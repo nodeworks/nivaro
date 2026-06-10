@@ -1,0 +1,10 @@
+{% layout 'base' %}
+{% block content %}
+<p style="margin:0 0 18px;">Hi {{ first_name | default: 'there' }},</p>
+<p style="margin:0 0 18px;">{{ message }}</p>
+{% if action_url and action_label %}
+<p style="margin:0 0 18px;">
+  <a href="{{ action_url }}" style="display:inline-block;padding:12px 28px;background-color:#00ceff;color:#172940;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;text-decoration:none;border-radius:6px;">{{ action_label }}</a>
+</p>
+{% endif %}
+{% endblock %}

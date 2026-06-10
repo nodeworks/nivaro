@@ -1,0 +1,162 @@
+import { useQuery } from '@tanstack/react-query'
+import { Check, ChevronDown } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { api } from '@/lib/api'
+import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
+
+interface RelationPickerProps {
+  relatedCollection: string
+  value: unknown
+  onChange: (id: unknown) => void
+  disabled?: boolean
+}
+
+export function RelationPicker({
+  relatedCollection,
+  value,
+  onChange,
+  disabled
+}: RelationPickerProps) {
+  const [open, setOpen] = useState(false)
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      setDebouncedSearch(searchInput)
+    }, 200)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [searchInput])
+
+  const { data: colMeta } = useQuery({
+    queryKey: ['collection-meta', relatedCollection],
+    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
+    staleTime: 10 * 60 * 1000
+  })
+
+  const displayTemplate = colMeta?.display_template ?? null
+  const fields = extractTemplateFields(displayTemplate)
+
+  const hasValue = value !== null && value !== undefined && value !== ''
+
+  // Fetch the selected item immediately — parallel to colMeta, no serial dependency.
+  // fields=* avoids needing the display template before fetching.
+  const { data: currentItem, isLoading: labelLoading } = useQuery({
+    queryKey: ['relation-item', relatedCollection, String(value)],
+    queryFn: async () => {
+      const res = await api.get(`/items/${relatedCollection}/${value}`, {
+        params: { fields: '*' }
+      })
+      return res.data.data as Record<string, unknown>
+    },
+    enabled: hasValue,
+    staleTime: 30 * 60 * 1000
+  })
+
+  // Search results — fetched when popover is open; uses template fields when available, * otherwise.
+  const searchFields = colMeta ? fields.join(',') : '*'
+  const { data: searchResults, isLoading: searchLoading } = useQuery({
+    queryKey: ['relation-search', relatedCollection, searchFields, debouncedSearch],
+    queryFn: async () => {
+      const res = await api.get(`/items/${relatedCollection}`, {
+        params: {
+          limit: 50,
+          fields: searchFields,
+          search: debouncedSearch || undefined
+        }
+      })
+      return (res.data.data ?? []) as Record<string, unknown>[]
+    },
+    enabled: open,
+    staleTime: 30 * 1000
+  })
+
+  const currentLabel = hasValue
+    ? currentItem
+      ? renderDisplayTemplate(displayTemplate, currentItem)
+      : String(value)
+    : null
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          disabled={disabled}
+          className='w-full h-9 px-3 text-[13px] border border-slate-200 rounded-md bg-white text-left flex items-center justify-between hover:bg-slate-50 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
+        >
+          {labelLoading ? (
+            <span className='text-slate-400 text-[12px]'>Loading…</span>
+          ) : currentLabel !== null ? (
+            <span className='text-slate-800 truncate'>{currentLabel}</span>
+          ) : (
+            <span className='text-slate-400'>Select…</span>
+          )}
+          <ChevronDown className='h-3.5 w-3.5 text-slate-400 shrink-0 ml-2' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[320px] p-2' align='start'>
+        <div className='mb-2'>
+          <Input
+            placeholder='Search…'
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            className='h-8 text-[13px]'
+            autoFocus
+          />
+        </div>
+        <ScrollArea className='h-[200px]'>
+          <div className='space-y-0.5'>
+            {/* Clear option */}
+            <button
+              type='button'
+              onClick={() => {
+                onChange(null)
+                setOpen(false)
+              }}
+              className='flex items-center gap-2 px-3 py-2 text-[13px] text-slate-400 hover:bg-slate-50 cursor-pointer rounded-md w-full text-left'
+            >
+              Clear selection
+            </button>
+
+            {searchLoading && <div className='px-3 py-2 text-[13px] text-slate-400'>Loading…</div>}
+
+            {!searchLoading && searchResults?.length === 0 && (
+              <div className='px-3 py-2 text-[13px] text-slate-400'>No results</div>
+            )}
+
+            {!searchLoading &&
+              searchResults?.map((item) => {
+                const itemId = item.id
+                const label = renderDisplayTemplate(displayTemplate, item)
+                const isSelected = String(itemId) === String(value)
+                return (
+                  <button
+                    type='button'
+                    key={String(itemId)}
+                    onClick={() => {
+                      onChange(itemId)
+                      setOpen(false)
+                    }}
+                    className='flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-slate-50 cursor-pointer rounded-md w-full text-left'
+                  >
+                    <Check
+                      className={`h-3.5 w-3.5 shrink-0 ${isSelected ? 'text-nvr-cyan' : 'text-transparent'}`}
+                    />
+                    <span className='truncate text-slate-800'>{label}</span>
+                  </button>
+                )
+              })}
+          </div>
+        </ScrollArea>
+      </PopoverContent>
+    </Popover>
+  )
+}

@@ -1,0 +1,4 @@
+{
+  "entry": ["api/src/index.ts", "api/src/db/migrate.ts", "admin/src/main.tsx"],
+  "ignorePatterns": ["**/dist/**", "**/node_modules/**", "**/*.d.ts", "api/extensions/**"]
+}

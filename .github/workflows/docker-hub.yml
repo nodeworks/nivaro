@@ -1,0 +1,76 @@
+name: Docker Hub
+
+on:
+  push:
+    tags:
+      - '@app-*'
+
+  workflow_dispatch:
+
+jobs:
+  build-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#@app-}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3 # TODO: pin SHA — gh api repos/docker/setup-buildx-action/git/ref/tags/v3 --jq '.object.sha'
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3 # TODO: pin SHA — gh api repos/docker/login-action/git/ref/tags/v3 --jq '.object.sha'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6 # TODO: pin SHA — gh api repos/docker/build-push-action/git/ref/tags/v6 --jq '.object.sha'
+        with:
+          context: .
+          file: Dockerfile.release
+          push: true
+          tags: |
+            nodeworks/nivaro:${{ steps.meta.outputs.version }}
+            nodeworks/nivaro:latest
+          cache-from: type=registry,ref=nodeworks/nivaro:latest
+          cache-to: type=inline
+          sbom: true
+          provenance: mode=max
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate changelog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          PREV_TAG=$(git tag --sort=-version:refname | grep "^@app-" | sed -n '2p' || true)
+          node scripts/gen-changelog.mjs "${PREV_TAG}" "${CURRENT_TAG}" "Nivaro" > CHANGELOG_DRAFT.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file CHANGELOG_DRAFT.md

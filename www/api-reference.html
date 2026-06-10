@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Reference — Nivaro Headless CMS</title>
+  <meta name="description" content="Nivaro REST API reference — endpoints, parameters, schemas, and curl examples generated from the schema registry.">
+  <meta property="og:title" content="API Reference — Nivaro Headless CMS">
+  <meta property="og:description" content="Generated REST API reference for your Nivaro instance.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Onest:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="docs.css">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+  <style>
+    /* ── API reference page specifics (extends style.css + docs.css) ── */
+    .api-content-wrap {
+      flex: 1;
+      max-width: 900px;
+      margin-inline: auto;
+      width: 100%;
+      padding: 3rem clamp(1.5rem, 4vw, 3rem);
+      min-width: 0;
+    }
+    .api-back {
+      display: inline-block;
+      font-size: 0.8125rem;
+      color: var(--ink-faint);
+      margin-bottom: 1.25rem;
+      transition: color 120ms;
+    }
+    .api-back:hover { color: var(--primary); }
+    .api-meta { display: flex; align-items: center; gap: 0.625rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .api-chip {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: var(--ink-muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.15em 0.7em;
+    }
+    .api-tag-section { margin-top: 3rem; scroll-margin-top: calc(var(--nav-h) + 1rem); }
+    .api-tag-section:first-of-type { margin-top: 2rem; }
+    .api-op {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+      padding: 1.25rem 1.375rem 1.375rem;
+      margin-bottom: 1.25rem;
+      scroll-margin-top: calc(var(--nav-h) + 1rem);
+    }
+    .api-op-line { display: flex; align-items: center; gap: 0.625rem; flex-wrap: wrap; }
+    .api-op-line .method { font-size: 0.75rem; padding: 0.18em 0.55em; margin-right: 0; }
+    .api-op-path { font-family: var(--font-mono); font-size: 0.875rem; font-weight: 500; color: var(--ink); word-break: break-all; }
+    .api-op-summary {
+      font-family: var(--font-display);
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--ink);
+      margin-top: 0.75rem;
+    }
+    .api-op-desc { font-size: 0.875rem; color: var(--ink-muted); line-height: 1.65; margin-top: 0.25rem; }
+    .api-sub {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      margin: 1.375rem 0 0.5rem;
+    }
+    .api-schema { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .api-schema-head {
+      padding: 0.4rem 0.875rem;
+      font-size: 0.75rem;
+      color: var(--ink-faint);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+    }
+    .api-schema-row {
+      display: flex;
+      align-items: baseline;
+      gap: 0.625rem;
+      flex-wrap: wrap;
+      padding: 0.45rem 0.875rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8125rem;
+    }
+    .api-schema-row:last-child { border-bottom: none; }
+    .api-prop-name { font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink); }
+    .api-prop-type { font-family: var(--font-mono); font-size: 0.72rem; color: var(--ink-faint); }
+    .api-req { font-size: 0.68rem; font-weight: 600; color: oklch(0.55 0.18 25); letter-spacing: 0.02em; }
+    .api-prop-desc { font-size: 0.78rem; color: var(--ink-muted); line-height: 1.5; }
+    .api-nest { flex-basis: 100%; margin: 0.3rem 0 0.15rem 1rem; }
+    .api-status {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 600;
+      border-radius: 3px;
+      padding: 0.1em 0.45em;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--ink-muted);
+    }
+    .api-status-2xx { background: oklch(0.92 0.08 145 / 0.2); border-color: oklch(0.92 0.08 145 / 0.4); color: oklch(0.30 0.10 145); }
+    .api-status-4xx { background: oklch(0.60 0.18 25 / 0.1); border-color: oklch(0.60 0.18 25 / 0.25); color: oklch(0.40 0.15 25); }
+    .api-response { margin-bottom: 0.75rem; }
+    .api-response-line { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.375rem; }
+    .api-response-desc { font-size: 0.8125rem; color: var(--ink-muted); }
+    .api-response .api-schema { margin-top: 0.375rem; }
+    .api-op .doc-pre { margin-bottom: 0; }
+    .api-hidden { display: none !important; }
+    .docs-nav-item .method { font-size: 0.58rem; padding: 0.1em 0.35em; min-width: 3.2em; justify-content: center; }
+    .docs-nav-item.api-nav-op { display: flex; align-items: center; gap: 0.45rem; }
+    .api-nav-op-path { overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 0.72rem; }
+    @media (max-width: 768px) {
+      .api-content-wrap { padding-inline: 1.25rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav class="nav nav-dark" id="nav" role="navigation" aria-label="Primary">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo" aria-label="Nivaro home">
+      <svg class="nav-logo-svg" width="24" height="24" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#172940"/><polyline points="7,26 7,6 23,26 23,6" fill="none" stroke="#00ceff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="miter"/></svg>
+      nivaro
+    </a>
+    <ul class="nav-links" role="list">
+      <li><a href="/#features">Features</a></li>
+      <li><a href="/#sdk">SDK</a></li>
+      <li><a href="/#architecture">Architecture</a></li>
+      <li><a href="/#enterprise">Enterprise</a></li>
+      <li><a href="/pricing">Pricing</a></li>
+      <li><a href="/docs">Docs</a></li>
+    </ul>
+    <div class="nav-cta">
+      <a href="https://github.com/nodeworks/nivaro" class="btn btn-primary">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- API reference layout -->
+<div class="docs-layout">
+
+  <!-- Sidebar -->
+  <aside class="docs-sidebar" id="apiSidebar" aria-label="API reference navigation">
+    <div class="docs-search">
+      <input type="search" class="docs-search-input" placeholder="Search endpoints..." id="apiSearch" aria-label="Search endpoints">
+    </div>
+    <nav class="docs-nav" id="apiNav" aria-label="API endpoints"></nav>
+  </aside>
+
+  <!-- Main -->
+  <main class="docs-main">
+    <div class="api-content-wrap">
+      <a class="api-back" href="docs.html">&larr; Documentation</a>
+      <h1 class="doc-h1" id="apiTitle">API Reference</h1>
+      <div class="api-meta" id="apiMeta"></div>
+      <p class="doc-p" id="apiIntro"></p>
+      <div id="apiBody"></div>
+    </div>
+  </main>
+</div>
+
+<button class="docs-sidebar-toggle" id="sidebarToggle" aria-label="Toggle navigation">
+  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
+</button>
+
+<script>
+(function () {
+  'use strict';
+
+  var SPEC_URL = './openapi.json';
+  var METHOD_ORDER = ['get', 'post', 'put', 'patch', 'delete'];
+  var CURL_BASE = '$BASE_URL';
+
+  var navEl = document.getElementById('apiNav');
+  var bodyEl = document.getElementById('apiBody');
+  var titleEl = document.getElementById('apiTitle');
+  var metaEl = document.getElementById('apiMeta');
+  var introEl = document.getElementById('apiIntro');
+  var searchEl = document.getElementById('apiSearch');
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function chevron() {
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 12 12');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.75');
+    svg.setAttribute('aria-hidden', 'true');
+    var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M4 2l4 4-4 4');
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function slugify(str) {
+    return String(str).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+
+  function methodClass(method) {
+    var known = { get: 'method-get', post: 'method-post', patch: 'method-patch', delete: 'method-delete' };
+    return 'method ' + (known[method] || 'method-post');
+  }
+
+  function resolveRef(spec, schema) {
+    if (schema && schema.$ref && typeof schema.$ref === 'string') {
+      var parts = schema.$ref.replace(/^#\//, '').split('/');
+      var node = spec;
+      for (var i = 0; i < parts.length; i++) {
+        node = node ? node[parts[i]] : undefined;
+      }
+      return { schema: node || {}, refName: parts[parts.length - 1] };
+    }
+    return { schema: schema || {}, refName: null };
+  }
+
+  function typeLabel(spec, schema) {
+    var resolved = resolveRef(spec, schema);
+    var s = resolved.schema;
+    if (resolved.refName) return resolved.refName;
+    if (s.type === 'array') {
+      var inner = resolveRef(spec, s.items);
+      return 'array<' + (inner.refName || typeLabel(spec, s.items)) + '>';
+    }
+    if (!s.type) return 'any';
+    return s.type + (s.format ? ' (' + s.format + ')' : '');
+  }
+
+  // ── Recursive schema renderer ─────────────────────────────────────────────
+
+  function renderSchema(spec, schema, seen, headLabel) {
+    var resolved = resolveRef(spec, schema);
+    var s = resolved.schema;
+    var refName = resolved.refName;
+
+    var box = el('div', 'api-schema');
+    if (headLabel || refName) {
+      box.appendChild(el('div', 'api-schema-head', headLabel || refName));
+    }
+
+    if (refName && seen.indexOf(refName) !== -1) {
+      var row = el('div', 'api-schema-row');
+      row.appendChild(el('span', 'api-prop-type', 'recursive reference → ' + refName));
+      box.appendChild(row);
+      return box;
+    }
+    var nextSeen = refName ? seen.concat([refName]) : seen;
+
+    if (s.type === 'array') {
+      var arrRow = el('div', 'api-schema-row');
+      arrRow.appendChild(el('span', 'api-prop-type', 'array of ' + typeLabel(spec, s.items)));
+      box.appendChild(arrRow);
+      var itemResolved = resolveRef(spec, s.items);
+      if (itemResolved.schema.type === 'object' || itemResolved.schema.properties || itemResolved.refName) {
+        var nest = el('div', 'api-nest');
+        nest.appendChild(renderSchema(spec, s.items, nextSeen, null));
+        arrRow.appendChild(nest);
+      }
+      return box;
+    }
+
+    if (s.properties && typeof s.properties === 'object') {
+      var required = Array.isArray(s.required) ? s.required : [];
+      Object.keys(s.properties).forEach(function (name) {
+        var prop = s.properties[name];
+        var propResolved = resolveRef(spec, prop);
+        var pr = el('div', 'api-schema-row');
+        pr.appendChild(el('span', 'api-prop-name', name));
+        pr.appendChild(el('span', 'api-prop-type', typeLabel(spec, prop)));
+        if (required.indexOf(name) !== -1) pr.appendChild(el('span', 'api-req', 'required'));
+        if (propResolved.schema.description) {
+          pr.appendChild(el('span', 'api-prop-desc', propResolved.schema.description));
+        }
+        var nested = propResolved.schema;
+        var isNestable = propResolved.refName ||
+          (nested.type === 'object' && nested.properties) ||
+          (nested.type === 'array' && (function () {
+            var inner = resolveRef(spec, nested.items);
+            return inner.refName || inner.schema.properties;
+          })());
+        if (isNestable) {
+          var sub = el('div', 'api-nest');
+          sub.appendChild(renderSchema(spec, prop, nextSeen, null));
+          pr.appendChild(sub);
+        }
+        box.appendChild(pr);
+      });
+      if (Object.keys(s.properties).length === 0) {
+        var empty = el('div', 'api-schema-row');
+        empty.appendChild(el('span', 'api-prop-type', 'object'));
+        box.appendChild(empty);
+      }
+      return box;
+    }
+
+    var scalar = el('div', 'api-schema-row');
+    scalar.appendChild(el('span', 'api-prop-type', typeLabel(spec, s)));
+    if (s.description) scalar.appendChild(el('span', 'api-prop-desc', s.description));
+    box.appendChild(scalar);
+    return box;
+  }
+
+  // ── curl example builder ──────────────────────────────────────────────────
+
+  function sampleValue(spec, prop) {
+    var s = resolveRef(spec, prop).schema;
+    if (s.type === 'integer' || s.type === 'number') return 0;
+    if (s.type === 'boolean') return false;
+    if (s.type === 'array') return [];
+    if (s.type === 'object') return {};
+    if (s.format === 'uuid') return '00000000-0000-0000-0000-000000000000';
+    if (s.format === 'date-time') return '2026-01-01T00:00:00Z';
+    if (s.format === 'date') return '2026-01-01';
+    return '';
+  }
+
+  function sampleBody(spec, schema) {
+    var s = resolveRef(spec, schema).schema;
+    if (!s.properties) return {};
+    var body = {};
+    var count = 0;
+    Object.keys(s.properties).forEach(function (name) {
+      if (name === 'id' || name === 'created_at' || name === 'updated_at') return;
+      if (count >= 8) return;
+      body[name] = sampleValue(spec, s.properties[name]);
+      count++;
+    });
+    return body;
+  }
+
+  function buildCurl(spec, op) {
+    var serverPrefix = (spec.servers && spec.servers[0] && spec.servers[0].url) || '/api';
+    var urlPath = op.path.replace(/\{([^}]+)\}/g, '<$1>');
+    var url = CURL_BASE + serverPrefix + urlPath;
+    var lines = ['curl'];
+    if (op.method !== 'get') lines[0] += ' -X ' + op.method.toUpperCase();
+    lines.push('  -H "Authorization: Bearer $TOKEN"');
+    if (op.operation.requestBody) {
+      lines.push('  -H "Content-Type: application/json"');
+      var content = op.operation.requestBody.content || {};
+      var json = content['application/json'] || {};
+      var body = sampleBody(spec, json.schema);
+      var pretty = JSON.stringify(body, null, 2).split('\n').join('\n  ');
+      lines.push("  -d '" + pretty + "'");
+    }
+    if (op.method === 'get' && op.path.indexOf('{') === -1 && (op.operation.parameters || []).some(function (p) { return p.in === 'query'; })) {
+      url += '?limit=25&offset=0';
+    }
+    lines.push('  "' + url + '"');
+    return lines.join(' \\\n');
+  }
+
+  // ── Operation card ────────────────────────────────────────────────────────
+
+  function renderOperation(spec, op) {
+    var card = el('article', 'api-op');
+    card.id = op.id;
+    card.dataset.search = (op.method + ' ' + op.path + ' ' + (op.operation.summary || '') + ' ' + (op.operation.description || '')).toLowerCase();
+
+    var line = el('div', 'api-op-line');
+    line.appendChild(el('span', methodClass(op.method), op.method.toUpperCase()));
+    line.appendChild(el('code', 'api-op-path', (spec.servers && spec.servers[0] ? spec.servers[0].url : '/api') + op.path));
+    card.appendChild(line);
+
+    if (op.operation.summary) card.appendChild(el('h3', 'api-op-summary', op.operation.summary));
+    if (op.operation.description) card.appendChild(el('p', 'api-op-desc', op.operation.description));
+
+    var params = op.operation.parameters || [];
+    if (params.length) {
+      card.appendChild(el('div', 'api-sub', 'Parameters'));
+      var wrap = el('div', 'doc-table-wrap');
+      var table = el('table', 'doc-table');
+      var thead = el('thead');
+      var hr = el('tr');
+      ['Name', 'In', 'Type', 'Description'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+      thead.appendChild(hr);
+      table.appendChild(thead);
+      var tbody = el('tbody');
+      params.forEach(function (p) {
+        var tr = el('tr');
+        var nameTd = el('td', null, p.name + (p.required ? ' *' : ''));
+        tr.appendChild(nameTd);
+        tr.appendChild(el('td', null, p.in || ''));
+        tr.appendChild(el('td', null, typeLabel(spec, p.schema)));
+        var desc = p.description || '';
+        if (p.schema && p.schema.default !== undefined) {
+          desc += (desc ? ' ' : '') + '(default: ' + p.schema.default + ')';
+        }
+        tr.appendChild(el('td', null, desc));
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      card.appendChild(wrap);
+    }
+
+    if (op.operation.requestBody) {
+      card.appendChild(el('div', 'api-sub', 'Request body' + (op.operation.requestBody.required ? ' (required)' : '')));
+      var rbContent = op.operation.requestBody.content || {};
+      var rbJson = rbContent['application/json'];
+      if (rbJson && rbJson.schema) {
+        card.appendChild(renderSchema(spec, rbJson.schema, [], null));
+      }
+    }
+
+    var responses = op.operation.responses || {};
+    var statusCodes = Object.keys(responses);
+    if (statusCodes.length) {
+      card.appendChild(el('div', 'api-sub', 'Responses'));
+      statusCodes.forEach(function (code) {
+        var res = responses[code] || {};
+        var block = el('div', 'api-response');
+        var rline = el('div', 'api-response-line');
+        var cls = 'api-status' + (code.charAt(0) === '2' ? ' api-status-2xx' : code.charAt(0) === '4' ? ' api-status-4xx' : '');
+        rline.appendChild(el('span', cls, code));
+        rline.appendChild(el('span', 'api-response-desc', res.description || ''));
+        block.appendChild(rline);
+        var resJson = res.content && res.content['application/json'];
+        if (resJson && resJson.schema) {
+          block.appendChild(renderSchema(spec, resJson.schema, [], null));
+        }
+        card.appendChild(block);
+      });
+    }
+
+    card.appendChild(el('div', 'api-sub', 'Example'));
+    var pre = el('pre', 'doc-pre');
+    var code = el('code', null, buildCurl(spec, op));
+    pre.appendChild(code);
+    card.appendChild(pre);
+
+    return card;
+  }
+
+  // ── Page assembly ─────────────────────────────────────────────────────────
+
+  function buildModel(spec) {
+    var groups = [];
+    var byTag = {};
+    var paths = spec.paths || {};
+    Object.keys(paths).forEach(function (path) {
+      var item = paths[path] || {};
+      METHOD_ORDER.forEach(function (method) {
+        if (!item[method]) return;
+        var operation = item[method];
+        var tag = (operation.tags && operation.tags[0]) || 'General';
+        if (!byTag[tag]) {
+          byTag[tag] = { tag: tag, ops: [] };
+          groups.push(byTag[tag]);
+        }
+        byTag[tag].ops.push({
+          method: method,
+          path: path,
+          operation: operation,
+          id: 'op-' + slugify(operation.operationId || method + '-' + path),
+        });
+      });
+    });
+    return groups;
+  }
+
+  function renderSidebar(spec, groups) {
+    groups.forEach(function (group, idx) {
+      var wrap = el('div', 'docs-nav-group');
+      var btn = el('button', 'docs-nav-group-btn open');
+      btn.setAttribute('aria-expanded', 'true');
+      btn.appendChild(document.createTextNode(group.tag));
+      btn.appendChild(chevron());
+      var items = el('div', 'docs-nav-items open');
+      group.ops.forEach(function (op) {
+        var a = el('a', 'docs-nav-item api-nav-op');
+        a.href = '#' + op.id;
+        a.dataset.search = (op.method + ' ' + op.path + ' ' + (op.operation.summary || '')).toLowerCase();
+        a.appendChild(el('span', methodClass(op.method), op.method.toUpperCase()));
+        a.appendChild(el('span', 'api-nav-op-path', op.path));
+        items.appendChild(a);
+      });
+      btn.addEventListener('click', function () {
+        var open = items.classList.toggle('open');
+        btn.classList.toggle('open', open);
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+      wrap.appendChild(btn);
+      wrap.appendChild(items);
+      navEl.appendChild(wrap);
+    });
+  }
+
+  function renderMain(spec, groups) {
+    if (spec.info) {
+      if (spec.info.title) titleEl.textContent = spec.info.title + ' — Reference';
+      if (spec.info.version) metaEl.appendChild(el('span', 'api-chip', 'v' + spec.info.version));
+      metaEl.appendChild(el('span', 'api-chip', 'OpenAPI ' + (spec.openapi || '3.1')));
+      metaEl.appendChild(el('span', 'api-chip', 'Bearer auth'));
+      introEl.textContent = (spec.info.description || '') +
+        ' All endpoints require an Authorization: Bearer <static token> header. Replace $BASE_URL with your instance URL (e.g. http://localhost:3055).';
+    }
+    groups.forEach(function (group) {
+      var section = el('section', 'api-tag-section');
+      section.id = 'tag-' + slugify(group.tag);
+      section.appendChild(el('h2', 'doc-h2', group.tag));
+      group.ops.forEach(function (op) {
+        section.appendChild(renderOperation(spec, op));
+      });
+      bodyEl.appendChild(section);
+    });
+  }
+
+  function initSearch() {
+    searchEl.addEventListener('input', function () {
+      var q = searchEl.value.trim().toLowerCase();
+      document.querySelectorAll('.api-op, .api-nav-op').forEach(function (node) {
+        var match = !q || (node.dataset.search || '').indexOf(q) !== -1;
+        node.classList.toggle('api-hidden', !match);
+      });
+      document.querySelectorAll('.api-tag-section').forEach(function (section) {
+        var visible = section.querySelectorAll('.api-op:not(.api-hidden)').length;
+        section.classList.toggle('api-hidden', visible === 0);
+      });
+      document.querySelectorAll('#apiNav .docs-nav-group').forEach(function (group) {
+        var visible = group.querySelectorAll('.api-nav-op:not(.api-hidden)').length;
+        group.classList.toggle('api-hidden', visible === 0);
+      });
+    });
+  }
+
+  function renderEmptyState() {
+    titleEl.textContent = 'API Reference';
+    var note = el('div', 'doc-note');
+    note.appendChild(el('strong', null, 'No OpenAPI spec found. '));
+    note.appendChild(document.createTextNode(
+      'Run pnpm docs:api against a live instance to generate the spec — it fetches ' +
+      '/api/dev-tools/openapi.json with an admin token and writes www/openapi.json.'
+    ));
+    var pre = el('pre', 'doc-pre');
+    pre.appendChild(el('code', null, 'pnpm docs:api -- --url http://localhost:3055 --token <admin static token>'));
+    bodyEl.appendChild(note);
+    bodyEl.appendChild(pre);
+  }
+
+  function initSidebarToggle() {
+    var toggle = document.getElementById('sidebarToggle');
+    var sidebar = document.getElementById('apiSidebar');
+    if (!toggle || !sidebar) return;
+    toggle.addEventListener('click', function () { sidebar.classList.toggle('open'); });
+    navEl.addEventListener('click', function (e) {
+      if (e.target.closest('.docs-nav-item')) sidebar.classList.remove('open');
+    });
+  }
+
+  function init() {
+    initSidebarToggle();
+    fetch(SPEC_URL)
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (spec) {
+        if (!spec || !spec.paths) throw new Error('Invalid spec');
+        var groups = buildModel(spec);
+        renderSidebar(spec, groups);
+        renderMain(spec, groups);
+        initSearch();
+        if (location.hash) {
+          var target = document.getElementById(location.hash.slice(1));
+          if (target) target.scrollIntoView();
+        }
+      })
+      .catch(function () {
+        renderEmptyState();
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nivaro — Headless CMS for complex organizations</title>
+  <meta name="description" content="Nivaro adds a metadata layer, workflow engine, and React admin UI on top of your existing MSSQL tables. RBAC, state machine workflows, and a TypeScript SDK built in.">
+  <meta property="og:title" content="Nivaro — Headless CMS for complex organizations">
+  <meta property="og:description" content="Content operations for teams that own their database.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Onest:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+</head>
+<body>
+
+<!-- ── Navigation ── -->
+<nav class="nav" id="nav" role="navigation" aria-label="Primary">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo" aria-label="Nivaro home">
+      <svg class="nav-logo-svg" width="24" height="24" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#172940"/><polyline points="7,26 7,6 23,26 23,6" fill="none" stroke="#00ceff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="miter"/></svg>
+      nivaro
+    </a>
+    <ul class="nav-links" role="list">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#sdk">SDK</a></li>
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#enterprise">Enterprise</a></li>
+      <li><a href="/pricing">Pricing</a></li>
+    </ul>
+    <div class="nav-cta">
+      <a href="/docs" class="btn btn-outline-dark">Documentation</a>
+      <a href="https://github.com/nodeworks/nivaro" class="btn btn-primary">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Hero ── -->
+<section class="hero" id="hero" aria-labelledby="hero-headline">
+  <div class="hero-grid-bg" aria-hidden="true"></div>
+  <div class="container hero-inner">
+
+    <div class="hero-copy">
+      <div class="hero-tag" aria-label="Open-source headless CMS">
+        <span class="hero-tag-dot" aria-hidden="true"></span>
+        Open-source headless CMS
+      </div>
+
+      <h1 class="t-hero hero-headline" id="hero-headline">
+        The CMS that fits<br>
+        <em>your database,</em><br>
+        not the other way&nbsp;around
+      </h1>
+
+      <p class="t-subhead hero-subhead">
+        Nivaro puts a metadata layer, workflow engine, and full React admin on top of your existing MSSQL tables. Your schema stays yours. No migration required.
+      </p>
+
+      <div class="hero-actions">
+        <a href="/docs" class="btn btn-primary">Read the docs</a>
+        <a href="https://github.com/nodeworks/nivaro" class="btn btn-outline-dark">View source</a>
+      </div>
+
+      <div class="hero-stack" role="list" aria-label="Built with">
+        <span class="stack-chip" role="listitem">TypeScript</span>
+        <span class="stack-chip" role="listitem">Fastify v5</span>
+        <span class="stack-chip" role="listitem">MSSQL / Knex</span>
+        <span class="stack-chip" role="listitem">React 19</span>
+        <span class="stack-chip" role="listitem">Socket.io</span>
+        <span class="stack-chip" role="listitem">GraphQL</span>
+      </div>
+    </div>
+
+    <!-- UI Mockup -->
+    <div class="hero-visual" aria-hidden="true">
+      <div class="hero-mockup-glow"></div>
+      <div class="mockup-window" role="img" aria-label="Nivaro CMS admin interface">
+        <!-- Chrome bar -->
+        <div class="mockup-chrome">
+          <div class="mockup-dot"></div>
+          <div class="mockup-dot"></div>
+          <div class="mockup-dot"></div>
+          <div class="mockup-url">app.nivaro.io/collections/articles</div>
+        </div>
+        <!-- App body -->
+        <div class="mockup-body">
+          <!-- Sidebar -->
+          <aside class="mockup-sidebar">
+            <div class="mockup-sidebar-logo">
+              <svg width="14" height="14" viewBox="0 0 32 32" aria-hidden="true" style="display:block"><rect width="32" height="32" rx="7" fill="#172940"/><polyline points="7,26 7,6 23,26 23,6" fill="none" stroke="#00ceff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="miter"/></svg>
+              nivaro
+            </div>
+            <div class="mockup-nav-item">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
+              Dashboard
+            </div>
+            <div class="mockup-nav-item active">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 4h12M2 8h8M2 12h10"/></svg>
+              Collections
+            </div>
+            <div class="mockup-nav-sub">
+              <div class="mockup-nav-sub-item active">Articles</div>
+              <div class="mockup-nav-sub-item">Products</div>
+              <div class="mockup-nav-sub-item">Customers</div>
+            </div>
+            <div class="mockup-nav-separator"></div>
+            <div class="mockup-nav-item">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/></svg>
+              Workflows
+            </div>
+            <div class="mockup-nav-item">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 8h3l2-4 2 8 2-4h3"/></svg>
+              Pipelines
+            </div>
+            <div class="mockup-nav-separator"></div>
+            <div class="mockup-nav-item">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="5" r="2.5"/><path d="M3 14c0-3 10-3 10 0"/></svg>
+              Users
+            </div>
+            <div class="mockup-nav-item">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/></svg>
+              Settings
+            </div>
+          </aside>
+
+          <!-- Main content -->
+          <main class="mockup-main">
+            <div class="mockup-main-header">
+              <span class="mockup-main-title">Articles</span>
+              <span class="mockup-new-btn">+ New article</span>
+            </div>
+            <div class="mockup-search-bar">
+              <div class="mockup-search-input">Search articles…</div>
+            </div>
+            <div class="mockup-table">
+              <div class="mockup-table-head">
+                <span>Title</span>
+                <span>Status</span>
+                <span>Updated</span>
+              </div>
+              <div class="mockup-row" data-row="0">
+                <span class="mockup-row-title">Q3 Product Roadmap</span>
+                <span><span class="badge badge-live">Live</span></span>
+                <span class="mockup-row-meta">2h ago</span>
+              </div>
+              <div class="mockup-row" data-row="1">
+                <span class="mockup-row-title">API Migration Guide v2</span>
+                <span><span class="badge badge-review">Review</span></span>
+                <span class="mockup-row-meta">Yesterday</span>
+              </div>
+              <div class="mockup-row" data-row="2">
+                <span class="mockup-row-title">Team Handbook 2026</span>
+                <span><span class="badge badge-live">Live</span></span>
+                <span class="mockup-row-meta">3d ago</span>
+              </div>
+              <div class="mockup-row" data-row="3">
+                <span class="mockup-row-title">Release Notes — June</span>
+                <span><span class="badge badge-draft">Draft</span></span>
+                <span class="mockup-row-meta">1w ago</span>
+              </div>
+              <div class="mockup-row" data-row="4">
+                <span class="mockup-row-title">Onboarding Checklist</span>
+                <span><span class="badge badge-live">Live</span></span>
+                <span class="mockup-row-meta">2w ago</span>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ── Marquee ── -->
+<div class="marquee-section" aria-label="Feature list" aria-hidden="true">
+  <div class="marquee-track">
+    <!-- Two identical sets for seamless loop -->
+    <span class="marquee-item">Workflow Engine</span>
+    <span class="marquee-item">Pipeline Matrix</span>
+    <span class="marquee-item">RBAC Permissions</span>
+    <span class="marquee-item">GraphQL + Subscriptions</span>
+    <span class="marquee-item">TypeScript SDK</span>
+    <span class="marquee-item">Multi-workspace</span>
+    <span class="marquee-item">AI Field Generation</span>
+    <span class="marquee-item">Revision History</span>
+    <span class="marquee-item">Real-time Notifications</span>
+    <span class="marquee-item">Microsoft OIDC</span>
+    <span class="marquee-item">Audit Reports</span>
+    <span class="marquee-item">Computed Fields</span>
+    <span class="marquee-item">Public Forms</span>
+    <span class="marquee-item">SLA Tracking</span>
+    <span class="marquee-item">Workflow Engine</span>
+    <span class="marquee-item">Pipeline Matrix</span>
+    <span class="marquee-item">RBAC Permissions</span>
+    <span class="marquee-item">GraphQL + Subscriptions</span>
+    <span class="marquee-item">TypeScript SDK</span>
+    <span class="marquee-item">Multi-workspace</span>
+    <span class="marquee-item">AI Field Generation</span>
+    <span class="marquee-item">Revision History</span>
+    <span class="marquee-item">Real-time Notifications</span>
+    <span class="marquee-item">Microsoft OIDC</span>
+    <span class="marquee-item">Audit Reports</span>
+    <span class="marquee-item">Computed Fields</span>
+    <span class="marquee-item">Public Forms</span>
+    <span class="marquee-item">SLA Tracking</span>
+  </div>
+</div>
+
+<!-- ── Features ── -->
+<section class="features-section section" id="features" aria-labelledby="features-heading">
+  <div class="container">
+    <div class="features-header">
+      <h2 class="t-section" id="features-heading">
+        Built for how enterprise<br>content actually works
+      </h2>
+      <p class="t-subhead">
+        Most CMS tools force your data into their schema. Nivaro maps to yours — and adds the operational infrastructure your teams need to run complex approval and ownership workflows.
+      </p>
+    </div>
+
+    <div class="features-bento" role="list">
+
+      <!-- Wide: Workflow Engine -->
+      <article class="feat-card feat-card--wide reveal" role="listitem">
+        <div class="feat-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>
+        </div>
+        <h3 class="feat-label">Workflow Engine</h3>
+        <p class="feat-body">
+          Define states, transitions, and role-gated approvals as a state machine on any collection. The engine enforces the process; editors see only the transitions they're allowed to take.
+        </p>
+        <div class="feat-workflow-visual" aria-label="Example workflow: Draft → In Review → Published">
+          <span class="wf-state wf-state-draft">Draft</span>
+          <span class="wf-arrow" aria-hidden="true">→</span>
+          <span class="wf-state wf-state-review">In Review</span>
+          <span class="wf-arrow" aria-hidden="true">→</span>
+          <span class="wf-state wf-state-live">Published</span>
+          <span class="wf-arrow" aria-hidden="true">→</span>
+          <span class="wf-state wf-state-review">Needs Revision</span>
+          <span class="wf-arrow" aria-hidden="true">→</span>
+          <span class="wf-state wf-state-live">Published</span>
+        </div>
+      </article>
+
+      <!-- Medium: Pipeline Matrix -->
+      <article class="feat-card feat-card--med feat-card--accent reveal reveal-delay-1" role="listitem">
+        <div class="feat-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>
+        </div>
+        <h3 class="feat-label">Pipeline / Owner Matrix</h3>
+        <p class="feat-body">
+          Route records through multi-dimensional ownership chains. Assign responsibility by field value, department, or workflow state. Priority and inheritance rules handle edge cases.
+        </p>
+      </article>
+
+      <!-- Third: RBAC -->
+      <article class="feat-card feat-card--third reveal reveal-delay-1" role="listitem">
+        <div class="feat-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <h3 class="feat-label">RBAC Permissions</h3>
+        <p class="feat-body">
+          Fine-grained access control at the collection and field level. Roles, policies, and Microsoft Entra group sync without a separate identity store.
+        </p>
+      </article>
+
+      <!-- Third: GraphQL -->
+      <article class="feat-card feat-card--third reveal reveal-delay-2" role="listitem">
+        <div class="feat-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/><line x1="12" y1="2" x2="12" y2="22"/><path d="M2 8.5l20 0M2 15.5l20 0"/></svg>
+        </div>
+        <h3 class="feat-label">GraphQL + REST</h3>
+        <p class="feat-body">
+          Auto-generated schema from your metadata registry. GraphQL subscriptions via WebSocket. REST for everything else. Rebuilt live with one request.
+        </p>
+      </article>
+
+      <!-- Third: SDK with code preview -->
+      <article class="feat-card feat-card--third reveal reveal-delay-3" role="listitem">
+        <div class="feat-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        </div>
+        <h3 class="feat-label">TypeScript SDK</h3>
+        <p class="feat-body">
+          A typed client for reading, writing, and filtering records. Real-time subscriptions via Socket.io. Ships as <code class="t-mono">@nivaro/sdk</code>.
+        </p>
+        <div class="feat-code-preview" aria-label="SDK code sample">
+          <span style="color:oklch(0.72 0.16 285)">import</span>
+          <span style="color:oklch(0.88 0.06 238)"> { createNivaro } </span>
+          <span style="color:oklch(0.72 0.16 285)">from</span>
+          <span style="color:oklch(0.74 0.14 155)"> '@nivaro/sdk'</span><br>
+          <br>
+          <span style="color:oklch(0.72 0.16 285)">const</span>
+          <span style="color:oklch(0.88 0.06 238)"> cms </span>
+          <span style="color:oklch(0.65 0.01 238)">=</span>
+          <span style="color:oklch(0.75 0.15 220)"> createNivaro</span>
+          <span style="color:oklch(0.65 0.01 238)">(</span>
+          <span style="color:oklch(0.65 0.01 238)">{ url })</span>
+        </div>
+      </article>
+
+      <!-- Med: Audit + Revisions -->
+      <article class="feat-card feat-card--med reveal reveal-delay-2" role="listitem">
+        <div class="feat-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        </div>
+        <h3 class="feat-label">Audit Log + Revisions</h3>
+        <p class="feat-body">
+          Every mutation logged with a full snapshot and field-level delta. Compare any two versions side-by-side. Immutable history that holds up to compliance requirements.
+        </p>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── SDK Section ── -->
+<section class="sdk-section section" id="sdk" aria-labelledby="sdk-heading">
+  <div class="container">
+    <div class="sdk-inner">
+      <div class="sdk-copy reveal">
+        <h2 class="t-section" id="sdk-heading">
+          Query your data<br>from anywhere
+        </h2>
+        <p class="t-subhead">
+          The TypeScript SDK wraps the Nivaro API with full type safety, filter helpers, and real-time subscriptions. One import replaces hundreds of ad-hoc fetch calls.
+        </p>
+        <div class="sdk-features">
+          <div class="sdk-feature-row">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Inferred TypeScript types for every collection
+          </div>
+          <div class="sdk-feature-row">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Filter, sort, paginate with a typed query builder
+          </div>
+          <div class="sdk-feature-row">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Socket.io subscriptions with <code class="t-mono" style="font-size:0.8125rem">subscribe()</code>
+          </div>
+          <div class="sdk-feature-row">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Workflow transitions and pipeline ownership reads
+          </div>
+          <div class="sdk-feature-row">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Published to npm as <code class="t-mono" style="font-size:0.8125rem">@nivaro/sdk</code>
+          </div>
+        </div>
+        <div style="margin-top:0.5rem">
+          <a href="/docs#sdk" class="btn btn-primary">SDK reference</a>
+        </div>
+      </div>
+
+      <div class="sdk-code-wrap reveal reveal-delay-2">
+        <div class="sdk-code-block">
+          <div class="sdk-code-header">
+            <span class="sdk-code-filename">fetch-articles.ts</span>
+            <span class="sdk-code-lang">TypeScript</span>
+          </div>
+          <pre class="sdk-code-content" role="region" aria-label="TypeScript SDK example"><code><span class="tok-keyword">import</span><span class="tok-var"> { createNivaro, readItems, createItem } </span><span class="tok-keyword">from</span><span class="tok-string"> '@nivaro/sdk'</span>
+
+<span class="tok-keyword">const</span><span class="tok-var"> cms </span><span class="tok-op">=</span><span class="tok-fn"> createNivaro</span><span class="tok-op">({</span>
+<span class="tok-var">  url</span><span class="tok-op">:</span><span class="tok-string"> 'https://cms.example.com'</span><span class="tok-op">,</span>
+<span class="tok-var">  token</span><span class="tok-op">:</span><span class="tok-var"> process</span><span class="tok-op">.</span><span class="tok-prop">env</span><span class="tok-op">.</span><span class="tok-prop">CMS_TOKEN</span>
+<span class="tok-op">})</span>
+
+<span class="tok-comment">// Fetch published articles with filters</span>
+<span class="tok-keyword">const</span><span class="tok-var"> articles </span><span class="tok-op">=</span><span class="tok-keyword"> await</span><span class="tok-var"> cms</span><span class="tok-op">.</span><span class="tok-fn">request</span><span class="tok-op">(</span>
+<span class="tok-fn">  readItems</span><span class="tok-op">(</span><span class="tok-string">'articles'</span><span class="tok-op">, {</span>
+<span class="tok-var">    filter</span><span class="tok-op">: {</span>
+<span class="tok-var">      status</span><span class="tok-op">: {</span><span class="tok-prop"> _eq</span><span class="tok-op">:</span><span class="tok-string"> 'published'</span><span class="tok-op"> },</span>
+<span class="tok-var">      department</span><span class="tok-op">: {</span><span class="tok-prop"> _in</span><span class="tok-op">: [</span><span class="tok-string">'engineering'</span><span class="tok-op">,</span><span class="tok-string"> 'product'</span><span class="tok-op">] }</span>
+<span class="tok-op">    },</span>
+<span class="tok-var">    sort</span><span class="tok-op">: [</span><span class="tok-string">'-published_at'</span><span class="tok-op">],</span>
+<span class="tok-var">    limit</span><span class="tok-op">:</span><span class="tok-num"> 20</span>
+<span class="tok-op">  })</span>
+<span class="tok-op">)</span>
+
+<span class="tok-comment">// Subscribe to real-time updates</span>
+<span class="tok-keyword">const</span><span class="tok-var"> unsub </span><span class="tok-op">=</span><span class="tok-var"> cms</span><span class="tok-op">.</span><span class="tok-fn">subscribe</span><span class="tok-op">(</span><span class="tok-string">'articles'</span><span class="tok-op">, (</span><span class="tok-var">event</span><span class="tok-op">) =></span><span class="tok-op"> {</span>
+<span class="tok-var">  console</span><span class="tok-op">.</span><span class="tok-fn">log</span><span class="tok-op">(</span><span class="tok-var">event</span><span class="tok-op">.</span><span class="tok-prop">action</span><span class="tok-op">,</span><span class="tok-var"> event</span><span class="tok-op">.</span><span class="tok-prop">item</span><span class="tok-op">)</span>
+<span class="tok-op">})</span></code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Architecture ── -->
+<section class="arch-section section" id="architecture" aria-labelledby="arch-heading">
+  <div class="container">
+    <div class="arch-header reveal">
+      <h2 class="t-section" id="arch-heading">How it fits in your stack</h2>
+      <p class="t-subhead">
+        Nivaro sits between your existing database and your applications. It adds a permission-aware API layer without altering your table structure.
+      </p>
+    </div>
+
+    <div class="arch-diagram reveal reveal-delay-1" role="img" aria-label="Architecture diagram: MSSQL Database connects to Nivaro API, which connects to the SDK, GraphQL, and REST APIs, which connect to your admin UI and custom frontends">
+      <div class="arch-layer">
+        <span class="arch-layer-label">DATA</span>
+        <div class="arch-nodes">
+          <div class="arch-node">MSSQL Database</div>
+          <div class="arch-node" style="font-size:0.75rem;color:var(--ink-faint)">Your existing tables</div>
+        </div>
+      </div>
+
+      <div class="arch-arrow" aria-hidden="true">
+        <svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 14h20M16 7l8 7-8 7"/></svg>
+      </div>
+
+      <div class="arch-layer">
+        <span class="arch-layer-label">CORE</span>
+        <div class="arch-nodes">
+          <div class="arch-node arch-node-primary">Nivaro API</div>
+          <div class="arch-node" style="font-size:0.75rem">Fastify v5 + Knex</div>
+          <div class="arch-node" style="font-size:0.75rem">RBAC · Workflows</div>
+          <div class="arch-node" style="font-size:0.75rem">MS OIDC · Redis</div>
+        </div>
+      </div>
+
+      <div class="arch-arrow" aria-hidden="true">
+        <svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 14h20M16 7l8 7-8 7"/></svg>
+      </div>
+
+      <div class="arch-layer">
+        <span class="arch-layer-label">INTERFACE</span>
+        <div class="arch-nodes">
+          <div class="arch-node">@nivaro/sdk</div>
+          <div class="arch-node">GraphQL WS</div>
+          <div class="arch-node">REST API</div>
+        </div>
+      </div>
+
+      <div class="arch-arrow" aria-hidden="true">
+        <svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 14h20M16 7l8 7-8 7"/></svg>
+      </div>
+
+      <div class="arch-layer">
+        <span class="arch-layer-label">CONSUMERS</span>
+        <div class="arch-nodes">
+          <div class="arch-node">React Admin UI</div>
+          <div class="arch-node">Your App</div>
+          <div class="arch-node">Extensions</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Enterprise ── -->
+<section class="enterprise-section section" id="enterprise" aria-labelledby="enterprise-heading">
+  <div class="container">
+    <div class="enterprise-inner">
+      <div class="enterprise-copy reveal">
+        <h2 class="t-section" id="enterprise-heading">
+          Operational depth<br>for complex orgs
+        </h2>
+        <p class="t-subhead">
+          Nivaro was built to replace a paid enterprise CMS. Every feature exists because a real team needed it, not because a roadmap demanded it.
+        </p>
+        <div style="margin-top:0.5rem; display:flex; gap:0.75rem; flex-wrap:wrap;">
+          <a href="/docs" class="btn btn-primary">Read the docs</a>
+          <a href="https://github.com/nodeworks/nivaro" class="btn btn-outline-dark">View source</a>
+        </div>
+      </div>
+
+      <div class="enterprise-grid reveal reveal-delay-2">
+        <div class="enterprise-item">
+          <div class="enterprise-item-title">Microsoft OIDC + Entra</div>
+          <div class="enterprise-item-body">PKCE auth flow, AD group sync, and role assignment. No separate identity store.</div>
+        </div>
+        <div class="enterprise-item">
+          <div class="enterprise-item-title">Multi-workspace</div>
+          <div class="enterprise-item-body">Isolated environments with separate collections, roles, and permission scopes per workspace.</div>
+        </div>
+        <div class="enterprise-item">
+          <div class="enterprise-item-title">SLA Tracking</div>
+          <div class="enterprise-item-body">Business-hours-aware SLA rules per workflow state. Warning and breach notifications with escalation.</div>
+        </div>
+        <div class="enterprise-item">
+          <div class="enterprise-item-title">Alert Engine</div>
+          <div class="enterprise-item-body">Threshold alerts on any numeric field with cooldown windows, in-app and email delivery.</div>
+        </div>
+        <div class="enterprise-item">
+          <div class="enterprise-item-title">Data Import Queue</div>
+          <div class="enterprise-item-body">CSV import with column mapping, deduplication strategies, and live progress via Socket.io.</div>
+        </div>
+        <div class="enterprise-item">
+          <div class="enterprise-item-title">Inngest Job Queue</div>
+          <div class="enterprise-item-body">Scheduled flows, retries, and background jobs via self-hosted Inngest. No cloud dependency.</div>
+        </div>
+        <div class="enterprise-item">
+          <div class="enterprise-item-title">Public Submission Forms</div>
+          <div class="enterprise-item-body">Token-gated forms with rate limiting, optional password protection, and scrypt hashing.</div>
+        </div>
+        <div class="enterprise-item">
+          <div class="enterprise-item-title">Field-Level Watches</div>
+          <div class="enterprise-item-body">Subscribe to changes on specific fields. Notifications delivered in-app and via email when values change.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Final CTA ── -->
+<section class="cta-section section" aria-labelledby="cta-heading">
+  <div class="container">
+    <div class="cta-inner">
+      <h2 class="t-section" id="cta-heading">
+        Your data. Your schema.<br>Your CMS.
+      </h2>
+      <p class="t-subhead">
+        Nivaro is open source and self-hosted. Bring your own MSSQL database and deploy with Docker in minutes.
+      </p>
+      <div class="cta-actions">
+        <a href="/docs" class="btn btn-primary" style="font-size:1.0625rem; padding:0.75rem 1.75rem;">Read the docs</a>
+        <a href="https://github.com/nodeworks/nivaro" class="btn btn-outline-dark" style="font-size:1.0625rem; padding:0.75rem 1.75rem;">View on Github</a>
+      </div>
+      <div class="cta-built-on">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Self-hosted · No vendor lock-in · MIT licensed
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ── -->
+<footer class="footer" aria-label="Site footer">
+  <div class="container">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <div class="footer-brand-logo">
+          <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#172940"/><polyline points="7,26 7,6 23,26 23,6" fill="none" stroke="#00ceff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="miter"/></svg>
+          nivaro
+        </div>
+        <p class="footer-brand-desc">
+          Headless CMS for teams that own their MSSQL database.
+        </p>
+      </div>
+      <nav class="footer-col" aria-label="Product links">
+        <span class="footer-col-title">Product</span>
+        <a href="#features">Features</a>
+        <a href="#sdk">SDK</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#enterprise">Enterprise</a>
+        <a href="/pricing">Pricing</a>
+        <a href="/docs#roadmap">Roadmap</a>
+      </nav>
+      <nav class="footer-col" aria-label="Developer links">
+        <span class="footer-col-title">Developers</span>
+        <a href="/docs">Documentation</a>
+        <a href="/docs#sdk">SDK Reference</a>
+        <a href="/docs#graphql">GraphQL API</a>
+        <a href="/docs#extensions">Extensions</a>
+        <a href="https://github.com/nodeworks/nivaro">Source</a>
+      </nav>
+      <nav class="footer-col" aria-label="Other links">
+        <span class="footer-col-title">More</span>
+        <a href="/docs#deployment">Self-hosting</a>
+        <a href="/docs#migrations">Migrations</a>
+        <a href="/docs#auth">Auth</a>
+        <a href="/docs#workflows">Workflows</a>
+        <a href="/docs#changelog">Changelog</a>
+      </nav>
+    </div>
+    <div class="footer-bottom">
+      <p class="footer-copy">© 2026 Nodeworks. Nivaro is open source.</p>
+      <div class="footer-legal">
+        <a href="/license">License</a>
+        <a href="/privacy">Privacy</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@studio-freight/lenis@1.0.42/dist/lenis.min.js" integrity="sha384-li4UtcFCH6QeUqR4JyV58/VgTprMuz9aauj+oWtew7V4Y7ZVjnvz5px9Y3UCG0Ea" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js" integrity="sha384-g4NTh/Iv5PPU4xPyhEWqPcwtNXOvdaDI8LLnyYfyNZOjKJeYQyjzQ9X5275eBjpt" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js" integrity="sha384-Z3REaz79l2IaAZqJsSABtTbhjgOUYyV3p90XNnAPCSHg3EMTz1fouunq9WZRtj3d" crossorigin="anonymous"></script>
+<script src="app.js"></script>
+</body>
+</html>
