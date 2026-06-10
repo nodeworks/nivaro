@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+*.local
+.DS_Store
+uploads/
+*.log
+docker-compose.override.yml
+www/.vercel/
+ROADMAP.md
+DESIGN.md
+PRODUCT.md
+CLAUDE.md
+.claude
+.playwright-mcp
+.impeccable

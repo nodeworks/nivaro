@@ -1,0 +1,64 @@
+name: Publish SDK
+
+on:
+  push:
+    tags:
+      - '@sdk-*'
+
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Publish @nivaro/sdk to npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4 # TODO: pin SHA — gh api repos/actions/setup-node/git/ref/tags/v4 --jq '.object.sha'
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK
+        run: pnpm --filter @nivaro/sdk build
+
+      - name: Extract version from tag
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#@sdk-}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        working-directory: sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Generate changelog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          PREV_TAG=$(git tag --sort=-version:refname | grep "^@sdk-" | sed -n '2p' || true)
+          node scripts/gen-changelog.mjs "${PREV_TAG}" "${CURRENT_TAG}" "@nivaro/sdk" > CHANGELOG_DRAFT.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          gh release create "@sdk-${VERSION}" \
+            --title "@nivaro/sdk v${VERSION}" \
+            --notes-file CHANGELOG_DRAFT.md

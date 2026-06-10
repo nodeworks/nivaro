@@ -1,0 +1,55 @@
+{
+  "name": "@nivaro/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Nivaro CMS — typed REST client, GraphQL, realtime subscriptions, and presence.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "cms",
+    "headless-cms",
+    "nivaro",
+    "sdk",
+    "typescript",
+    "rest",
+    "graphql",
+    "realtime",
+    "workflow",
+    "fastify"
+  ],
+  "homepage": "https://nivaro.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nodeworks/nivaro"
+  },
+  "bugs": {
+    "url": "https://github.com/nodeworks/nivaro/issues",
+    "email": "support@nivaro.dev"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --out-dir dist",
+    "dev": "tsup src/index.ts --format esm --dts --out-dir dist --watch"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3"
+  }
+}

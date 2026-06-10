@@ -1,0 +1,110 @@
+services:
+  # ─── Redis ───────────────────────────────────────────────────────────────────
+  # Used by: API (sessions, Socket.io adapter) + Inngest
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - nivaro
+
+  # ─── PostgreSQL ──────────────────────────────────────────────────────────────
+  # ONLY for Inngest event/run history persistence.
+  # The main app database is an external MSSQL server — NOT included here.
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: inngest
+      POSTGRES_PASSWORD: inngest
+      POSTGRES_DB: inngest
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inngest -d inngest"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - nivaro
+
+  # ─── Inngest ─────────────────────────────────────────────────────────────────
+  inngest:
+    image: inngest/inngest:latest
+    command: inngest start --host 0.0.0.0
+    ports:
+      - "8288:8288"
+    environment:
+      # Fixed dev signing key — must be 64-char hex. Override by setting
+      # INNGEST_SIGNING_KEY_DOCKER in your environment (not .env) for production.
+      INNGEST_EVENT_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
+      INNGEST_POSTGRES_URI: postgres://inngest:inngest@postgres:5432/inngest
+      INNGEST_REDIS_URI: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "inngest", "alpha", "doctor"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - nivaro
+
+  # ─── API ─────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "3055:3055"
+    env_file: .env
+    environment:
+      # Override local dev values with docker-internal hostnames
+      REDIS_URL: redis://redis:6379
+      INNGEST_BASE_URL: http://inngest:8288
+      NODE_ENV: production
+      # Must match the inngest service signing key above
+      INNGEST_EVENT_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
+    depends_on:
+      redis:
+        condition: service_healthy
+      inngest:
+        condition: service_healthy
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - nivaro
+
+  # ─── Admin UI ────────────────────────────────────────────────────────────────
+  admin:
+    build:
+      context: .
+      dockerfile: admin/Dockerfile
+    ports:
+      - "3056:80"
+    depends_on:
+      - api
+    networks:
+      - nivaro
+
+volumes:
+  redis_data:
+  postgres_data:
+  uploads_data:
+
+networks:
+  nivaro:
+    driver: bridge

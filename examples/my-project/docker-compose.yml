@@ -1,0 +1,80 @@
+services:
+  nivaro:
+    image: nodeworks/nivaro:latest
+    ports:
+      - "3055:3055"
+    env_file: .env
+    environment:
+      # Override with docker-internal hostnames
+      REDIS_URL: redis://redis:6379
+      INNGEST_BASE_URL: http://inngest:8288
+      # Must match the inngest service below. Override INNGEST_SIGNING_KEY_DOCKER
+      # in your shell (or CI secrets) for production — never commit a real key.
+      INNGEST_EVENT_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
+    volumes:
+      # Mount your compiled extensions — each subfolder is one extension
+      - ./extensions:/app/api/extensions
+      # Persist uploaded files
+      - uploads:/app/uploads
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      inngest:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: inngest
+      POSTGRES_PASSWORD: inngest
+      POSTGRES_DB: inngest
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inngest -d inngest"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  inngest:
+    image: inngest/inngest:latest
+    restart: unless-stopped
+    command: inngest start --host 0.0.0.0
+    ports:
+      - "8288:8288"
+    environment:
+      INNGEST_EVENT_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
+      INNGEST_POSTGRES_URI: postgres://inngest:inngest@postgres:5432/inngest
+      INNGEST_REDIS_URI: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "inngest", "alpha", "doctor"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+volumes:
+  uploads:
+  redis_data:
+  postgres_data:

@@ -1,0 +1,60 @@
+import type { Knex } from 'knex'
+
+export async function up(knex: Knex): Promise<void> {
+  await knex.schema.createTable('nivaro_addendums', (t) => {
+    t.uuid('id').primary().defaultTo(knex.raw('NEWID()'))
+    t.string('parent_collection', 255).notNullable()
+    t.string('parent_id', 255).notNullable()
+    t.string('title', 500).notNullable()
+    t.specificType('description', 'nvarchar(max)').nullable()
+    t.uuid('workflow_template_id').nullable()
+    t.foreign('workflow_template_id')
+      .references('id')
+      .inTable('nivaro_workflow_templates')
+      .onDelete('NO ACTION')
+      .onUpdate('NO ACTION')
+    t.string('current_state', 255).nullable()
+    t.specificType('fields_schema', 'nvarchar(max)').nullable()
+    t.specificType('data', 'nvarchar(max)').nullable()
+    t.float('cost_impact').nullable()
+    t.integer('timeline_impact_days').nullable()
+    t.string('status', 50).notNullable().defaultTo('draft') // 'draft' | 'review' | 'approved' | 'rejected'
+    t.uuid('created_by').nullable()
+    t.foreign('created_by')
+      .references('id')
+      .inTable('nivaro_users')
+      .onDelete('NO ACTION')
+      .onUpdate('NO ACTION')
+    t.datetime('created_at').defaultTo(knex.fn.now())
+    t.datetime('updated_at').defaultTo(knex.fn.now())
+  })
+
+  await knex.schema.createTable('nivaro_change_orders', (t) => {
+    t.increments('id')
+    t.string('parent_collection', 255).notNullable()
+    t.string('parent_id', 255).notNullable()
+    t.uuid('addendum_id').notNullable()
+    t.foreign('addendum_id')
+      .references('id')
+      .inTable('nivaro_addendums')
+      .onDelete('NO ACTION')
+      .onUpdate('NO ACTION')
+    t.integer('order_number').notNullable()
+    t.float('net_cost_impact').nullable()
+    t.integer('net_timeline_impact_days').nullable()
+    t.datetime('approved_at').nullable()
+    t.uuid('approved_by').nullable()
+    t.foreign('approved_by')
+      .references('id')
+      .inTable('nivaro_users')
+      .onDelete('NO ACTION')
+      .onUpdate('NO ACTION')
+    t.specificType('notes', 'nvarchar(max)').nullable()
+    t.datetime('created_at').defaultTo(knex.fn.now())
+  })
+}
+
+export async function down(knex: Knex): Promise<void> {
+  await knex.schema.dropTableIfExists('nivaro_change_orders')
+  await knex.schema.dropTableIfExists('nivaro_addendums')
+}

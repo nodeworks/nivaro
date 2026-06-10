@@ -1,0 +1,18 @@
+{
+  "name": "@nivaro/example-ui-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.api.json",
+    "build:ui": "vite build",
+    "build:api": "tsc -p tsconfig.api.json",
+    "dev": "vite build --watch"
+  },
+  "devDependencies": {
+    "@nivaro/sdk": "workspace:*",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "vite": "^6.0.0"
+  }
+}

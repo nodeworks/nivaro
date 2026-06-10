@@ -1,0 +1,10 @@
+{% layout 'base' %}
+{% block content %}
+<p style="margin:0 0 18px;">Hi {{ first_name | default: 'there' }},</p>
+<p style="margin:0 0 18px;">You've been invited to access <strong>{{ project_name | default: 'Nivaro' }}</strong>.</p>
+<p style="margin:0 0 18px;">Click the button below to sign in with your Microsoft account:</p>
+<p style="margin:0 0 18px;">
+  <a href="{{ login_url }}" style="display:inline-block;padding:12px 28px;background-color:#00ceff;color:#172940;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;text-decoration:none;border-radius:6px;">Sign in</a>
+</p>
+<p style="margin:24px 0 0;font-size:13px;color:#64748b;">If you weren't expecting this invitation, you can safely ignore this email.</p>
+{% endblock %}

@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pricing — Nivaro Headless CMS</title>
+  <meta name="description" content="Nivaro is free, open source, and self-hosted. No per-seat pricing, no vendor lock-in. Deploy on your own infrastructure.">
+  <meta property="og:title" content="Pricing — Nivaro Headless CMS">
+  <meta property="og:description" content="Free forever. Self-hosted. MIT licensed. Optional Pro support for teams that need it.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Onest:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+
+  <style>
+    /* ── Pricing hero ── */
+    .pricing-hero {
+      background: var(--bg-dark);
+      padding-block: clamp(6rem, 12vw, 10rem);
+      padding-block-start: calc(var(--nav-h) + clamp(4rem, 8vw, 6rem));
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .pricing-hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 70% 55% at 50% 0%, oklch(0.753 0.182 214 / 0.13) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .pricing-hero-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--primary);
+      background: oklch(0.753 0.182 214 / 0.1);
+      border: 1px solid oklch(0.753 0.182 214 / 0.25);
+      border-radius: 100px;
+      padding: 0.3125rem 0.875rem;
+      margin-bottom: 1.5rem;
+    }
+    .pricing-hero h1 {
+      color: var(--ink-dark);
+      margin-bottom: 1.25rem;
+    }
+    .pricing-hero h1 em {
+      font-style: normal;
+      color: var(--primary);
+    }
+    .pricing-hero .t-subhead {
+      color: var(--ink-muted-dark);
+      max-width: 600px;
+      margin-inline: auto;
+    }
+    .pricing-hero-meta {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1.5rem;
+      margin-top: 2rem;
+      flex-wrap: wrap;
+    }
+    .pricing-hero-meta-item {
+      display: flex;
+      align-items: center;
+      gap: 0.4375rem;
+      font-size: 0.875rem;
+      color: var(--ink-muted-dark);
+    }
+    .pricing-hero-meta-item svg {
+      color: var(--primary);
+      flex-shrink: 0;
+    }
+
+    /* ── Pricing grid ── */
+    .pricing-section {
+      background: var(--bg-dark);
+      padding-block: clamp(3rem, 6vw, 5rem);
+    }
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1.5rem;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .pricing-grid { grid-template-columns: 1fr; max-width: 480px; margin-inline: auto; }
+    }
+
+    /* ── Pricing card ── */
+    .pricing-card {
+      background: var(--bg-dark-2);
+      border: 1px solid var(--border-dark);
+      border-radius: 16px;
+      padding: 2rem;
+      position: relative;
+      transition: border-color 200ms;
+    }
+    .pricing-card:hover { border-color: oklch(0.753 0.182 214 / 0.4); }
+    .pricing-card--featured {
+      background: var(--bg-dark-3);
+      border-color: oklch(0.753 0.182 214 / 0.35);
+      padding: 2.25rem 2rem;
+    }
+    .pricing-card--featured::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: 17px;
+      background: linear-gradient(135deg, oklch(0.753 0.182 214 / 0.3) 0%, transparent 50%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .pricing-card--featured > * { position: relative; z-index: 1; }
+
+    .pricing-card-tier {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ink-faint-dark);
+      margin-bottom: 0.75rem;
+    }
+    .pricing-card--featured .pricing-card-tier { color: var(--primary); }
+
+    .pricing-badge {
+      display: inline-block;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--bg-dark);
+      background: var(--accent);
+      border-radius: 100px;
+      padding: 0.1875rem 0.625rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .pricing-price {
+      font-family: var(--font-display);
+      font-size: clamp(2.25rem, 4vw, 3rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--ink-dark);
+      line-height: 1;
+      margin-bottom: 0.375rem;
+    }
+    .pricing-price span {
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--ink-faint-dark);
+      letter-spacing: 0;
+    }
+    .pricing-desc {
+      font-size: 0.9375rem;
+      color: var(--ink-muted-dark);
+      line-height: 1.5;
+      margin-bottom: 1.75rem;
+      min-height: 2.5rem;
+    }
+
+    .pricing-divider {
+      height: 1px;
+      background: var(--border-dark);
+      margin-bottom: 1.5rem;
+    }
+
+    .pricing-features {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6875rem;
+      margin-bottom: 2rem;
+    }
+    .pricing-features li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6875rem;
+      font-size: 0.9375rem;
+      color: var(--ink-muted-dark);
+      line-height: 1.45;
+    }
+    .pricing-features li .feat-check {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      margin-top: 0.125rem;
+      color: var(--primary);
+    }
+    .pricing-features li .feat-check--accent { color: var(--accent); }
+
+    .pricing-card .btn { width: 100%; justify-content: center; }
+    .btn-dark-outline {
+      background: transparent;
+      color: var(--ink-muted-dark);
+      border: 1px solid var(--border-dark);
+    }
+    .btn-dark-outline:hover {
+      background: var(--bg-dark-3);
+      color: var(--ink-dark);
+      border-color: oklch(0.753 0.182 214 / 0.35);
+    }
+
+    /* ── Comparison table ── */
+    .comparison-section {
+      background: var(--bg-dark);
+      padding-block: clamp(4rem, 7vw, 6rem);
+      border-top: 1px solid var(--border-dark);
+    }
+    .comparison-header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+    .comparison-header h2 { color: var(--ink-dark); margin-bottom: 0.75rem; }
+    .comparison-header p { color: var(--ink-muted-dark); }
+
+    .comparison-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9375rem;
+    }
+    .comparison-table thead th {
+      padding: 0.875rem 1.25rem;
+      text-align: left;
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 0.875rem;
+      color: var(--ink-dark);
+      border-bottom: 1px solid var(--border-dark);
+      background: var(--bg-dark-2);
+    }
+    .comparison-table thead th:not(:first-child) {
+      text-align: center;
+      white-space: nowrap;
+    }
+    .comparison-table thead th:nth-child(3) { color: var(--primary); }
+    .comparison-table thead th:nth-child(2) { color: var(--ink-muted-dark); }
+
+    .comparison-table tbody tr {
+      border-bottom: 1px solid oklch(0.265 0.028 244 / 0.6);
+      transition: background 120ms;
+    }
+    .comparison-table tbody tr:last-child { border-bottom: none; }
+    .comparison-table tbody tr:hover { background: var(--bg-dark-2); }
+
+    .comparison-table td {
+      padding: 0.75rem 1.25rem;
+      color: var(--ink-muted-dark);
+      vertical-align: middle;
+    }
+    .comparison-table td:not(:first-child) { text-align: center; }
+    .comparison-table td:first-child { color: var(--ink-dark); }
+
+    .comparison-table .section-row td {
+      padding-block: 1.25rem 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--ink-faint-dark);
+      border-bottom: 1px solid oklch(0.265 0.028 244 / 0.4);
+    }
+    .check-yes {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      color: var(--primary);
+    }
+    .check-no {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      color: var(--ink-faint-dark);
+      opacity: 0.45;
+    }
+    .check-custom {
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--accent);
+    }
+
+    /* ── FAQ ── */
+    .faq-section {
+      background: var(--bg-dark);
+      padding-block: clamp(4rem, 7vw, 6rem);
+      border-top: 1px solid var(--border-dark);
+    }
+    .faq-header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+    .faq-header h2 { color: var(--ink-dark); margin-bottom: 0.75rem; }
+    .faq-header p { color: var(--ink-muted-dark); }
+
+    .faq-list {
+      max-width: 760px;
+      margin-inline: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .faq-item {
+      border-bottom: 1px solid var(--border-dark);
+    }
+    .faq-item:first-child { border-top: 1px solid var(--border-dark); }
+
+    .faq-question {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      width: 100%;
+      padding: 1.25rem 0;
+      font-family: var(--font-display);
+      font-size: 1.0625rem;
+      font-weight: 600;
+      color: var(--ink-dark);
+      cursor: pointer;
+      background: none;
+      border: none;
+      text-align: left;
+      transition: color 120ms;
+    }
+    .faq-question:hover { color: var(--primary); }
+    .faq-question svg {
+      flex-shrink: 0;
+      transition: transform 250ms var(--ease-out-quart);
+      color: var(--ink-faint-dark);
+    }
+    .faq-item.is-open .faq-question { color: var(--primary); }
+    .faq-item.is-open .faq-question svg { transform: rotate(45deg); color: var(--primary); }
+
+    .faq-answer {
+      overflow: hidden;
+      max-height: 0;
+      transition: max-height 350ms var(--ease-out-quart);
+    }
+    .faq-answer-inner {
+      padding-bottom: 1.25rem;
+      font-size: 0.9375rem;
+      line-height: 1.7;
+      color: var(--ink-muted-dark);
+    }
+    .faq-answer-inner a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
+    .faq-answer-inner a:hover { color: oklch(0.68 0.165 214); }
+
+    /* ── Final CTA (pricing) ── */
+    .pricing-cta {
+      background: var(--bg-dark);
+      border-top: 1px solid var(--border-dark);
+      padding-block: clamp(5rem, 9vw, 7rem);
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .pricing-cta::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 60% 60% at 50% 100%, oklch(0.753 0.182 214 / 0.1) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .pricing-cta > .container { position: relative; z-index: 1; }
+    .pricing-cta h2 { color: var(--ink-dark); margin-bottom: 1rem; }
+    .pricing-cta .t-subhead { color: var(--ink-muted-dark); max-width: 560px; margin-inline: auto 0; margin-inline: auto; margin-bottom: 2.5rem; }
+    .pricing-cta-actions {
+      display: flex;
+      gap: 0.875rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 1.75rem;
+    }
+    .pricing-cta-note {
+      font-size: 0.8125rem;
+      color: var(--ink-faint-dark);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    .pricing-cta-note svg { color: var(--primary); }
+
+  </style>
+</head>
+<body>
+
+<!-- ── Navigation ── -->
+<nav class="nav nav-dark" id="nav" role="navigation" aria-label="Primary">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo" aria-label="Nivaro home">
+      <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#172940"/><polyline points="7,26 7,6 23,26 23,6" fill="none" stroke="#00ceff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="miter"/></svg>
+      nivaro
+    </a>
+    <ul class="nav-links" role="list">
+      <li><a href="/#features">Features</a></li>
+      <li><a href="/#sdk">SDK</a></li>
+      <li><a href="/#architecture">Architecture</a></li>
+      <li><a href="/#enterprise">Enterprise</a></li>
+      <li><a href="/pricing" class="active" aria-current="page">Pricing</a></li>
+    </ul>
+    <div class="nav-cta">
+      <a href="/docs" class="btn btn-outline-dark">Documentation</a>
+      <a href="https://github.com/nodeworks/nivaro" class="btn btn-primary">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Hero ── -->
+<section class="pricing-hero" aria-labelledby="pricing-hero-heading">
+  <div class="container">
+    <div class="pricing-hero-tag" aria-hidden="true">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+      MIT licensed · Self-hosted · No per-seat fees
+    </div>
+    <h1 class="t-hero" id="pricing-hero-heading">
+      Open source.<br>
+      <em>No per-seat pricing.</em>
+    </h1>
+    <p class="t-subhead" style="margin-top:1.25rem;">
+      Nivaro is free forever. Deploy it on your own infrastructure, keep 100% of your data, and scale to any team size without paying per user. Optional paid support for teams that need it.
+    </p>
+    <div class="pricing-hero-meta">
+      <span class="pricing-hero-meta-item">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
+        Unlimited collections
+      </span>
+      <span class="pricing-hero-meta-item">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="8" cy="5" r="2.5"/><path d="M3 14c0-3 10-3 10 0"/></svg>
+        Unlimited users
+      </span>
+      <span class="pricing-hero-meta-item">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M2 4h12M2 8h8M2 12h10"/></svg>
+        All 19 features included
+      </span>
+      <span class="pricing-hero-meta-item">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>
+        No vendor lock-in
+      </span>
+    </div>
+  </div>
+</section>
+
+<!-- ── Pricing Cards ── -->
+<section class="pricing-section" aria-labelledby="pricing-cards-heading">
+  <div class="container">
+    <h2 class="sr-only" id="pricing-cards-heading">Pricing tiers</h2>
+    <div class="pricing-grid">
+
+      <!-- Community -->
+      <div class="pricing-card reveal">
+        <div class="pricing-card-tier">Community</div>
+        <div class="pricing-price">Free <span>forever</span></div>
+        <p class="pricing-desc">Everything you need to run a production CMS, on your own infrastructure.</p>
+        <div class="pricing-divider"></div>
+        <ul class="pricing-features">
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Full feature set — all 19 roadmap items
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Unlimited collections, users &amp; workspaces
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            MIT licensed — use in commercial projects
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Docker deploy in minutes
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            <code class="t-mono" style="font-size:0.8125rem">@nivaro/sdk</code> TypeScript client
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Community support via GitHub Issues
+          </li>
+        </ul>
+        <a href="https://github.com/nodeworks/nivaro" class="btn btn-dark-outline">Get the source</a>
+      </div>
+
+      <!-- Pro Support (featured) -->
+      <div class="pricing-card pricing-card--featured reveal reveal-delay-1">
+        <div class="pricing-badge">Most popular</div>
+        <div class="pricing-card-tier">Pro Support</div>
+        <div class="pricing-price">$299 <span>/ month</span></div>
+        <p class="pricing-desc">The same open-source software, plus expert help from the team that built it.</p>
+        <div class="pricing-divider"></div>
+        <ul class="pricing-features">
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Everything in Community
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Priority email support — 48h SLA
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Installation &amp; migration assistance
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Architecture review call (1hr / quarter)
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Private Slack channel
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Custom Docker image builds
+          </li>
+          <li>
+            <svg class="feat-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Up to 5 team members in support
+          </li>
+        </ul>
+        <a href="mailto:support@nivaro.dev?subject=Nivaro%20Pro%20Support" class="btn btn-primary">Get Pro support</a>
+      </div>
+
+      <!-- Enterprise -->
+      <div class="pricing-card reveal reveal-delay-2">
+        <div class="pricing-card-tier">Enterprise</div>
+        <div class="pricing-price" style="font-size:clamp(1.625rem, 3vw, 2.25rem);">Contact us</div>
+        <p class="pricing-desc">Custom SLAs, dedicated implementation, and hands-on integration for complex orgs.</p>
+        <div class="pricing-divider"></div>
+        <ul class="pricing-features">
+          <li>
+            <svg class="feat-check feat-check--accent" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Everything in Pro Support
+          </li>
+          <li>
+            <svg class="feat-check feat-check--accent" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Custom SLA agreements
+          </li>
+          <li>
+            <svg class="feat-check feat-check--accent" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Dedicated implementation support
+          </li>
+          <li>
+            <svg class="feat-check feat-check--accent" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            On-premise / air-gapped deployment
+          </li>
+          <li>
+            <svg class="feat-check feat-check--accent" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            AD / Entra group sync setup
+          </li>
+          <li>
+            <svg class="feat-check feat-check--accent" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Custom extensions development
+          </li>
+          <li>
+            <svg class="feat-check feat-check--accent" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>
+            Annual contract
+          </li>
+        </ul>
+        <a href="mailto:support@nivaro.dev?subject=Nivaro%20Enterprise" class="btn btn-dark-outline" style="border-color:oklch(0.68 0.165 49 / 0.4);color:var(--accent);">Talk to us</a>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── Feature comparison table ── -->
+<section class="comparison-section reveal" aria-labelledby="comparison-heading">
+  <div class="container">
+    <div class="comparison-header">
+      <h2 class="t-section" id="comparison-heading">Full feature comparison</h2>
+      <p class="t-subhead">Every tier runs the same open-source software. Support tiers add people, not features.</p>
+    </div>
+
+    <div style="overflow-x:auto; border-radius:12px; border:1px solid var(--border-dark);">
+      <table class="comparison-table" role="table" aria-label="Feature comparison across tiers">
+        <thead>
+          <tr>
+            <th scope="col" style="width:46%">Feature</th>
+            <th scope="col" style="width:18%">Community</th>
+            <th scope="col" style="width:18%">Pro Support</th>
+            <th scope="col" style="width:18%">Enterprise</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          <tr class="section-row">
+            <td colspan="4">Core CMS</td>
+          </tr>
+          <tr>
+            <td>Metadata registry (collections &amp; fields)</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>RBAC — role, policy &amp; field-level access</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Revision history &amp; audit log</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>GraphQL API + WebSocket subscriptions</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>REST API + <code class="t-mono" style="font-size:0.8125rem">@nivaro/sdk</code></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Multi-workspace isolation</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+
+          <tr class="section-row">
+            <td colspan="4">Workflows &amp; Operations</td>
+          </tr>
+          <tr>
+            <td>State machine workflow engine</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Pipeline / owner matrix engine</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>SLA tracking (business-hours aware)</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Alert &amp; threshold engine</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Inngest background job queue</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Data import queue (CSV + column map)</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+
+          <tr class="section-row">
+            <td colspan="4">Microsoft &amp; Auth</td>
+          </tr>
+          <tr>
+            <td>Microsoft OIDC / Entra PKCE auth</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>AD / Entra group → role sync</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>AD / Entra setup &amp; configuration assistance</td>
+            <td><svg class="check-no" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Not included"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+
+          <tr class="section-row">
+            <td colspan="4">AI &amp; Intelligence</td>
+          </tr>
+          <tr>
+            <td>AI field generation (Claude)</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Record summarization</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+
+          <tr class="section-row">
+            <td colspan="4">Support</td>
+          </tr>
+          <tr>
+            <td>Community support (GitHub Issues)</td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Priority email support (48h SLA)</td>
+            <td><svg class="check-no" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Not included"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Private Slack channel</td>
+            <td><svg class="check-no" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Not included"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Architecture review call (1hr / quarter)</td>
+            <td><svg class="check-no" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Not included"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Custom SLA agreement</td>
+            <td><svg class="check-no" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Not included"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></td>
+            <td><svg class="check-no" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Not included"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+          <tr>
+            <td>Custom extensions development</td>
+            <td><svg class="check-no" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Not included"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></td>
+            <td><svg class="check-no" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Not included"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></td>
+            <td><span class="check-custom">On request</span></td>
+          </tr>
+          <tr>
+            <td>On-premise / air-gapped deployment</td>
+            <td><svg class="check-no" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Not included"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></td>
+            <td><svg class="check-no" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Not included"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></td>
+            <td><svg class="check-yes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-label="Included"><polyline points="3 8 7 12 13 4"/></svg></td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ── FAQ ── -->
+<section class="faq-section" aria-labelledby="faq-heading">
+  <div class="container">
+    <div class="faq-header reveal">
+      <h2 class="t-section" id="faq-heading">Frequently asked</h2>
+      <p class="t-subhead">Straight answers about how Nivaro is licensed, deployed, and supported.</p>
+    </div>
+
+    <div class="faq-list reveal reveal-delay-1" role="list">
+
+      <div class="faq-item" role="listitem">
+        <button class="faq-question" aria-expanded="false" aria-controls="faq-1">
+          Is it really free?
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
+        </button>
+        <div class="faq-answer" id="faq-1" role="region">
+          <div class="faq-answer-inner">
+            Yes. Nivaro is MIT licensed and the full source is on <a href="https://github.com/nodeworks/nivaro">GitHub</a>. There is no feature-gating, no usage limits, and no telemetry. Every feature — workflows, AI, multi-workspace, SLA tracking — ships in the open-source build. The only paid options are support contracts for teams that want hands-on help from the people who built it.
+          </div>
+        </div>
+      </div>
+
+      <div class="faq-item" role="listitem">
+        <button class="faq-question" aria-expanded="false" aria-controls="faq-2">
+          What does "self-hosted" mean in practice?
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
+        </button>
+        <div class="faq-answer" id="faq-2" role="region">
+          <div class="faq-answer-inner">
+            You run the Nivaro API and admin UI on your own servers or cloud account. A <code class="t-mono" style="font-size:0.8125rem">docker-compose.yml</code> is included that brings up the API, admin, Redis, Inngest, and a database in one command. You own the runtime, the data, and the keys. Nothing phones home. You can deploy to any Docker-compatible environment — VMs, Kubernetes, bare metal, AWS ECS, Azure Container Apps, etc.
+          </div>
+        </div>
+      </div>
+
+      <div class="faq-item" role="listitem">
+        <button class="faq-question" aria-expanded="false" aria-controls="faq-3">
+          Can I start on Community and upgrade to Pro later?
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
+        </button>
+        <div class="faq-answer" id="faq-3" role="region">
+          <div class="faq-answer-inner">
+            Absolutely. Community is a complete, production-ready deployment — not a trial. When your team decides they want faster support response or architectural guidance, just <a href="mailto:support@nivaro.dev?subject=Nivaro%20Pro%20Support">reach out</a>. There's no migration involved; you're already running the same software. Pro support simply adds people and access, not a different build.
+          </div>
+        </div>
+      </div>
+
+      <div class="faq-item" role="listitem">
+        <button class="faq-question" aria-expanded="false" aria-controls="faq-4">
+          How is Nivaro different from Directus?
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
+        </button>
+        <div class="faq-answer" id="faq-4" role="region">
+          <div class="faq-answer-inner">
+            Nivaro was built specifically to replace Directus 11, which moved enterprise features behind a paid plan at v11.17+. The key differences: Nivaro targets MSSQL and fixed production schemas (no dynamic schema editor), has a built-in state machine workflow engine, a multi-dimensional pipeline/owner matrix, SLA tracking, business-hours alerts, and deep Microsoft OIDC + Entra integration — all in the open-source build with no cloud upsell. It's a narrower tool that goes much deeper on operational workflows.
+          </div>
+        </div>
+      </div>
+
+      <div class="faq-item" role="listitem">
+        <button class="faq-question" aria-expanded="false" aria-controls="faq-5">
+          Do you offer a hosted (SaaS) version?
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
+        </button>
+        <div class="faq-answer" id="faq-5" role="region">
+          <div class="faq-answer-inner">
+            Not currently. Nivaro is intentionally self-hosted — the whole point is that your data stays on your infrastructure. If a managed hosting option would be useful for your team, <a href="mailto:support@nivaro.dev?subject=Nivaro%20managed%20hosting">let us know</a>; enough demand will move it up the roadmap.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── Final CTA ── -->
+<section class="pricing-cta" aria-labelledby="pricing-cta-heading">
+  <div class="container">
+    <h2 class="t-section" id="pricing-cta-heading">
+      Start with Community —<br>it's everything you need.
+    </h2>
+    <p class="t-subhead">
+      Clone the repo, spin up Docker, and have a full-featured CMS running on your own infrastructure in minutes. No sign-up. No credit card. No limits.
+    </p>
+    <div class="pricing-cta-actions">
+      <a href="https://github.com/nodeworks/nivaro" class="btn btn-primary" style="font-size:1.0625rem; padding:0.75rem 1.75rem;">Get the source</a>
+      <a href="/docs" class="btn btn-outline-dark" style="font-size:1.0625rem; padding:0.75rem 1.75rem;">Read the docs</a>
+    </div>
+    <p class="pricing-cta-note">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>
+      Self-hosted · MIT licensed · No vendor lock-in
+    </p>
+  </div>
+</section>
+
+<!-- ── Footer ── -->
+<footer class="footer" aria-label="Site footer">
+  <div class="container">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <div class="footer-brand-logo">
+          <div class="nav-logo-mark" aria-hidden="true">N</div>
+          nivaro
+        </div>
+        <p class="footer-brand-desc">
+          Headless CMS for teams that own their MSSQL database.
+        </p>
+      </div>
+      <nav class="footer-col" aria-label="Product links">
+        <span class="footer-col-title">Product</span>
+        <a href="/#features">Features</a>
+        <a href="/#sdk">SDK</a>
+        <a href="/#architecture">Architecture</a>
+        <a href="/#enterprise">Enterprise</a>
+        <a href="/docs#roadmap">Roadmap</a>
+      </nav>
+      <nav class="footer-col" aria-label="Developer links">
+        <span class="footer-col-title">Developers</span>
+        <a href="/docs">Documentation</a>
+        <a href="/docs#sdk">SDK Reference</a>
+        <a href="/docs#graphql">GraphQL API</a>
+        <a href="/docs#extensions">Extensions</a>
+        <a href="https://github.com/nodeworks/nivaro">Source</a>
+      </nav>
+      <nav class="footer-col" aria-label="Other links">
+        <span class="footer-col-title">More</span>
+        <a href="/docs#deployment">Self-hosting</a>
+        <a href="/docs#migrations">Migrations</a>
+        <a href="/docs#auth">Auth</a>
+        <a href="/docs#workflows">Workflows</a>
+        <a href="/docs#changelog">Changelog</a>
+      </nav>
+    </div>
+    <div class="footer-bottom">
+      <p class="footer-copy">© 2026 Nodeworks. Nivaro is open source.</p>
+      <div class="footer-legal">
+        <a href="/docs#license">License</a>
+        <a href="/docs#privacy">Privacy</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@studio-freight/lenis@1.0.42/dist/lenis.min.js" integrity="sha384-li4UtcFCH6QeUqR4JyV58/VgTprMuz9aauj+oWtew7V4Y7ZVjnvz5px9Y3UCG0Ea" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js" integrity="sha384-g4NTh/Iv5PPU4xPyhEWqPcwtNXOvdaDI8LLnyYfyNZOjKJeYQyjzQ9X5275eBjpt" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js" integrity="sha384-Z3REaz79l2IaAZqJsSABtTbhjgOUYyV3p90XNnAPCSHg3EMTz1fouunq9WZRtj3d" crossorigin="anonymous"></script>
+<script src="app.js"></script>
+<script>
+  // FAQ accordion
+  document.querySelectorAll('.faq-question').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const item = btn.closest('.faq-item');
+      const answer = item.querySelector('.faq-answer');
+      const isOpen = item.classList.contains('is-open');
+
+      // Close all
+      document.querySelectorAll('.faq-item.is-open').forEach(open => {
+        open.classList.remove('is-open');
+        open.querySelector('.faq-question').setAttribute('aria-expanded', 'false');
+        open.querySelector('.faq-answer').style.maxHeight = '0';
+      });
+
+      // Open clicked (if it was closed)
+      if (!isOpen) {
+        item.classList.add('is-open');
+        btn.setAttribute('aria-expanded', 'true');
+        answer.style.maxHeight = answer.scrollHeight + 'px';
+      }
+    });
+  });
+</script>
+</body>
+</html>

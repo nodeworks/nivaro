@@ -1,0 +1,66 @@
+# Release image — API + Admin SPA bundled into a single container.
+# The Fastify API serves /api/* and proxies Socket.io, then falls back to
+# serving the compiled admin SPA for all other routes.
+#
+# Build:  docker build -f Dockerfile.release -t nivaro:latest .
+# Run:    docker run -p 3055:3055 --env-file .env nivaro:latest
+
+# ─── Stage 1: base ───────────────────────────────────────────────────────────
+FROM node:22-alpine AS base
+RUN corepack enable pnpm
+
+# ─── Stage 2: install all deps ───────────────────────────────────────────────
+FROM base AS deps
+WORKDIR /app
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY api/package.json ./api/
+COPY admin/package.json ./admin/
+COPY sdk/package.json ./sdk/
+RUN pnpm install --frozen-lockfile
+
+# ─── Stage 3: build SDK + API + Admin ────────────────────────────────────────
+FROM base AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/api/node_modules ./api/node_modules
+COPY --from=deps /app/admin/node_modules ./admin/node_modules
+COPY --from=deps /app/sdk/node_modules ./sdk/node_modules
+COPY . .
+RUN pnpm --filter @nivaro/sdk build
+RUN pnpm --filter @nivaro/api build
+RUN pnpm --filter @nivaro/admin build
+
+# ─── Stage 4: production runner ──────────────────────────────────────────────
+FROM node:22-alpine AS runner
+WORKDIR /app
+
+# Upgrade Alpine packages to pick up security patches (busybox etc.)
+RUN apk upgrade --no-cache
+# Required for sharp (image processing) native binaries on Alpine
+RUN apk add --no-cache libc6-compat
+RUN corepack enable pnpm
+
+# Install production deps only
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY api/package.json ./api/
+COPY sdk/package.json ./sdk/
+RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
+
+# Compiled API + SDK
+COPY --from=build /app/api/dist ./api/dist
+COPY --from=build /app/sdk/dist ./sdk/dist
+
+# Admin SPA — Fastify serves this at /app/admin/dist (resolved from api/dist/server.js)
+COPY --from=build /app/admin/dist ./admin/dist
+
+# Mail templates
+COPY api/templates ./api/templates
+
+# Uploads directory — mount as a named volume in production
+RUN mkdir -p /app/uploads
+
+LABEL org.opencontainers.image.title="Nivaro" \
+      org.opencontainers.image.source="https://github.com/nodeworks/nivaro"
+
+EXPOSE 3055
+CMD ["node", "api/dist/index.js"]

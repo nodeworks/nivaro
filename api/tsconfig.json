@@ -1,0 +1,20 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "baseUrl": ".",
+    "paths": {
+      "@src/*": ["./src/*"],
+      "@db/*": ["./src/db/*"],
+      "@graphql/*": ["./src/graphql/*"],
+      "@hooks/*": ["./src/hooks/*"],
+      "@middleware/*": ["./src/middleware/*"],
+      "@plugins/*": ["./src/plugins/*"],
+      "@routes/*": ["./src/routes/*"],
+      "@services/*": ["./src/services/*"],
+      "@extensions/*": ["./src/extensions/*"]
+    }
+  },
+  "include": ["src/**/*"]
+}

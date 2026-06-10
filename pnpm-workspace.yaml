@@ -1,0 +1,16 @@
+packages:
+  - api
+  - admin
+  - sdk
+
+overrides:
+  '@graphiql/react': '0.37.6-alpha.2'
+allowBuilds:
+  '@scarf/scarf': true
+  '@tree-sitter-grammars/tree-sitter-yaml': true
+  core-js-pure: true
+  esbuild: true
+  protobufjs: true
+  sharp: true
+  tree-sitter: true
+  tree-sitter-json: true

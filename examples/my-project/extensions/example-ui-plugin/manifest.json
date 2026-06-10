@@ -1,0 +1,6 @@
+{
+  "name": "Example UI Plugin",
+  "version": "1.0.0",
+  "uiBundle": "ui.js",
+  "slots": ["external-api-detail", "nav-sidebar"]
+}

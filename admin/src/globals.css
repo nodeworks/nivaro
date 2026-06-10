@@ -1,0 +1,204 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Metric-matched fallback for DM Sans — minimizes layout shift on font swap */
+@font-face {
+  font-family: 'DM Sans Fallback';
+  src: local('Arial');
+  size-adjust: 100%;
+  ascent-override: 94%;
+  descent-override: 25%;
+  line-gap-override: 0%;
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 220 45% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 45% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 45% 11%;
+    --primary: 200 75% 47%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 14% 96%;
+    --secondary-foreground: 220 28% 16%;
+    --muted: 210 14% 96%;
+    --muted-foreground: 215 15% 44%;
+    --accent: 200 60% 93%;
+    --accent-foreground: 200 75% 22%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 18% 90%;
+    --input: 210 18% 90%;
+    --ring: 200 75% 47%;
+    --radius: 0.375rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: 'ss01', 'cv02', 'cv03', 'cv04';
+    font-optical-sizing: auto;
+    font-kerning: normal;
+  }
+
+  /* Tabular figures in data tables — numbers align in columns */
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Light-on-dark text: slightly open tracking + looser leading per typeset guidance */
+  aside nav a, aside nav button {
+    line-height: 1.45;
+    letter-spacing: 0.005em;
+  }
+
+  /* Mono: slashed zero, no ligatures, tabular */
+  code, pre, kbd, .font-mono {
+    font-variant-ligatures: none;
+    font-variant-numeric: slashed-zero tabular-nums;
+    font-feature-settings: 'zero' 1;
+  }
+}
+
+/* ─── Animation system ───────────────────────────────────────────────────────── */
+
+:root {
+  /* Easing */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-expo:  cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Route-level page enter — plays once on mount */
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Skeleton shimmer */
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position:  200% 0; }
+}
+
+.animate-page-enter {
+  animation: page-enter 200ms var(--ease-out-quint) both;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, hsl(210 14% 90%) 25%, hsl(210 10% 94%) 50%, hsl(210 14% 90%) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: 4px;
+}
+
+/* ─── Nivaro loader ──────────────────────────────────────────────────────────── */
+
+@keyframes draw-n {
+  0%   { stroke-dashoffset: 55; opacity: 0; }
+  8%   { opacity: 1; }
+  60%  { stroke-dashoffset: 0; opacity: 1; }
+  80%  { stroke-dashoffset: 0; opacity: 0; }
+  100% { stroke-dashoffset: 55; opacity: 0; }
+}
+
+.nvr-loader {
+  stroke-dasharray: 55;
+  stroke-dashoffset: 55;
+  opacity: 0;
+  animation: draw-n 2.4s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+}
+
+/* ─── Login page animations ──────────────────────────────────────────────────── */
+@keyframes login-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes login-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes login-mark-pulse {
+  0%, 100% { opacity: 0.035; transform: scale(1); }
+  50%       { opacity: 0.06;  transform: scale(1.04); }
+}
+
+/* Reduced motion — collapses all durations, preserves essential state */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .nvr-loader {
+    stroke-dashoffset: 0 !important;
+    opacity: 0.85 !important;
+    animation: none !important;
+  }
+}
+
+/* ─── Dark mode tokens ───────────────────────────────────────────────────────── */
+/* True neutral dark — zero chroma on all surfaces. Cyan accent unchanged.      */
+
+.dark {
+  --background: 224 15% 8%;
+  --foreground: 210 15% 94%;
+  --card: 220 12% 17%;
+  --card-foreground: 210 15% 94%;
+  --popover: 220 12% 17%;
+  --popover-foreground: 210 15% 94%;
+  --primary: 200 75% 57%;
+  --primary-foreground: 220 45% 11%;
+  --secondary: 224 15% 8%;
+  --secondary-foreground: 210 10% 85%;
+  --muted: 220 10% 22%;
+  --muted-foreground: 214 10% 62%;
+  --accent: 200 22% 20%;
+  --accent-foreground: 200 65% 78%;
+  --destructive: 0 60% 48%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 222 9% 26%;
+  --input: 222 9% 26%;
+  --ring: 200 75% 57%;
+}
+
+/* ─── Dark mode cascade overrides ────────────────────────────────────────────── */
+/* Override hardcoded Tailwind neutral utilities. Semantic colors (emerald,      */
+/* amber, red, violet) intentionally excluded — they're meaningful at any mode.  */
+
+.dark .bg-white { background-color: hsl(var(--card)) !important; }
+.dark .bg-slate-50 { background-color: hsl(220 12% 17%) !important; }
+.dark .bg-slate-100 { background-color: hsl(220 10% 22%) !important; }
+.dark .hover\:bg-slate-50:hover { background-color: hsl(220 12% 17%) !important; }
+.dark .hover\:bg-slate-50\/70:hover { background-color: hsl(220 12% 17% / 0.7) !important; }
+.dark .hover\:bg-slate-100:hover { background-color: hsl(220 10% 22%) !important; }
+.dark .border-slate-100 { border-color: hsl(222 9% 24%) !important; }
+.dark .border-slate-200 { border-color: hsl(var(--border)) !important; }
+.dark .divide-slate-100 > * + * { border-color: hsl(222 9% 24%) !important; }
+.dark .text-slate-900 { color: hsl(var(--foreground)) !important; }
+.dark .text-slate-800 { color: hsl(210 10% 88%) !important; }
+.dark .text-slate-700 { color: hsl(210 8% 76%) !important; }
+.dark .text-slate-600 { color: hsl(214 8% 64%) !important; }
+.dark .text-slate-500 { color: hsl(var(--muted-foreground)) !important; }
+.dark .text-muted-foreground { color: hsl(var(--muted-foreground)) !important; }
+.dark .bg-slate-900 { background-color: hsl(210 12% 91%) !important; }
+.dark .text-white { color: hsl(0 0% 95%) !important; }
+.dark .skeleton {
+  background: linear-gradient(90deg, hsl(220 10% 16%) 25%, hsl(220 8% 21%) 50%, hsl(220 10% 16%) 75%);
+  background-size: 200% 100%;
+}
+.dark ::-webkit-scrollbar-thumb { background: hsl(222 9% 30%); }
+.dark ::-webkit-scrollbar-thumb:hover { background: hsl(222 7% 42%); }
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(210 14% 86%); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(210 10% 68%); }
