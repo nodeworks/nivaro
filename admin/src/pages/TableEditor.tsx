@@ -4602,24 +4602,30 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                 />
               </form>
             ) : (
-              <button
-                type='button'
-                onClick={() => setSelectedId(l.id)}
-                onDoubleClick={() => { setEditingId(l.id); setEditingName(l.name) }}
+              <div
                 className={cn(
-                  'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] transition-colors',
+                  'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] transition-colors',
                   effectiveId === l.id
                     ? 'bg-nvr-cyan/10 font-medium text-nvr-cyan'
                     : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
                 )}
               >
-                {l.is_active ? (
-                  <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-nvr-cyan' />
-                ) : (
-                  <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-transparent' />
-                )}
-                <span className='truncate'>{l.name}</span>
-              </button>
+                <button type='button' onClick={() => setSelectedId(l.id)} className='flex min-w-0 flex-1 items-center gap-1.5'>
+                  {l.is_active ? (
+                    <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-nvr-cyan' />
+                  ) : (
+                    <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-transparent' />
+                  )}
+                  <span className='truncate'>{l.name}</span>
+                </button>
+                <button
+                  type='button'
+                  onClick={() => { setEditingId(l.id); setEditingName(l.name) }}
+                  className='shrink-0 opacity-0 transition-opacity group-hover:opacity-50 hover:!opacity-100'
+                >
+                  <Pencil className='h-3 w-3' />
+                </button>
+              </div>
             )}
           </div>
         ))}
