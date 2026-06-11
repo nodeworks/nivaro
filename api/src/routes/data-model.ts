@@ -879,7 +879,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
     }
 
     try {
-      const [row] = await db('nivaro_relations').insert({
+      await db('nivaro_relations').insert({
         many_collection: body.many_collection,
         many_field: body.many_field,
         one_collection: body.one_collection ?? null,
@@ -905,12 +905,14 @@ export async function dataModelRoutes(app: FastifyInstance) {
         }
       }
 
-      const id = typeof row === 'object' ? (row as { id: number }).id : row
-      const relation = await db<CMSRelation>('nivaro_relations').where({ id }).first()
+      const relation = await db<CMSRelation>('nivaro_relations')
+        .where({ many_collection: body.many_collection, many_field: body.many_field })
+        .orderBy('id', 'desc')
+        .first()
       await logActivity({
         action: 'create',
         collection: 'nivaro_relations',
-        item: String(id),
+        item: String(relation?.id ?? ''),
         user: req.user?.id,
         req,
         comment: `${body.many_collection}.${body.many_field}`
