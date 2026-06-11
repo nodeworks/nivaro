@@ -412,3 +412,69 @@ export function retryDeadLetter(
 ): Command<{ data: { ok: boolean; retried: string } }> {
   return cmd('POST', `/dead-letters/${runId}/retry`)
 }
+
+// ─── Collection layouts ───────────────────────────────────────────────────────
+
+export interface CollectionLayout {
+  id: number
+  collection: string
+  name: string
+  is_active: boolean | number
+  sort: number
+  created_at: string
+}
+
+export interface LayoutAssignment {
+  field: string
+  group_key: string | null
+  sort: number
+}
+
+export interface LayoutGroup {
+  id: number
+  collection: string
+  key: string
+  label: string
+  type: 'section' | 'tab'
+  icon: string | null
+  sort: number
+  is_collapsed: boolean | number
+  layout_id: number
+}
+
+/** List all layouts for a collection. */
+export function readCollectionLayouts(
+  collection: string
+): Command<{ data: CollectionLayout[] }> {
+  return cmd('GET', '/collection-layouts', { collection })
+}
+
+/** Read the active layout for a collection with groups + assignments. */
+export function readActiveLayout(collection: string): Command<{
+  data: { layout: CollectionLayout; groups: LayoutGroup[]; assignments: LayoutAssignment[] }
+}> {
+  return cmd('GET', '/collection-layouts/active', { collection })
+}
+
+/** Read groups for a specific layout by collection + layout id. */
+export function readLayoutGroups(
+  collection: string,
+  layoutId: number
+): Command<{ data: LayoutGroup[] }> {
+  return cmd('GET', `/field-groups/${collection}`, { layout_id: layoutId })
+}
+
+/** Read field assignments for a specific layout. */
+export function readLayoutAssignments(layoutId: number): Command<{ data: LayoutAssignment[] }> {
+  return cmd('GET', `/collection-layouts/${layoutId}/assignments`)
+}
+
+/** Activate a layout (deactivates all others for the collection). */
+export function activateLayout(layoutId: number): Command<{ data: CollectionLayout }> {
+  return cmd('POST', `/collection-layouts/${layoutId}/activate`)
+}
+
+/** Clone a layout under a new name. */
+export function cloneLayout(layoutId: number, name: string): Command<{ data: CollectionLayout }> {
+  return cmd('POST', `/collection-layouts/${layoutId}/clone`, undefined, { name })
+}
