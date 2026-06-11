@@ -14,13 +14,13 @@ export async function up(knex: Knex): Promise<void> {
 
   // 2. layout_id FK on field_groups
   await knex.schema.alterTable('nivaro_field_groups', (t) => {
-    t.integer('layout_id').nullable().references('id').inTable('nivaro_collection_layouts').onDelete('CASCADE')
+    t.integer('layout_id').nullable().references('id').inTable('nivaro_collection_layouts').onDelete('NO ACTION').onUpdate('NO ACTION')
   })
 
   // 3. layout field assignments table
   await knex.schema.createTable('nivaro_layout_field_assignments', (t) => {
     t.increments('id').primary()
-    t.integer('layout_id').notNullable().references('id').inTable('nivaro_collection_layouts').onDelete('CASCADE')
+    t.integer('layout_id').notNullable().references('id').inTable('nivaro_collection_layouts').onDelete('NO ACTION').onUpdate('NO ACTION')
     t.string('field', 255).notNullable()
     t.string('group_key', 255).nullable()
     t.integer('sort').notNullable().defaultTo(0)
@@ -33,10 +33,13 @@ export async function up(knex: Knex): Promise<void> {
     .pluck('collection') as string[]
 
   for (const collection of collections) {
-    const [row] = await knex('nivaro_collection_layouts')
+    await knex('nivaro_collection_layouts')
       .insert({ collection, name: 'Default', is_active: 1, sort: 0 })
-      .returning('id')
-    const layoutId = typeof row === 'object' ? row.id : row
+    const inserted = await knex('nivaro_collection_layouts')
+      .where({ collection, name: 'Default' })
+      .select('id')
+      .first()
+    const layoutId = inserted.id as number
 
     // point all existing groups at this layout
     await knex('nivaro_field_groups')
@@ -49,7 +52,6 @@ export async function up(knex: Knex): Promise<void> {
       .select('field', 'group_key', 'sort')
 
     const assignments = fields
-      .filter((f: { field: string; group_key: string | null; sort: number | null }) => f.group_key !== null || f.sort !== null)
       .map((f: { field: string; group_key: string | null; sort: number | null }) => ({
         layout_id: layoutId,
         field: f.field,
