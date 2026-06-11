@@ -5300,6 +5300,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
                       isM2O={kind === 'M2O'}
                       isM2M={kind === 'M2M'}
                       colSpan={getColSpan(f)}
+                      onColSpan={(span) => patchField(f, { col_span: span })}
                       fieldSettings={settings}
                       onSettings={patch => handleFieldSettings(f, patch)}
                     />
