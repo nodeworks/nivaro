@@ -13,21 +13,24 @@ function parseJsonSafe(val: unknown): unknown {
   }
 }
 
-function formatLineItem(row: Record<string, unknown>) {
+function formatSubRow(row: Record<string, unknown>) {
   return {
     ...row,
     data: parseJsonSafe(row.data)
   }
 }
 
-export async function lineItemsRoutes(app: FastifyInstance) {
-  // ─── Line item templates (must be before /:collection/:itemId/:field to avoid route conflict) ──
+export async function subRowsRoutes(app: FastifyInstance) {
+  // ─── Sub-row templates (must be before /:collection/:itemId/:field to avoid route conflict) ──
 
-  // GET /line-items/templates/:collection/:field — list templates for a field
+  // GET /sub-rows/templates/:collection/:field — list templates for a field
   app.get('/templates/:collection/:field', { preHandler: authenticate }, async (req, reply) => {
     const { collection, field } = req.params as { collection: string; field: string }
 
-    const rows = (await db('nivaro_line_item_templates')
+    if (!(await can(req.user!, 'read', collection)))
+      return reply.code(403).send({ error: 'Forbidden' })
+
+    const rows = (await db('nivaro_sub_row_templates')
       .where({ collection, field })
       .orderBy('created_at', 'desc')) as Record<string, unknown>[]
 
@@ -39,7 +42,7 @@ export async function lineItemsRoutes(app: FastifyInstance) {
     })
   })
 
-  // POST /line-items/templates — create a template
+  // POST /sub-rows/templates — create a template
   app.post('/templates', { preHandler: authenticate }, async (req, reply) => {
     const body = req.body as {
       collection: string
@@ -51,9 +54,12 @@ export async function lineItemsRoutes(app: FastifyInstance) {
     if (!body.collection || !body.field || !body.name) {
       return reply.code(400).send({ error: 'collection, field, and name are required' })
     }
+    if (body.collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await can(req.user!, 'update', body.collection)))
+      return reply.code(403).send({ error: 'Forbidden' })
 
     const now = new Date()
-    const [row] = await db('nivaro_line_item_templates')
+    const [row] = await db('nivaro_sub_row_templates')
       .insert({
         collection: body.collection,
         field: body.field,
@@ -66,7 +72,7 @@ export async function lineItemsRoutes(app: FastifyInstance) {
       .returning('id')
 
     const insertedId = typeof row === 'object' ? row.id : row
-    const created = (await db('nivaro_line_item_templates')
+    const created = (await db('nivaro_sub_row_templates')
       .where({ id: insertedId })
       .first()) as Record<string, unknown>
 
@@ -75,11 +81,11 @@ export async function lineItemsRoutes(app: FastifyInstance) {
     })
   })
 
-  // DELETE /line-items/templates/:id — delete a template
+  // DELETE /sub-rows/templates/:id — delete a template
   app.delete('/templates/:id', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
 
-    const existing = await db('nivaro_line_item_templates').where({ id }).first()
+    const existing = await db('nivaro_sub_row_templates').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
     const isAdmin = req.isAdmin ?? false
@@ -87,25 +93,28 @@ export async function lineItemsRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
-    await db('nivaro_line_item_templates').where({ id }).delete()
+    await db('nivaro_sub_row_templates').where({ id }).delete()
     return reply.code(204).send()
   })
 
-  // POST /line-items/templates/:id/apply — return template items
+  // POST /sub-rows/templates/:id/apply — return template items
   app.post('/templates/:id/apply', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
 
-    const template = (await db('nivaro_line_item_templates').where({ id }).first()) as
+    const template = (await db('nivaro_sub_row_templates').where({ id }).first()) as
       | Record<string, unknown>
       | undefined
     if (!template) return reply.code(404).send({ error: 'Not found' })
+
+    if (!(await can(req.user!, 'read', template.collection as string)))
+      return reply.code(403).send({ error: 'Forbidden' })
 
     return reply.send({ items: parseJsonSafe(template.items) })
   })
 
   // ─── Reorder — also must be before /:collection/:itemId/:field ────────────────
 
-  // POST /line-items/reorder — batch update sort values
+  // POST /sub-rows/reorder — batch update sort values
   app.post('/reorder', { preHandler: authenticate }, async (req, reply) => {
     const body = req.body as {
       collection: string
@@ -119,9 +128,12 @@ export async function lineItemsRoutes(app: FastifyInstance) {
         .code(400)
         .send({ error: 'collection, item_id, field, and order array are required' })
     }
+    if (body.collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await can(req.user!, 'update', body.collection)))
+      return reply.code(403).send({ error: 'Forbidden' })
 
     for (const item of body.order) {
-      await db('nivaro_line_items')
+      await db('nivaro_sub_rows')
         .where({
           id: item.id,
           collection: body.collection,
@@ -131,16 +143,16 @@ export async function lineItemsRoutes(app: FastifyInstance) {
         .update({ sort: item.sort, updated_at: new Date() })
     }
 
-    const rows = (await db('nivaro_line_items')
+    const rows = (await db('nivaro_sub_rows')
       .where({ collection: body.collection, item_id: body.item_id, field: body.field })
       .orderBy('sort', 'asc')) as Record<string, unknown>[]
 
-    return reply.send({ data: rows.map(formatLineItem) })
+    return reply.send({ data: rows.map(formatSubRow) })
   })
 
-  // ─── Core line item CRUD ──────────────────────────────────────────────────────
+  // ─── Core sub-row CRUD ────────────────────────────────────────────────────────
 
-  // GET /line-items/:collection/:itemId/:field
+  // GET /sub-rows/:collection/:itemId/:field
   app.get('/:collection/:itemId/:field', { preHandler: authenticate }, async (req, reply) => {
     const { collection, itemId, field } = req.params as {
       collection: string
@@ -148,15 +160,18 @@ export async function lineItemsRoutes(app: FastifyInstance) {
       field: string
     }
 
-    const rows = (await db('nivaro_line_items')
+    if (!(await can(req.user!, 'read', collection)))
+      return reply.code(403).send({ error: 'Forbidden' })
+
+    const rows = (await db('nivaro_sub_rows')
       .where({ collection, item_id: itemId, field })
       .select('id', 'sort', 'data')
       .orderBy('sort', 'asc')) as Record<string, unknown>[]
 
-    return reply.send({ data: rows.map(formatLineItem) })
+    return reply.send({ data: rows.map(formatSubRow) })
   })
 
-  // POST /line-items/:collection/:itemId/:field — add a line item
+  // POST /sub-rows/:collection/:itemId/:field — add a sub-row
   app.post('/:collection/:itemId/:field', { preHandler: authenticate }, async (req, reply) => {
     const { collection, itemId, field } = req.params as {
       collection: string
@@ -173,8 +188,7 @@ export async function lineItemsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'data object is required' })
     }
 
-    // Get max sort
-    const maxRow = await db('nivaro_line_items')
+    const maxRow = await db('nivaro_sub_rows')
       .where({ collection, item_id: itemId, field })
       .max('sort as max_sort')
       .first()
@@ -183,7 +197,7 @@ export async function lineItemsRoutes(app: FastifyInstance) {
     const newSort = maxSort + 1
     const now = new Date()
 
-    const [row] = await db('nivaro_line_items')
+    const [row] = await db('nivaro_sub_rows')
       .insert({
         collection,
         item_id: itemId,
@@ -196,7 +210,7 @@ export async function lineItemsRoutes(app: FastifyInstance) {
       .returning('id')
 
     const insertedId = typeof row === 'object' ? row.id : row
-    const created = (await db('nivaro_line_items')
+    const created = (await db('nivaro_sub_rows')
       .where({ id: insertedId })
       .select('id', 'sort', 'data')
       .first()) as Record<string, unknown>
@@ -204,15 +218,15 @@ export async function lineItemsRoutes(app: FastifyInstance) {
     await logActivity({
       action: 'create',
       user: req.user?.id,
-      collection: 'nivaro_line_items',
+      collection: 'nivaro_sub_rows',
       item: String(insertedId),
       req
     })
 
-    return reply.code(201).send({ data: formatLineItem(created) })
+    return reply.code(201).send({ data: formatSubRow(created) })
   })
 
-  // PATCH /line-items/:collection/:itemId/:field — bulk replace all line items
+  // PATCH /sub-rows/:collection/:itemId/:field — bulk replace all sub-rows
   app.patch('/:collection/:itemId/:field', { preHandler: authenticate }, async (req, reply) => {
     const { collection, itemId, field } = req.params as {
       collection: string
@@ -234,13 +248,11 @@ export async function lineItemsRoutes(app: FastifyInstance) {
 
     const now = new Date()
 
-    // Delete all existing line items for this parent+field
-    await db('nivaro_line_items').where({ collection, item_id: itemId, field }).delete()
+    await db('nivaro_sub_rows').where({ collection, item_id: itemId, field }).delete()
 
-    // Re-insert in order
     const inserted: Record<string, unknown>[] = []
     for (const item of body.items) {
-      const [row] = await db('nivaro_line_items')
+      const [row] = await db('nivaro_sub_rows')
         .insert({
           collection,
           item_id: itemId,
@@ -253,34 +265,38 @@ export async function lineItemsRoutes(app: FastifyInstance) {
         .returning('id')
 
       const insertedId = typeof row === 'object' ? row.id : row
-      const created = (await db('nivaro_line_items')
+      const created = (await db('nivaro_sub_rows')
         .where({ id: insertedId })
         .select('id', 'sort', 'data')
         .first()) as Record<string, unknown>
-      inserted.push(formatLineItem(created))
+      inserted.push(formatSubRow(created))
     }
 
     return reply.send({ data: inserted })
   })
 
-  // DELETE /line-items/:collection/:itemId/:field/:lineItemId — delete a single line item
+  // DELETE /sub-rows/:collection/:itemId/:field/:subRowId — delete a single sub-row
   app.delete(
-    '/:collection/:itemId/:field/:lineItemId',
+    '/:collection/:itemId/:field/:subRowId',
     { preHandler: authenticate },
     async (req, reply) => {
-      const { collection, itemId, field, lineItemId } = req.params as {
+      const { collection, itemId, field, subRowId } = req.params as {
         collection: string
         itemId: string
         field: string
-        lineItemId: string
+        subRowId: string
       }
 
-      const existing = await db('nivaro_line_items')
-        .where({ id: lineItemId, collection, item_id: itemId, field })
+      if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+      if (!(await can(req.user!, 'update', collection)))
+        return reply.code(403).send({ error: 'Forbidden' })
+
+      const existing = await db('nivaro_sub_rows')
+        .where({ id: subRowId, collection, item_id: itemId, field })
         .first()
       if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-      await db('nivaro_line_items').where({ id: lineItemId }).delete()
+      await db('nivaro_sub_rows').where({ id: subRowId }).delete()
 
       return reply.code(204).send()
     }

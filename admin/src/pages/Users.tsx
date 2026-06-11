@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -286,46 +287,48 @@ export function UsersPage() {
             <DialogTitle>Add User</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleCreateSubmit}>
-            <div className='space-y-4 px-6 pb-6'>
-              <div className='grid grid-cols-2 gap-3'>
-                <div className='space-y-1.5'>
-                  <Label htmlFor='first_name'>First Name</Label>
-                  <Input id='first_name' name='first_name' placeholder='Jane' />
+            <DialogBody>
+              <div className='space-y-4'>
+                <div className='grid grid-cols-2 gap-3'>
+                  <div className='space-y-1.5'>
+                    <Label htmlFor='first_name'>First Name</Label>
+                    <Input id='first_name' name='first_name' placeholder='Jane' />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label htmlFor='last_name'>Last Name</Label>
+                    <Input id='last_name' name='last_name' placeholder='Smith' />
+                  </div>
                 </div>
                 <div className='space-y-1.5'>
-                  <Label htmlFor='last_name'>Last Name</Label>
-                  <Input id='last_name' name='last_name' placeholder='Smith' />
+                  <Label htmlFor='email'>
+                    Email <span className='text-red-500'>*</span>
+                  </Label>
+                  <Input
+                    id='email'
+                    name='email'
+                    type='email'
+                    required
+                    placeholder='jane@example.com'
+                  />
+                </div>
+                <div className='space-y-1.5'>
+                  <Label htmlFor='create-role'>Role</Label>
+                  <Select name='role' defaultValue='__none__'>
+                    <SelectTrigger id='create-role'>
+                      <SelectValue placeholder='Select a role' />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value='__none__'>No role</SelectItem>
+                      {roles.map((r) => (
+                        <SelectItem key={r.id} value={r.id}>
+                          {r.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
-              <div className='space-y-1.5'>
-                <Label htmlFor='email'>
-                  Email <span className='text-red-500'>*</span>
-                </Label>
-                <Input
-                  id='email'
-                  name='email'
-                  type='email'
-                  required
-                  placeholder='jane@example.com'
-                />
-              </div>
-              <div className='space-y-1.5'>
-                <Label htmlFor='create-role'>Role</Label>
-                <Select name='role' defaultValue='__none__'>
-                  <SelectTrigger id='create-role'>
-                    <SelectValue placeholder='Select a role' />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value='__none__'>No role</SelectItem>
-                    {roles.map((r) => (
-                      <SelectItem key={r.id} value={r.id}>
-                        {r.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+            </DialogBody>
             <DialogFooter>
               <Button type='button' variant='outline' onClick={() => setShowCreate(false)}>
                 Cancel

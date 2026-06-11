@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -370,7 +371,8 @@ function CreateFlowDialog({
           <DialogTitle>Create Flow</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
-          <div className='space-y-4 px-6 pb-6'>
+          <DialogBody>
+            <div className='space-y-4'>
             <div className='space-y-1.5'>
               <Label htmlFor='flow-name'>
                 Name <span className='text-red-500'>*</span>
@@ -430,7 +432,8 @@ function CreateFlowDialog({
                 rows={3}
               />
             </div>
-          </div>
+            </div>
+          </DialogBody>
 
           <DialogFooter>
             <Button type='button' variant='outline' onClick={() => onOpenChange(false)}>

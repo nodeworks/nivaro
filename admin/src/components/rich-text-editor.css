@@ -1,0 +1,80 @@
+.nivaro-rich-text .tiptap {
+  outline: none;
+  min-height: 140px;
+}
+
+.nivaro-rich-text .tiptap p.is-editor-empty:first-child::before {
+  color: #94a3b8;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.nivaro-rich-text .tiptap > * + * { margin-top: 0.5em; }
+
+.nivaro-rich-text .tiptap h1 { font-size: 1.5em; font-weight: 700; line-height: 1.25; }
+.nivaro-rich-text .tiptap h2 { font-size: 1.25em; font-weight: 700; line-height: 1.3; }
+.nivaro-rich-text .tiptap h3 { font-size: 1.1em; font-weight: 600; line-height: 1.35; }
+
+.nivaro-rich-text .tiptap strong { font-weight: 700; }
+.nivaro-rich-text .tiptap em { font-style: italic; }
+.nivaro-rich-text .tiptap u { text-decoration: underline; }
+.nivaro-rich-text .tiptap s { text-decoration: line-through; }
+
+.nivaro-rich-text .tiptap ul { list-style: disc; padding-left: 1.25em; }
+.nivaro-rich-text .tiptap ol { list-style: decimal; padding-left: 1.25em; }
+.nivaro-rich-text .tiptap li { margin: 0.15em 0; }
+
+.nivaro-rich-text .tiptap blockquote {
+  border-left: 3px solid #e2e8f0;
+  padding-left: 0.75em;
+  color: #64748b;
+  font-style: italic;
+}
+
+.dark .nivaro-rich-text .tiptap blockquote {
+  border-left-color: #334155;
+  color: #94a3b8;
+}
+
+.nivaro-rich-text .tiptap code {
+  background: #f1f5f9;
+  border-radius: 3px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  padding: 0.1em 0.3em;
+}
+
+.dark .nivaro-rich-text .tiptap code {
+  background: #1e293b;
+}
+
+.nivaro-rich-text .tiptap pre {
+  background: #f1f5f9;
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+}
+
+.dark .nivaro-rich-text .tiptap pre {
+  background: #0f172a;
+}
+
+.nivaro-rich-text .tiptap hr {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 0.75em 0;
+}
+
+.dark .nivaro-rich-text .tiptap hr {
+  border-top-color: #334155;
+}
+
+.nivaro-rich-text .tiptap a {
+  color: #00ceff;
+  text-decoration: underline;
+  cursor: pointer;
+}

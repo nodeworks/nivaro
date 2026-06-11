@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
+import { navCategories } from '@/layouts/AppLayout'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -48,7 +49,11 @@ type Policy = {
   row_filter?: RowCondition[] | null
 }
 type Collection = { collection: string; display_name: string | null }
-type ActiveTab = 'permissions' | 'members'
+type ActiveTab = 'permissions' | 'members' | 'ui'
+
+const ALL_NAV_ITEMS = navCategories.flatMap((cat) =>
+  cat.items.map((item) => ({ category: cat.label, label: item.label, to: item.to }))
+)
 
 const ACTIONS = ['create', 'read', 'update', 'delete'] as const
 type Action = (typeof ACTIONS)[number]
@@ -631,6 +636,88 @@ function RoleListItem({
   )
 }
 
+// ─── UI permissions tab ───────────────────────────────────────────────────────
+
+function UiPermissionsTab({
+  roleId,
+  isAdmin,
+  disabled
+}: {
+  roleId: string
+  isAdmin: boolean
+  disabled: string[]
+}) {
+  const queryClient = useQueryClient()
+  const disabledSet = new Set(disabled)
+
+  const save = useMutation({
+    mutationFn: (next: string[]) =>
+      api.patch(`/roles/${roleId}/ui-permissions`, { disabled: next }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['role', roleId] })
+      queryClient.invalidateQueries({ queryKey: ['role-ui-permissions', roleId] })
+    },
+    onError: () => toast.error('Failed to update UI permissions')
+  })
+
+  function toggle(path: string) {
+    const next = new Set(disabledSet)
+    next.has(path) ? next.delete(path) : next.add(path)
+    save.mutate([...next])
+  }
+
+  const categories = [...new Set(ALL_NAV_ITEMS.map((i) => i.category))]
+
+  if (isAdmin) {
+    return (
+      <p className='py-4 text-[13px] text-slate-500'>
+        Admin roles always have full UI access — restrictions do not apply.
+      </p>
+    )
+  }
+
+  return (
+    <div className='space-y-5'>
+      <p className='text-[12px] text-slate-500'>
+        Uncheck to hide nav items and block direct URL access for this role. API access is controlled separately via policies.
+      </p>
+      {categories.map((cat) => {
+        const items = ALL_NAV_ITEMS.filter((i) => i.category === cat)
+        return (
+          <div key={cat}>
+            <p className='mb-2 text-[11px] font-semibold text-slate-400'>{cat}</p>
+            <div className='grid grid-cols-2 gap-1.5 sm:grid-cols-3'>
+              {items.map((item) => {
+                const enabled = !disabledSet.has(item.to)
+                return (
+                  <label
+                    key={item.to}
+                    className={cn(
+                      'flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[12px] transition-colors',
+                      enabled
+                        ? 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                        : 'border-slate-100 bg-slate-50 text-slate-400'
+                    )}
+                  >
+                    <input
+                      type='checkbox'
+                      checked={enabled}
+                      onChange={() => toggle(item.to)}
+                      className='rounded'
+                      disabled={save.isPending}
+                    />
+                    {item.label}
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ─── Role detail panel ────────────────────────────────────────────────────────
 
 function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
@@ -698,7 +785,7 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
 
       {/* Tabs */}
       <div className='shrink-0 flex border-b border-slate-100 bg-slate-50/50 dark:bg-muted/20 dark:border-border'>
-        {(['permissions', 'members'] as ActiveTab[]).map((tab) => (
+        {(['permissions', 'members', 'ui'] as ActiveTab[]).map((tab) => (
           <button
             key={tab}
             type='button'
@@ -710,7 +797,7 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
                 : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
             )}
           >
-            {tab}
+            {tab === 'ui' ? 'UI Access' : tab}
           </button>
         ))}
       </div>
@@ -733,6 +820,8 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
               collections={collections}
             />
           )
+        ) : activeTab === 'ui' ? (
+          <UiPermissionsTab roleId={role.id} isAdmin={role.admin_access} disabled={(roleDetail as (typeof roleDetail & { ui_permissions?: string[] }) | undefined)?.ui_permissions ?? []} />
         ) : (
           <MembersTab roleId={role.id} />
         )}

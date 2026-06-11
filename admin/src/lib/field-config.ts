@@ -35,6 +35,7 @@ export const INTERFACES_BY_TYPE: Record<string, InterfaceOption[]> = {
     { value: 'input-hash', label: 'Password / Hash' }
   ],
   text: [
+    { value: 'input', label: 'Text Input' },
     { value: 'input-multiline', label: 'Textarea' },
     { value: 'input-rich-text-md', label: 'Markdown' },
     { value: 'input-rich-text-html', label: 'WYSIWYG' },
@@ -73,6 +74,17 @@ export const INTERFACES_BY_TYPE: Record<string, InterfaceOption[]> = {
     { value: 'group-raw', label: 'Group (always open)' },
     { value: 'presentation-divider', label: 'Divider' },
     { value: 'presentation-notice', label: 'Notice / Banner' }
+  ],
+  m2o: [
+    { value: 'relation-picker', label: 'Relation Picker (default)' },
+    { value: 'input', label: 'Plain Text (FK value)' }
+  ],
+  m2m: [
+    { value: 'relation-m2m', label: 'Tags Picker (default)' },
+    { value: 'select-multiple-m2m', label: 'Multiselect Combobox' }
+  ],
+  o2m: [
+    { value: 'relation-list', label: 'Related Items List (default)' }
   ]
 }
 

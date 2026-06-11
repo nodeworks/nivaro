@@ -2,6 +2,14 @@ import type { CMSRelation } from './api'
 
 const LABEL_FALLBACK_FIELDS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
 
+// User system tables have no /collections entry and no /items route — fetch via /users instead
+export const USER_SYSTEM_COLS = new Set(['nivaro_users', 'directus_users'])
+
+export function userDisplayLabel(user: Record<string, unknown>): string {
+  const name = [user.first_name, user.last_name].filter(Boolean).join(' ').trim()
+  return name || String(user.email ?? user.id ?? '')
+}
+
 export function renderDisplayTemplate(
   template: string | null | undefined,
   item: Record<string, unknown>
@@ -24,7 +32,7 @@ export function renderDisplayTemplate(
 }
 
 export function extractTemplateFields(template: string | null | undefined): string[] {
-  if (!template) return ['id', ...LABEL_FALLBACK_FIELDS]
+  if (!template) return ['*']
   const fields = [...template.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1])
   return ['id', ...fields]
 }

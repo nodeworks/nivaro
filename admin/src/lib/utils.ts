@@ -1,3 +1,4 @@
+import * as LucideIcons from 'lucide-react'
 import { type ClassValue, clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
@@ -56,4 +57,15 @@ export function formatFileSize(bytes: number | null | undefined): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+export function resolveCollectionIcon(
+  iconName: string | null | undefined,
+): React.ElementType | null {
+  if (!iconName) return null
+  const pascal = iconName
+    .split('-')
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join('')
+  return (LucideIcons as Record<string, unknown>)[pascal] as React.ElementType | null
 }

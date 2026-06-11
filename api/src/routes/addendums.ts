@@ -31,7 +31,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { collection, itemId } = req.params as { collection: string; itemId: string }
 
-      const rows = (await db('nivaro_change_orders as co')
+      const rows = (await db('nivaro_addendum_approvals as co')
         .leftJoin('nivaro_addendums as a', 'co.addendum_id', 'a.id')
         .where({ 'co.parent_collection': collection, 'co.parent_id': itemId })
         .select(
@@ -291,10 +291,10 @@ export async function addendumsRoutes(app: FastifyInstance) {
       .update({ status: 'approved', approved_by: req.user!.id, approved_at: now, updated_at: now })
 
     // Create change order log entry if not already exists
-    const existingOrder = await db('nivaro_change_orders').where({ addendum_id: id }).first()
+    const existingOrder = await db('nivaro_addendum_approvals').where({ addendum_id: id }).first()
 
     if (!existingOrder) {
-      await db('nivaro_change_orders').insert({
+      await db('nivaro_addendum_approvals').insert({
         addendum_id: id,
         parent_collection: existing.parent_collection,
         parent_id: existing.parent_id,

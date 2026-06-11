@@ -8,7 +8,6 @@ import {
   ChevronDown,
   ChevronsUpDown,
   ChevronUp,
-  Copy,
   ExternalLink,
   FunctionSquare,
   LayoutTemplate,
@@ -21,10 +20,12 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { ApprovalPanel } from '@/components/approval-panel'
+import { CloneDialog } from '@/components/clone-dialog'
+import { RichTextEditor } from '@/components/rich-text-editor'
 import { CommentPanel } from '@/components/comment-panel'
 import { ErpStatusBadge } from '@/components/erp-status-badge'
 import { FieldHistorySparkline } from '@/components/field-history-sparkline'
@@ -42,6 +43,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Command,
+  CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
@@ -60,12 +62,18 @@ import {
   api,
   type CMSField,
   type CMSRelation,
-  type LineItem,
+  type SubRow,
   type RecordTemplate
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from '@/lib/relations'
-import { cn, titleCase } from '@/lib/utils'
+import {
+  extractTemplateFields,
+  findM2ORelation,
+  renderDisplayTemplate,
+  USER_SYSTEM_COLS,
+  userDisplayLabel
+} from '@/lib/relations'
+import { cn, resolveCollectionIcon, titleCase } from '@/lib/utils'
 
 interface TreeConfig {
   id: number
@@ -117,7 +125,7 @@ interface AiCollectionSettings {
   duplicate_threshold: number
 }
 
-interface LineItemTemplate {
+interface SubRowTemplate {
   id: number
   name: string
   items: unknown[]
@@ -147,18 +155,60 @@ function FieldInput({
   collection: string
   id?: string
 }) {
-  const m2oRelation = findM2ORelation(relations, collection, field.field)
+  const iface = field.interface ?? ''
+  // Relation interfaces: anything starting with 'relation-', the legacy
+  // 'select-multiple-m2m' interface, or no interface at all (auto-detect).
+  const isRelationInterface = !iface || iface.startsWith('relation-') || iface === 'select-multiple-m2m'
+  const m2oRelation = isRelationInterface
+    ? findM2ORelation(relations, collection, field.field)
+    : null
   if (m2oRelation) {
-    return (
-      <InlineRelationEditor relatedCollection={m2oRelation.one_collection!} relatedId={value}>
-        <RelationPicker
-          relatedCollection={m2oRelation.one_collection!}
-          value={value}
-          onChange={onChange}
-          disabled={field.readonly}
-        />
-      </InlineRelationEditor>
+    const opts = (() => { try { return typeof field.options === 'string' ? JSON.parse(field.options) : (field.options ?? {}) } catch { return {} } })()
+    const inlineEdit = opts.inline_relation !== false
+    const picker = (
+      <RelationPicker
+        relatedCollection={m2oRelation.one_collection!}
+        value={value}
+        onChange={onChange}
+        disabled={field.readonly}
+      />
     )
+    return inlineEdit ? (
+      <InlineRelationEditor relatedCollection={m2oRelation.one_collection!} relatedId={value}>
+        {picker}
+      </InlineRelationEditor>
+    ) : picker
+  }
+
+  // M2M interface override check — skip inline picker if overridden to non-relation.
+  // Don't require junction_field to be set — infer it from the companion row if
+  // missing (handles DB state where the migration hasn't populated junction_field).
+  const m2mRelation = (() => {
+    if (!isRelationInterface) return null
+    const r = relations.find(
+      (rel) => rel.one_collection === collection && rel.one_field === field.field
+    )
+    if (!r) return null
+    if (r.junction_field) return r
+    const companion = relations.find(
+      (c) => c.many_collection === r.many_collection && c.id !== r.id
+    )
+    if (!companion) return null
+    return { ...r, junction_field: companion.many_field }
+  })()
+
+  if (m2mRelation) {
+    if (!itemId || itemId === 'new') {
+      return <p className='text-[12px] text-slate-400 py-1'>Save the record first to manage related items</p>
+    }
+    if (field.interface === 'relation-m2m') {
+      return <InlineM2MPicker relation={m2mRelation} parentId={itemId} allRelations={relations} />
+    }
+    const fieldOpts = (() => { try { return typeof field.options === 'string' ? JSON.parse(field.options) : (field.options ?? {}) } catch { return {} } })()
+    if (fieldOpts.max_values === 1) {
+      return <M2MSingleSelectCombobox relation={m2mRelation} parentId={itemId} allRelations={relations} />
+    }
+    return <M2MMultiSelectCombobox relation={m2mRelation} parentId={itemId} allRelations={relations} />
   }
 
   const strVal = value === null || value === undefined ? '' : String(value)
@@ -190,11 +240,13 @@ function FieldInput({
     )
   }
 
-  if (field.type === 'integer' || field.type === 'float') {
+  const isNumeric = ['integer', 'bigInteger', 'float', 'decimal', 'numeric'].includes(field.type)
+  if (isNumeric) {
+    const isInt = field.type === 'integer' || field.type === 'bigInteger'
     return (
       <Input
         type='number'
-        step={field.type === 'float' ? 'any' : '1'}
+        step={isInt ? '1' : 'any'}
         value={strVal}
         onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
       />
@@ -272,7 +324,11 @@ function FieldInput({
     )
   }
 
-  if (field.interface === 'rich_text' || field.type === 'rich_text') {
+  if (
+    field.interface === 'rich_text' ||
+    field.interface === 'input-rich-text-html' ||
+    field.type === 'rich_text'
+  ) {
     return (
       <RichTextField
         value={typeof value === 'string' ? value : value ? JSON.stringify(value) : ''}
@@ -282,15 +338,19 @@ function FieldInput({
     )
   }
 
-  if (field.interface === 'line_items' || field.type === 'line_items') {
+  if (field.interface === 'sub_rows' || field.type === 'sub_rows') {
     return (
-      <LineItemsField
+      <SubRowsField
         collection={collection}
         itemId={itemId ?? ''}
         field={field.field}
         disabled={field.readonly}
       />
     )
+  }
+
+  if (field.interface === 'input') {
+    return <Input value={strVal} onChange={(e) => onChange(e.target.value || null)} />
   }
 
   if (field.type === 'text' || (field.interface ?? '').includes('textarea')) {
@@ -478,6 +538,39 @@ export function ItemEditPage() {
   const [generatingField, setGeneratingField] = useState<string | null>(null)
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+
+  // M2M deferred staging — links/unlinks committed only on save
+  const [m2mLinks, setM2mLinks] = useState<Map<string, unknown[]>>(new Map())
+  const [m2mUnlinks, setM2mUnlinks] = useState<Map<string, Set<unknown>>>(new Map())
+
+  const m2mStagingCtx: M2MStagingCtx = useMemo(() => ({
+    getStagedLinks: (key) => m2mLinks.get(key) ?? [],
+    getStagedUnlinks: (key) => m2mUnlinks.get(key) ?? new Set(),
+    stageLink: (key, relatedId) => setM2mLinks(prev => {
+      const next = new Map(prev)
+      next.set(key, [...(next.get(key) ?? []), relatedId])
+      return next
+    }),
+    stageUnlink: (key, junctionId) => setM2mUnlinks(prev => {
+      const next = new Map(prev)
+      const s = new Set(next.get(key))
+      s.add(junctionId)
+      next.set(key, s)
+      return next
+    }),
+    unstageLink: (key, relatedId) => setM2mLinks(prev => {
+      const next = new Map(prev)
+      next.set(key, (next.get(key) ?? []).filter(id => id !== relatedId))
+      return next
+    }),
+    unstageUnlink: (key, junctionId) => setM2mUnlinks(prev => {
+      const next = new Map(prev)
+      const s = new Set(next.get(key))
+      s.delete(junctionId)
+      next.set(key, s)
+      return next
+    }),
+  }), [m2mLinks, m2mUnlinks])
   // Pre-save AI checks — content rule violations + possible duplicates (new items only)
   const [aiWarning, setAiWarning] = useState<{
     violations: AiViolation[]
@@ -493,7 +586,7 @@ export function ItemEditPage() {
     !!collection && !!id && id !== 'new'
   )
 
-  const { data: colMeta } = useQuery({
+  const { data: colMeta, isLoading: colMetaLoading } = useQuery({
     queryKey: ['collection-meta', collection],
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!collection,
@@ -503,7 +596,7 @@ export function ItemEditPage() {
   const { data: itemData, isLoading } = useQuery({
     queryKey: ['item', collection, id],
     queryFn: () => api.get(`/items/${collection}/${id}`).then((r) => r.data.data),
-    enabled: !!collection && !!id
+    enabled: !!collection && !!id && id !== 'new'
   })
 
   const { data: treeConfig } = useQuery({
@@ -804,6 +897,22 @@ export function ItemEditPage() {
     return { ungrouped, groups, groupedMap }
   }, [allFields, fieldGroups, fieldConfigMap])
 
+  const COL_SPAN_CLASS: Record<number, string> = {
+    3: 'col-span-12 sm:col-span-3',
+    4: 'col-span-12 sm:col-span-4',
+    6: 'col-span-12 sm:col-span-6',
+    12: 'col-span-12',
+  }
+
+  const getFieldColSpanClass = (field: CMSField): string => {
+    try {
+      const opts = field.options
+      const obj = typeof opts === 'string' ? JSON.parse(opts) : opts
+      const span = (obj as Record<string, unknown>)?.col_span
+      return COL_SPAN_CLASS[span as number] ?? 'col-span-12'
+    } catch { return 'col-span-12' }
+  }
+
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev)
@@ -813,10 +922,67 @@ export function ItemEditPage() {
     })
   }
 
-  // Virtual field names defined by O2M/M2M relations — these have no real DB column
+  // ── Tab groups ──────────────────────────────────────────────────────────────
+  const tabGroups = useMemo(
+    () => (groupedFields?.groups ?? []).filter((g) => g.type === 'tab'),
+    [groupedFields]
+  )
+  const sectionGroups = useMemo(
+    () => (groupedFields?.groups ?? []).filter((g) => g.type === 'section'),
+    [groupedFields]
+  )
+  const hasTabs = tabGroups.length > 0
+
+  const hasGeneralContent =
+    hasTabs &&
+    ((groupedFields?.ungrouped.filter((f) => !f.hidden && !SYSTEM_FIELDS.has(f.field)).length ??
+      0) > 0 ||
+      sectionGroups.length > 0)
+
+  const [activeTab, setActiveTabRaw] = useState<string>(() => {
+    try {
+      return localStorage.getItem(`nvr_tab_${collection}`) ?? '__general__'
+    } catch {
+      return '__general__'
+    }
+  })
+
+  const setActiveTab = (key: string) => {
+    setActiveTabRaw(key)
+    try { localStorage.setItem(`nvr_tab_${collection}`, key) } catch { /* noop */ }
+  }
+
+  // Reset to first valid tab when tab structure changes
+  useEffect(() => {
+    if (!hasTabs) return
+    const valid = new Set([
+      ...(hasGeneralContent ? ['__general__'] : []),
+      ...tabGroups.map((g) => g.key)
+    ])
+    if (!valid.has(activeTab)) {
+      setActiveTabRaw(tabGroups[0]?.key ?? '__general__')
+    }
+  }, [hasTabs, tabGroups, hasGeneralContent, activeTab])
+
+  // Error dot: which tabs contain a validation error
+  const tabsWithErrors = useMemo(() => {
+    const out = new Set<string>()
+    for (const [field, err] of Object.entries(validationErrors)) {
+      if (!err) continue
+      const gk = fieldConfigMap[field]?.group_key
+      if (!gk) { out.add('__general__'); continue }
+      const grp = groupedFields?.groups.find((g) => g.key === gk)
+      if (!grp || grp.type !== 'tab') out.add('__general__')
+      else out.add(gk)
+    }
+    return out
+  }, [validationErrors, fieldConfigMap, groupedFields])
+
+  // O2M virtual fields have no DB column and are handled by O2MPanel — exclude from editable fields
+  // M2M virtual fields are now rendered inline by InlineM2MPicker so they stay in editable fields
   const virtualFieldNames = new Set(
     relations
-      .filter((r) => r.one_collection === collection && r.one_field !== null)
+      .filter((r) => r.one_collection === collection && r.one_field !== null && r.junction_field === null)
       .map((r) => r.one_field!)
   )
 
@@ -835,6 +1001,24 @@ export function ItemEditPage() {
     ? new Set(['path', 'depth'])
     : new Set()
 
+  // Detect all M2M relations for this collection.
+  // Don't require junction_field to be set — infer it from the companion row if missing.
+  // This handles DB state where migration hasn't yet populated junction_field.
+  const allM2mRelations: CMSRelation[] = relations
+    .filter((r) => r.one_collection === collection)
+    .map((r) => {
+      if (r.junction_field) return r
+      // Infer junction_field from companion row in the same junction table
+      const companion = relations.find(
+        (c) => c.many_collection === r.many_collection && c.id !== r.id
+      )
+      if (!companion) return null
+      return { ...r, junction_field: companion.many_field }
+    })
+    .filter((r): r is CMSRelation => r !== null)
+
+  const namedM2mFields = new Set(allM2mRelations.map((r) => r.one_field).filter(Boolean) as string[])
+
   const editableFields = allFields.filter(
     (f) =>
       !f.hidden &&
@@ -842,14 +1026,13 @@ export function ItemEditPage() {
       !SYSTEM_FIELDS.has(f.field) &&
       !pathFieldNames.has(f.field) &&
       !virtualFieldNames.has(f.field) &&
-      !computedFieldNames.has(f.field)
+      !computedFieldNames.has(f.field) &&
+      !namedM2mFields.has(f.field)
   )
   const systemFields = allFields.filter(
     (f) => SYSTEM_FIELDS.has(f.field) || f.readonly || pathFieldNames.has(f.field)
   )
 
-  // Inherited field values — sidecar map of { field: ancestorId } returned by
-  // item reads when the collection has inheritable fields (nivaro_fields.is_inheritable).
   const inheritedMap =
     ((itemData as Record<string, unknown> | undefined)?._inherited as
       | Record<string, unknown>
@@ -858,12 +1041,12 @@ export function ItemEditPage() {
   const displayName = colMeta?.display_name ?? titleCase(collection ?? '')
 
   const o2mRelations: CMSRelation[] = relations.filter(
-    (r) => r.one_collection === collection && r.junction_field === null
+    (r) => r.one_collection === collection && !r.junction_field &&
+      !relations.find((c) => c.many_collection === r.many_collection && c.id !== r.id)
   )
 
-  const m2mRelations: CMSRelation[] = relations.filter(
-    (r) => r.one_collection === collection && r.junction_field !== null
-  )
+  const namedM2mRelations = allM2mRelations
+  const m2mRelations: CMSRelation[] = []
 
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
   const { data: extItemActions = [] } = useQuery({
@@ -953,7 +1136,35 @@ export function ItemEditPage() {
       }
     }
 
-    mutation.mutate(patch)
+    try {
+      const saved = await mutation.mutateAsync(patch)
+      const savedId = id !== 'new' ? id! : String((saved as Record<string, unknown>).id)
+      // Commit staged M2M changes now that the parent record exists
+      const m2mOps: Promise<unknown>[] = []
+      // Commit staged M2M ops for all M2M relations
+      for (const rel of [...namedM2mRelations, ...m2mRelations]) {
+        const key = rel.one_field ?? `${rel.many_collection}.${rel.junction_field}`
+        const links = m2mLinks.get(key) ?? []
+        const unlinks = m2mUnlinks.get(key) ?? new Set()
+        for (const relatedId of links) {
+          m2mOps.push(api.post(`/items/${rel.many_collection}`, {
+            [rel.many_field]: savedId,
+            [rel.junction_field!]: relatedId,
+          }))
+        }
+        for (const junctionId of unlinks) {
+          m2mOps.push(api.delete(`/items/${rel.many_collection}/${junctionId}`))
+        }
+      }
+      if (m2mOps.length > 0) {
+        await Promise.all(m2mOps)
+        setM2mLinks(new Map())
+        setM2mUnlinks(new Map())
+        queryClient.invalidateQueries({ queryKey: ['m2m-items'] })
+      }
+    } catch {
+      // mutation.onError already surfaces the error toast
+    }
   }
 
   // Apply dependency cascade for fields that depend on the changed one
@@ -1003,7 +1214,26 @@ export function ItemEditPage() {
       })
   }
 
+  if (colMetaLoading || isLoading) {
+    return (
+      <div className='p-8 space-y-4 max-w-3xl'>
+        <Skeleton className='h-8 w-48' />
+        <Skeleton className='h-4 w-32' />
+        <div className='space-y-4 mt-8'>
+          {[...Array(6)].map((_, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: skeleton
+            <div key={i} className='space-y-1.5'>
+              <Skeleton className='h-3 w-24' />
+              <Skeleton className='h-9 w-full' />
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   return (
+    <M2MStagingContext.Provider value={m2mStagingCtx}>
     <div className='p-8'>
       {/* Header */}
       <div className='flex items-center gap-4 mb-8'>
@@ -1038,43 +1268,6 @@ export function ItemEditPage() {
             </nav>
           )}
         </div>
-        <RevisionsPanel
-          collection={collection!}
-          item={id!}
-          onRollback={() => {
-            queryClient.invalidateQueries({ queryKey: ['item', collection, id] })
-            setInitialized(false)
-          }}
-        />
-        {id !== 'new' && (
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-8 text-[12px]'
-            onClick={async () => {
-              try {
-                const res = await api.post<{ data: { id: string | number } }>(
-                  `/items/${collection}/${id}/clone`
-                )
-                toast.success('Item cloned')
-                navigate(`/collections/${collection}/${res.data.data.id}`)
-              } catch {
-                toast.error('Failed to clone item')
-              }
-            }}
-          >
-            <Copy className='mr-1.5 h-3.5 w-3.5' />
-            Clone
-          </Button>
-        )}
-        {id !== 'new' && (
-          <ScheduleChangeDialog
-            collection={collection!}
-            itemId={id!}
-            currentValues={draft}
-            fields={allFields}
-          />
-        )}
         {dpConfig?.draft_publish_enabled && id !== 'new' && (
           <div className='flex items-center gap-2'>
             <span
@@ -1164,27 +1357,68 @@ export function ItemEditPage() {
             {action.label}
           </Button>
         ))}
-        {user?.is_admin && (
-          <Button variant='outline' onClick={handleSummarize} disabled={summarizing} size='sm'>
-            {summarizing ? (
-              <Loader2 className='h-4 w-4 mr-1.5 animate-spin' />
-            ) : (
-              <Sparkles className='h-4 w-4 mr-1.5' />
-            )}
-            Summarize
-          </Button>
-        )}
-        <Button
-          onClick={() => handleSave()}
-          disabled={mutation.isPending || aiChecking || isReadOnly}
-        >
-          {aiChecking ? (
-            <Loader2 className='h-4 w-4 mr-1.5 animate-spin' />
-          ) : (
-            <Save className='h-4 w-4 mr-1.5' />
+        <div className='flex overflow-hidden rounded-md'>
+          {id !== 'new' && (
+            <RevisionsPanel
+              collection={collection!}
+              item={id!}
+              onRollback={() => {
+                queryClient.invalidateQueries({ queryKey: ['item', collection, id] })
+                setInitialized(false)
+              }}
+              triggerClassName='gap-1.5 rounded-none border-r-0'
+            />
           )}
-          {aiChecking ? 'Checking…' : mutation.isPending ? 'Saving…' : 'Save'}
-        </Button>
+          {id !== 'new' && (
+            <CloneDialog
+              collection={collection!}
+              itemId={id!}
+              fields={allFields}
+              relations={relations}
+              currentValues={draft}
+              onSuccess={(newId) => navigate(`/collections/${collection}/${newId}`)}
+              triggerClassName='rounded-none border-r-0'
+            />
+          )}
+          {id !== 'new' && (
+            <ScheduleChangeDialog
+              collection={collection!}
+              itemId={id!}
+              currentValues={draft}
+              fields={allFields}
+              triggerClassName='rounded-none border-r-0'
+            />
+          )}
+          {user?.is_admin && (
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={handleSummarize}
+              disabled={summarizing}
+              className='rounded-none border-r-0'
+            >
+              {summarizing ? (
+                <Loader2 className='h-3.5 w-3.5 mr-1.5 animate-spin' />
+              ) : (
+                <Sparkles className='h-3.5 w-3.5 mr-1.5' />
+              )}
+              Summarize
+            </Button>
+          )}
+          <Button
+            size='sm'
+            onClick={() => handleSave()}
+            disabled={mutation.isPending || aiChecking || isReadOnly}
+            className='rounded-none'
+          >
+            {aiChecking ? (
+              <Loader2 className='h-3.5 w-3.5 mr-1.5 animate-spin' />
+            ) : (
+              <Save className='h-3.5 w-3.5 mr-1.5' />
+            )}
+            {aiChecking ? 'Checking…' : mutation.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
       </div>
 
       {/* Edit lock banner — shown when another user is editing this item */}
@@ -1315,7 +1549,7 @@ export function ItemEditPage() {
         </div>
       )}
 
-      {isLoading ? (
+      {isLoading || colMetaLoading ? (
         <div className='space-y-4'>
           {[...Array(5)].map((_, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: skeleton
@@ -1394,10 +1628,7 @@ export function ItemEditPage() {
           {editableFields.length > 0 && (
             <fieldset disabled={isReadOnly} className='m-0 min-w-0 border-0 p-0'>
               <Card>
-                <CardHeader className='pb-2'>
-                  <CardTitle className='text-sm font-medium text-slate-500'>Fields</CardTitle>
-                </CardHeader>
-                <CardContent className='space-y-5'>
+                <CardContent className='space-y-5 pt-6'>
                   {/* Template picker for new items */}
                   {id === 'new' && (
                     <TemplatePicker
@@ -1406,10 +1637,176 @@ export function ItemEditPage() {
                     />
                   )}
 
-                  {groupedFields ? (
-                    // Render with field groups
+                  {hasTabs ? (
+                    // ── Tab mode ────────────────────────────────────────────
                     <>
-                      {/* Ungrouped fields first */}
+                      {/* Tab strip */}
+                      <div className='mb-5 flex items-center gap-0.5 border-b border-slate-200 pb-0 -mt-1'>
+                        {hasGeneralContent && (
+                          <button
+                            type='button'
+                            onClick={() => setActiveTab('__general__')}
+                            className={cn(
+                              'relative flex items-center gap-1.5 rounded-t px-3.5 py-2 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                              activeTab === '__general__'
+                                ? 'bg-white text-slate-900 shadow-[inset_0_-2px_0_#00ceff]'
+                                : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                            )}
+                          >
+                            General
+                            {tabsWithErrors.has('__general__') && (
+                              <span className='h-1.5 w-1.5 rounded-full bg-red-500' />
+                            )}
+                          </button>
+                        )}
+                        {tabGroups.map((g) => (
+                          <button
+                            key={g.key}
+                            type='button'
+                            onClick={() => setActiveTab(g.key)}
+                            className={cn(
+                              'relative flex items-center gap-1.5 rounded-t px-3.5 py-2 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                              activeTab === g.key
+                                ? 'bg-white text-slate-900 shadow-[inset_0_-2px_0_#00ceff]'
+                                : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                            )}
+                          >
+                            {g.icon && (() => { const I = resolveCollectionIcon(g.icon!) as React.ElementType; return <I className='h-3.5 w-3.5 shrink-0 mr-1' /> })()}
+                            {g.label}
+                            {tabsWithErrors.has(g.key) && (
+                              <span className='h-1.5 w-1.5 rounded-full bg-red-500' />
+                            )}
+                          </button>
+                        ))}
+                        <div className='ml-auto flex items-center pr-1'>
+                          <span className='text-[11px] text-slate-400'>
+                            {(hasGeneralContent ? 1 : 0) + tabGroups.length} tabs
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* General tab content */}
+                      {activeTab === '__general__' && hasGeneralContent && (
+                        <div className='space-y-4'>
+                          {groupedFields!.ungrouped
+                            .filter(
+                              (f) =>
+                                !f.hidden &&
+                                !SYSTEM_FIELDS.has(f.field) &&
+                                !pathFieldNames.has(f.field) &&
+                                !hiddenFields.has(f.field)
+                            )
+                            .map((field) => (
+                              <FieldRow
+                                key={field.field}
+                                field={field}
+                                draft={draft}
+                                inheritedMap={inheritedMap}
+                                original={itemData as Record<string, unknown> | undefined}
+                                lockedFields={lockedFields}
+                                validationErrors={validationErrors}
+                                treeConfig={treeConfig ?? null}
+                                collection={collection!}
+                                id={id}
+                                colMeta={colMeta}
+                                user={user}
+                                generatingField={generatingField}
+                                handleFieldChange={handleFieldChange}
+                                handleGenerateField={handleGenerateField}
+                              />
+                            ))}
+                          {sectionGroups.map((group) => {
+                            const gfl = (groupedFields!.groupedMap[group.key] ?? []).filter(
+                              (f) => !f.hidden && !pathFieldNames.has(f.field) && !hiddenFields.has(f.field)
+                            )
+                            if (gfl.length === 0) return null
+                            const isCollapsed = collapsedGroups.has(group.key)
+                            return (
+                              <div key={group.key} className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+                                <button
+                                  type='button'
+                                  onClick={() => toggleGroup(group.key)}
+                                  className='flex w-full items-center justify-between bg-slate-50 border-b border-slate-200 px-4 py-3 text-[13px] font-medium text-slate-700'
+                                >
+                                  <span className='flex items-center gap-1.5'>
+                                    {group.icon && (() => { const I = resolveCollectionIcon(group.icon!) as React.ElementType; return <I className='h-3.5 w-3.5 shrink-0 text-slate-400' /> })()}
+                                    {group.label}
+                                  </span>
+                                  <ChevronDown className={cn('h-4 w-4 text-slate-400 transition-transform', isCollapsed ? '' : 'rotate-180')} />
+                                </button>
+                                {!isCollapsed && (
+                                  <div className='grid grid-cols-12 gap-4 p-4 items-start'>
+                                    {gfl.map((field) => (
+                                      <div key={field.field} className={getFieldColSpanClass(field)}>
+                                        <FieldRow
+                                          field={field}
+                                          draft={draft}
+                                          inheritedMap={inheritedMap}
+                                          original={itemData as Record<string, unknown> | undefined}
+                                          lockedFields={lockedFields}
+                                          validationErrors={validationErrors}
+                                          treeConfig={treeConfig ?? null}
+                                          collection={collection!}
+                                          id={id}
+                                          colMeta={colMeta}
+                                          user={user}
+                                          generatingField={generatingField}
+                                          handleFieldChange={handleFieldChange}
+                                          handleGenerateField={handleGenerateField}
+                                        />
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      {/* Individual tab content */}
+                      {tabGroups.map((group) => {
+                        if (activeTab !== group.key) return null
+                        const gfl = (groupedFields!.groupedMap[group.key] ?? []).filter(
+                          (f) => !f.hidden && !pathFieldNames.has(f.field) && !hiddenFields.has(f.field)
+                        )
+                        if (gfl.length === 0) {
+                          return (
+                            <div key={group.key} className='flex flex-col items-center justify-center py-12 text-center'>
+                              <p className='text-[13px] text-slate-400'>No fields in this tab.</p>
+                              <p className='mt-1 text-[12px] text-slate-300'>Assign fields from Data Model → Field Groups.</p>
+                            </div>
+                          )
+                        }
+                        return (
+                          <div key={group.key} className='grid grid-cols-12 gap-4 items-start'>
+                            {gfl.map((field) => (
+                              <div key={field.field} className={getFieldColSpanClass(field)}>
+                                <FieldRow
+                                  field={field}
+                                  draft={draft}
+                                  inheritedMap={inheritedMap}
+                                  original={itemData as Record<string, unknown> | undefined}
+                                  lockedFields={lockedFields}
+                                  validationErrors={validationErrors}
+                                  treeConfig={treeConfig ?? null}
+                                  collection={collection!}
+                                  id={id}
+                                  colMeta={colMeta}
+                                  user={user}
+                                  generatingField={generatingField}
+                                  handleFieldChange={handleFieldChange}
+                                  handleGenerateField={handleGenerateField}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })}
+                    </>
+                  ) : groupedFields ? (
+                    // ── Section mode (no tabs) ───────────────────────────────
+                    <>
                       {groupedFields.ungrouped
                         .filter(
                           (f) =>
@@ -1437,7 +1834,6 @@ export function ItemEditPage() {
                             handleGenerateField={handleGenerateField}
                           />
                         ))}
-                      {/* Grouped sections / tabs */}
                       {groupedFields.groups.map((group) => {
                         const groupFieldList = (groupedFields.groupedMap[group.key] ?? []).filter(
                           (f) =>
@@ -1455,7 +1851,10 @@ export function ItemEditPage() {
                               onClick={() => toggleGroup(group.key)}
                               className='flex w-full items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200 text-[13px] font-medium text-slate-700'
                             >
-                              {group.label}
+                              <span className='flex items-center gap-1.5'>
+                                {group.icon && (() => { const I = resolveCollectionIcon(group.icon!) as React.ElementType; return <I className='h-3.5 w-3.5 shrink-0 text-slate-400' /> })()}
+                                {group.label}
+                              </span>
                               <ChevronDown
                                 className={cn(
                                   'h-4 w-4 text-slate-400 transition-transform',
@@ -1464,10 +1863,10 @@ export function ItemEditPage() {
                               />
                             </button>
                             {!isCollapsed && (
-                              <div className='p-4 space-y-4'>
+                              <div className='grid grid-cols-12 gap-4 p-4 items-start'>
                                 {groupFieldList.map((field) => (
+                                  <div key={field.field} className={getFieldColSpanClass(field)}>
                                   <FieldRow
-                                    key={field.field}
                                     field={field}
                                     draft={draft}
                                     inheritedMap={inheritedMap}
@@ -1483,6 +1882,7 @@ export function ItemEditPage() {
                                     handleFieldChange={handleFieldChange}
                                     handleGenerateField={handleGenerateField}
                                   />
+                                  </div>
                                 ))}
                               </div>
                             )}
@@ -1491,7 +1891,7 @@ export function ItemEditPage() {
                       })}
                     </>
                   ) : (
-                    // No groups — render flat list
+                    // ── No groups — flat list ────────────────────────────────
                     editableFields
                       .filter((f) => !hiddenFields.has(f.field))
                       .map((field) => (
@@ -1561,7 +1961,7 @@ export function ItemEditPage() {
                   return (
                     <div key={field.field} className='space-y-1'>
                       <div className='flex items-center gap-1.5'>
-                        <Label className='text-slate-600'>{titleCase(field.field)}</Label>
+                        <Label className='text-slate-600'>{field.label ?? titleCase(field.field)}</Label>
                         <span className='inline-flex items-center gap-0.5 rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 dark:bg-violet-900/30 dark:text-violet-400'>
                           {field.computed_type === 'write' ? 'write-time' : 'read-time'}
                         </span>
@@ -1595,7 +1995,7 @@ export function ItemEditPage() {
                     key={field.field}
                     className='flex items-center justify-between py-1 border-b last:border-0'
                   >
-                    <span className='text-sm text-muted-foreground'>{titleCase(field.field)}</span>
+                    <span className='text-sm text-muted-foreground'>{field.label ?? titleCase(field.field)}</span>
                     <span className='text-sm font-mono text-slate-700 max-w-xs truncate text-right'>
                       {draft[field.field] === null || draft[field.field] === undefined
                         ? '—'
@@ -1626,15 +2026,25 @@ export function ItemEditPage() {
             />
           ))}
 
-          {/* M2M relation panels */}
-          {m2mRelations.map((rel) => (
-            <M2MPanel
-              key={`${rel.many_collection}-${rel.junction_field}`}
-              relation={rel}
-              parentId={id!}
-              onNavigate={(col) => navigate(`/collections/${col}`)}
-            />
-          ))}
+          {/* M2M relations — all rendered as inline combobox regardless of one_field */}
+          {[...namedM2mRelations, ...m2mRelations].map((rel) => {
+            const label = rel.one_field ? titleCase(rel.one_field) : titleCase(rel.many_collection)
+            const relField = allFields.find(f => f.field === rel.one_field)
+            const relOpts = (() => { try { return typeof relField?.options === 'string' ? JSON.parse(relField.options) : (relField?.options ?? {}) } catch { return {} } })()
+            const isSingle = relOpts.max_values === 1
+            return (
+              <div key={`${rel.many_collection}-${rel.junction_field}`} className='space-y-1.5'>
+                <Label className='text-slate-600'>{label}</Label>
+                {!id || id === 'new' ? (
+                  <p className='text-[12px] text-slate-400'>Save the record first to manage related items</p>
+                ) : isSingle ? (
+                  <M2MSingleSelectCombobox relation={rel} parentId={id} allRelations={relations} />
+                ) : (
+                  <M2MMultiSelectCombobox relation={rel} parentId={id} allRelations={relations} />
+                )}
+              </div>
+            )
+          })}
 
           {/* Comments & mentions */}
           {id && (
@@ -1653,6 +2063,7 @@ export function ItemEditPage() {
         </div>
       )}
     </div>
+    </M2MStagingContext.Provider>
   )
 }
 
@@ -1693,7 +2104,7 @@ function FieldRow({
     return (
       <div className='space-y-1.5'>
         <Label>
-          {titleCase(field.field)}
+          {field.label ?? titleCase(field.field)}
           {field.required && <span className='text-red-500 ml-0.5'>*</span>}
         </Label>
         {field.note && <p className='text-xs text-muted-foreground'>{field.note}</p>}
@@ -1730,9 +2141,9 @@ function FieldRow({
 
   return (
     <div className='space-y-1.5'>
-      <div className='flex flex-wrap items-center gap-1.5'>
+      <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
         <Label htmlFor={field.field}>
-          {field.field === 'id' ? 'ID' : titleCase(field.field)}
+          {field.field === 'id' ? 'ID' : (field.label ?? titleCase(field.field))}
           {field.required && <span className='text-red-500 ml-0.5'>*</span>}
         </Label>
         {isLocked && <span className='text-[10px] text-slate-400 italic'>locked</span>}
@@ -1907,40 +2318,19 @@ function RichTextField({
   onChange: (v: unknown) => void
   disabled?: boolean
 }) {
-  const [text, setText] = useState(() => {
-    try {
-      const parsed = JSON.parse(value) as { text?: string }
-      return typeof parsed === 'object' && parsed?.text ? parsed.text : value
-    } catch {
-      return value || ''
-    }
-  })
-
-  const handleChange = (v: string) => {
-    setText(v)
-    onChange(JSON.stringify({ type: 'doc', text: v, html: v }))
-  }
-
   return (
-    <div className='rounded-md border border-input overflow-hidden'>
-      <div className='flex items-center gap-0.5 border-b border-slate-200 bg-slate-50 px-2 py-1'>
-        <span className='text-[10px] text-slate-400'>Rich Text</span>
-      </div>
-      <Textarea
-        value={text}
-        onChange={(e) => handleChange(e.target.value)}
-        disabled={disabled}
-        rows={6}
-        className='border-0 rounded-none focus-visible:ring-0 text-[13px]'
-        placeholder='Enter rich text content…'
-      />
-    </div>
+    <RichTextEditor
+      value={value}
+      onChange={onChange}
+      disabled={disabled}
+      placeholder='Start writing…'
+    />
   )
 }
 
-// ─── LineItemsField ───────────────────────────────────────────────────────────
+// ─── SubRowsField ─────────────────────────────────────────────────────────────
 
-function LineItemsField({
+function SubRowsField({
   collection,
   itemId,
   field,
@@ -1953,11 +2343,11 @@ function LineItemsField({
 }) {
   const qc = useQueryClient()
 
-  const { data: lineItems = [] } = useQuery({
-    queryKey: ['line-items', collection, itemId, field],
+  const { data: subRows = [] } = useQuery({
+    queryKey: ['sub-rows', collection, itemId, field],
     queryFn: () =>
       api
-        .get<{ data: LineItem[] }>(`/line-items/${collection}/${itemId}/${field}`)
+        .get<{ data: SubRow[] }>(`/sub-rows/${collection}/${itemId}/${field}`)
         .then((r) => r.data.data),
     enabled: !!itemId && itemId !== 'new'
   })
@@ -1968,33 +2358,33 @@ function LineItemsField({
   const [initialized, setInitialized] = useState(false)
 
   useEffect(() => {
-    if (lineItems.length > 0 && !initialized) {
-      setLocalItems(lineItems)
+    if (subRows.length > 0 && !initialized) {
+      setLocalItems(subRows)
       setInitialized(true)
     }
-  }, [lineItems, initialized])
+  }, [subRows, initialized])
 
   const saveMut = useMutation({
     mutationFn: (items: Array<{ id?: number; sort: number; data: Record<string, unknown> }>) =>
-      api.patch(`/line-items/${collection}/${itemId}/${field}`, { items }),
+      api.patch(`/sub-rows/${collection}/${itemId}/${field}`, { items }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['line-items', collection, itemId, field] })
-      toast.success('Line items saved')
+      qc.invalidateQueries({ queryKey: ['sub-rows', collection, itemId, field] })
+      toast.success('Sub-rows saved')
     },
-    onError: () => toast.error('Failed to save line items')
+    onError: () => toast.error('Failed to save sub-rows')
   })
 
-  // ─── Line item templates ───
+  // ─── Sub-row templates ───
   const [tplOpen, setTplOpen] = useState(false)
-  const [tplSaving, setTplSaving] = useState(false) // inline "save as template" name form
+  const [tplSaving, setTplSaving] = useState(false)
   const [tplName, setTplName] = useState('')
   const [tplConfirmDelete, setTplConfirmDelete] = useState<number | null>(null)
 
   const { data: templates = [] } = useQuery({
-    queryKey: ['line-item-templates', collection, field],
+    queryKey: ['sub-row-templates', collection, field],
     queryFn: () =>
       api
-        .get<{ data: LineItemTemplate[] }>(`/line-items/templates/${collection}/${field}`)
+        .get<{ data: SubRowTemplate[] }>(`/sub-rows/templates/${collection}/${field}`)
         .then((r) => r.data.data),
     enabled: !!collection && !!field && itemId !== 'new'
   })
@@ -2019,9 +2409,9 @@ function LineItemsField({
   }
 
   const applyTplMut = useMutation({
-    mutationFn: (tpl: LineItemTemplate) =>
+    mutationFn: (tpl: SubRowTemplate) =>
       api
-        .post<{ items: unknown[] }>(`/line-items/templates/${tpl.id}/apply`)
+        .post<{ items: unknown[] }>(`/sub-rows/templates/${tpl.id}/apply`)
         .then((r) => ({ tpl, items: r.data.items })),
     onSuccess: ({ tpl, items }) => {
       appendTemplateRows(Array.isArray(items) ? items : [], tpl.name)
@@ -2032,14 +2422,14 @@ function LineItemsField({
 
   const createTplMut = useMutation({
     mutationFn: (name: string) =>
-      api.post('/line-items/templates', {
+      api.post('/sub-rows/templates', {
         collection,
         field,
         name,
         items: localItems.map((i) => i.data)
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['line-item-templates', collection, field] })
+      qc.invalidateQueries({ queryKey: ['sub-row-templates', collection, field] })
       setTplName('')
       setTplSaving(false)
       toast.success('Template saved')
@@ -2048,9 +2438,9 @@ function LineItemsField({
   })
 
   const deleteTplMut = useMutation({
-    mutationFn: (tplId: number) => api.delete(`/line-items/templates/${tplId}`),
+    mutationFn: (tplId: number) => api.delete(`/sub-rows/templates/${tplId}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['line-item-templates', collection, field] })
+      qc.invalidateQueries({ queryKey: ['sub-row-templates', collection, field] })
       setTplConfirmDelete(null)
       toast.success('Template deleted')
     },
@@ -2058,7 +2448,7 @@ function LineItemsField({
   })
 
   if (itemId === 'new') {
-    return <p className='text-[12px] text-slate-400'>Save the item first to add line items.</p>
+    return <p className='text-[12px] text-slate-400'>Save the item first to add sub-rows.</p>
   }
 
   const columns = localItems[0]
@@ -2135,7 +2525,7 @@ function LineItemsField({
               className='flex items-center gap-1.5 text-[12px] text-slate-400 hover:text-nvr-cyan transition-colors'
             >
               <Plus className='h-3.5 w-3.5' />
-              Add line
+              Add row
             </button>
             {(templates.length > 0 || localItems.length > 0) && (
               <Popover
@@ -2285,7 +2675,7 @@ function LineItemsField({
             disabled={saveMut.isPending}
             onClick={() => saveMut.mutate(localItems)}
           >
-            {saveMut.isPending ? 'Saving…' : 'Save lines'}
+            {saveMut.isPending ? 'Saving…' : 'Save rows'}
           </Button>
         </div>
       )}
@@ -2493,12 +2883,14 @@ function AddendumPanel({ collection, itemId }: { collection: string; itemId: str
 function ScheduleChangeDialog({
   collection,
   itemId,
-  fields
+  fields,
+  triggerClassName
 }: {
   collection: string
   itemId: string
   currentValues: Record<string, unknown>
   fields: CMSField[]
+  triggerClassName?: string
 }) {
   const [open, setOpen] = useState(false)
   const [fieldPickerOpen, setFieldPickerOpen] = useState(false)
@@ -2530,7 +2922,7 @@ function ScheduleChangeDialog({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button size='sm' variant='outline' className='h-8 text-[12px]'>
+        <Button size='sm' variant='outline' className={triggerClassName}>
           <CalendarClock className='mr-1.5 h-3.5 w-3.5' />
           Schedule
         </Button>
@@ -2947,6 +3339,554 @@ function O2MPanel({
   )
 }
 
+// ── M2MMultiSelectCombobox ────────────────────────────────────────────────────
+// Inline combobox for M2M fields: shows selected tags, 200-item initial load,
+// server-side search on keypress, staged (committed on form save).
+
+function M2MMultiSelectCombobox({
+  relation,
+  parentId,
+  allRelations,
+}: {
+  relation: CMSRelation
+  parentId: string
+  allRelations: CMSRelation[]
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => setDebouncedSearch(search), 220)
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [search])
+
+  const otherRelation: CMSRelation | undefined = allRelations.find(
+    (r) => r.many_collection === relation.many_collection && r.many_field === relation.junction_field && r.id !== relation.id
+  )
+  const relatedCollection = otherRelation?.one_collection ?? null
+
+  // Skip collection meta for system tables — they don't have a /collections entry
+  const SYSTEM_COLS = new Set(['directus_users', 'directus_files', 'directus_activity', 'directus_roles', 'nivaro_users'])
+  const isSystemCol = !!relatedCollection && SYSTEM_COLS.has(relatedCollection)
+  // User relations are fetched via /users (not /items/<col> — system tables aren't registered collections)
+  const isUserCol = !!relatedCollection && USER_SYSTEM_COLS.has(relatedCollection)
+
+  const { data: relatedColMeta } = useQuery({
+    queryKey: ['collection-meta', relatedCollection],
+    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
+    enabled: !!relatedCollection && !isSystemCol,
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+  })
+
+  const templateFields = extractTemplateFields(relatedColMeta?.display_template ?? null)
+
+  const { data: junctionItems, isLoading: junctionLoading } = useQuery({
+    queryKey: ['m2m-items', relation.many_collection, relation.many_field, parentId],
+    queryFn: async () => {
+      const res = await api.get(`/items/${relation.many_collection}`, {
+        params: {
+          filter: JSON.stringify({ [relation.many_field]: { _eq: parentId } }),
+          limit: 200,
+          fields: `id,${relation.junction_field}`,
+        },
+      })
+      return (res.data.data ?? []) as Record<string, unknown>[]
+    },
+    staleTime: 30_000,
+  })
+
+  const { data: options, isLoading: optionsLoading } = useQuery({
+    queryKey: ['m2m-options', relatedCollection, debouncedSearch],
+    queryFn: async () => {
+      if (!relatedCollection) return []
+      if (isUserCol) {
+        const res = await api.get('/users', {
+          params: { limit: 200, search: debouncedSearch || undefined },
+        })
+        return (res.data.data ?? []) as Record<string, unknown>[]
+      }
+      const res = await api.get(`/items/${relatedCollection}`, {
+        params: {
+          limit: 200,
+          fields: templateFields.join(','),
+          search: debouncedSearch || undefined,
+        },
+      })
+      return (res.data.data ?? []) as Record<string, unknown>[]
+    },
+    enabled: open && !!relatedCollection && (isUserCol || !isSystemCol),
+    retry: false,
+    staleTime: 30_000,
+  })
+
+  const stagingKey = relation.one_field ?? `${relation.many_collection}.${relation.junction_field}`
+  const staging = useM2MStaging()
+  const stagedLinks = staging?.getStagedLinks(stagingKey) ?? []
+  const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
+
+  const committedIds = new Set(
+    (junctionItems ?? []).filter(i => !stagedUnlinks.has(i.id)).map(i => String(i[relation.junction_field!]))
+  )
+  const pendingRemovalItems = (junctionItems ?? []).filter(i => stagedUnlinks.has(i.id))
+  const stagedLinkIds = new Set(stagedLinks.map(String))
+  const allSelectedIds = new Set([...committedIds, ...stagedLinkIds])
+
+  const displayTemplate = relatedColMeta?.display_template ?? null
+
+  const handleToggle = (optionId: unknown) => {
+    const strId = String(optionId)
+    if (stagedLinkIds.has(strId)) {
+      staging?.unstageLink(stagingKey, optionId)
+      return
+    }
+    const existingJunction = (junctionItems ?? []).find(i => String(i[relation.junction_field!]) === strId)
+    if (existingJunction) {
+      if (stagedUnlinks.has(existingJunction.id)) {
+        staging?.unstageUnlink(stagingKey, existingJunction.id)
+      } else {
+        staging?.stageUnlink(stagingKey, existingJunction.id)
+      }
+      return
+    }
+    staging?.stageLink(stagingKey, optionId)
+  }
+
+  if (junctionLoading) return <Skeleton className='h-9 w-full rounded-md' />
+
+  return (
+    <div className='space-y-1.5'>
+      {/* Selected tags */}
+      {(allSelectedIds.size > 0 || pendingRemovalItems.length > 0) && (
+        <div className='flex flex-wrap gap-1.5'>
+          {/* committed (not staged for removal) */}
+          {(junctionItems ?? []).filter(i => !stagedUnlinks.has(i.id)).map(item => {
+            const relatedId = item[relation.junction_field!]
+            return (
+              <span key={String(item.id)} className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 pl-2.5 pr-1.5 py-0.5 text-[12px] text-slate-700'>
+                {relatedCollection ? <RelationLabel relatedCollection={relatedCollection} id={relatedId} /> : <span className='font-mono'>{String(relatedId ?? '—')}</span>}
+                <button type='button' onClick={() => staging?.stageUnlink(stagingKey, item.id)} className='ml-0.5 rounded-full p-0.5 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors'>
+                  <X className='h-3 w-3' />
+                </button>
+              </span>
+            )
+          })}
+          {/* staged for removal */}
+          {pendingRemovalItems.map(item => {
+            const relatedId = item[relation.junction_field!]
+            return (
+              <span key={String(item.id)} className='inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 pl-2.5 pr-1.5 py-0.5 text-[12px] text-red-400 line-through opacity-60'>
+                {relatedCollection ? <RelationLabel relatedCollection={relatedCollection} id={relatedId} /> : <span className='font-mono'>{String(relatedId ?? '—')}</span>}
+                <button type='button' onClick={() => staging?.unstageUnlink(stagingKey, item.id)} className='ml-0.5 rounded-full p-0.5 text-red-300 hover:bg-red-100 hover:text-red-500 transition-colors'>
+                  <X className='h-3 w-3' />
+                </button>
+              </span>
+            )
+          })}
+          {/* staged additions */}
+          {stagedLinks.map(relatedId => (
+            <span key={String(relatedId)} className='inline-flex items-center gap-1 rounded-full border border-dashed border-nvr-cyan/50 bg-nvr-cyan/5 pl-2.5 pr-1.5 py-0.5 text-[12px] text-nvr-cyan'>
+              {relatedCollection ? <RelationLabel relatedCollection={relatedCollection} id={relatedId} /> : <span className='font-mono'>{String(relatedId)}</span>}
+              <button type='button' onClick={() => staging?.unstageLink(stagingKey, relatedId)} className='ml-0.5 rounded-full p-0.5 text-nvr-cyan/50 hover:bg-nvr-cyan/10 hover:text-nvr-cyan transition-colors'>
+                <X className='h-3 w-3' />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Combobox trigger */}
+      <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setSearch('') }}>
+        <PopoverTrigger asChild>
+          <Button variant='outline' size='sm' className='h-8 w-full justify-start gap-1.5 text-[13px] font-normal text-muted-foreground'>
+            <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 opacity-50' />
+            {allSelectedIds.size > 0 ? `${allSelectedIds.size} selected — click to change` : 'Select items…'}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className='w-[320px] p-0' align='start'>
+          <Command shouldFilter={false}>
+            <CommandInput
+              placeholder='Search…'
+              value={search}
+              onValueChange={setSearch}
+              className='h-9 text-[13px]'
+            />
+            <CommandList>
+              {optionsLoading ? (
+                <div className='py-3 text-center text-[12px] text-muted-foreground'>Loading…</div>
+              ) : (
+                <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>No results</CommandEmpty>
+              )}
+              <CommandGroup>
+                {(options ?? []).map(opt => {
+                  const optId = String(opt.id)
+                  const isSelected = allSelectedIds.has(optId)
+                  const isPendingRemoval = !!((junctionItems ?? []).find(i => String(i[relation.junction_field!]) === optId && stagedUnlinks.has(i.id)))
+                  return (
+                    <CommandItem
+                      key={optId}
+                      value={optId}
+                      onSelect={() => handleToggle(opt.id)}
+                      className='flex items-center gap-2 text-[13px]'
+                    >
+                      <div className={cn(
+                        'flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors',
+                        isSelected && !isPendingRemoval ? 'border-nvr-cyan bg-nvr-cyan' : isPendingRemoval ? 'border-red-300 bg-red-50' : 'border-slate-300'
+                      )}>
+                        {isSelected && !isPendingRemoval && <Check className='h-2.5 w-2.5 text-white' />}
+                        {isPendingRemoval && <X className='h-2.5 w-2.5 text-red-400' />}
+                      </div>
+                      <span className={cn('truncate', isPendingRemoval && 'line-through text-slate-400')}>
+                        {isUserCol ? userDisplayLabel(opt) : renderDisplayTemplate(displayTemplate, opt)}
+                      </span>
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+}
+
+// ── M2M staging context ───────────────────────────────────────────────────────
+// Defers junction row create/delete until the main form is saved.
+
+interface M2MStagingCtx {
+  getStagedLinks: (key: string) => unknown[]
+  getStagedUnlinks: (key: string) => Set<unknown>
+  stageLink: (key: string, relatedId: unknown) => void
+  stageUnlink: (key: string, junctionId: unknown) => void
+  unstageLink: (key: string, relatedId: unknown) => void
+  unstageUnlink: (key: string, junctionId: unknown) => void
+}
+
+const M2MStagingContext = createContext<M2MStagingCtx | null>(null)
+
+function useM2MStaging() {
+  return useContext(M2MStagingContext)
+}
+
+// ── M2MSingleSelectCombobox — max_values=1 ────────────────────────────────────
+function M2MSingleSelectCombobox({
+  relation,
+  parentId,
+  allRelations,
+}: {
+  relation: CMSRelation
+  parentId: string
+  allRelations: CMSRelation[]
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => setDebouncedSearch(search), 220)
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [search])
+
+  const otherRelation = allRelations.find(
+    (r) => r.many_collection === relation.many_collection && r.many_field === relation.junction_field && r.id !== relation.id
+  )
+  const relatedCollection = otherRelation?.one_collection ?? null
+  const SYSTEM_COLS = new Set(['directus_users', 'directus_files', 'directus_activity', 'directus_roles', 'nivaro_users'])
+  const isSystemCol = !!relatedCollection && SYSTEM_COLS.has(relatedCollection)
+
+  const { data: relatedColMeta } = useQuery({
+    queryKey: ['collection-meta', relatedCollection],
+    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
+    enabled: !!relatedCollection && !isSystemCol,
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+  })
+  const displayTemplate = relatedColMeta?.display_template ?? null
+  const templateFields = extractTemplateFields(displayTemplate)
+
+  const { data: junctionItems } = useQuery({
+    queryKey: ['m2m-items', relation.many_collection, relation.many_field, parentId],
+    queryFn: async () => {
+      const res = await api.get(`/items/${relation.many_collection}`, {
+        params: { filter: JSON.stringify({ [relation.many_field]: { _eq: parentId } }), limit: 1, fields: `id,${relation.junction_field}` },
+      })
+      return (res.data.data ?? []) as Record<string, unknown>[]
+    },
+    staleTime: 30_000,
+  })
+
+  const { data: options, isLoading: optionsLoading } = useQuery({
+    queryKey: ['m2m-options', relatedCollection, debouncedSearch],
+    queryFn: async () => {
+      if (!relatedCollection) return []
+      const res = await api.get(`/items/${relatedCollection}`, {
+        params: { limit: 200, fields: templateFields.join(','), search: debouncedSearch || undefined },
+      })
+      return (res.data.data ?? []) as Record<string, unknown>[]
+    },
+    enabled: open && !!relatedCollection && !isSystemCol,
+    staleTime: 30_000,
+    retry: false,
+  })
+
+  const stagingKey = relation.one_field ?? `${relation.many_collection}.${relation.junction_field}`
+  const staging = useM2MStaging()
+  const stagedLinks = staging?.getStagedLinks(stagingKey) ?? []
+  const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
+
+  const committedItem = (junctionItems ?? []).find(i => !stagedUnlinks.has(i.id))
+  const committedRelatedId = committedItem ? committedItem[relation.junction_field!] : null
+  const stagedRelatedId = stagedLinks.length > 0 ? stagedLinks[stagedLinks.length - 1] : null
+  const currentRelatedId = stagedRelatedId ?? committedRelatedId
+  const isPendingChange = stagedLinks.length > 0 || stagedUnlinks.size > 0
+
+  const handleSelect = (optId: unknown) => {
+    for (const id of stagedLinks) staging?.unstageLink(stagingKey, id)
+    if (committedItem && !stagedUnlinks.has(committedItem.id)) staging?.stageUnlink(stagingKey, committedItem.id)
+    if (String(optId) === String(committedRelatedId) && committedItem) {
+      staging?.unstageUnlink(stagingKey, committedItem.id)
+    } else if (String(optId) !== String(currentRelatedId)) {
+      staging?.stageLink(stagingKey, optId)
+    }
+    setOpen(false)
+    setSearch('')
+  }
+
+  const handleClear = () => {
+    for (const id of stagedLinks) staging?.unstageLink(stagingKey, id)
+    if (committedItem) staging?.stageUnlink(stagingKey, committedItem.id)
+    setOpen(false)
+  }
+
+  const { data: currentItemData, isLoading: currentItemLoading } = useQuery({
+    queryKey: ['relation-item', relatedCollection, String(currentRelatedId)],
+    queryFn: () => api.get(`/items/${relatedCollection}/${currentRelatedId}`, { params: { fields: templateFields.join(',') } }).then(r => r.data.data as Record<string, unknown>),
+    enabled: !!relatedCollection && currentRelatedId != null && !isSystemCol,
+    staleTime: 30 * 60 * 1000,
+    retry: false,
+  })
+
+  const currentOpt = options?.find(o => String(o.id) === String(currentRelatedId)) ?? currentItemData
+  const currentLabel = currentOpt ? renderDisplayTemplate(displayTemplate, currentOpt) : (currentRelatedId != null ? String(currentRelatedId) : null)
+  const labelLoading = currentRelatedId != null && !currentOpt && currentItemLoading
+
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setSearch('') }}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className={cn(
+            'w-full h-9 px-3 text-[13px] border rounded-md bg-white text-left flex items-center justify-between hover:bg-slate-50 cursor-pointer',
+            isPendingChange ? 'border-nvr-cyan/50' : 'border-slate-200'
+          )}
+        >
+          {labelLoading ? (
+            <Skeleton className='h-4 w-32 rounded' />
+          ) : (
+            <span className={cn('truncate', currentLabel ? (isPendingChange ? 'text-nvr-cyan' : 'text-slate-800') : 'text-slate-400')}>
+              {currentLabel ?? 'Select…'}
+            </span>
+          )}
+          <ChevronsUpDown className='h-3.5 w-3.5 text-slate-400 shrink-0 ml-2' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[320px] p-0' align='start'>
+        <Command shouldFilter={false}>
+          <CommandInput placeholder='Search…' value={search} onValueChange={setSearch} className='h-9 text-[13px]' />
+          <CommandList>
+            {optionsLoading ? (
+              <div className='py-3 text-center text-[12px] text-muted-foreground'>Loading…</div>
+            ) : (
+              <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>No results</CommandEmpty>
+            )}
+            <CommandGroup>
+              <CommandItem value='__clear__' onSelect={handleClear} className='text-[13px] text-slate-400'>Clear selection</CommandItem>
+              {(options ?? []).map(opt => {
+                const optId = String(opt.id)
+                const isSelected = String(currentRelatedId) === optId
+                return (
+                  <CommandItem key={optId} value={optId} onSelect={() => handleSelect(opt.id)} className='flex items-center gap-2 text-[13px]'>
+                    <div className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors', isSelected ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300')}>
+                      {isSelected && <Check className='h-2.5 w-2.5 text-white' />}
+                    </div>
+                    <span className='truncate'>{renderDisplayTemplate(displayTemplate, opt)}</span>
+                  </CommandItem>
+                )
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function InlineM2MPicker({
+  relation,
+  parentId,
+  allRelations,
+}: {
+  relation: CMSRelation
+  parentId: string
+  allRelations: CMSRelation[]
+}) {
+  const queryClient = useQueryClient()
+
+  // Resolve the related collection from the already-fetched relations array.
+  // Don't require junction_field === null — some companion rows have corrupted data
+  // where junction_field is incorrectly set. Match by many_collection + many_field only.
+  const otherRelation: CMSRelation | undefined = allRelations.find(
+    (r) =>
+      r.many_collection === relation.many_collection &&
+      r.many_field === relation.junction_field &&
+      r.id !== relation.id
+  )
+  const relatedCollection = otherRelation?.one_collection ?? null
+
+  const { data: relatedColMeta } = useQuery({
+    queryKey: ['collection-meta', relatedCollection],
+    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
+    enabled: !!relatedCollection,
+    staleTime: 10 * 60 * 1000,
+  })
+  const displayTemplate = relatedColMeta?.display_template ?? null
+
+  const { data: junctionItems, isLoading } = useQuery({
+    queryKey: ['m2m-items', relation.many_collection, relation.many_field, parentId],
+    queryFn: async () => {
+      const res = await api.get(`/items/${relation.many_collection}`, {
+        params: {
+          filter: JSON.stringify({ [relation.many_field]: { _eq: parentId } }),
+          limit: 100,
+          fields: `id,${relation.junction_field}`,
+        },
+      })
+      return (res.data.data ?? []) as Record<string, unknown>[]
+    },
+    staleTime: 30_000,
+  })
+
+  const stagingKey = relation.one_field ?? `${relation.many_collection}.${relation.junction_field}`
+  const staging = useM2MStaging()
+  const stagedLinks = staging?.getStagedLinks(stagingKey) ?? []
+  const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
+
+  if (isLoading) return <Skeleton className='h-8 w-full rounded' />
+
+  // Committed items not staged for removal
+  const visibleCommitted = (junctionItems ?? []).filter(
+    (item) => !stagedUnlinks.has(item.id)
+  )
+  // Committed items staged for removal
+  const pendingRemoval = (junctionItems ?? []).filter(
+    (item) => stagedUnlinks.has(item.id)
+  )
+
+  // All linked related IDs (committed + staged) to exclude from picker
+  const linkedRelatedIds = new Set([
+    ...(junctionItems?.map((i) => String(i[relation.junction_field!])) ?? []),
+    ...stagedLinks.map(String),
+  ])
+
+  return (
+    <div className='space-y-1.5'>
+      <div className='flex flex-wrap gap-1.5'>
+        {/* committed items (not pending removal) */}
+        {visibleCommitted.map((item) => {
+          const relatedId = item[relation.junction_field!]
+          return (
+            <span
+              key={String(item.id)}
+              className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 pl-2.5 pr-1.5 py-0.5 text-[12px] text-slate-700'
+            >
+              {relatedCollection ? (
+                <RelationLabel relatedCollection={relatedCollection} id={relatedId} />
+              ) : (
+                <span className='font-mono'>{String(relatedId ?? '—')}</span>
+              )}
+              <button
+                type='button'
+                onClick={() => staging?.stageUnlink(stagingKey, item.id)}
+                className='ml-0.5 rounded-full p-0.5 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors'
+              >
+                <X className='h-3 w-3' />
+              </button>
+            </span>
+          )
+        })}
+
+        {/* items pending removal — show with strikethrough, allow undo */}
+        {pendingRemoval.map((item) => {
+          const relatedId = item[relation.junction_field!]
+          return (
+            <span
+              key={String(item.id)}
+              className='inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 pl-2.5 pr-1.5 py-0.5 text-[12px] text-red-400 line-through opacity-60'
+            >
+              {relatedCollection ? (
+                <RelationLabel relatedCollection={relatedCollection} id={relatedId} />
+              ) : (
+                <span className='font-mono'>{String(relatedId ?? '—')}</span>
+              )}
+              <button
+                type='button'
+                title='Undo removal'
+                onClick={() => staging?.unstageUnlink(stagingKey, item.id)}
+                className='ml-0.5 rounded-full p-0.5 text-red-300 hover:bg-red-100 hover:text-red-500 no-underline transition-colors'
+              >
+                <X className='h-3 w-3' />
+              </button>
+            </span>
+          )
+        })}
+
+        {/* staged additions — pending, not yet saved */}
+        {stagedLinks.map((relatedId) => (
+          <span
+            key={String(relatedId)}
+            className='inline-flex items-center gap-1 rounded-full border border-dashed border-nvr-cyan/50 bg-nvr-cyan/5 pl-2.5 pr-1.5 py-0.5 text-[12px] text-nvr-cyan'
+          >
+            {relatedCollection ? (
+              <RelationLabel relatedCollection={relatedCollection} id={relatedId} />
+            ) : (
+              <span className='font-mono'>{String(relatedId)}</span>
+            )}
+            <button
+              type='button'
+              title='Undo add'
+              onClick={() => staging?.unstageLink(stagingKey, relatedId)}
+              className='ml-0.5 rounded-full p-0.5 text-nvr-cyan/50 hover:bg-nvr-cyan/10 hover:text-nvr-cyan transition-colors'
+            >
+              <X className='h-3 w-3' />
+            </button>
+          </span>
+        ))}
+      </div>
+
+      {/* add button */}
+      {relatedCollection && (
+        <LinkRelationPopover
+          collection={relatedCollection}
+          displayTemplate={displayTemplate}
+          excludeIds={linkedRelatedIds}
+          onSelect={(id) => staging?.stageLink(stagingKey, id)}
+          disabled={false}
+        />
+      )}
+
+      {!visibleCommitted.length && !stagedLinks.length && !pendingRemoval.length && !relatedCollection && (
+        <p className='text-[12px] text-slate-400'>No related items — relation not fully configured</p>
+      )}
+    </div>
+  )
+}
+
 function M2MPanel({
   relation,
   parentId,
@@ -2968,7 +3908,7 @@ function M2MPanel({
     (r: CMSRelation) =>
       r.many_collection === relation.many_collection &&
       r.many_field === relation.junction_field &&
-      r.junction_field === null
+      r.id !== relation.id
   )
   const relatedCollection = otherRelation?.one_collection ?? null
 

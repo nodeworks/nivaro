@@ -365,6 +365,12 @@ export async function itemsRoutes(app: FastifyInstance) {
   app.post('/:collection/:id/clone', async (req, reply) => {
     const { collection, id } = req.params as { collection: string; id: string }
 
+    const body = (req.body ?? {}) as {
+      field_overrides?: Record<string, unknown>
+      exclude_fields?: string[]
+      include_sub_rows?: string[]
+    }
+
     try {
       const original = (await db(collection).where({ id }).first()) as
         | Record<string, unknown>
@@ -375,6 +381,31 @@ export async function itemsRoutes(app: FastifyInstance) {
       const clone = { ...original }
       delete clone.id
 
+      // Apply caller-supplied field overrides — restricted to registered CMS fields only.
+      // Never allow overwriting system/protected columns.
+      const PROTECTED_FIELDS = new Set([
+        'id', 'created_at', 'created_by', 'updated_at', 'updated_by',
+        '_status', 'workspace_id', 'is_redacted'
+      ])
+      if (body.field_overrides) {
+        const allowedFields = await db('nivaro_fields')
+          .where({ collection })
+          .pluck('field') as string[]
+        const allowedSet = new Set(allowedFields)
+        for (const [field, value] of Object.entries(body.field_overrides)) {
+          if (allowedSet.has(field) && !PROTECTED_FIELDS.has(field)) {
+            clone[field] = value
+          }
+        }
+      }
+
+      // Drop excluded fields — guard against removing id or other protected columns
+      if (body.exclude_fields) {
+        for (const field of body.exclude_fields) {
+          if (!PROTECTED_FIELDS.has(field)) delete clone[field]
+        }
+      }
+
       // If collection has draft_publish_enabled, set _status to draft
       const colMeta = await db('nivaro_collections').where({ collection }).first()
       if (colMeta?.draft_publish_enabled) {
@@ -383,6 +414,27 @@ export async function itemsRoutes(app: FastifyInstance) {
 
       const [row] = await db(collection).insert(clone).returning('id')
       const newId = typeof row === 'object' ? (row as { id: unknown }).id : row
+
+      // Clone sub-rows for requested fields
+      if (body.include_sub_rows?.length) {
+        for (const field of body.include_sub_rows) {
+          const subRows = (await db('nivaro_sub_rows')
+            .where({ collection, item_id: String(id), field })
+            .orderBy('sort', 'asc')) as Record<string, unknown>[]
+
+          for (const sr of subRows) {
+            await db('nivaro_sub_rows').insert({
+              collection,
+              item_id: String(newId),
+              field,
+              sort: sr.sort,
+              data: sr.data,
+              created_at: new Date(),
+              updated_at: new Date()
+            })
+          }
+        }
+      }
 
       await logActivity({
         action: 'clone',

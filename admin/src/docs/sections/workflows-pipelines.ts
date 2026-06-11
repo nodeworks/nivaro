@@ -51,6 +51,23 @@ export const userWorkflows: DocSection = {
     {
       type: 'note',
       text: '`lock_record` on a state prevents editing the record\'s fields while that state is active — useful for "under review" or terminal states.'
+    },
+    {
+      type: 'h3',
+      text: 'Stage Progress Visibility'
+    },
+    {
+      type: 'p',
+      text: 'Each state has a `stage_visibility` field that controls whether it appears in the stage progress track on the item edit page.'
+    },
+    {
+      type: 'table',
+      head: ['Value', 'Behaviour'],
+      rows: [
+        ['always', 'Default. State always shown in the stage progress track.'],
+        ['hide_unless_active', 'Hidden unless the record is currently in this state or has visited it.'],
+        ['hide', 'Never shown in the stage progress track.']
+      ]
     }
   ]
 }
@@ -74,7 +91,7 @@ export const pipelineOverview: DocSection = {
       rows: [
         ['Template', 'The blueprint — same as a workflow template. States + bindings.'],
         ['State', 'Same as workflow states. Supports skip criteria for auto-advancing.'],
-        ['Binding', 'Attaches the template to a collection with a state_field.'],
+        ['Binding', 'Attaches the template to a collection. Supports state_field sync and auto_start on item create.'],
         [
           'Dimension',
           'A filter axis on the binding — a field path (e.g. regions.short_name), label, and flags.'
@@ -295,6 +312,7 @@ export const pipelineApi: DocSection = {
       rows: [
         ['GET', '/api/pipelines/bindings', 'List all bindings.'],
         ['POST', '/api/pipelines/:id/bind', 'Bind a template to a collection.'],
+        ['PATCH', '/api/pipelines/bindings/:bindingId', 'Update binding config: auto_start, auto_start_state.'],
         ['DELETE', '/api/pipelines/bindings/:bindingId', 'Remove a binding.'],
         ['GET', '/api/pipelines/bindings/:bindingId/dimensions', 'List dimensions for a binding.'],
         [
@@ -308,6 +326,19 @@ export const pipelineApi: DocSection = {
           'Update dimension (field, label, is_row_axis, sort, required).'
         ],
         ['DELETE', '/api/pipelines/dimensions/:dimId', 'Remove a dimension.']
+      ]
+    },
+    { type: 'h3', text: 'Auto-Start' },
+    {
+      type: 'p',
+      text: 'A binding can be configured to automatically start a pipeline instance whenever a new item is created in the bound collection. Enable auto_start on the binding and optionally set auto_start_state to a specific state ID. If auto_start_state is null, the pipeline starts in the first initial state (ordered by sort). The auto-start is non-blocking — if it fails, the item creation still succeeds.'
+    },
+    {
+      type: 'table',
+      head: ['Field', 'Type', 'Description'],
+      rows: [
+        ['auto_start', 'boolean', 'When true, a pipeline instance is created automatically on item create.'],
+        ['auto_start_state', 'UUID | null', 'State to start in. Null = first initial state ordered by sort.']
       ]
     },
     { type: 'h3', text: 'Owner Groups (admin)' },

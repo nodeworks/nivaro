@@ -218,6 +218,8 @@ export interface WorkflowBinding {
   template: UUID
   collection: string
   state_field: string | null
+  auto_start: boolean
+  auto_start_state: string | null
 }
 
 export interface WorkflowInstanceData {
@@ -739,6 +741,14 @@ export function readWorkflowInstances(collection: string): Command<{ data: Workf
 /** List all pipeline/workflow bindings (admin). */
 export function readWorkflowBindings(): Command<{ data: WorkflowBinding[] }> {
   return cmd('GET', '/pipelines/bindings')
+}
+
+/** Update a pipeline binding's auto-start settings (admin). */
+export function updateWorkflowBinding(
+  bindingId: number | string,
+  body: { auto_start?: boolean; auto_start_state?: string | null }
+): Command<{ data: WorkflowBinding }> {
+  return cmd('PATCH', `/pipelines/bindings/${bindingId}`, body)
 }
 
 // ─── Pipeline — Owner Matrix ──────────────────────────────────────────────────
@@ -2084,3 +2094,316 @@ export const desc = (field: string): string => `-${field}`
 
 // Deprecated alias
 export const readItemsSearch = readItems
+
+// ─── Form SDK (schema-driven form helpers) ─────────────────────────────────────
+
+export type FormValidationRule = {
+  type: 'required' | 'min' | 'max' | 'regex' | 'email' | 'url' | 'custom'
+  value?: unknown
+  message?: string
+  /** soft = warning only, hard = blocks save */
+  soft?: boolean
+}
+
+export type FormVisibilityRule = {
+  /** field key */
+  when: string
+  /** eq | neq | null | nnull | in | contains */
+  op: string
+  value?: unknown
+  action: 'show' | 'hide'
+}
+
+export type FormLockCondition = {
+  when: string
+  op: string
+  value?: unknown
+}
+
+export type FormFieldRelation = {
+  type: 'm2o' | 'o2m' | 'm2m' | 'm2a'
+  related_collection: string
+  display_template: string | null
+  many_field?: string | null
+  junction_field?: string | null
+}
+
+export type FormFieldDescriptor = {
+  field: string
+  /** 'string' | 'text' | 'integer' | 'bigInteger' | 'float' | 'decimal' | 'boolean' | 'date' | 'dateTime' | 'timestamp' | 'uuid' | 'json' | ... */
+  type: string
+  /** CMS interface: 'input' | 'textarea' | 'select-dropdown' | 'boolean' | 'datetime' | 'file' | 'many-to-one' | 'many-to-many' | 'one-to-many' | ... */
+  interface: string | null
+  /** display label (from field metadata or titleCased field name) */
+  label: string
+  note: string | null
+  required: boolean
+  readonly: boolean
+  hidden: boolean
+  sort: number | null
+  /** field group key (null = ungrouped) */
+  group: string | null
+  /** interface options (e.g. { choices: [{text, value}] } for selects) */
+  options: Record<string, unknown> | null
+  validation_rules: FormValidationRule[] | null
+  visibility_rules: FormVisibilityRule[] | null
+  lock_condition: FormLockCondition | null
+  relation?: FormFieldRelation | null
+  default_value?: unknown
+}
+
+export type FormGroupDescriptor = {
+  key: string
+  label: string
+  type: 'section' | 'tab'
+  icon: string | null
+  sort: number
+  is_collapsed: boolean
+}
+
+export type FormSchema = {
+  collection: string
+  display_name: string | null
+  singleton: boolean
+  draft_publish_enabled: boolean
+  /** sorted by sort, hidden fields excluded by default */
+  fields: FormFieldDescriptor[]
+  /** sorted by sort */
+  groups: FormGroupDescriptor[]
+}
+
+export type RelationOption = {
+  id: string | number
+  label: string
+  raw: Record<string, unknown>
+}
+
+/** Raw field row as returned by GET /collections/:collection. */
+interface CMSFieldRow {
+  field: string
+  type?: string | null
+  interface?: string | null
+  label?: string | null
+  note?: string | null
+  required?: boolean | number | null
+  readonly?: boolean | number | null
+  hidden?: boolean | number | null
+  sort?: number | null
+  group_key?: string | null
+  options?: unknown
+  validation_rules?: unknown
+  visibility_rules?: unknown
+  lock_condition?: unknown
+  default_value?: unknown
+  [key: string]: unknown
+}
+
+/** Raw relation row as returned by GET /collections/:collection. */
+interface CMSRelationRow {
+  type?: string | null
+  many_collection?: string | null
+  many_field?: string | null
+  one_collection?: string | null
+  one_field?: string | null
+  junction_collection?: string | null
+  junction_field?: string | null
+  display_template?: string | null
+  related_display_template?: string | null
+  [key: string]: unknown
+}
+
+interface CMSCollectionResponse {
+  collection: string
+  display_name?: string | null
+  singleton?: boolean | number | null
+  draft_publish_enabled?: boolean | number | null
+  fields?: CMSFieldRow[]
+  relations?: CMSRelationRow[]
+}
+
+/** Title-case a field key for use as a fallback label. */
+function titleCaseField(key: string): string {
+  return key
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .trim()
+    .split(/\s+/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(' ')
+}
+
+/** Safely parse a JSON string column; returns null on failure or non-string input. */
+function parseJsonColumn<T>(input: unknown): T | null {
+  if (input == null) return null
+  if (typeof input !== 'string') return input as T
+  try {
+    return JSON.parse(input) as T
+  } catch {
+    return null
+  }
+}
+
+function toBool(v: unknown): boolean {
+  return v === true || v === 1 || v === '1' || v === 'true'
+}
+
+/** Find the relation descriptor for a given field on a collection, if any. */
+function buildFieldRelation(
+  collection: string,
+  field: string,
+  relations: CMSRelationRow[]
+): FormFieldRelation | null {
+  for (const rel of relations) {
+    const type = (rel.type ?? '').toLowerCase()
+    const displayTemplate = rel.related_display_template ?? rel.display_template ?? null
+    if (rel.many_collection === collection && rel.many_field === field) {
+      // m2o (field on the "many" side points to the "one" collection) or m2a
+      return {
+        type: type === 'm2a' ? 'm2a' : 'm2o',
+        related_collection: rel.one_collection ?? '',
+        display_template: displayTemplate,
+        many_field: rel.many_field ?? null,
+        junction_field: rel.junction_field ?? null
+      }
+    }
+    if (rel.one_collection === collection && rel.one_field === field) {
+      // o2m or m2m (the "one" side exposing the related set)
+      return {
+        type: type === 'm2m' ? 'm2m' : 'o2m',
+        related_collection: rel.many_collection ?? '',
+        display_template: displayTemplate,
+        many_field: rel.many_field ?? null,
+        junction_field: rel.junction_field ?? null
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Fetch the full form schema for a collection.
+ *
+ * NOTE: this is an async helper (not a Command) because it needs two API calls:
+ *   GET /collections/:collection  and  GET /field-groups/:collection.
+ * Pass the client returned by createNivaro().
+ *
+ *   const nivaro = createNivaro(url, { token })
+ *   const schema = await fetchFormSchema(nivaro, 'projects')
+ */
+export async function fetchFormSchema(
+  client: NivaroClient,
+  collection: string,
+  options?: { includeHidden?: boolean }
+): Promise<FormSchema> {
+  const [collectionRes, groupsRes] = await Promise.all([
+    client.request<{ data: CMSCollectionResponse }>(cmd('GET', `/collections/${collection}`)),
+    client.request<{ data: FormGroupDescriptor[] }>(cmd('GET', `/field-groups/${collection}`))
+  ])
+
+  const meta = collectionRes.data
+  const rawFields = meta.fields ?? []
+  const relations = meta.relations ?? []
+
+  const fields: FormFieldDescriptor[] = rawFields
+    .filter((f) => options?.includeHidden === true || !toBool(f.hidden))
+    .map((f) => {
+      const relation = buildFieldRelation(collection, f.field, relations)
+      return {
+        field: f.field,
+        type: f.type ?? 'string',
+        interface: f.interface ?? null,
+        label: f.label ?? titleCaseField(f.field),
+        note: f.note ?? null,
+        required: toBool(f.required),
+        readonly: toBool(f.readonly),
+        hidden: toBool(f.hidden),
+        sort: f.sort ?? null,
+        group: f.group_key ?? null,
+        options:
+          parseJsonColumn<Record<string, unknown>>(f.options) ??
+          parseJsonColumn<Record<string, unknown>>(
+            (f as Record<string, unknown>).remote_options_config
+          ),
+        validation_rules: parseJsonColumn<FormValidationRule[]>(f.validation_rules),
+        visibility_rules: parseJsonColumn<FormVisibilityRule[]>(f.visibility_rules),
+        lock_condition: parseJsonColumn<FormLockCondition>(f.lock_condition),
+        relation,
+        default_value: f.default_value
+      }
+    })
+    .sort((a, b) => {
+      // sort ASC, nulls last
+      if (a.sort == null && b.sort == null) return 0
+      if (a.sort == null) return 1
+      if (b.sort == null) return -1
+      return a.sort - b.sort
+    })
+
+  const groups: FormGroupDescriptor[] = (groupsRes.data ?? [])
+    .map((g) => ({
+      key: g.key,
+      label: g.label,
+      type: g.type,
+      icon: g.icon ?? null,
+      sort: g.sort ?? 0,
+      is_collapsed: toBool(g.is_collapsed)
+    }))
+    .sort((a, b) => a.sort - b.sort)
+
+  return {
+    collection: meta.collection,
+    display_name: meta.display_name ?? null,
+    singleton: toBool(meta.singleton),
+    draft_publish_enabled: toBool(meta.draft_publish_enabled),
+    fields,
+    groups
+  }
+}
+
+/**
+ * Evaluate a collection's field rules against a working value set without
+ * saving. Returns only the fields whose values change as a result.
+ *
+ *   const { data } = await nivaro.request(evaluateFieldRules('projects', form))
+ *   Object.assign(form, data.updates)
+ */
+export function evaluateFieldRules(
+  collection: string,
+  values: Record<string, unknown>
+): Command<{ data: { updates: Record<string, unknown> } }> {
+  return cmd('POST', '/field-rules/evaluate', undefined, { collection, values })
+}
+
+/**
+ * Read selectable options for a relation field's related collection.
+ * Returns raw item rows — render labels client-side (e.g. via the relation's
+ * display_template) since the response shape is collection-specific.
+ *
+ * @param options.search - free-text search passed to the items API
+ * @param options.limit  - max rows (default 50)
+ * @param options.fields - comma-separated field list to fetch (always include id)
+ */
+export function readRelationOptions(
+  relatedCollection: string,
+  options?: { search?: string; limit?: number; fields?: string }
+): Command<{ data: Record<string, unknown>[] }> {
+  const params: Record<string, unknown> = { limit: options?.limit ?? 50 }
+  if (options?.search) params.search = options.search
+  if (options?.fields) params.fields = options.fields
+  return cmd('GET', `/items/${relatedCollection}`, params)
+}
+
+/**
+ * Create or update a single form item.
+ * Omit options.itemId to create; pass it to update an existing record.
+ */
+export function submitFormItem(
+  collection: string,
+  values: Record<string, unknown>,
+  options?: { itemId?: string | number }
+): Command<{ data: Record<string, unknown> }> {
+  if (options?.itemId != null) {
+    return cmd('PATCH', `/items/${collection}/${options.itemId}`, undefined, values)
+  }
+  return cmd('POST', `/items/${collection}`, undefined, values)
+}

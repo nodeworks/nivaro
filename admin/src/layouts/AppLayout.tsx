@@ -52,7 +52,7 @@ import {
   Workflow
 } from 'lucide-react'
 import { Suspense, useEffect, useState } from 'react'
-import { Link, Outlet, useLocation } from 'react-router'
+import { Link, Navigate, Outlet, useLocation } from 'react-router'
 import { CommandPalette } from '@/components/command-palette'
 import { NotificationBell } from '@/components/notification-bell'
 import { KeyboardShortcuts } from '@/components/shortcuts-overlay'
@@ -65,15 +65,16 @@ import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
 import { useSettings } from '@/lib/useSettings'
+import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
 
 const SIDEBAR_KEY = 'nivaro-sidebar-collapsed'
 const CATEGORY_KEY = 'nivaro-nav-category'
 
-type NavItem = { icon: React.ElementType; label: string; to: string }
-type NavCategory = { id: string; icon: React.ElementType; label: string; items: NavItem[] }
+export type NavItem = { icon: React.ElementType; label: string; to: string }
+export type NavCategory = { id: string; icon: React.ElementType; label: string; items: NavItem[] }
 
-const navCategories: NavCategory[] = [
+export const navCategories: NavCategory[] = [
   {
     id: 'home',
     icon: House,
@@ -115,8 +116,8 @@ const navCategories: NavCategory[] = [
     label: 'Automation',
     items: [
       { icon: GitBranch, label: 'Pipelines', to: '/pipelines' },
-      { icon: SlidersHorizontal, label: 'Flows', to: '/flows' },
       { icon: Workflow, label: 'Workflows', to: '/workflows' },
+      { icon: SlidersHorizontal, label: 'Flows', to: '/flows' },
       { icon: ThumbsUp, label: 'Approvals', to: '/approvals' },
       { icon: Webhook, label: 'Webhooks', to: '/webhooks' },
       { icon: ListFilter, label: 'Rules', to: '/rules' },
@@ -335,12 +336,19 @@ export function AppLayout() {
     })
   }
 
-  const activeCat = navCategories.find((c) => c.id === activeCategory) ?? navCategories[0]
+  const disabledPaths = useUiPermissions()
+
+  const visibleCategories = navCategories.map((cat) => ({
+    ...cat,
+    items: cat.items.filter((item) => !disabledPaths.has(item.to))
+  })).filter((cat) => cat.items.length > 0)
+
+  const activeCat = visibleCategories.find((c) => c.id === activeCategory) ?? visibleCategories[0]
 
   const panelItems: NavItem[] =
     activeCategory === 'system'
       ? [
-          ...activeCat.items,
+          ...(activeCat?.items ?? []),
           ...extensionNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href }))
         ]
       : activeCat.items
@@ -390,7 +398,7 @@ export function AppLayout() {
               className='flex min-h-0 w-full flex-1 flex-col gap-0.5 overflow-y-auto pb-3'
               aria-label='Navigation categories'
             >
-              {navCategories.map((cat) => {
+              {visibleCategories.map((cat) => {
                 const hasActive = cat.items.some((item) =>
                   isActiveRoute(item.to, location.pathname)
                 )
@@ -529,12 +537,16 @@ export function AppLayout() {
         {/* ─── Main area ───────────────────────────────────────────── */}
         <main id='main-content' className='flex flex-1 flex-col overflow-hidden bg-secondary'>
           <Suspense fallback={null}>
-            <div
-              key={location.pathname}
-              className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
-            >
-              <Outlet />
-            </div>
+            {disabledPaths.size > 0 && [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
+              <Navigate to='/' replace />
+            ) : (
+              <div
+                key={location.pathname}
+                className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
+              >
+                <Outlet />
+              </div>
+            )}
           </Suspense>
         </main>
       </div>

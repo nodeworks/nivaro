@@ -6187,21 +6187,16 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
           <!-- SYNC:collection-layouts -->
           <h1 class="doc-h1" id="collection-layouts">Collection Layouts</h1>
           <p class="doc-p">Each registered collection can have multiple named layouts. A layout defines how fields are grouped and ordered in the item editor. One layout is marked active and used by ItemEdit automatically; others can be referenced by name via the SDK.</p>
-
           <h3 class="doc-h3">Managing layouts</h3>
-          <p class="doc-p">Open <strong>Data Model</strong> → select a collection → <strong>Layout tab</strong>. The left panel lists layouts. Click to edit groups and field assignments. The active layout (cyan dot) is what the item editor displays. Double-click a name to rename inline.</p>
-
+          <p class="doc-p">Open Data Model → select a collection → Layout tab. The left panel lists layouts for the collection. Click a layout to edit its groups and field assignments. The active layout (shown with a cyan dot) is what the item editor displays. Double-click a layout name to rename it inline.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Action</th><th>How</th></tr></thead>
-            <tbody>
-              <tr><td>Create layout</td><td>Click "+ Add layout" in the left panel</td></tr>
-              <tr><td>Set active</td><td>Open a layout → click "Set active"</td></tr>
-              <tr><td>Clone layout</td><td>Open a layout → click "Clone"</td></tr>
-              <tr><td>Delete layout</td><td>Open a layout → click "Delete" (blocked if only layout)</td></tr>
-              <tr><td>Rename layout</td><td>Double-click the layout name in the left panel</td></tr>
-            </tbody>
+            <tbody><tr><tr><td>Create layout</td><td>Click "+ Add layout" at the bottom of the left panel</td></tr>
+              <tr><td>Set active</td><td>Open a layout → click "Set active" in the toolbar</td></tr>
+              <tr><td>Clone layout</td><td>Open a layout → click "Clone" to duplicate groups + field assignments</td></tr>
+              <tr><td>Delete layout</td><td>Open a layout → click "Delete" (blocked if it is the only layout)</td></tr>
+              <tr><td>Rename layout</td><td>Double-click the layout name in the left panel</td></tr></tr></tbody>
           </table></div>
-
           <h3 class="doc-h3">API</h3>
           <pre class="doc-pre"><code>GET  /api/collection-layouts?collection=articles
 POST /api/collection-layouts                    { collection, name }
@@ -6211,10 +6206,8 @@ POST /api/collection-layouts/:id/clone          { name }
 GET  /api/collection-layouts/:id/assignments
 PUT  /api/collection-layouts/:id/assignments    { assignments: [{field, group_key, sort}] }
 DELETE /api/collection-layouts/:id</code></pre>
-
           <h3 class="doc-h3">SDK</h3>
-          <pre class="doc-pre"><code>import { readCollectionLayouts, readActiveLayout, readLayoutAssignments,
-         activateLayout, cloneLayout } from '@nivaro/sdk'
+          <pre class="doc-pre"><code>import { readCollectionLayouts, readActiveLayout, readLayoutAssignments, activateLayout, cloneLayout } from '@nivaro/sdk'
 
 // List all layouts
 const layouts = await cms.request(readCollectionLayouts('articles'))

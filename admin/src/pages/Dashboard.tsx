@@ -15,9 +15,10 @@ import {
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api } from '@/lib/api'
+import { type CMSField, type Collection, api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { cn, formatDateTime, formatNumber } from '@/lib/utils'
+import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
+import { cn, formatDateTime, formatNumber, titleCase } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,7 +39,82 @@ type ActivityEntry = {
   user_email: string | null
   collection: string
   item: string | null
+  comment: string | null
   timestamp: string
+}
+
+const PIPELINE_ACTIONS = new Set(['pipeline-transition', 'pipeline-start'])
+const ITEM_LABEL_FALLBACKS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
+
+function useActivityItemLabel(collection: string | null, item: string | null) {
+  const isSystem = !collection || collection.startsWith('nivaro_') || collection.startsWith('directus_')
+  const { data: colMeta } = useQuery({
+    queryKey: ['collection-meta', collection],
+    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
+    staleTime: 120_000, enabled: !isSystem && !!collection, retry: false
+  })
+  const displayTemplate: string | null = colMeta?.display_template ?? null
+  const actualFields: string[] = (colMeta?.fields ?? []).map((f: CMSField) => f.field)
+  const wantedFields = [...new Set(['id', ...extractTemplateFields(displayTemplate), ...ITEM_LABEL_FALLBACKS])]
+  const safeFields = actualFields.length
+    ? wantedFields.filter((f) => f === 'id' || actualFields.includes(f)).join(',')
+    : null
+  const { data: itemData } = useQuery({
+    queryKey: ['activity-item-label', collection, item, safeFields],
+    queryFn: () =>
+      api.get(`/items/${collection}/${item}`, { params: { fields: safeFields } }).then((r) => r.data.data),
+    staleTime: 120_000, enabled: !isSystem && !!safeFields && !!item, retry: false
+  })
+  const label = itemData ? renderDisplayTemplate(displayTemplate, itemData) : null
+  return label && label !== item && label.trim() !== '' ? label : null
+}
+
+function ActivityItemRow({
+  entry,
+  collections,
+  onClick
+}: {
+  entry: ActivityEntry
+  collections: Collection[]
+  onClick: () => void
+}) {
+  const itemLabel = useActivityItemLabel(entry.collection, entry.item)
+  const isPipeline = PIPELINE_ACTIONS.has(entry.action)
+
+  const colDisplay = (() => {
+    const found = collections.find((c) => c.collection === entry.collection)
+    if (found?.display_name) return found.display_name
+    return titleCase(entry.collection.replace(/^nivaro_/, '').replace(/_/g, ' '))
+  })()
+
+  return (
+    <button
+      type='button'
+      className='flex w-full cursor-pointer items-start gap-3 px-5 py-3 text-left transition-colors hover:bg-slate-50/70'
+      onClick={onClick}
+    >
+      <ActionBadge action={entry.action} />
+      <div className='min-w-0 flex-1'>
+        <div className='flex flex-wrap items-baseline gap-x-1.5'>
+          <span className='text-[12px] font-medium text-slate-700'>{colDisplay}</span>
+          {!isPipeline && entry.item && (
+            <span className='text-[11px] text-slate-500'>
+              {itemLabel ?? <span className='font-mono'>#{entry.item}</span>}
+            </span>
+          )}
+          {entryUserName(entry) && (
+            <span className='text-[11px] text-slate-400'>· {entryUserName(entry)}</span>
+          )}
+        </div>
+        {isPipeline && entry.comment && (
+          <p className='mt-0.5 truncate text-[11px] text-slate-500'>{entry.comment}</p>
+        )}
+      </div>
+      <span className='shrink-0 text-[11px] text-slate-400'>
+        {formatDateTime(entry.timestamp)}
+      </span>
+    </button>
+  )
 }
 
 function entryUserName(entry: ActivityEntry): string | null {
@@ -287,7 +363,6 @@ export function DashboardPage() {
             <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900'>
               {greeting}, {displayName}
             </h1>
-            <p className='mt-0.5 text-[13px] text-slate-500'>{dateStr}</p>
           </div>
           {health && (
             <div
@@ -416,30 +491,12 @@ export function DashboardPage() {
                 ) : (
                   <div className='divide-y divide-slate-100'>
                     {activityEntries.map((entry) => (
-                      <button
+                      <ActivityItemRow
                         key={entry.id}
-                        type='button'
-                        className='flex w-full cursor-pointer items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-slate-50/70'
+                        entry={entry}
+                        collections={collectionsData ?? []}
                         onClick={() => navigate(`/activity/${entry.id}`)}
-                      >
-                        <ActionBadge action={entry.action} />
-                        <div className='min-w-0 flex-1'>
-                          <span className='font-mono text-[12px] text-slate-700'>
-                            {entry.collection}
-                          </span>
-                          {entry.item && (
-                            <span className='ml-1.5 text-[11px] text-slate-400'>#{entry.item}</span>
-                          )}
-                          {entryUserName(entry) && (
-                            <span className='ml-1.5 text-[11px] text-slate-400'>
-                              · {entryUserName(entry)}
-                            </span>
-                          )}
-                        </div>
-                        <span className='shrink-0 text-[11px] text-slate-400'>
-                          {formatDateTime(entry.timestamp)}
-                        </span>
-                      </button>
+                      />
                     ))}
                   </div>
                 )}

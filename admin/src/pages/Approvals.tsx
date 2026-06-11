@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -507,27 +508,29 @@ function ActiveInstances() {
               {decideTarget?.decision === 'approved' ? 'Approve Step' : 'Reject Approval'}
             </DialogTitle>
           </DialogHeader>
-          <div className='space-y-3'>
-            <p className='text-sm text-muted-foreground'>
-              {decideTarget?.decision === 'approved'
-                ? 'Approve the current step of '
-                : 'Reject the approval for '}
-              <span className='font-medium text-foreground'>
-                {decideTarget?.instance.chain_name}
-              </span>
-              .
-            </p>
-            <div className='space-y-1.5'>
-              <Label htmlFor='decide-comment'>Comment (optional)</Label>
-              <Textarea
-                id='decide-comment'
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                rows={3}
-                placeholder='Add a note for the audit trail…'
-              />
+          <DialogBody>
+            <div className='space-y-3'>
+              <p className='text-sm text-muted-foreground'>
+                {decideTarget?.decision === 'approved'
+                  ? 'Approve the current step of '
+                  : 'Reject the approval for '}
+                <span className='font-medium text-foreground'>
+                  {decideTarget?.instance.chain_name}
+                </span>
+                .
+              </p>
+              <div className='space-y-1.5'>
+                <Label htmlFor='decide-comment'>Comment (optional)</Label>
+                <Textarea
+                  id='decide-comment'
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  rows={3}
+                  placeholder='Add a note for the audit trail…'
+                />
+              </div>
             </div>
-          </div>
+          </DialogBody>
           <DialogFooter>
             <Button
               variant='outline'
@@ -748,21 +751,23 @@ export function ApprovalsPage() {
           <DialogHeader>
             <DialogTitle>New Approval Chain</DialogTitle>
           </DialogHeader>
-          <div className='space-y-1.5'>
-            <Label htmlFor='new-chain-name'>Chain Name</Label>
-            <Input
-              id='new-chain-name'
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder='e.g. Contract Approval'
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newName.trim()) createMut.mutate(newName.trim())
-              }}
-            />
-            <p className='text-[11px] text-muted-foreground'>
-              You can add steps after creating the chain.
-            </p>
-          </div>
+          <DialogBody>
+            <div className='space-y-1.5'>
+              <Label htmlFor='new-chain-name'>Chain Name</Label>
+              <Input
+                id='new-chain-name'
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder='e.g. Contract Approval'
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newName.trim()) createMut.mutate(newName.trim())
+                }}
+              />
+              <p className='text-[11px] text-muted-foreground'>
+                You can add steps after creating the chain.
+              </p>
+            </div>
+          </DialogBody>
           <DialogFooter>
             <Button
               variant='outline'

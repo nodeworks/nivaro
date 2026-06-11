@@ -25,13 +25,21 @@ export async function rolesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
   app.addHook('preHandler', resolveWorkspace)
 
+  function formatRole(role: Role & { ui_permissions?: string | null }) {
+    let uiPerms: string[] = []
+    if (role.ui_permissions) {
+      try { uiPerms = JSON.parse(role.ui_permissions as unknown as string) } catch { /* ignore */ }
+    }
+    return { ...role, ui_permissions: uiPerms }
+  }
+
   app.get('/', async (req, reply) => {
     const data = await db<Role>('nivaro_roles')
       .where(function () {
         this.where('workspace', req.workspaceId).orWhereNull('workspace')
       })
       .orderBy('name')
-    return reply.send({ data })
+    return reply.send({ data: data.map(formatRole) })
   })
 
   app.get('/:id', async (req, reply) => {
@@ -39,7 +47,7 @@ export async function rolesRoutes(app: FastifyInstance) {
     const role = await db<Role>('nivaro_roles').where({ id }).first()
     if (!role) return reply.code(404).send({ error: 'Not found' })
     const policies = await getPoliciesForRole(id)
-    return reply.send({ data: { ...role, policies } })
+    return reply.send({ data: { ...formatRole(role), policies } })
   })
 
   app.post('/', async (req, reply) => {
@@ -95,6 +103,19 @@ export async function rolesRoutes(app: FastifyInstance) {
       req
     })
     return reply.code(204).send()
+  })
+
+  // UI permissions for a role
+  app.patch('/:id/ui-permissions', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = req.body as { disabled: string[] }
+    if (!Array.isArray(body.disabled)) return reply.code(400).send({ error: 'disabled must be an array' })
+    await db('nivaro_roles').where({ id }).update({
+      ui_permissions: JSON.stringify(body.disabled),
+      updated_at: new Date()
+    })
+    const role = await db<Role>('nivaro_roles').where({ id }).first()
+    return reply.send({ data: formatRole(role!) })
   })
 
   // Users assigned to a role

@@ -50,6 +50,8 @@ interface WorkflowBinding {
   template: string
   collection: string
   state_field: string | null
+  auto_start: boolean
+  auto_start_state: string | null
 }
 
 interface WorkflowInstance {
@@ -914,13 +916,17 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         .where({ id: existing.id })
         .update({
           template: id,
-          state_field: body.state_field ?? existing.state_field
+          state_field: body.state_field ?? existing.state_field,
+          auto_start: body.auto_start !== undefined ? (body.auto_start ? 1 : 0) : existing.auto_start,
+          auto_start_state: body.auto_start_state !== undefined ? (body.auto_start_state || null) : existing.auto_start_state
         })
     } else {
       await db('nivaro_workflow_bindings').insert({
         template: id,
         collection: body.collection.trim(),
-        state_field: body.state_field ?? null
+        state_field: body.state_field ?? null,
+        auto_start: body.auto_start ? 1 : 0,
+        auto_start_state: body.auto_start_state ?? null
       })
     }
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
@@ -949,6 +955,20 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       req
     })
     return reply.code(204).send()
+  })
+
+  app.patch('/bindings/:bindingId', { preHandler: requireAdmin }, async (req, reply) => {
+    const { bindingId } = req.params as { bindingId: string }
+    const body = req.body as Partial<Pick<WorkflowBinding, 'state_field' | 'auto_start' | 'auto_start_state'>>
+    const existing = await db<WorkflowBinding>('nivaro_workflow_bindings').where({ id: bindingId }).first()
+    if (!existing) return reply.code(404).send({ error: 'Not found' })
+    await db('nivaro_workflow_bindings').where({ id: bindingId }).update({
+      state_field: body.state_field !== undefined ? (body.state_field || null) : existing.state_field,
+      auto_start: body.auto_start !== undefined ? (body.auto_start ? 1 : 0) : existing.auto_start,
+      auto_start_state: body.auto_start_state !== undefined ? (body.auto_start_state || null) : existing.auto_start_state
+    })
+    const updated = await db<WorkflowBinding>('nivaro_workflow_bindings').where({ id: bindingId }).first()
+    return reply.send({ data: { ...updated, auto_start: coerceBool(updated?.auto_start) } })
   })
 
   // ─── Instance endpoints (authenticated, not admin-only) ───────────────────

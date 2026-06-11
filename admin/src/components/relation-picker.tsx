@@ -71,12 +71,12 @@ export function RelationPicker({
     queryFn: async () => {
       if (isUserRelation) {
         const res = await api.get('/users', {
-          params: { limit: 50, search: debouncedSearch || undefined }
+          params: { limit: 200, search: debouncedSearch || undefined }
         })
         return (res.data.data ?? []) as Record<string, unknown>[]
       }
       const res = await api.get(`/items/${relatedCollection}`, {
-        params: { limit: 50, fields: searchFields, search: debouncedSearch || undefined }
+        params: { limit: 200, fields: searchFields, search: debouncedSearch || undefined }
       })
       return (res.data.data ?? []) as Record<string, unknown>[]
     },

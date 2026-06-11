@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -442,13 +443,15 @@ export function SlaRulesPage() {
           <DialogHeader>
             <DialogTitle>New SLA Rule</DialogTitle>
           </DialogHeader>
-          <SlaRuleForm
-            templates={templates}
-            users={users}
-            onSave={(body) => createMut.mutate(body)}
-            onCancel={() => setCreating(false)}
-            saving={createMut.isPending}
-          />
+          <DialogBody>
+            <SlaRuleForm
+              templates={templates}
+              users={users}
+              onSave={(body) => createMut.mutate(body)}
+              onCancel={() => setCreating(false)}
+              saving={createMut.isPending}
+            />
+          </DialogBody>
         </DialogContent>
       </Dialog>
 
@@ -463,16 +466,18 @@ export function SlaRulesPage() {
           <DialogHeader>
             <DialogTitle>Edit SLA Rule</DialogTitle>
           </DialogHeader>
-          {editing && (
-            <SlaRuleForm
-              initial={toFormData(editing)}
-              templates={templates}
-              users={users}
-              onSave={(body) => updateMut.mutate({ id: editing.id, body })}
-              onCancel={() => setEditing(null)}
-              saving={updateMut.isPending}
-            />
-          )}
+          <DialogBody>
+            {editing && (
+              <SlaRuleForm
+                initial={toFormData(editing)}
+                templates={templates}
+                users={users}
+                onSave={(body) => updateMut.mutate({ id: editing.id, body })}
+                onCancel={() => setEditing(null)}
+                saving={updateMut.isPending}
+              />
+            )}
+          </DialogBody>
         </DialogContent>
       </Dialog>
 
@@ -487,11 +492,13 @@ export function SlaRulesPage() {
           <DialogHeader>
             <DialogTitle>Delete SLA Rule</DialogTitle>
           </DialogHeader>
-          <p className='text-sm text-muted-foreground'>
-            Are you sure you want to delete{' '}
-            <span className='font-medium text-foreground'>{deleting?.name}</span>? This cannot be
-            undone.
-          </p>
+          <DialogBody>
+            <p className='text-sm text-muted-foreground'>
+              Are you sure you want to delete{' '}
+              <span className='font-medium text-foreground'>{deleting?.name}</span>? This cannot be
+              undone.
+            </p>
+          </DialogBody>
           <DialogFooter>
             <Button
               variant='outline'

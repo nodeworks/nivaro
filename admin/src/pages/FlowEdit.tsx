@@ -28,6 +28,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -897,7 +898,8 @@ function EditOperationDialog({
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
-          <div className='space-y-4 px-6 pb-6'>
+          <DialogBody>
+            <div className='space-y-4'>
             <div className='space-y-1.5'>
               <Label>Name</Label>
               <Input
@@ -1646,6 +1648,7 @@ function EditOperationDialog({
               </>
             )}
           </div>
+          </DialogBody>
           <DialogFooter>
             <Button type='button' variant='outline' onClick={() => onOpenChange(false)}>
               Cancel
@@ -1731,7 +1734,8 @@ function AddOperationDialog({
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
-          <div className='space-y-4 px-6 pb-6'>
+          <DialogBody>
+            <div className='space-y-4'>
             <div className='space-y-1.5'>
               <Label htmlFor='op-name'>
                 Name <span className='text-red-500'>*</span>
@@ -1790,7 +1794,8 @@ function AddOperationDialog({
                 </SelectContent>
               </Select>
             </div>
-          </div>
+            </div>
+          </DialogBody>
           <DialogFooter>
             <Button type='button' variant='outline' onClick={() => onOpenChange(false)}>
               Cancel

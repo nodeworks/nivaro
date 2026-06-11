@@ -4924,16 +4924,13 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
   const [localFieldOrder, setLocalFieldOrder] = useState<Record<string, string[]>>({})
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
 
-  // Refs mirror state so debounced save always reads the latest values
-  const localAssignmentsRef = useRef<Record<string, string | null>>({})
-  const localFieldOrderRef = useRef<Record<string, string[]>>({})
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => { localAssignmentsRef.current = localAssignments }, [localAssignments])
-  useEffect(() => { localFieldOrderRef.current = localFieldOrder }, [localFieldOrder])
+  // True only after user makes a drag change — prevents saving on server-data reloads
+  const hasLocalChangeRef = useRef(false)
 
   useEffect(() => {
     if (!groups.length && !allFields.length) return
+    hasLocalChangeRef.current = false  // server data loading — suppress auto-save
     setLocalGroupOrder(groups.map(g => g.id))
     const assignments: Record<string, string | null> = {}
     const fieldOrder: Record<string, string[]> = { __unassigned__: [] }
@@ -4952,6 +4949,22 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     setLocalAssignments(assignments)
     setLocalFieldOrder(fieldOrder)
   }, [groups, fieldConfig, allFields])
+
+  // Debounced layout save — watches state directly (no stale-ref risk)
+  useEffect(() => {
+    if (!layoutId || !hasLocalChangeRef.current) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      const assignments = Object.entries(localAssignments).map(([f, gk]) => {
+        const order = localFieldOrder[gk ?? '__unassigned__'] ?? []
+        return { field: f, group_key: gk ?? null, sort: order.indexOf(f) >= 0 ? order.indexOf(f) : 0 }
+      })
+      api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
+        .then(() => invalidateFieldConfig())
+        .catch(() => toast.error('Failed to save field order'))
+    }, 400)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  }, [localAssignments, localFieldOrder, layoutId, invalidateFieldConfig])
 
   // ── Mutations ──
   const invalidateGroups = useCallback(() => qc.invalidateQueries({ queryKey: ['field-groups', tableName] }), [qc, tableName])
@@ -4990,29 +5003,15 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       api.post('/field-groups/reorder', { collection: tableName, order })
   })
 
-  // Debounced layout save — batches rapid drops into one PUT, preventing race conditions
-  const scheduleSave = useCallback(() => {
-    if (!layoutId) return
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
-      const assignments = Object.entries(localAssignmentsRef.current).map(([f, gk]) => {
-        const order = localFieldOrderRef.current[gk ?? '__unassigned__'] ?? []
-        return { field: f, group_key: gk ?? null, sort: order.indexOf(f) >= 0 ? order.indexOf(f) : 0 }
-      })
-      api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
-        .then(() => { invalidateFieldConfig() })
-        .catch(() => toast.error('Failed to save field order'))
-    }, 400)
-  }, [layoutId, invalidateFieldConfig])
-
   const patchField = useCallback((field: string, patch: Record<string, unknown>) => {
     if (layoutId && ('group_key' in patch || 'sort' in patch)) {
-      scheduleSave()
+      // State update triggers the debounced save effect — just mark dirty
+      hasLocalChangeRef.current = true
     } else {
       api.patch(`/field-config/${tableName}/${field}`, patch)
         .then(() => { invalidateFieldConfig(); invalidateMeta() })
     }
-  }, [tableName, layoutId, scheduleSave, invalidateFieldConfig, invalidateMeta])
+  }, [tableName, layoutId, invalidateFieldConfig, invalidateMeta])
 
   // ── Add group form ──
   const [adding, setAdding] = useState(false)
@@ -5098,9 +5097,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     if (!toContainer) return
 
     if (fromContainer === toContainer) {
-      // Same container — already sorted in onDragOver, commit via debounced save
+      // Same container — already sorted in onDragOver; mark dirty so save effect fires
       if (layoutId) {
-        scheduleSave()
+        hasLocalChangeRef.current = true
       } else {
         const fields = localFieldOrder[fromContainer] ?? []
         fields.forEach((f, idx) => {
