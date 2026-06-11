@@ -50,9 +50,10 @@ export async function up(knex: Knex): Promise<void> {
   }
 
   // 4. Data migration: one "Default" layout per collection that already has groups
-  const collections = await knex('nivaro_field_groups')
+  const collections = (await knex('nivaro_field_groups')
     .distinct('collection')
-    .pluck('collection') as string[]
+    .whereNotNull('collection')
+    .pluck('collection') as string[]).filter((c): c is string => typeof c === 'string' && c.length > 0)
 
   for (const collection of collections) {
     // Skip if a layout already exists for this collection (idempotent re-run)
