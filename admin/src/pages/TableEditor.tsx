@@ -16,10 +16,35 @@ import {
   Settings2,
   Trash2
 } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import {
+  DndContext,
+  DragOverlay,
+  type DragEndEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  pointerWithin,
+  rectIntersection,
+  useSensor,
+  useSensors,
+  useDroppable,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  rectSortingStrategy,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS as DndCSS } from '@dnd-kit/utilities'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { CollectionFieldPickerPanel, type PickedField } from '@/components/field-picker'
+import { IconPicker } from '@/components/icon-picker'
 import { FormulaBuilder } from '@/components/formula-builder'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -33,6 +58,7 @@ import {
 } from '@/components/ui/command'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -69,7 +95,7 @@ import {
   type RelationType,
   schemaApi
 } from '@/lib/schema-api'
-import { cn, titleCase } from '@/lib/utils'
+import { cn, resolveCollectionIcon, titleCase } from '@/lib/utils'
 
 // ─── Formula mode toggle (Builder | Raw) ─────────────────────────────────────
 
@@ -382,6 +408,27 @@ function RollupConfigEditor({
   )
 }
 
+// ─── SQL type → abstract Knex type ───────────────────────────────────────────
+
+function normalizeDataType(col: { data_type: string; max_length: number | null }): string {
+  const t = col.data_type.toLowerCase()
+  if (t === 'nvarchar' || t === 'varchar' || t === 'char' || t === 'nchar') {
+    return col.max_length === -1 ? 'text' : 'string'
+  }
+  if (t === 'ntext' || t === 'text') return 'text'
+  if (t === 'int') return 'integer'
+  if (t === 'bigint') return 'bigInteger'
+  if (t === 'bit') return 'boolean'
+  if (t === 'decimal' || t === 'numeric') return 'decimal'
+  if (t === 'float' || t === 'real') return 'float'
+  if (t === 'date') return 'date'
+  if (t === 'datetime' || t === 'datetime2' || t === 'smalldatetime') return 'datetime'
+  if (t === 'time') return 'time'
+  if (t === 'uniqueidentifier') return 'uuid'
+  if (t === 'json') return 'json'
+  return t
+}
+
 // ─── Add column form ──────────────────────────────────────────────────────────
 
 const COLUMN_TYPES = [
@@ -413,6 +460,11 @@ function AddColumnForm({
     default_value: null,
     max_length: undefined
   })
+  const [fieldInterface, setFieldInterfaceRaw] = useState(() => getDefaultInterface('string'))
+  const [note, setNote] = useState('')
+  const [hidden, setHidden] = useState(false)
+  const [readonly, setReadonly] = useState(false)
+  const [required, setRequired] = useState(false)
   const [computedEnabled, setComputedEnabled] = useState(false)
   const [computedType, setComputedType] = useState<'read' | 'write' | 'rollup'>('read')
   const [computedFormula, setComputedFormula] = useState('')
@@ -424,6 +476,13 @@ function AddColumnForm({
   const set = <K extends keyof CreateColumnBody>(k: K, v: CreateColumnBody[K]) =>
     setForm((f) => ({ ...f, [k]: v }))
 
+  function setFormType(t: string) {
+    set('type', t as CreateColumnBody['type'])
+    const ifaces = getInterfaces(t)
+    const current = ifaces.find((i) => i.value === fieldInterface)
+    if (!current) setFieldInterfaceRaw(ifaces[0]?.value ?? '')
+  }
+
   // Read-time + rollup computed = virtual; no DB column needed
   const isVirtual = computedEnabled && (computedType === 'read' || computedType === 'rollup')
   const isRollup = computedEnabled && computedType === 'rollup'
@@ -432,6 +491,8 @@ function AddColumnForm({
   const computedFormulaValue = isRollup ? JSON.stringify(rollup) : computedFormula.trim()
   const computedReady = isRollup ? isRollupValid(rollup) : !!computedFormula.trim()
 
+  const addInterfaces = getInterfaces(form.type)
+
   const handleSubmit = async () => {
     if (!form.name) return
     setSaving(true)
@@ -439,15 +500,23 @@ function AddColumnForm({
       if (!isVirtual) {
         await schemaApi.addColumn(table, form)
       }
-      if (computedEnabled && computedReady) {
-        await api.post(`/collections/${table}/fields`, {
-          field: form.name,
-          type: form.type,
-          computed_formula: computedFormulaValue,
-          computed_type: computedType,
-          computed_store: computedType === 'write' ? computedStore : false
-        })
-      }
+      // Always save field metadata (interface, note, visibility flags)
+      await api.post(`/collections/${table}/fields`, {
+        field: form.name,
+        type: form.type,
+        interface: fieldInterface || null,
+        note: note || null,
+        hidden,
+        readonly,
+        required,
+        ...(computedEnabled && computedReady
+          ? {
+              computed_formula: computedFormulaValue,
+              computed_type: computedType,
+              computed_store: computedType === 'write' ? computedStore : false,
+            }
+          : {}),
+      })
       toast.success(`${isVirtual ? 'Computed field' : 'Column'} "${form.name}" added`)
       onSuccess()
     } catch (err: unknown) {
@@ -475,17 +544,21 @@ function AddColumnForm({
         </div>
         <div>
           <Label className='mb-1 block text-[11px]'>{isVirtual ? 'Display type' : 'Type'}</Label>
-          <select
+          <Sel
             value={form.type}
-            onChange={(e) => set('type', e.target.value as CreateColumnBody['type'])}
-            className='h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px]'
-          >
-            {COLUMN_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
+            onChange={setFormType}
+            options={FIELD_TYPES.map((ft) => ({ value: ft.value, label: ft.label, group: ft.group }))}
+            placeholder='Select type…'
+          />
+        </div>
+        <div>
+          <Label className='mb-1 block text-[11px]'>Interface</Label>
+          <Sel
+            value={fieldInterface}
+            onChange={setFieldInterfaceRaw}
+            options={addInterfaces}
+            placeholder='Select interface…'
+          />
         </div>
         {form.type === 'string' && !isVirtual && (
           <div>
@@ -497,6 +570,38 @@ function AddColumnForm({
                 set('max_length', e.target.value ? Number(e.target.value) : undefined)
               }
               placeholder='255'
+              className='h-7 text-[12px]'
+            />
+          </div>
+        )}
+        {(form.type === 'decimal' || form.type === 'float') && !isVirtual && (
+          <div>
+            <Label className='mb-1 block text-[11px]'>Precision</Label>
+            <Input
+              type='number'
+              min={1}
+              max={form.type === 'float' ? 53 : 38}
+              value={form.precision ?? ''}
+              onChange={(e) =>
+                set('precision', e.target.value ? Number(e.target.value) : undefined)
+              }
+              placeholder={form.type === 'float' ? '8' : '10'}
+              className='h-7 text-[12px]'
+            />
+          </div>
+        )}
+        {form.type === 'decimal' && !isVirtual && (
+          <div>
+            <Label className='mb-1 block text-[11px]'>Scale</Label>
+            <Input
+              type='number'
+              min={0}
+              max={form.precision ?? 10}
+              value={form.scale ?? ''}
+              onChange={(e) =>
+                set('scale', e.target.value ? Number(e.target.value) : undefined)
+              }
+              placeholder='2'
               className='h-7 text-[12px]'
             />
           </div>
@@ -623,9 +728,20 @@ function AddColumnForm({
         )}
       </div>
 
-      <div className='mt-3 flex items-center gap-4'>
+      {/* Note */}
+      <div className='mt-3'>
+        <Label className='mb-1 block text-[11px]'>Note</Label>
+        <Input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          className='h-7 text-[12px]'
+          placeholder='Helper text for editors'
+        />
+      </div>
+
+      <div className='mt-3 flex flex-wrap items-center gap-4 text-[12px]'>
         {!isVirtual && (
-          <label className='flex cursor-pointer items-center gap-1.5 text-[12px]'>
+          <label className='flex cursor-pointer items-center gap-1.5'>
             <input
               type='checkbox'
               checked={form.nullable !== false}
@@ -635,6 +751,44 @@ function AddColumnForm({
             Nullable
           </label>
         )}
+        {!isVirtual && (
+          <label className='flex cursor-pointer items-center gap-1.5'>
+            <input
+              type='checkbox'
+              checked={form.unique === true}
+              onChange={(e) => set('unique', e.target.checked || undefined)}
+              className='rounded'
+            />
+            Unique
+          </label>
+        )}
+        <label className='flex cursor-pointer items-center gap-1.5'>
+          <input
+            type='checkbox'
+            checked={hidden}
+            onChange={(e) => setHidden(e.target.checked)}
+            className='rounded'
+          />
+          Hidden
+        </label>
+        <label className='flex cursor-pointer items-center gap-1.5'>
+          <input
+            type='checkbox'
+            checked={readonly}
+            onChange={(e) => setReadonly(e.target.checked)}
+            className='rounded'
+          />
+          Read-only
+        </label>
+        <label className='flex cursor-pointer items-center gap-1.5'>
+          <input
+            type='checkbox'
+            checked={required}
+            onChange={(e) => setRequired(e.target.checked)}
+            className='rounded'
+          />
+          Required
+        </label>
         <div className='ml-auto flex gap-2'>
           <Button
             type='button'
@@ -665,11 +819,17 @@ function AddColumnForm({
 function FieldsTab({
   tableData,
   tableName,
-  onRefresh
+  onRefresh,
+  isSystem = false,
+  extendMode = false,
+  onExtendModeChange
 }: {
   tableData: DBTableDetail
   tableName: string
   onRefresh: () => void
+  isSystem?: boolean
+  extendMode?: boolean
+  onExtendModeChange?: (v: boolean) => void
 }) {
   const qc = useQueryClient()
   const [addingColumn, setAddingColumn] = useState(false)
@@ -692,6 +852,33 @@ function FieldsTab({
   const columns = tableData.columns
 
   return (
+    <div className='space-y-3'>
+      {/* System table banner */}
+      {isSystem && (
+        <div className='flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3'>
+          <div>
+            <p className='text-[12px] font-medium text-amber-800'>System table — schema changes restricted</p>
+            <p className='text-[11px] text-amber-600 mt-0.5'>
+              {extendMode
+                ? 'Extend mode active. You can add columns and modify columns you created.'
+                : 'Original columns are protected. Enable extend mode to add new columns.'}
+            </p>
+          </div>
+          <button
+            type='button'
+            onClick={() => onExtendModeChange?.(!extendMode)}
+            className={cn(
+              'shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors',
+              extendMode
+                ? 'bg-amber-200 text-amber-900 hover:bg-amber-300'
+                : 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+            )}
+          >
+            {extendMode ? 'Exit extend mode' : 'Extend table →'}
+          </button>
+        </div>
+      )}
+
     <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
       {/* Column rows */}
       {columns.map((col, i) => (
@@ -700,6 +887,8 @@ function FieldsTab({
           col={col}
           tableName={tableName}
           isFirst={i === 0}
+          isSystem={isSystem}
+          canDrop={!isSystem || (extendMode && !!col.field_meta)}
           onDrop={() => {
             if (confirm(`Drop column "${col.name}"? This cannot be undone.`)) {
               dropColumn.mutate(col.name)
@@ -713,28 +902,31 @@ function FieldsTab({
         <div className='px-4 py-8 text-center text-[13px] text-slate-400'>No columns found</div>
       )}
 
-      {/* Add column inline form */}
-      {addingColumn ? (
-        <AddColumnForm
-          table={tableName}
-          onSuccess={() => {
-            setAddingColumn(false)
-            qc.invalidateQueries({ queryKey: ['data-model-table', tableName] })
-          }}
-          onCancel={() => setAddingColumn(false)}
-        />
-      ) : (
-        <div className='border-t border-slate-100 px-4 py-2.5'>
-          <button
-            type='button'
-            onClick={() => setAddingColumn(true)}
-            className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-nvr-cyan'
-          >
-            <Plus className='h-3.5 w-3.5' />
-            Add column
-          </button>
-        </div>
+      {/* Add column inline form — hidden for system tables unless extend mode */}
+      {(!isSystem || extendMode) && (
+        addingColumn ? (
+          <AddColumnForm
+            table={tableName}
+            onSuccess={() => {
+              setAddingColumn(false)
+              qc.invalidateQueries({ queryKey: ['data-model-table', tableName] })
+            }}
+            onCancel={() => setAddingColumn(false)}
+          />
+        ) : (
+          <div className='border-t border-slate-100 px-4 py-2.5'>
+            <button
+              type='button'
+              onClick={() => setAddingColumn(true)}
+              className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-nvr-cyan'
+            >
+              <Plus className='h-3.5 w-3.5' />
+              Add column
+            </button>
+          </div>
+        )
       )}
+    </div>
     </div>
   )
 }
@@ -744,13 +936,17 @@ function ColumnRow({
   tableName,
   isFirst,
   onDrop,
-  onRefresh
+  onRefresh,
+  isSystem = false,
+  canDrop = true
 }: {
   col: DBColumn
   tableName: string
   isFirst: boolean
   onDrop: () => void
   onRefresh: () => void
+  isSystem?: boolean
+  canDrop?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const qc = useQueryClient()
@@ -775,9 +971,14 @@ function ColumnRow({
     onError: () => toast.error('Failed to save field metadata')
   })
 
+  const isProtected = isSystem && !col.field_meta
+
   return (
     <div className={cn(!isFirst && 'border-t border-slate-100')}>
-      <div className='group flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50'>
+      <div className={cn(
+        'group flex items-center gap-3 px-4 py-2.5',
+        isProtected ? 'opacity-40 cursor-default' : 'hover:bg-slate-50'
+      )}>
         {/* PK indicator */}
         <div className='flex w-4 shrink-0 justify-center'>
           {col.is_primary_key && (
@@ -822,46 +1023,55 @@ function ColumnRow({
           </div>
         )}
 
-        <div className='ml-auto flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100'>
-          {/* Expand/collapse metadata */}
-          <button
-            type='button'
-            onClick={() => setExpanded((v) => !v)}
-            className='rounded p-1 text-slate-400 hover:text-slate-700'
-            title='Field metadata'
-          >
-            <Settings2 className='h-3.5 w-3.5' />
-          </button>
+        {/* Protected system column indicator */}
+        {isProtected && (
+          <div className='ml-auto'>
+            <Lock className='h-3 w-3 text-slate-300' aria-label='System column — protected' />
+          </div>
+        )}
 
-          {/* Drop column — not applicable for virtual computed fields */}
-          {!col.is_primary_key && !col.is_virtual && (
+        {/* Action buttons — hidden for protected system columns */}
+        {!isProtected && (
+          <div className='ml-auto flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100'>
             <button
               type='button'
-              onClick={onDrop}
-              className='rounded p-1 text-slate-400 hover:text-red-500'
-              title='Drop column'
+              onClick={() => setExpanded((v) => !v)}
+              className='rounded p-1 text-slate-400 hover:text-slate-700'
+              title='Field metadata'
             >
-              <Trash2 className='h-3.5 w-3.5' />
+              <Settings2 className='h-3.5 w-3.5' />
             </button>
-          )}
 
-          <button
-            type='button'
-            onClick={() => setExpanded((v) => !v)}
-            className='rounded p-1 text-slate-400 hover:text-slate-700'
-          >
-            {expanded ? (
-              <ChevronUp className='h-3.5 w-3.5' />
-            ) : (
-              <ChevronDown className='h-3.5 w-3.5' />
+            {!col.is_primary_key && !col.is_virtual && canDrop && (
+              <button
+                type='button'
+                onClick={onDrop}
+                className='rounded p-1 text-slate-400 hover:text-red-500'
+                title='Drop column'
+              >
+                <Trash2 className='h-3.5 w-3.5' />
+              </button>
             )}
-          </button>
-        </div>
+
+            <button
+              type='button'
+              onClick={() => setExpanded((v) => !v)}
+              className='rounded p-1 text-slate-400 hover:text-slate-700'
+            >
+              {expanded ? (
+                <ChevronUp className='h-3.5 w-3.5' />
+              ) : (
+                <ChevronDown className='h-3.5 w-3.5' />
+              )}
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Expanded field metadata editor */}
-      {expanded && (
+      {/* Expanded field metadata editor — never shown for protected columns */}
+      {expanded && !isProtected && (
         <FieldMetaEditor
+          key={col.name}
           col={col}
           tableName={tableName}
           onSave={(body) => addFieldMeta.mutate(body)}
@@ -992,32 +1202,91 @@ function LabelChoicesEditor({
   )
 }
 
-// ─── Select wrapper ───────────────────────────────────────────────────────────
+// ─── Combobox wrapper ─────────────────────────────────────────────────────────
 
 function Sel({
   value,
   onChange,
-  children,
+  options,
+  placeholder,
+  disabled,
   className
 }: {
   value: string
   onChange: (v: string) => void
-  children: React.ReactNode
+  options: { value: string; label: string; group?: string }[]
+  placeholder?: string
+  disabled?: boolean
   className?: string
 }) {
+  const [open, setOpen] = useState(false)
+  const selected = options.find((o) => o.value === value)
+
+  // Group options
+  const groups: Record<string, { value: string; label: string }[]> = {}
+  const ungrouped: { value: string; label: string }[] = []
+  for (const o of options) {
+    if (o.group) { (groups[o.group] ??= []).push(o) }
+    else ungrouped.push(o)
+  }
+  const hasGroups = Object.keys(groups).length > 0
+
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className={cn(
-        'h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] text-slate-800 focus:outline-none focus:ring-1 focus:ring-nvr-cyan',
-        className
-      )}
-    >
-      {children}
-    </select>
+    <Popover open={disabled ? false : open} onOpenChange={disabled ? undefined : setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          disabled={disabled}
+          className={cn(
+            'flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-left text-[12px] text-slate-800 focus:outline-none focus:ring-1 focus:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground',
+            !selected && 'text-slate-400',
+            disabled && 'cursor-not-allowed opacity-50',
+            className
+          )}
+        >
+          <span className='truncate'>{selected?.label ?? placeholder ?? 'Select…'}</span>
+          <ChevronDown className='ml-1 h-3 w-3 shrink-0 text-slate-400' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[220px] p-0' align='start'>
+        <Command>
+          <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
+          <CommandList>
+            <CommandEmpty className='py-2 text-center text-[12px] text-slate-400'>No results</CommandEmpty>
+            {hasGroups
+              ? Object.entries(groups).map(([group, items]) => (
+                  <CommandGroup key={group} heading={group}>
+                    {items.map((o) => (
+                      <CommandItem
+                        key={o.value}
+                        value={`${o.label} ${o.value}`}
+                        onSelect={() => { onChange(o.value); setOpen(false) }}
+                        className='text-[12px]'
+                      >
+                        <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === o.value ? 'opacity-100' : 'opacity-0')} />
+                        {o.label}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                ))
+              : ungrouped.map((o) => (
+                  <CommandItem
+                    key={o.value}
+                    value={`${o.label} ${o.value}`}
+                    onSelect={() => { onChange(o.value); setOpen(false) }}
+                    className='text-[12px]'
+                  >
+                    <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === o.value ? 'opacity-100' : 'opacity-0')} />
+                    {o.label}
+                  </CommandItem>
+                ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }
+
 
 // ─── Field meta editor ────────────────────────────────────────────────────────
 
@@ -1035,18 +1304,22 @@ function FieldMetaEditor({
   saving: boolean
 }) {
   const fm = col.field_meta
+  const abstractType = fm?.type ?? normalizeDataType(col)
 
-  const [fieldType, setFieldTypeRaw] = useState(fm?.type ?? col.data_type)
+  const [fieldType, setFieldTypeRaw] = useState(abstractType)
   const [fieldInterface, setFieldInterface] = useState(
-    fm?.interface ?? getDefaultInterface(fm?.type ?? col.data_type)
+    fm?.interface ?? getDefaultInterface(abstractType)
   )
   const [display, setDisplay] = useState(
-    fm?.display ?? getDefaultDisplay(fm?.type ?? col.data_type)
+    fm?.display ?? getDefaultDisplay(abstractType)
   )
   const [note, setNote] = useState(fm?.note ?? '')
   const [hidden, setHidden] = useState(fm?.hidden ?? false)
   const [readonly, setReadonly] = useState(fm?.readonly ?? false)
   const [required, setRequired] = useState(fm?.required ?? false)
+  const [nullable, setNullable] = useState(
+    () => parseJson<{ nullable?: boolean }>(fm?.options)?.nullable ?? true
+  )
   const [sort, setSort] = useState<number | ''>(fm?.sort ?? '')
 
   // Interface options state
@@ -1068,8 +1341,23 @@ function FieldMetaEditor({
   const [dtFormat, setDtFormat] = useState(
     () => parseJson<{ format?: string }>(fm?.options)?.format ?? ''
   )
+  const [dtOnCreate, setDtOnCreate] = useState<string>(
+    () => parseJson<{ on_create?: string }>(fm?.options)?.on_create ?? 'do_nothing'
+  )
+  const [dtOnUpdate, setDtOnUpdate] = useState<string>(
+    () => parseJson<{ on_update?: string }>(fm?.options)?.on_update ?? 'do_nothing'
+  )
   const [colorPresets, setColorPresets] = useState(() =>
     (parseJson<{ presets?: string[] }>(fm?.options)?.presets ?? []).join(', ')
+  )
+  const [isUnique, setIsUnique] = useState(
+    () => parseJson<{ unique?: boolean }>(fm?.options)?.unique ?? false
+  )
+  const [numPrecision, setNumPrecision] = useState(
+    () => parseJson<{ precision?: number }>(fm?.options)?.precision ?? ''
+  )
+  const [numScale, setNumScale] = useState(
+    () => parseJson<{ scale?: number }>(fm?.options)?.scale ?? ''
   )
 
   // Computed formula state
@@ -1136,7 +1424,12 @@ function FieldMetaEditor({
       return JSON.stringify({ min: sliderMin, max: sliderMax, step: sliderStep })
     }
     if (DATETIME_INTERFACES.has(fieldInterface)) {
-      return JSON.stringify({ mode: dtMode, format: dtFormat || undefined })
+      return JSON.stringify({
+        mode: dtMode,
+        format: dtFormat || undefined,
+        on_create: dtOnCreate !== 'do_nothing' ? dtOnCreate : undefined,
+        on_update: dtOnUpdate !== 'do_nothing' ? dtOnUpdate : undefined,
+      })
     }
     if (COLOR_INTERFACES.has(fieldInterface)) {
       const presets = colorPresets
@@ -1145,7 +1438,14 @@ function FieldMetaEditor({
         .filter(Boolean)
       return presets.length ? JSON.stringify({ presets }) : null
     }
-    return null
+    const extra: Record<string, unknown> = {}
+    if (isUnique) extra.unique = true
+    if (!nullable) extra.nullable = false
+    if ((fieldType === 'decimal' || fieldType === 'float') && numPrecision !== '') {
+      extra.precision = Number(numPrecision)
+      if (fieldType === 'decimal' && numScale !== '') extra.scale = Number(numScale)
+    }
+    return Object.keys(extra).length ? JSON.stringify(extra) : null
   }
 
   function buildDisplayOptions(): string | null {
@@ -1194,28 +1494,33 @@ function FieldMetaEditor({
       {/* ── Row 1: Type / Interface / Note ── */}
       <div className='grid grid-cols-2 gap-3 sm:grid-cols-3'>
         <div>
-          <Label className='mb-1 block text-[11px]'>Type</Label>
-          <Sel value={fieldType} onChange={setFieldType}>
-            {Object.entries(typeGroups).map(([group, types]) => (
-              <optgroup key={group} label={group}>
-                {types.map((ft) => (
-                  <option key={ft.value} value={ft.value}>
-                    {ft.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </Sel>
+          <Label className='mb-1 flex items-center gap-1.5 text-[11px]'>
+            Type
+            {!col.is_virtual && (
+              <span className='text-[10px] font-normal text-slate-400'>(read-only)</span>
+            )}
+          </Label>
+          <Sel
+            value={fieldType}
+            onChange={setFieldType}
+            options={FIELD_TYPES.map((ft) => ({ value: ft.value, label: ft.label, group: ft.group }))}
+            placeholder='Select type…'
+            disabled={!col.is_virtual}
+          />
+          {!col.is_virtual && (
+            <p className='mt-0.5 text-[10px] text-slate-400'>
+              Use Change Type in the column actions to alter the DB column.
+            </p>
+          )}
         </div>
         <div>
           <Label className='mb-1 block text-[11px]'>Interface</Label>
-          <Sel value={fieldInterface} onChange={setFieldInterface}>
-            {interfaces.map((i) => (
-              <option key={i.value} value={i.value}>
-                {i.label}
-              </option>
-            ))}
-          </Sel>
+          <Sel
+            value={fieldInterface}
+            onChange={setFieldInterface}
+            options={interfaces}
+            placeholder='Select interface…'
+          />
         </div>
         <div>
           <Label className='mb-1 block text-[11px]'>Note</Label>
@@ -1269,23 +1574,53 @@ function FieldMetaEditor({
       )}
 
       {DATETIME_INTERFACES.has(fieldInterface) && (
-        <div className='mt-3 grid grid-cols-2 gap-3 rounded-md border border-slate-200 bg-white p-3'>
-          <div>
-            <Label className='mb-1 block text-[11px]'>Mode</Label>
-            <Sel value={dtMode} onChange={setDtMode}>
-              <option value='date'>Date only</option>
-              <option value='time'>Time only</option>
-              <option value='datetime'>Date & Time</option>
-            </Sel>
+        <div className='mt-3 rounded-md border border-slate-200 bg-white p-3 space-y-3'>
+          <div className='grid grid-cols-2 gap-3'>
+            <div>
+              <Label className='mb-1 block text-[11px]'>Mode</Label>
+              <Sel
+                value={dtMode}
+                onChange={setDtMode}
+                options={[
+                  { value: 'date', label: 'Date only' },
+                  { value: 'time', label: 'Time only' },
+                  { value: 'datetime', label: 'Date & Time' },
+                ]}
+              />
+            </div>
+            <div>
+              <Label className='mb-1 block text-[11px]'>Format</Label>
+              <Input
+                value={dtFormat}
+                onChange={(e) => setDtFormat(e.target.value)}
+                className='h-7 font-mono text-[12px]'
+                placeholder='e.g. YYYY-MM-DD'
+              />
+            </div>
           </div>
-          <div>
-            <Label className='mb-1 block text-[11px]'>Format</Label>
-            <Input
-              value={dtFormat}
-              onChange={(e) => setDtFormat(e.target.value)}
-              className='h-7 font-mono text-[12px]'
-              placeholder='e.g. YYYY-MM-DD'
-            />
+          <div className='grid grid-cols-2 gap-3'>
+            <div>
+              <Label className='mb-1 block text-[11px]'>On Create</Label>
+              <Sel
+                value={dtOnCreate}
+                onChange={setDtOnCreate}
+                options={[
+                  { value: 'do_nothing', label: 'Do Nothing' },
+                  { value: 'now', label: 'Save Current Date/Time' },
+                ]}
+              />
+            </div>
+            <div>
+              <Label className='mb-1 block text-[11px]'>On Update</Label>
+              <Sel
+                value={dtOnUpdate}
+                onChange={setDtOnUpdate}
+                options={[
+                  { value: 'do_nothing', label: 'Do Nothing' },
+                  { value: 'now', label: 'Save Current Date/Time' },
+                ]}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -1302,19 +1637,50 @@ function FieldMetaEditor({
         </div>
       )}
 
+      {/* ── Precision (decimal / float) ── */}
+      {(fieldType === 'decimal' || fieldType === 'float') && (
+        <div className='mt-3 grid grid-cols-2 gap-3 rounded-md border border-slate-200 bg-white p-3'>
+          <div>
+            <Label className='mb-1 block text-[11px]'>Precision</Label>
+            <Input
+              type='number'
+              min={1}
+              max={fieldType === 'float' ? 53 : 38}
+              value={numPrecision}
+              onChange={(e) => setNumPrecision(e.target.value ? Number(e.target.value) : '')}
+              placeholder={fieldType === 'float' ? '8' : '10'}
+              className='h-7 text-[12px]'
+            />
+          </div>
+          {fieldType === 'decimal' && (
+            <div>
+              <Label className='mb-1 block text-[11px]'>Scale</Label>
+              <Input
+                type='number'
+                min={0}
+                max={numPrecision !== '' ? Number(numPrecision) : 10}
+                value={numScale}
+                onChange={(e) => setNumScale(e.target.value ? Number(e.target.value) : '')}
+                placeholder='2'
+                className='h-7 text-[12px]'
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Display configuration ── */}
       {displays.length > 0 && (
         <div className='mt-3 rounded-md border border-slate-200 bg-white p-3'>
           <div className='mb-3 flex items-center gap-3'>
             <div className='flex-1'>
               <Label className='mb-1 block text-[11px]'>Display</Label>
-              <Sel value={display} onChange={setDisplay}>
-                {displays.map((d) => (
-                  <option key={d.value} value={d.value}>
-                    {d.label}
-                  </option>
-                ))}
-              </Sel>
+              <Sel
+                value={display}
+                onChange={setDisplay}
+                options={displays}
+                placeholder='Select display…'
+              />
             </div>
           </div>
 
@@ -1552,6 +1918,24 @@ function FieldMetaEditor({
           />
           Required
         </label>
+        <label className='flex cursor-pointer items-center gap-1.5'>
+          <input
+            type='checkbox'
+            checked={isUnique}
+            onChange={(e) => setIsUnique(e.target.checked)}
+            className='rounded'
+          />
+          Unique
+        </label>
+        <label className='flex cursor-pointer items-center gap-1.5'>
+          <input
+            type='checkbox'
+            checked={nullable}
+            onChange={(e) => setNullable(e.target.checked)}
+            className='rounded'
+          />
+          Nullable
+        </label>
         <div className='flex items-center gap-1.5'>
           <Label className='text-[11px]'>Sort</Label>
           <Input
@@ -1639,9 +2023,6 @@ const REL_TYPE_META: Record<RelationType, { label: string; badgeCls: string; des
   }
 }
 
-const SEL_CLS =
-  'h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] text-slate-800 focus:outline-none focus:ring-1 focus:ring-nvr-cyan disabled:opacity-50'
-
 function TblSel({
   value,
   onChange,
@@ -1654,15 +2035,15 @@ function TblSel({
   placeholder?: string
 }) {
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} className={SEL_CLS}>
-      <option value=''>{placeholder ?? 'Select table…'}</option>
-      {allTables.map((t) => (
-        <option key={t.name} value={t.name}>
-          {t.name}
-          {t.display_name && t.display_name !== t.name ? ` — ${t.display_name}` : ''}
-        </option>
-      ))}
-    </select>
+    <Sel
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder ?? 'Select table…'}
+      options={allTables.map((t) => ({
+        value: t.name,
+        label: t.display_name && t.display_name !== t.name ? `${t.name} — ${t.display_name}` : t.name
+      }))}
+    />
   )
 }
 
@@ -1679,26 +2060,51 @@ function ColSel({
   placeholder?: string
   disabled?: boolean
 }) {
+  const [open, setOpen] = useState(false)
   const { data, isFetching } = useQuery({
     queryKey: ['data-model-table', table],
     queryFn: () => schemaApi.getTable(table),
     enabled: !!table
   })
   const cols = data?.data?.columns ?? []
+  const selected = cols.find((c) => c.name === value)
+  const isDisabled = disabled || !table || isFetching
+
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={disabled || !table || isFetching}
-      className={SEL_CLS}
-    >
-      <option value=''>{isFetching ? 'Loading…' : (placeholder ?? 'Select column…')}</option>
-      {cols.map((c) => (
-        <option key={c.name} value={c.name}>
-          {c.name} ({c.data_type})
-        </option>
-      ))}
-    </select>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          disabled={isDisabled}
+          className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-left text-[12px] text-slate-800 focus:outline-none focus:ring-1 focus:ring-nvr-cyan disabled:opacity-50 dark:border-border dark:bg-card dark:text-foreground'
+        >
+          <span className={cn('truncate', !selected && 'text-slate-400')}>
+            {isFetching ? 'Loading…' : (selected ? `${selected.name} (${selected.data_type})` : (placeholder ?? 'Select column…'))}
+          </span>
+          <ChevronDown className='ml-1 h-3 w-3 shrink-0 text-slate-400' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[240px] p-0' align='start'>
+        <Command>
+          <CommandInput placeholder='Search columns…' className='h-8 text-[12px]' />
+          <CommandList>
+            <CommandEmpty className='py-2 text-center text-[12px] text-slate-400'>No columns</CommandEmpty>
+            {cols.map((c) => (
+              <CommandItem
+                key={c.name}
+                value={`${c.name} ${c.data_type}`}
+                onSelect={() => { onChange(c.name); setOpen(false) }}
+                className='text-[12px]'
+              >
+                <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === c.name ? 'opacity-100' : 'opacity-0')} />
+                <span className='font-mono'>{c.name}</span>
+                <span className='ml-1.5 text-slate-400'>({c.data_type})</span>
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -2176,7 +2582,13 @@ function RelationsTab({
       return `${tableName}.${rel.many_field} → ${rel.one_collection}.${rel.one_field ?? 'id'}`
     if (t === 'o2m')
       return `${rel.many_collection}.${rel.many_field} → ${tableName}.${rel.one_field ?? 'id'}`
-    if (t === 'm2m') return `${tableName} ↔ ${rel.one_collection} (via ${rel.many_collection})`
+    if (t === 'm2m') {
+      const companion = cmsRelations.find(
+        (r) => r.many_collection === rel.many_collection && r.many_field === rel.junction_field && r.id !== rel.id
+      )
+      const target = companion?.one_collection ?? rel.one_collection
+      return `${tableName} ↔ ${target} (via ${rel.many_collection})`
+    }
     return `${tableName}.${rel.many_field} → any (${rel.one_collection_field})`
   }
 
@@ -2194,8 +2606,15 @@ function RelationsTab({
       base.m2m_junction = rel.many_collection
       base.m2m_many_field = rel.many_field
       base.m2m_junction_field = rel.junction_field ?? ''
-      base.m2m_one_collection = rel.one_collection ?? ''
-      base.m2m_one_field = rel.one_field ?? ''
+      // rel.one_collection is the SOURCE (this) table — target must be resolved
+      // from the companion relation where many_field === junction_field
+      const companion = cmsRelations.find(
+        (r) => r.many_collection === rel.many_collection &&
+               r.many_field === rel.junction_field &&
+               r.id !== rel.id
+      )
+      base.m2m_one_collection = companion?.one_collection ?? ''
+      base.m2m_one_field = companion?.one_field ?? ''
     } else {
       base.m2a_many_field = rel.many_field
       base.m2a_one_collection_field = rel.one_collection_field ?? ''
@@ -2434,7 +2853,13 @@ function RelationsTab({
           </div>
         ) : cmsRelations.length > 0 ? (
           <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
-            {cmsRelations.map((rel, i) => {
+            {cmsRelations.filter(rel =>
+              // Only show relations directly involving this table.
+              // Junction companion rows (many_collection=junction, one_collection=other)
+              // stay in cmsRelations for M2M resolution but aren't table-level relations.
+              rel.many_collection === tableName ||
+              rel.one_collection === tableName
+            ).map((rel, i) => {
               const t = detectRelationType(rel, tableName)
               const isDeleting = deleteId === rel.id
               const isEditing = editingId === rel.id
@@ -2728,13 +3153,7 @@ function SettingsTab({
           </div>
           <div>
             <Label className='mb-1 block text-[12px]'>Icon</Label>
-            <Input
-              value={icon}
-              onChange={(e) => setIcon(e.target.value)}
-              placeholder='e.g. file-text, users, database'
-              className='text-[13px]'
-            />
-            <p className='mt-1 text-[11px] text-slate-400'>Lucide icon name</p>
+            <IconPicker value={icon} onChange={setIcon} />
           </div>
           <div>
             <Label className='mb-1 block text-[12px]'>Note</Label>
@@ -3504,7 +3923,7 @@ function AttributesTab({ tableName }: { tableName: string }) {
   )
 }
 
-// ─── Field Groups tab ────────────────────────────────────────────────────────
+// ─── Layout tab ──────────────────────────────────────────────────────────────
 
 interface FieldGroup {
   id: number
@@ -3517,239 +3936,1227 @@ interface FieldGroup {
   is_collapsed: boolean
 }
 
-function FieldGroupsTab({ tableName }: { tableName: string }) {
-  const qc = useQueryClient()
-  const [adding, setAdding] = useState(false)
-  const [newKey, setNewKey] = useState('')
-  const [newLabel, setNewLabel] = useState('')
-  const [newType, setNewType] = useState<'section' | 'tab'>('section')
+// ── Width options ──────────────────────────────────────────────────────────────
+const WIDTH_OPTIONS = [
+  { span: 12, label: 'Full' },
+  { span: 6,  label: '1/2'  },
+  { span: 4,  label: '1/3'  },
+  { span: 3,  label: '1/4'  },
+] as const
 
-  const { data: groups = [], isLoading } = useQuery({
-    queryKey: ['field-groups', tableName],
+function parseColSpan(options: unknown): number {
+  try {
+    const obj = typeof options === 'string' ? JSON.parse(options) : options
+    const span = (obj as Record<string, unknown>)?.col_span
+    return typeof span === 'number' ? span : 12
+  } catch { return 12 }
+}
+
+// ── Friendly type badge colors (used in Layout tab chips) ─────────────────────
+
+const FRIENDLY_TYPE_STYLES: Record<string, string> = {
+  text: 'bg-slate-100 text-slate-600',
+  num: 'bg-blue-50 text-blue-700',
+  bigint: 'bg-blue-50 text-blue-700',
+  bool: 'bg-purple-50 text-purple-700',
+  float: 'bg-green-50 text-green-700',
+  decimal: 'bg-green-50 text-green-700',
+  money: 'bg-green-50 text-green-700',
+  date: 'bg-amber-50 text-amber-700',
+  datetime: 'bg-amber-50 text-amber-700',
+  time: 'bg-amber-50 text-amber-700',
+  uuid: 'bg-orange-50 text-orange-700',
+  json: 'bg-slate-100 text-slate-600',
+  M2O: 'bg-nvr-cyan/10 text-nvr-cyan',
+  M2M: 'bg-nvr-cyan/15 text-nvr-cyan',
+  O2M: 'bg-nvr-cyan/10 text-nvr-cyan',
+}
+
+// ── FieldSettingsPopover ──────────────────────────────────────────────────────
+
+interface FieldSettings {
+  label: string | null
+  interface: string | null
+  note: string | null
+  required: boolean
+  hidden: boolean
+  readonly: boolean
+  inline_relation: boolean
+  max_values: number | null
+}
+
+function FieldSettingsPopover({
+  fieldName,
+  abstractType,
+  isM2O,
+  isM2M,
+  settings,
+  onSave,
+}: {
+  fieldName: string
+  abstractType?: string
+  isM2O?: boolean
+  isM2M?: boolean
+  settings: FieldSettings
+  onSave: (patch: Partial<FieldSettings>) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [label, setLabel] = useState(settings.label ?? '')
+  const [iface, setIface] = useState(settings.interface ?? '')
+  const [note, setNote] = useState(settings.note ?? '')
+  const [required, setRequired] = useState(settings.required)
+  const [hidden, setHidden] = useState(settings.hidden)
+  const [readonly, setReadonly] = useState(settings.readonly)
+  const [inlineRelation, setInlineRelation] = useState(settings.inline_relation)
+  const [maxValues, setMaxValues] = useState<string>(settings.max_values != null ? String(settings.max_values) : '')
+
+  // Reset local state when popover opens
+  function handleOpenChange(next: boolean) {
+    if (next) {
+      setLabel(settings.label ?? '')
+      setIface(settings.interface ?? '')
+      setNote(settings.note ?? '')
+      setRequired(settings.required)
+      setHidden(settings.hidden)
+      setReadonly(settings.readonly)
+      setInlineRelation(settings.inline_relation)
+      setMaxValues(settings.max_values != null ? String(settings.max_values) : '')
+    }
+    setOpen(next)
+  }
+
+  function save() {
+    const maxV = maxValues.trim() ? parseInt(maxValues, 10) : null
+    onSave({
+      label: label.trim() || null,
+      interface: iface || null,
+      note: note.trim() || null,
+      required,
+      hidden,
+      readonly,
+      inline_relation: inlineRelation,
+      max_values: maxV && maxV > 0 ? maxV : null,
+    })
+    setOpen(false)
+  }
+
+  const interfaceOptions = abstractType
+    ? getInterfaces(abstractType).map(i => ({ value: i.value, label: i.label }))
+    : []
+
+  const hasOverrides = !!settings.label || !!settings.interface || !!settings.note || settings.hidden || settings.readonly || settings.required
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          title='Display settings'
+          onPointerDown={e => e.stopPropagation()}
+          className={cn(
+            'shrink-0 rounded p-0.5 transition-colors',
+            hasOverrides
+              ? 'text-nvr-cyan hover:text-nvr-cyan/80'
+              : 'text-slate-300 opacity-0 group-hover:opacity-100 hover:text-slate-500'
+          )}
+        >
+          <Settings2 className='h-3.5 w-3.5' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        className='w-72 p-0'
+        align='end'
+        onPointerDown={e => e.stopPropagation()}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className='border-b border-slate-100 px-3 py-2'>
+          <p className='text-[12px] font-medium text-slate-800'>Display settings</p>
+          <p className='text-[11px] text-slate-400 font-mono'>{fieldName}</p>
+        </div>
+        <div className='space-y-3 p-3'>
+          {/* Label override */}
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-slate-600'>Label</Label>
+            <Input
+              value={label}
+              onChange={e => setLabel(e.target.value)}
+              placeholder={titleCase(fieldName)}
+              className='h-7 text-[12px]'
+            />
+          </div>
+
+          {/* Interface override */}
+          {interfaceOptions.length > 0 && (
+            <div className='space-y-1'>
+              <Label className='text-[11px] text-slate-600'>Interface</Label>
+              <Combobox
+                value={iface}
+                onChange={setIface}
+                options={[{ value: '', label: 'Default' }, ...interfaceOptions]}
+                placeholder='Default'
+              />
+            </div>
+          )}
+
+          {/* Note */}
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-slate-600'>Note</Label>
+            <Textarea
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder='Helper text shown below the field'
+              className='min-h-[56px] resize-none text-[12px]'
+            />
+          </div>
+
+          {/* Toggles */}
+          <div className='space-y-2 rounded-md border border-slate-100 bg-slate-50 px-3 py-2'>
+            {([
+              { key: 'required', label: 'Required', value: required, set: setRequired },
+              { key: 'hidden', label: 'Hidden', value: hidden, set: setHidden },
+              { key: 'readonly', label: 'Read-only', value: readonly, set: setReadonly },
+            ] as const).map(row => (
+              <div key={row.key} className='flex items-center justify-between'>
+                <span className='text-[12px] text-slate-600'>{row.label}</span>
+                <Switch checked={row.value} onCheckedChange={row.set} className='scale-90' />
+              </div>
+            ))}
+            {isM2O && (
+              <div className='flex items-center justify-between border-t border-slate-200 pt-2'>
+                <span className='text-[12px] text-slate-600'>Inline edit</span>
+                <Switch checked={inlineRelation} onCheckedChange={setInlineRelation} className='scale-90' />
+              </div>
+            )}
+          </div>
+
+          {isM2M && (
+            <div className='space-y-1'>
+              <Label className='text-[11px] text-slate-600'>Max values</Label>
+              <Input
+                type='number'
+                min={1}
+                value={maxValues}
+                onChange={e => setMaxValues(e.target.value)}
+                placeholder='Unlimited'
+                className='h-7 text-[12px]'
+              />
+              <p className='text-[10px] text-slate-400'>Leave blank for unlimited. Set to 1 for single-select.</p>
+            </div>
+          )}
+
+          <div className='flex gap-2 pt-1'>
+            <Button size='sm' className='h-7 flex-1 text-[12px]' onClick={save}>
+              Save
+            </Button>
+            <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ── SortableFieldChip ─────────────────────────────────────────────────────────
+
+function FieldChip({
+  fieldName,
+  displayName,
+  fieldType,
+  abstractType,
+  isM2O,
+  isM2M,
+  colSpan,
+  onColSpan,
+  fieldSettings,
+  onSettings,
+  dragHandleProps = {},
+  style = {},
+  isDragging = false,
+}: {
+  fieldName: string
+  displayName?: string
+  fieldType?: string
+  abstractType?: string
+  isM2O?: boolean
+  isM2M?: boolean
+  colSpan: number
+  onColSpan?: (span: number) => void
+  fieldSettings?: FieldSettings
+  onSettings?: (patch: Partial<FieldSettings>) => void
+  dragHandleProps?: Record<string, unknown>
+  style?: React.CSSProperties
+  isDragging?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const widthLabel = WIDTH_OPTIONS.find(w => w.span === colSpan)?.label ?? 'Full'
+
+  return (
+    <div
+      style={style}
+      className={cn(
+        'group flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-[12px] select-none',
+        isDragging ? 'shadow-lg opacity-80 ring-2 ring-nvr-cyan/40' : 'shadow-sm hover:border-slate-300'
+      )}
+    >
+      {/* drag handle */}
+      <span
+        className='shrink-0 cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing'
+        {...dragHandleProps}
+      >
+        <GripVertical className='h-3.5 w-3.5' />
+      </span>
+
+      {/* field name */}
+      <span className='flex-1 truncate text-slate-700' title={fieldName}>
+        {displayName ?? <span className='font-mono'>{fieldName}</span>}
+      </span>
+
+      {/* type badge */}
+      {fieldType && (
+        <span className={cn(
+          'shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px]',
+          FRIENDLY_TYPE_STYLES[fieldType] ?? 'bg-slate-100 text-slate-500'
+        )}>
+          {fieldType}
+        </span>
+      )}
+
+      {/* settings popover */}
+      {fieldSettings && onSettings && (
+        <FieldSettingsPopover
+          fieldName={fieldName}
+          abstractType={abstractType}
+          isM2O={isM2O}
+          isM2M={isM2M}
+          settings={fieldSettings}
+          onSave={onSettings}
+        />
+      )}
+
+      {/* width selector — stopPropagation prevents dnd-kit from capturing pointer events */}
+      {onColSpan && (
+        <div className='relative shrink-0' onPointerDown={e => e.stopPropagation()}>
+          <button
+            type='button'
+            onClick={() => setOpen(o => !o)}
+            className='flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-slate-200'
+          >
+            {widthLabel}
+            <ChevronDown className='h-2.5 w-2.5' />
+          </button>
+          {open && (
+            <div className='absolute right-0 top-full z-20 mt-1 rounded-md border border-slate-200 bg-white py-1 shadow-md'>
+              {WIDTH_OPTIONS.map(w => (
+                <button
+                  key={w.span}
+                  type='button'
+                  onClick={() => { onColSpan(w.span); setOpen(false) }}
+                  className={cn(
+                    'flex w-full items-center gap-2.5 px-3 py-1.5 text-[12px] hover:bg-slate-50',
+                    w.span === colSpan ? 'font-medium text-nvr-cyan' : 'text-slate-700'
+                  )}
+                >
+                  <span className='inline-flex h-2.5 w-12 overflow-hidden rounded-sm bg-slate-100'>
+                    <span className='h-full rounded-sm bg-nvr-cyan/50' style={{ width: `${(w.span / 12) * 100}%` }} />
+                  </span>
+                  {w.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SortableFieldChip({
+  fieldName,
+  displayName,
+  fieldType,
+  abstractType,
+  isM2O,
+  isM2M,
+  colSpan,
+  onColSpan,
+  fieldSettings,
+  onSettings,
+  inGrid = false,
+}: {
+  fieldName: string
+  displayName?: string
+  fieldType?: string
+  abstractType?: string
+  isM2O?: boolean
+  isM2M?: boolean
+  colSpan: number
+  onColSpan?: (span: number) => void
+  fieldSettings?: FieldSettings
+  onSettings?: (patch: Partial<FieldSettings>) => void
+  inGrid?: boolean
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: fieldName,
+    data: { type: 'field' },
+  })
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      style={{
+        transform: DndCSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.3 : 1,
+        gridColumn: inGrid ? `span ${colSpan}` : undefined,
+      }}
+    >
+      <FieldChip
+        fieldName={fieldName}
+        displayName={displayName}
+        fieldType={fieldType}
+        abstractType={abstractType}
+        isM2O={isM2O}
+        isM2M={isM2M}
+        colSpan={colSpan}
+        onColSpan={onColSpan}
+        fieldSettings={fieldSettings}
+        onSettings={onSettings}
+        dragHandleProps={listeners ?? {}}
+      />
+    </div>
+  )
+}
+
+// ── SortableGroupCard ─────────────────────────────────────────────────────────
+
+function SortableGroupCard({
+  group,
+  fieldNames,
+  allFields,
+  getColSpan,
+  onColSpan,
+  onToggleType,
+  onDelete,
+  onRename,
+  onIconChange,
+  getRelKind,
+  getFriendlyType,
+  getFieldSettings,
+  onFieldSettings,
+}: {
+  group: FieldGroup
+  fieldNames: string[]
+  allFields: Array<{ field: string; type?: string }>
+  getColSpan: (f: string) => number
+  onColSpan: (f: string, span: number) => void
+  onToggleType: () => void
+  onDelete: () => void
+  onRename: (label: string) => void
+  onIconChange: (icon: string | null) => void
+  getRelKind?: (f: string) => string | null
+  getFriendlyType?: (t?: string, fieldName?: string) => string | undefined
+  getFieldSettings?: (f: string) => FieldSettings
+  onFieldSettings?: (f: string, patch: Partial<FieldSettings>) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [labelDraft, setLabelDraft] = useState(group.label)
+
+  function commitRename() {
+    const trimmed = labelDraft.trim()
+    if (trimmed && trimmed !== group.label) onRename(trimmed)
+    else setLabelDraft(group.label)
+    setEditing(false)
+  }
+
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `group:${group.key}`,
+    data: { type: 'group' },
+  })
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: DndCSS.Transform.toString(transform), transition }}
+      className={cn('rounded-lg border border-slate-200 bg-white', isDragging && 'opacity-50 ring-2 ring-nvr-cyan/40')}
+    >
+      {/* Group header */}
+      <div className='group flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2.5'>
+        <span className='shrink-0 cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing' {...attributes} {...listeners}>
+          <GripVertical className='h-3.5 w-3.5' />
+        </span>
+        {/* Icon picker */}
+        <div className='flex items-center' onPointerDown={e => e.stopPropagation()}>
+          {(() => {
+            const GroupIcon = group.icon ? resolveCollectionIcon(group.icon) : null
+            return (
+              <IconPicker
+                value={group.icon ?? ''}
+                onChange={v => onIconChange(v || null)}
+                trigger={
+                  GroupIcon ? (
+                    <button type='button' title='Change icon' className='shrink-0 rounded p-0.5 text-slate-400 hover:text-nvr-cyan transition-colors'>
+                      <GroupIcon className='h-3.5 w-3.5' />
+                    </button>
+                  ) : (
+                    <button type='button' title='Add icon' className='shrink-0 rounded p-0.5 text-slate-300 hover:text-slate-500 transition-all'>
+                      <Plus className='h-3 w-3' />
+                    </button>
+                  )
+                }
+              />
+            )
+          })()}
+        </div>
+        {editing ? (
+          <input
+            autoFocus
+            value={labelDraft}
+            onChange={e => setLabelDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') { setLabelDraft(group.label); setEditing(false) } }}
+            onPointerDown={e => e.stopPropagation()}
+            className='flex-1 rounded border border-nvr-cyan/50 bg-white px-1.5 py-0.5 text-[13px] font-medium text-slate-800 outline-none ring-1 ring-nvr-cyan/30'
+          />
+        ) : (
+          <button
+            type='button'
+            onClick={() => { setLabelDraft(group.label); setEditing(true) }}
+            title='Click to rename'
+            className='group/label flex flex-1 items-center gap-1 truncate text-left text-[13px] font-medium text-slate-800 hover:text-nvr-cyan'
+          >
+            <span className='truncate'>{group.label}</span>
+            <Pencil className='h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/label:opacity-50' />
+          </button>
+        )}
+        <span className='font-mono text-[10px] text-slate-400'>{group.key}</span>
+        <button
+          type='button'
+          title='Click to toggle section / tab'
+          onClick={onToggleType}
+          className={cn(
+            'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80',
+            group.type === 'tab' ? 'bg-nvr-cyan/10 text-nvr-cyan' : 'bg-slate-100 text-slate-500'
+          )}
+        >
+          {group.type}
+        </button>
+        <button type='button' onClick={onDelete} className='rounded p-1 text-slate-300 hover:text-red-500'>
+          <Trash2 className='h-3.5 w-3.5' />
+        </button>
+      </div>
+
+      {/* Field drop zone — useDroppable registers this as a dnd-kit target */}
+      <DroppableFieldZone containerId={group.key}>
+      <SortableContext items={fieldNames} strategy={rectSortingStrategy}>
+        <div
+          className={cn(
+            'min-h-[52px] p-3',
+            fieldNames.length === 0
+              ? 'flex items-center justify-center'
+              : 'grid grid-cols-12 gap-2 auto-rows-auto'
+          )}
+        >
+          {fieldNames.length === 0 ? (
+            <p className='text-[11px] text-slate-300'>Drop fields here</p>
+          ) : (
+            fieldNames.map(f => {
+              const ft = allFields.find(af => af.field === f)
+              const settings = getFieldSettings?.(f)
+              const kind = getRelKind?.(f)
+              return (
+                <SortableFieldChip
+                  key={f}
+                  fieldName={f}
+                  displayName={settings?.label ?? titleCase(f)}
+                  fieldType={kind ?? getFriendlyType?.(ft?.type, f)}
+                  abstractType={kind ? kind.toLowerCase() : ft?.type}
+                  isM2O={kind === 'M2O'}
+                  isM2M={kind === 'M2M'}
+                  colSpan={getColSpan(f)}
+                  onColSpan={span => onColSpan(f, span)}
+                  fieldSettings={settings}
+                  onSettings={onFieldSettings ? patch => onFieldSettings(f, patch) : undefined}
+                  inGrid
+                />
+              )
+            })
+          )}
+        </div>
+      </SortableContext>
+      </DroppableFieldZone>
+    </div>
+  )
+}
+
+// ── DroppableFieldZone ────────────────────────────────────────────────────────
+
+function DroppableFieldZone({ containerId, children }: { containerId: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `drop:${containerId}` })
+  return (
+    <div ref={setNodeRef} className={cn('transition-colors', isOver && 'bg-nvr-cyan/[0.04]')}>
+      {children}
+    </div>
+  )
+}
+
+// ─── Layouts tab ─────────────────────────────────────────────────────────────
+
+interface CollectionLayout {
+  id: number
+  collection: string
+  name: string
+  is_active: boolean | number
+  sort: number
+}
+
+function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Array<{ name: string; data_type: string }> }) {
+  const qc = useQueryClient()
+  const invalidateLayouts = useCallback(
+    () => qc.invalidateQueries({ queryKey: ['collection-layouts', tableName] }),
+    [qc, tableName]
+  )
+
+  const { data: layouts = [] } = useQuery<CollectionLayout[]>({
+    queryKey: ['collection-layouts', tableName],
     queryFn: () =>
-      api.get<{ data: FieldGroup[] }>(`/field-groups/${tableName}`).then((r) => r.data.data),
+      api.get<{ data: CollectionLayout[] }>('/collection-layouts', { params: { collection: tableName } })
+        .then((r) => r.data.data ?? []),
     enabled: !!tableName
   })
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['field-groups', tableName] })
+  const activeLayout = layouts.find((l) => l.is_active) ?? layouts[0] ?? null
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const effectiveId = selectedId ?? activeLayout?.id ?? null
+
+  const [adding, setAdding] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editingName, setEditingName] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
 
   const createMut = useMutation({
-    mutationFn: (body: {
-      collection: string
-      key: string
-      label: string
-      type: 'section' | 'tab'
-    }) => api.post('/field-groups', body),
-    onSuccess: () => {
-      invalidate()
-      setAdding(false)
-      setNewKey('')
-      setNewLabel('')
-      toast.success('Group created')
-    },
-    onError: () => toast.error('Failed to create group')
+    mutationFn: (name: string) => api.post('/collection-layouts', { collection: tableName, name }),
+    onSuccess: () => { invalidateLayouts(); setAdding(false); setNewName('') },
+    onError: () => toast.error('Failed to create layout')
+  })
+
+  const activateMut = useMutation({
+    mutationFn: (id: number) => api.post(`/collection-layouts/${id}/activate`),
+    onSuccess: () => { invalidateLayouts(); toast.success('Layout activated') }
+  })
+
+  const cloneMut = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      api.post<{ data: CollectionLayout }>(`/collection-layouts/${id}/clone`, { name }),
+    onSuccess: (res) => {
+      invalidateLayouts()
+      setSelectedId(res.data.data.id)
+      toast.success('Layout cloned')
+    }
   })
 
   const deleteMut = useMutation({
-    mutationFn: (id: number) => api.delete(`/field-groups/${id}`),
-    onSuccess: () => {
-      invalidate()
-      toast.success('Group deleted')
-    }
+    mutationFn: (id: number) => api.delete(`/collection-layouts/${id}`),
+    onSuccess: () => { invalidateLayouts(); setSelectedId(null) },
+    onError: () => toast.error('Cannot delete the only layout')
+  })
+
+  const renameMut = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      api.patch(`/collection-layouts/${id}`, { name }),
+    onSuccess: () => { invalidateLayouts(); setEditingId(null) }
+  })
+
+  const selected = layouts.find((l) => l.id === effectiveId) ?? null
+
+  return (
+    <div className='flex min-h-0 gap-4'>
+      {/* Left sidebar */}
+      <div className='flex w-[140px] shrink-0 flex-col gap-0.5 border-r border-slate-200 pr-3 dark:border-border'>
+        <p className='mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400'>Layouts</p>
+        {layouts.map((l) => (
+          <div key={l.id} className='group relative'>
+            {editingId === l.id ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (editingName.trim()) renameMut.mutate({ id: l.id, name: editingName.trim() })
+                }}
+              >
+                <input
+                  autoFocus
+                  value={editingName}
+                  onChange={(e) => setEditingName(e.target.value)}
+                  onBlur={() => setEditingId(null)}
+                  className='w-full rounded border border-nvr-cyan px-2 py-1 text-[11px] outline-none'
+                />
+              </form>
+            ) : (
+              <button
+                type='button'
+                onClick={() => setSelectedId(l.id)}
+                onDoubleClick={() => { setEditingId(l.id); setEditingName(l.name) }}
+                className={cn(
+                  'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] transition-colors',
+                  effectiveId === l.id
+                    ? 'bg-nvr-cyan/10 font-medium text-nvr-cyan'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                )}
+              >
+                {l.is_active ? (
+                  <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-nvr-cyan' />
+                ) : (
+                  <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-transparent' />
+                )}
+                <span className='truncate'>{l.name}</span>
+              </button>
+            )}
+          </div>
+        ))}
+        {adding ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (newName.trim()) createMut.mutate(newName.trim())
+            }}
+            className='mt-1'
+          >
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onBlur={() => { setAdding(false); setNewName('') }}
+              placeholder='Layout name'
+              className='w-full rounded border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-nvr-cyan dark:border-border'
+            />
+          </form>
+        ) : (
+          <button
+            type='button'
+            onClick={() => setAdding(true)}
+            className='mt-1 flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+          >
+            <span>+ Add layout</span>
+          </button>
+        )}
+      </div>
+
+      {/* Right panel */}
+      <div className='min-h-0 flex-1'>
+        {selected && (
+          <div className='mb-3 flex items-center gap-2'>
+            <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>{selected.name}</span>
+            {selected.is_active ? (
+              <span className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan'>Active</span>
+            ) : (
+              <button
+                type='button'
+                onClick={() => activateMut.mutate(selected.id)}
+                className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/20'
+              >
+                Set active
+              </button>
+            )}
+            <div className='ml-auto flex items-center gap-1'>
+              <button
+                type='button'
+                onClick={() => cloneMut.mutate({ id: selected.id, name: `${selected.name} (copy)` })}
+                className='rounded px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
+              >
+                Clone
+              </button>
+              {confirmDeleteId === selected.id ? (
+                <>
+                  <span className='text-[10px] text-slate-500'>Delete?</span>
+                  <button
+                    type='button'
+                    onClick={() => { deleteMut.mutate(selected.id); setConfirmDeleteId(null) }}
+                    className='rounded px-2 py-0.5 text-[10px] text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20'
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => setConfirmDeleteId(null)}
+                    className='rounded px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100'
+                  >
+                    No
+                  </button>
+                </>
+              ) : (
+                <button
+                  type='button'
+                  onClick={() => setConfirmDeleteId(selected.id)}
+                  className='rounded px-2 py-0.5 text-[10px] text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        <FieldGroupsTab tableName={tableName} dbColumns={dbColumns} layoutId={effectiveId} />
+      </div>
+    </div>
+  )
+}
+
+// ── LayoutTab ─────────────────────────────────────────────────────────────────
+
+function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: string; dbColumns?: Array<{ name: string; data_type: string }>; layoutId: number | null }) {
+  const qc = useQueryClient()
+
+  const { data: groups = [], isLoading: groupsLoading } = useQuery<FieldGroup[]>({
+    queryKey: ['field-groups', tableName, layoutId],
+    queryFn: () =>
+      api
+        .get<{ data: FieldGroup[] }>(`/field-groups/${tableName}`, {
+          params: layoutId ? { layout_id: layoutId } : {}
+        })
+        .then((r) => r.data.data ?? []),
+    enabled: !!tableName
   })
 
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', tableName],
-    queryFn: () => api.get(`/collections/${tableName}`).then((r) => r.data.data),
+    queryFn: () => api.get(`/collections/${tableName}`).then(r => r.data.data),
     enabled: !!tableName,
     staleTime: 30_000
   })
 
   const { data: fieldConfig = [] } = useQuery({
-    queryKey: ['field-config', tableName],
+    queryKey: ['field-config', tableName, layoutId],
     queryFn: () =>
       api
-        .get<{ data: Array<{ field: string; group_key: string | null }> }>(
-          `/field-config/${tableName}`
+        .get<{ data: Array<{
+          field: string
+          group_key: string | null
+          sort: number | null
+          label: string | null
+          note: string | null
+          hidden: boolean
+          readonly: boolean
+          required: boolean
+          interface: string | null
+          options: Record<string, unknown> | null
+        }> }>(
+          `/field-config/${tableName}`,
+          { params: layoutId ? { layout_id: layoutId } : {} }
         )
-        .then((r) => r.data.data),
+        .then((r) => r.data.data ?? []),
     enabled: !!tableName,
     staleTime: 30_000
   })
 
-  const patchFieldGroup = async (fieldName: string, group_key: string | null) => {
-    await api.patch(`/field-config/${tableName}/${fieldName}`, { group_key })
-    qc.invalidateQueries({ queryKey: ['field-config', tableName] })
+  const allFields: Array<{ field: string; type?: string; options?: string | null }> = colMeta?.fields ?? []
+  const relations: Array<{ many_field: string; one_collection: string | null; one_field?: string | null; junction_field: string | null }> = colMeta?.relations ?? []
+
+  // field → relation kind label
+  const relKind = (fieldName: string): string | null => {
+    // Virtual M2M field — this collection is the "one" side of the junction
+    const m2m = relations.find(r => r.one_field === fieldName && r.junction_field !== null)
+    if (m2m) return 'M2M'
+    // Virtual O2M field
+    const o2m = relations.find(r => r.one_field === fieldName && r.junction_field === null)
+    if (o2m) return 'O2M'
+    // M2O FK column on this collection
+    const r = relations.find(r => r.many_field === fieldName)
+    if (!r) return null
+    return r.one_collection ? 'M2O' : null
   }
 
-  const fields: Array<{ field: string }> = colMeta?.fields ?? []
+  const DB_TYPE_LABELS: Record<string, string> = {
+    nvarchar: 'text', varchar: 'text', ntext: 'text', text: 'text',
+    int: 'num', bigint: 'bigint', tinyint: 'bool',
+    bit: 'bool', float: 'float', real: 'float',
+    decimal: 'decimal', numeric: 'decimal', money: 'money',
+    date: 'date', datetime: 'datetime', datetime2: 'datetime', time: 'time',
+    uniqueidentifier: 'uuid',
+  }
+  const ABSTRACT_TYPE_LABELS: Record<string, string> = {
+    string: 'text', text: 'text', integer: 'num', bigInteger: 'bigint',
+    float: 'float', decimal: 'decimal', boolean: 'bool',
+    date: 'date', datetime: 'datetime', uuid: 'uuid', json: 'json',
+  }
+  const friendlyType = (abstractType?: string, fieldName?: string): string | undefined => {
+    // Prefer actual DB column type when available
+    if (fieldName) {
+      const col = dbColumns.find(c => c.name === fieldName)
+      if (col) return DB_TYPE_LABELS[col.data_type.toLowerCase()] ?? col.data_type
+    }
+    return abstractType ? (ABSTRACT_TYPE_LABELS[abstractType] ?? abstractType) : undefined
+  }
+
+  // ── Local optimistic state ──
+  const [localGroupOrder, setLocalGroupOrder] = useState<number[]>([])
+  const [localAssignments, setLocalAssignments] = useState<Record<string, string | null>>({})
+  const [localFieldOrder, setLocalFieldOrder] = useState<Record<string, string[]>>({})
+  const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!groups.length && !allFields.length) return
+    setLocalGroupOrder(groups.map(g => g.id))
+    const assignments: Record<string, string | null> = {}
+    const fieldOrder: Record<string, string[]> = { __unassigned__: [] }
+    for (const g of groups) fieldOrder[g.key] = []
+    const sorted = [...allFields].sort((a, b) => {
+      const as_ = fieldConfig.find(fc => fc.field === a.field)?.sort ?? 9999
+      const bs_ = fieldConfig.find(fc => fc.field === b.field)?.sort ?? 9999
+      return as_ - bs_
+    })
+    for (const f of sorted) {
+      const gk = fieldConfig.find(fc => fc.field === f.field)?.group_key ?? null
+      assignments[f.field] = gk
+      if (gk && fieldOrder[gk] !== undefined) fieldOrder[gk].push(f.field)
+      else fieldOrder.__unassigned__.push(f.field)
+    }
+    setLocalAssignments(assignments)
+    setLocalFieldOrder(fieldOrder)
+  }, [groups, fieldConfig, allFields])
+
+  // ── Mutations ──
+  const invalidateGroups = useCallback(() => qc.invalidateQueries({ queryKey: ['field-groups', tableName] }), [qc, tableName])
+  const invalidateFieldConfig = useCallback(() => qc.invalidateQueries({ queryKey: ['field-config', tableName] }), [qc, tableName])
+  const invalidateMeta = useCallback(() => qc.invalidateQueries({ queryKey: ['collection-meta', tableName] }), [qc, tableName])
+
+  const createMut = useMutation({
+    mutationFn: (body: { collection: string; key: string; label: string; type: 'section' | 'tab' }) =>
+      api.post('/field-groups', { ...body, layout_id: layoutId }),
+    onSuccess: () => { invalidateGroups(); setAdding(false); setNewKey(''); setNewLabel(''); toast.success('Group created') },
+    onError: () => toast.error('Failed to create group')
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => api.delete(`/field-groups/${id}`),
+    onSuccess: () => { invalidateGroups(); invalidateFieldConfig(); toast.success('Group deleted') }
+  })
+
+  const patchTypeMut = useMutation({
+    mutationFn: ({ id, type }: { id: number; type: 'section' | 'tab' }) => api.patch(`/field-groups/${id}`, { type }),
+    onSuccess: () => invalidateGroups()
+  })
+
+  const renameMut = useMutation({
+    mutationFn: ({ id, label }: { id: number; label: string }) => api.patch(`/field-groups/${id}`, { label }),
+    onSuccess: () => invalidateGroups()
+  })
+
+  const iconMut = useMutation({
+    mutationFn: ({ id, icon }: { id: number; icon: string | null }) => api.patch(`/field-groups/${id}`, { icon }),
+    onSuccess: () => invalidateGroups()
+  })
+
+  const reorderGroupsMut = useMutation({
+    mutationFn: (order: Array<{ id: number; sort: number }>) =>
+      api.post('/field-groups/reorder', { collection: tableName, order })
+  })
+
+  const patchField = useCallback((field: string, patch: Record<string, unknown>) => {
+    if (layoutId && ('group_key' in patch || 'sort' in patch)) {
+      // Build full assignments from current local state and flush to backend
+      const allAssignments = Object.entries(localAssignments).flatMap(([f, gk]) => {
+        const groupFields = localFieldOrder[gk ?? '__unassigned__'] ?? []
+        const sortIdx = groupFields.indexOf(f)
+        return [{ field: f, group_key: gk ?? null, sort: sortIdx >= 0 ? sortIdx : 0 }]
+      })
+      // Also include the field being patched with its new values
+      const patchedAssignment = {
+        field,
+        group_key: ('group_key' in patch ? patch.group_key : localAssignments[field]) as string | null,
+        sort: ('sort' in patch ? patch.sort : 0) as number
+      }
+      const merged = allAssignments.map(a => a.field === field ? patchedAssignment : a)
+      if (!merged.find(a => a.field === field)) merged.push(patchedAssignment)
+      api.put(`/collection-layouts/${layoutId}/assignments`, { assignments: merged })
+        .then(() => { invalidateFieldConfig() })
+    } else {
+      api.patch(`/field-config/${tableName}/${field}`, patch)
+        .then(() => { invalidateFieldConfig(); invalidateMeta() })
+    }
+  }, [tableName, layoutId, localAssignments, localFieldOrder, invalidateFieldConfig, invalidateMeta])
+
+  // ── Add group form ──
+  const [adding, setAdding] = useState(false)
+  const [newKey, setNewKey] = useState('')
+  const [newLabel, setNewLabel] = useState('')
+  const [newType, setNewType] = useState<'section' | 'tab'>('section')
+
+  // ── dnd ──
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  )
+
+  const orderedGroups = useMemo(
+    () => localGroupOrder.map(id => groups.find(g => g.id === id)).filter(Boolean) as FieldGroup[],
+    [localGroupOrder, groups]
+  )
+
+  function findContainer(id: string): string {
+    if (id.startsWith('group:')) return '__groups__'
+    for (const [container, fields] of Object.entries(localFieldOrder)) {
+      if (fields.includes(id)) return container
+    }
+    return '__unassigned__'
+  }
+
+  function handleDragStart({ active }: DragStartEvent) {
+    if (!String(active.id).startsWith('group:')) setActiveFieldId(String(active.id))
+  }
+
+  function handleDragOver({ active, over }: DragOverEvent) {
+    // Only handle same-container sorting here — cross-container done in onDragEnd
+    if (!over) return
+    const activeId = String(active.id)
+    const overId = String(over.id)
+    if (activeId.startsWith('group:') || overId.startsWith('drop:') || overId.startsWith('group:')) return
+
+    const fromContainer = findContainer(activeId)
+    const toContainer = findContainer(overId)
+    if (!toContainer || fromContainer !== toContainer) return
+
+    const fields = localFieldOrder[fromContainer] ?? []
+    const fromIdx = fields.indexOf(activeId)
+    const toIdx = fields.indexOf(overId)
+    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return
+
+    setLocalFieldOrder(prev => ({
+      ...prev,
+      [fromContainer]: arrayMove(prev[fromContainer] ?? [], fromIdx, toIdx),
+    }))
+  }
+
+  function handleDragEnd({ active, over }: DragEndEvent) {
+    setActiveFieldId(null)
+    if (!over) return
+    const activeId = String(active.id)
+    const overId = String(over.id)
+
+    // ── Group reorder ──
+    if (activeId.startsWith('group:')) {
+      const activeKey = activeId.replace('group:', '')
+      const overKey = overId.replace('group:', '')
+      const activeIdx = orderedGroups.findIndex(g => g.key === activeKey)
+      const overIdx = orderedGroups.findIndex(g => g.key === overKey)
+      if (activeIdx === -1 || overIdx === -1 || activeIdx === overIdx) return
+      const newOrder = arrayMove(localGroupOrder, activeIdx, overIdx)
+      setLocalGroupOrder(newOrder)
+      reorderGroupsMut.mutate(newOrder.map((id, sort) => ({ id, sort })))
+      return
+    }
+
+    // ── Determine target container ──
+    let toContainer: string
+    if (overId.startsWith('drop:')) {
+      toContainer = overId.replace('drop:', '')
+    } else if (overId.startsWith('group:')) {
+      return
+    } else {
+      toContainer = findContainer(overId)
+    }
+
+    const fromContainer = findContainer(activeId)
+    if (!toContainer) return
+
+    if (fromContainer === toContainer) {
+      // Same container — already sorted in onDragOver, commit sort order to API
+      const fields = localFieldOrder[fromContainer] ?? []
+      fields.forEach((f, idx) => {
+        api.patch(`/field-config/${tableName}/${f}`, { sort: idx, group_key: localAssignments[f] ?? null })
+      })
+      invalidateFieldConfig()
+      return
+    }
+
+    // ── Cross-container drop — single state update, no jumping ──
+    const newGroupKey = toContainer === '__unassigned__' ? null : toContainer
+    setLocalAssignments(prev => ({ ...prev, [activeId]: newGroupKey }))
+    setLocalFieldOrder(prev => ({
+      ...prev,
+      [fromContainer]: (prev[fromContainer] ?? []).filter(f => f !== activeId),
+      [toContainer]: [...(prev[toContainer] ?? []), activeId],
+    }))
+    patchField(activeId, {
+      group_key: newGroupKey,
+      sort: (localFieldOrder[toContainer] ?? []).length,
+    })
+  }
+
+  const getColSpan = useCallback((f: string) => {
+    const field = allFields.find(af => af.field === f)
+    return parseColSpan(field?.options)
+  }, [allFields])
+
+  const getFieldSettings = useCallback((f: string): FieldSettings => {
+    const fc = fieldConfig.find(c => c.field === f)
+    // Read options from fieldConfig (field-config endpoint now returns parsed options)
+    // This ensures max_values/inline_relation are fresh after every patch without
+    // waiting for collection-meta to refetch.
+    const rawOpts = (fc as Record<string, unknown> | undefined)?.options
+    let opts: Record<string, unknown> = {}
+    try {
+      opts = typeof rawOpts === 'string' ? JSON.parse(rawOpts) : ((rawOpts as Record<string, unknown>) ?? {})
+    } catch { /* noop */ }
+    return {
+      label: fc?.label ?? null,
+      interface: fc?.interface ?? null,
+      note: fc?.note ?? null,
+      required: !!fc?.required,
+      hidden: !!fc?.hidden,
+      readonly: !!fc?.readonly,
+      inline_relation: opts.inline_relation !== false,
+      max_values: typeof opts.max_values === 'number' ? opts.max_values : null,
+    }
+  }, [fieldConfig])
+
+  const handleFieldSettings = useCallback((f: string, patch: Partial<FieldSettings>) => {
+    patchField(f, patch)
+  }, [patchField])
+
+  const activeFieldData = activeFieldId ? allFields.find(f => f.field === activeFieldId) : null
 
   return (
-    <div className='space-y-4'>
-      <div className='rounded-lg border border-slate-200 bg-white p-4'>
-        <p className='text-[12px] text-slate-500'>
-          Field groups organize the item editor. <strong>Sections</strong> are collapsible panels.{' '}
-          <strong>Tabs</strong> render as a tabbed interface. Fields not assigned to a group appear
-          at the top.
-        </p>
-      </div>
-
-      <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
-        <div className='border-b border-slate-100 px-4 py-3 flex items-center justify-between'>
-          <p className='text-[12px] font-medium text-slate-700'>Groups</p>
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-6 text-[11px]'
-            onClick={() => setAdding(true)}
-          >
-            <Plus className='mr-1 h-3 w-3' />
-            Add Group
-          </Button>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={(args) => {
+        if (String(args.active.id).startsWith('group:')) return closestCenter(args)
+        const pointer = pointerWithin(args)
+        return pointer.length > 0 ? pointer : rectIntersection(args)
+      }}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
+    >
+      <div className='flex gap-4 items-start'>
+        {/* Left sidebar — unassigned field pool */}
+        <div className='w-64 shrink-0'>
+          <div className='rounded-lg border border-dashed border-slate-200 bg-slate-50 sticky top-0'>
+            <div className='border-b border-slate-200 px-3 py-2'>
+              <p className='text-[11px] font-medium text-slate-400'>
+                Unassigned
+                {(localFieldOrder.__unassigned__ ?? []).length > 0 && (
+                  <span className='ml-1 text-slate-300'>({(localFieldOrder.__unassigned__ ?? []).length})</span>
+                )}
+              </p>
+            </div>
+            <DroppableFieldZone containerId='__unassigned__'>
+            <SortableContext items={localFieldOrder.__unassigned__ ?? []} strategy={verticalListSortingStrategy}>
+              <div className='overflow-y-auto min-h-[40px] space-y-1.5 p-2' style={{ maxHeight: 'calc(100vh - 220px)' }}>
+                {(localFieldOrder.__unassigned__ ?? []).length === 0 ? (
+                  <p className='py-2 text-center text-[10px] text-slate-300'>All fields assigned</p>
+                ) : (localFieldOrder.__unassigned__ ?? []).map(f => {
+                  const ft = allFields.find(af => af.field === f)
+                  const settings = getFieldSettings(f)
+                  const kind = relKind(f)
+                  return (
+                    <SortableFieldChip
+                      key={f}
+                      fieldName={f}
+                      displayName={settings.label ?? titleCase(f)}
+                      fieldType={kind ?? friendlyType(ft?.type, f)}
+                      abstractType={kind ? kind.toLowerCase() : ft?.type}
+                      isM2O={kind === 'M2O'}
+                      isM2M={kind === 'M2M'}
+                      colSpan={getColSpan(f)}
+                      fieldSettings={settings}
+                      onSettings={patch => handleFieldSettings(f, patch)}
+                    />
+                  )
+                })}
+              </div>
+            </SortableContext>
+            </DroppableFieldZone>
+          </div>
         </div>
 
-        {isLoading ? (
-          <div className='space-y-2 p-4'>
-            {[1, 2, 3].map((k) => (
-              <Skeleton key={k} className='h-10 w-full' />
-            ))}
+        {/* Main area — groups */}
+        <div className='min-w-0 flex-1 space-y-3'>
+          <div className='flex items-center justify-between'>
+            <p className='text-[12px] text-slate-500'>
+              Drag fields into groups and set column widths for side-by-side layout.
+            </p>
+            <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding(true)}>
+              <Plus className='mr-1 h-3 w-3' />
+              Add Group
+            </Button>
           </div>
-        ) : groups.length === 0 && !adding ? (
-          <div className='py-8 text-center text-[12px] text-slate-400'>No field groups defined</div>
+
+        {/* Groups */}
+        {groupsLoading ? (
+          <div className='space-y-2'>{[1,2].map(k => <Skeleton key={k} className='h-24 w-full rounded-lg' />)}</div>
         ) : (
-          groups.map((g) => (
-            <div
-              key={g.id}
-              className='flex items-center gap-3 border-b border-slate-100 px-4 py-3 last:border-0'
-            >
-              <GripVertical className='h-3.5 w-3.5 text-slate-300 shrink-0' />
-              <div className='flex-1 min-w-0'>
-                <div className='flex items-center gap-2'>
-                  <span className='text-[13px] font-medium text-slate-800'>{g.label}</span>
-                  <span className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500'>
-                    {g.key}
-                  </span>
-                  <span
-                    className={cn(
-                      'rounded px-1.5 py-0.5 text-[10px] font-medium',
-                      g.type === 'tab'
-                        ? 'bg-nvr-cyan/10 text-nvr-cyan'
-                        : 'bg-slate-100 text-slate-500'
-                    )}
-                  >
-                    {g.type}
-                  </span>
+          <SortableContext items={orderedGroups.map(g => `group:${g.key}`)} strategy={verticalListSortingStrategy}>
+            <div className='space-y-3'>
+              {orderedGroups.map(g => (
+                <SortableGroupCard
+                  key={g.id}
+                  group={g}
+                  fieldNames={localFieldOrder[g.key] ?? []}
+                  allFields={allFields}
+                  getColSpan={getColSpan}
+                  onColSpan={(f, span) => patchField(f, { col_span: span })}
+                  onToggleType={() => patchTypeMut.mutate({ id: g.id, type: g.type === 'tab' ? 'section' : 'tab' })}
+                  onDelete={() => { if (confirm(`Delete "${g.label}"? Fields will be unassigned.`)) deleteMut.mutate(g.id) }}
+                  onRename={(label) => renameMut.mutate({ id: g.id, label })}
+                  onIconChange={(icon) => iconMut.mutate({ id: g.id, icon })}
+                  getRelKind={relKind}
+                  getFriendlyType={friendlyType}
+                  getFieldSettings={getFieldSettings}
+                  onFieldSettings={handleFieldSettings}
+                />
+              ))}
+              {orderedGroups.length === 0 && !adding && (
+                <div className='rounded-lg border border-dashed border-slate-200 py-8 text-center text-[12px] text-slate-400'>
+                  No groups yet. Add a group to organize form fields.
                 </div>
-              </div>
-              <button
-                type='button'
-                onClick={() => {
-                  if (confirm(`Delete group "${g.label}"? Fields will be ungrouped.`)) {
-                    deleteMut.mutate(g.id)
-                  }
-                }}
-                className='rounded p-1 text-slate-400 hover:text-red-500'
-              >
-                <Trash2 className='h-3.5 w-3.5' />
-              </button>
+              )}
             </div>
-          ))
+          </SortableContext>
         )}
 
+        {/* Add group form */}
         {adding && (
-          <div className='border-t border-slate-200 bg-slate-50 p-4 space-y-3'>
-            <p className='text-[12px] font-medium text-slate-600'>New Group</p>
+          <div className='rounded-lg border border-slate-200 bg-white p-4 space-y-3'>
+            <p className='text-[12px] font-medium text-slate-700'>New Group</p>
             <div className='grid grid-cols-3 gap-3'>
               <div>
                 <Label className='mb-1 block text-[11px]'>Key (slug)</Label>
-                <Input
-                  value={newKey}
-                  onChange={(e) =>
-                    setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))
-                  }
-                  placeholder='details'
-                  className='h-7 font-mono text-[12px]'
-                />
+                <Input value={newKey} onChange={e => setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))} placeholder='details' className='h-7 font-mono text-[12px]' />
               </div>
               <div>
                 <Label className='mb-1 block text-[11px]'>Label</Label>
-                <Input
-                  value={newLabel}
-                  onChange={(e) => setNewLabel(e.target.value)}
-                  placeholder='Details'
-                  className='h-7 text-[12px]'
-                />
+                <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder='Details' className='h-7 text-[12px]' />
               </div>
               <div>
                 <Label className='mb-1 block text-[11px]'>Type</Label>
-                <Combobox
-                  value={newType}
-                  onChange={(v) => setNewType(v as 'section' | 'tab')}
-                  options={[
-                    { value: 'section', label: 'Section (collapsible)' },
-                    { value: 'tab', label: 'Tab' }
-                  ]}
-                />
+                <Sel value={newType} onChange={v => setNewType(v as 'section' | 'tab')} options={[{ value: 'section', label: 'Section' }, { value: 'tab', label: 'Tab' }]} />
               </div>
             </div>
             <div className='flex justify-end gap-2'>
-              <Button
-                type='button'
-                variant='outline'
-                size='sm'
-                className='h-7 text-[12px]'
-                onClick={() => setAdding(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type='button'
-                size='sm'
-                className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan-dark'
-                disabled={!newKey.trim() || !newLabel.trim() || createMut.isPending}
-                onClick={() =>
-                  createMut.mutate({
-                    collection: tableName,
-                    key: newKey.trim(),
-                    label: newLabel.trim(),
-                    type: newType
-                  })
-                }
-              >
-                Create Group
+              <Button type='button' variant='outline' size='sm' className='h-7 text-[12px]' onClick={() => setAdding(false)}>Cancel</Button>
+              <Button type='button' size='sm' className='h-7 bg-nvr-cyan text-[12px] text-white' disabled={!newKey.trim() || !newLabel.trim() || createMut.isPending}
+                onClick={() => createMut.mutate({ collection: tableName, key: newKey.trim(), label: newLabel.trim(), type: newType })}>
+                Create
               </Button>
             </div>
           </div>
         )}
-      </div>
+        </div>{/* end main area */}
+      </div>{/* end flex row */}
 
-      {groups.length > 0 && fields.length > 0 && (
-        <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
-          <div className='border-b border-slate-100 px-4 py-3'>
-            <p className='text-[12px] font-medium text-slate-700'>Assign Fields to Groups</p>
-          </div>
-          <div className='divide-y divide-slate-100'>
-            {fields.map((f) => {
-              const cfg = fieldConfig.find((fc) => fc.field === f.field)
-              return (
-                <div key={f.field} className='flex items-center gap-3 px-4 py-2.5'>
-                  <span className='flex-1 font-mono text-[12px] text-slate-700'>{f.field}</span>
-                  <Combobox
-                    value={cfg?.group_key ?? ''}
-                    onChange={(v) => patchFieldGroup(f.field, v || null)}
-                    options={[
-                      { value: '', label: '— no group —' },
-                      ...groups.map((g) => ({ value: g.key, label: g.label }))
-                    ]}
-                    placeholder='No group'
-                  />
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
+      <DragOverlay dropAnimation={{ duration: 150, easing: 'ease' }}>
+        {activeFieldId && (
+          <FieldChip
+            fieldName={activeFieldId}
+            fieldType={activeFieldData?.type}
+            colSpan={getColSpan(activeFieldId)}
+            isDragging
+          />
+        )}
+      </DragOverlay>
+    </DndContext>
   )
 }
 
@@ -5091,6 +6498,8 @@ export function TableEditorPage() {
   const [tab, setTab] = useState<Tab>('fields')
   const [showDrop, setShowDrop] = useState(false)
   const [dropConfirm, setDropConfirm] = useState('')
+  const [extendMode, setExtendMode] = useState(false)
+  const isSystem = (table ?? '').startsWith('nivaro_')
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['data-model-table', table],
@@ -5163,7 +6572,7 @@ export function TableEditorPage() {
           <div className='flex items-center gap-2'>
             {tableData && (
               <>
-                {tableData.registered ? (
+                {!isSystem && (tableData.registered ? (
                   <Button
                     size='sm'
                     variant='outline'
@@ -5192,16 +6601,18 @@ export function TableEditorPage() {
                     <Eye className='mr-1.5 h-3 w-3' />
                     Register
                   </Button>
+                ))}
+                {!isSystem && (
+                  <Button
+                    size='sm'
+                    variant='ghost'
+                    className='h-7 text-[12px] text-red-400 hover:text-red-600'
+                    onClick={() => setShowDrop(true)}
+                  >
+                    <Trash2 className='mr-1.5 h-3 w-3' />
+                    Drop Table
+                  </Button>
                 )}
-                <Button
-                  size='sm'
-                  variant='ghost'
-                  className='h-7 text-[12px] text-red-400 hover:text-red-600'
-                  onClick={() => setShowDrop(true)}
-                >
-                  <Trash2 className='mr-1.5 h-3 w-3' />
-                  Drop Table
-                </Button>
               </>
             )}
           </div>
@@ -5210,15 +6621,9 @@ export function TableEditorPage() {
         {/* Tabs */}
         <div className='mt-3 flex gap-0.5'>
           {(
-            [
-              'fields',
-              'relations',
-              'groups',
-              'behavior',
-              'content',
-              'attributes',
-              'settings'
-            ] as const
+            (isSystem
+              ? ['fields', 'relations'] as const
+              : ['fields', 'relations', 'groups', 'behavior', 'content', 'attributes', 'settings'] as const)
           ).map((t) => (
             <button
               key={t}
@@ -5232,7 +6637,7 @@ export function TableEditorPage() {
               )}
             >
               {t === 'groups'
-                ? 'Groups'
+                ? 'Layout'
                 : t === 'behavior'
                   ? 'Behavior'
                   : t === 'content'
@@ -5244,7 +6649,7 @@ export function TableEditorPage() {
       </div>
 
       {/* Content */}
-      <div className='p-6'>
+      <div className={cn('p-6', tab === 'groups' && 'pb-32')}>
         {isLoading || !tableData ? (
           <div className='space-y-2'>
             {Array.from({ length: 6 }).map((_, i) => (
@@ -5259,6 +6664,9 @@ export function TableEditorPage() {
                 tableData={tableData}
                 tableName={table ?? ''}
                 onRefresh={() => refetch()}
+                isSystem={isSystem}
+                extendMode={extendMode}
+                onExtendModeChange={setExtendMode}
               />
             )}
             {tab === 'relations' && (
@@ -5268,7 +6676,7 @@ export function TableEditorPage() {
                 onRefresh={() => refetch()}
               />
             )}
-            {tab === 'groups' && <FieldGroupsTab tableName={table ?? ''} />}
+            {tab === 'groups' && <LayoutsTab tableName={table ?? ''} dbColumns={tableData?.columns ?? []} />}
             {tab === 'behavior' && <BehaviorTab tableName={table ?? ''} tableData={tableData} />}
             {tab === 'content' && (
               <ContentTab
@@ -5301,30 +6709,32 @@ export function TableEditorPage() {
           <DialogHeader>
             <DialogTitle className='text-[15px] text-red-600'>Drop Table</DialogTitle>
           </DialogHeader>
-          <div className='space-y-3 px-6 pb-6'>
-            <p className='text-[13px] text-slate-700'>
-              This will permanently delete the table{' '}
-              <code className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[12px]'>
-                {table}
-              </code>{' '}
-              and all its data. This action cannot be undone.
-            </p>
-            <div>
-              <label
-                htmlFor='drop-table-confirm'
-                className='mb-1.5 block text-[12px] font-medium text-slate-700'
-              >
-                Type <strong>{table}</strong> to confirm
-              </label>
-              <Input
-                id='drop-table-confirm'
-                value={dropConfirm}
-                onChange={(e) => setDropConfirm(e.target.value)}
-                placeholder={table}
-                className='font-mono text-[13px]'
-              />
+          <DialogBody>
+            <div className='space-y-3'>
+              <p className='text-[13px] text-slate-700'>
+                This will permanently delete the table{' '}
+                <code className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[12px]'>
+                  {table}
+                </code>{' '}
+                and all its data. This action cannot be undone.
+              </p>
+              <div>
+                <label
+                  htmlFor='drop-table-confirm'
+                  className='mb-1.5 block text-[12px] font-medium text-slate-700'
+                >
+                  Type <strong>{table}</strong> to confirm
+                </label>
+                <Input
+                  id='drop-table-confirm'
+                  value={dropConfirm}
+                  onChange={(e) => setDropConfirm(e.target.value)}
+                  placeholder={table}
+                  className='font-mono text-[13px]'
+                />
+              </div>
             </div>
-          </div>
+          </DialogBody>
           <DialogFooter>
             <Button
               variant='outline'
