@@ -101,6 +101,19 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     if (count <= 1) return reply.code(409).send({ error: 'Cannot delete the only layout for a collection' })
 
+    // If deleting the active layout, promote the next one first
+    if (existing.is_active) {
+      const next = await db('nivaro_collection_layouts')
+        .where({ collection: existing.collection })
+        .whereNot({ id: Number(id) })
+        .orderBy('sort', 'asc')
+        .first('id')
+      if (next) {
+        await db('nivaro_collection_layouts').where({ collection: existing.collection }).update({ is_active: 0 })
+        await db('nivaro_collection_layouts').where({ id: next.id }).update({ is_active: 1 })
+      }
+    }
+
     await db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).delete()
     await db('nivaro_field_groups').where({ layout_id: Number(id) }).delete()
     await db('nivaro_collection_layouts').where({ id }).delete()
@@ -210,17 +223,19 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const body = req.body as { assignments: Array<{ field: string; group_key: string | null; sort: number }> }
     if (!Array.isArray(body.assignments)) return reply.code(400).send({ error: 'assignments array required' })
 
-    await db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).delete()
-    if (body.assignments.length > 0) {
-      await db('nivaro_layout_field_assignments').insert(
-        body.assignments.map((a) => ({
-          layout_id: Number(id),
-          field: a.field,
-          group_key: a.group_key ?? null,
-          sort: a.sort
-        }))
-      )
-    }
+    await db.transaction(async (trx) => {
+      await trx('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).delete()
+      if (body.assignments.length > 0) {
+        await trx('nivaro_layout_field_assignments').insert(
+          body.assignments.map((a) => ({
+            layout_id: Number(id),
+            field: a.field,
+            group_key: a.group_key ?? null,
+            sort: a.sort
+          }))
+        )
+      }
+    })
 
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
