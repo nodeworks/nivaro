@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -440,6 +441,7 @@ export function TasksPage() {
           <DialogHeader>
             <DialogTitle>New Task</DialogTitle>
           </DialogHeader>
+          <DialogBody>
           <TaskForm
             collections={collections}
             users={users}
@@ -447,6 +449,7 @@ export function TasksPage() {
             onCancel={() => setCreating(false)}
             saving={createMut.isPending}
           />
+          </DialogBody>
         </DialogContent>
       </Dialog>
 
@@ -461,11 +464,13 @@ export function TasksPage() {
           <DialogHeader>
             <DialogTitle>Delete Task</DialogTitle>
           </DialogHeader>
-          <p className='text-sm text-muted-foreground'>
-            Are you sure you want to delete{' '}
-            <span className='font-medium text-foreground'>{deleting?.title}</span>? This cannot be
-            undone.
-          </p>
+          <DialogBody>
+            <p className='text-sm text-muted-foreground'>
+              Are you sure you want to delete{' '}
+              <span className='font-medium text-foreground'>{deleting?.title}</span>? This cannot be
+              undone.
+            </p>
+          </DialogBody>
           <DialogFooter>
             <Button
               variant='outline'

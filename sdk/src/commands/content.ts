@@ -1,7 +1,7 @@
 /**
  * Content-operations commands: export, draft/publish, scheduled changes,
  * field config/groups, virtual collections, record templates, collection
- * presets, field translations, line items, addendums & change orders,
+ * presets, field translations, sub-rows, addendums & change orders,
  * clone / rollback / field history.
  */
 import { type Command, cmd } from '../command.js'
@@ -148,6 +148,7 @@ export interface FieldVisibilityRules {
 
 export interface FieldConfig {
   field: string
+  label: string | null
   group_key: string | null
   visibility_rules: FieldVisibilityRules | null
   dependency_config: Record<string, unknown> | null
@@ -437,15 +438,15 @@ export function deleteFieldTranslations(
   return cmd('DELETE', `/field-translations/${collection}/${itemId}/${field}`)
 }
 
-// ─── Line items ───────────────────────────────────────────────────────────────
+// ─── Sub-rows ─────────────────────────────────────────────────────────────────
 
-export interface LineItem {
+export interface SubRow {
   id: number
   sort: number
   data: Record<string, unknown>
 }
 
-export interface LineItemTemplate {
+export interface SubRowTemplate {
   id: number
   collection: string
   field: string
@@ -456,74 +457,74 @@ export interface LineItemTemplate {
   updated_at: ISODate
 }
 
-export function listLineItems(
+export function listSubRows(
   collection: string,
   itemId: string | number,
   field: string
-): Command<{ data: LineItem[] }> {
-  return cmd('GET', `/line-items/${collection}/${itemId}/${field}`)
+): Command<{ data: SubRow[] }> {
+  return cmd('GET', `/sub-rows/${collection}/${itemId}/${field}`)
 }
 
-export function addLineItem(
+export function addSubRow(
   collection: string,
   itemId: string | number,
   field: string,
   data: Record<string, unknown>
-): Command<{ data: LineItem }> {
-  return cmd('POST', `/line-items/${collection}/${itemId}/${field}`, undefined, { data })
+): Command<{ data: SubRow }> {
+  return cmd('POST', `/sub-rows/${collection}/${itemId}/${field}`, undefined, { data })
 }
 
-/** Bulk replace all line items for a parent field. */
-export function replaceLineItems(
+/** Bulk replace all sub-rows for a parent field. */
+export function replaceSubRows(
   collection: string,
   itemId: string | number,
   field: string,
   items: Array<{ id?: number | string; sort: number; data: Record<string, unknown> }>
-): Command<{ data: LineItem[] }> {
-  return cmd('PATCH', `/line-items/${collection}/${itemId}/${field}`, undefined, { items })
+): Command<{ data: SubRow[] }> {
+  return cmd('PATCH', `/sub-rows/${collection}/${itemId}/${field}`, undefined, { items })
 }
 
-export function deleteLineItem(
+export function deleteSubRow(
   collection: string,
   itemId: string | number,
   field: string,
-  lineItemId: number | string
+  subRowId: number | string
 ): Command<void> {
-  return cmd('DELETE', `/line-items/${collection}/${itemId}/${field}/${lineItemId}`)
+  return cmd('DELETE', `/sub-rows/${collection}/${itemId}/${field}/${subRowId}`)
 }
 
-export function reorderLineItems(body: {
+export function reorderSubRows(body: {
   collection: string
   item_id: string
   field: string
   order: Array<{ id: number | string; sort: number }>
-}): Command<{ data: LineItem[] }> {
-  return cmd('POST', '/line-items/reorder', undefined, body)
+}): Command<{ data: SubRow[] }> {
+  return cmd('POST', '/sub-rows/reorder', undefined, body)
 }
 
-export function listLineItemTemplates(
+export function listSubRowTemplates(
   collection: string,
   field: string
-): Command<{ data: LineItemTemplate[] }> {
-  return cmd('GET', `/line-items/templates/${collection}/${field}`)
+): Command<{ data: SubRowTemplate[] }> {
+  return cmd('GET', `/sub-rows/templates/${collection}/${field}`)
 }
 
-export function createLineItemTemplate(body: {
+export function createSubRowTemplate(body: {
   collection: string
   field: string
   name: string
   items: Record<string, unknown>[]
-}): Command<{ data: LineItemTemplate }> {
-  return cmd('POST', '/line-items/templates', undefined, body)
+}): Command<{ data: SubRowTemplate }> {
+  return cmd('POST', '/sub-rows/templates', undefined, body)
 }
 
-export function deleteLineItemTemplate(id: number): Command<void> {
-  return cmd('DELETE', `/line-items/templates/${id}`)
+export function deleteSubRowTemplate(id: number): Command<void> {
+  return cmd('DELETE', `/sub-rows/templates/${id}`)
 }
 
-/** Returns the template's line items for merging into the editor. */
-export function applyLineItemTemplate(id: number): Command<{ items: Record<string, unknown>[] }> {
-  return cmd('POST', `/line-items/templates/${id}/apply`)
+/** Returns the template's sub-rows for merging into the editor. */
+export function applySubRowTemplate(id: number): Command<{ items: Record<string, unknown>[] }> {
+  return cmd('POST', `/sub-rows/templates/${id}/apply`)
 }
 
 // ─── Addendums & change orders ────────────────────────────────────────────────
@@ -635,9 +636,14 @@ export function listChangeOrders(
 /** Clone an item; returns the new item's id. Draft-publish collections clone as drafts. */
 export function cloneItem(
   collection: string,
-  id: string | number
+  id: string | number,
+  options?: {
+    field_overrides?: Record<string, unknown>
+    exclude_fields?: string[]
+    include_sub_rows?: string[]
+  }
 ): Command<{ data: { id: string | number } }> {
-  return cmd('POST', `/items/${collection}/${id}/clone`)
+  return cmd('POST', `/items/${collection}/${id}/clone`, undefined, options)
 }
 
 export interface FieldHistoryEntry {

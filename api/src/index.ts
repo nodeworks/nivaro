@@ -10,6 +10,7 @@ import {
   registerNotificationSubscriptionHooks,
   setApp as setSubscriptionApp
 } from './hooks/notification-subscriptions.js'
+import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
 import { registerSlaHooks, setApp as setSlaApp } from './hooks/sla.js'
 import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
@@ -19,6 +20,7 @@ async function main() {
   registerFieldWatchHooks()
   registerNotificationSubscriptionHooks()
   registerSlaHooks()
+  registerPipelineAutostartHooks()
   registerAlertHooks()
   registerEmbeddingHooks()
   registerCrossTriggerHooks()

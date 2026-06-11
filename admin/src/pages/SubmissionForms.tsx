@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -198,13 +199,15 @@ export function SubmissionFormsPage() {
           <DialogHeader>
             <DialogTitle>Delete Submission Form</DialogTitle>
           </DialogHeader>
-          <p className='px-6 pb-6 text-sm text-muted-foreground'>
-            Are you sure you want to delete{' '}
-            <span className='font-medium text-foreground'>{deleting?.name}</span>? All{' '}
-            <span className='font-medium text-foreground'>{deleting?.submission_count}</span>{' '}
-            submission{deleting?.submission_count !== 1 ? 's' : ''} will also be deleted. This
-            cannot be undone.
-          </p>
+          <DialogBody>
+            <p className='text-sm text-muted-foreground'>
+              Are you sure you want to delete{' '}
+              <span className='font-medium text-foreground'>{deleting?.name}</span>? All{' '}
+              <span className='font-medium text-foreground'>{deleting?.submission_count}</span>{' '}
+              submission{deleting?.submission_count !== 1 ? 's' : ''} will also be deleted. This
+              cannot be undone.
+            </p>
+          </DialogBody>
           <DialogFooter>
             <Button
               variant='outline'

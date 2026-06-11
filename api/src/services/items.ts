@@ -526,6 +526,25 @@ interface FieldRuleRow {
  * all active rules whose trigger field is present in the payload are evaluated
  * (used on save).
  */
+async function applyDatetimeAutoFields(
+  collection: string,
+  payload: Record<string, unknown>,
+  event: 'on_create' | 'on_update'
+): Promise<void> {
+  const fields = (await db('nivaro_fields')
+    .where({ collection })
+    .whereNotNull('options')
+    .select('field', 'options')) as Array<{ field: string; options: string | null }>
+
+  const now = new Date().toISOString()
+  for (const f of fields) {
+    try {
+      const opts = JSON.parse(f.options ?? '{}') as Record<string, unknown>
+      if (opts[event] === 'now') payload[f.field] = now
+    } catch { /* malformed options — skip */ }
+  }
+}
+
 export async function applyFieldRules(
   collection: string,
   payload: Record<string, unknown>,
@@ -1411,6 +1430,9 @@ export async function createOne(
   // Field rules — apply inline field defaults based on other field values
   await applyFieldRules(collection, ctx.payload)
 
+  // Datetime auto-fields — on_create: 'now' sets the field to current timestamp
+  await applyDatetimeAutoFields(collection, ctx.payload, 'on_create')
+
   // Auto-ID generation — fill any auto_id fields not explicitly provided
   await applyAutoIds(collection, ctx.payload)
 
@@ -1505,6 +1527,9 @@ export async function updateOne(
 
   // Field rules — apply inline field defaults based on other field values
   await applyFieldRules(collection, ctx.payload)
+
+  // Datetime auto-fields — on_update: 'now' sets the field to current timestamp
+  await applyDatetimeAutoFields(collection, ctx.payload, 'on_update')
 
   // Write-time computed fields — merge previous data as context so formula can read existing fields
   const writeCtx = { ...(previousData ?? {}), ...ctx.payload }

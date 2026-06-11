@@ -741,6 +741,7 @@ interface PipelinePanelData {
 }
 
 export function PipelinePanel({ collection, item }: { collection: string; item: string }) {
+  if (item === 'new') return null
   const queryClient = useQueryClient()
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)

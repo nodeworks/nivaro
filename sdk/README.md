@@ -223,6 +223,187 @@ const { data: groups } = await nivaro.request(readOwnerGroups(templateId))
 
 ---
 
+## SDK — Form Schema
+
+`fetchFormSchema` aggregates collection metadata, fields, groups, and relations into a single normalized `FormSchema` — one round-trip instead of separate calls to collections, fields, field-groups, and relations. The remaining helpers cover the rest of a typical form lifecycle: evaluating inline field rules as the user types, loading relation options for M2O/M2M pickers, and submitting the completed item.
+
+```typescript
+import {
+  fetchFormSchema, evaluateFieldRules, readRelationOptions, submitFormItem
+} from '@nivaro/sdk'
+
+// 1. Load the normalized schema for a collection
+const schema = await nivaro.request(fetchFormSchema('inventory_requests'))
+// schema → {
+//   collection,    // collection metadata
+//   fields,        // FormField[] — type, interface, required, validation_rules, ...
+//   groups,        // FieldGroup[] — section/tab definitions, sorted
+//   relations,     // RelationMeta[] — m2o/o2m/m2m/m2a, related_collection + display_field
+// }
+
+// 2. Evaluate inline field rules against the in-progress values (no save)
+const { updates } = await nivaro.request(
+  evaluateFieldRules('inventory_requests', { category: 'hardware', priority: null })
+)
+// updates → only the fields the rules changed, e.g. { priority: 'high' }
+
+// 3. Load options for a relation field (M2O / M2M picker)
+const { data: options } = await nivaro.request(
+  readRelationOptions('inventory_requests', 'assigned_to', { search: 'jane', limit: 25 })
+)
+// options → [{ value, label }] — label rendered from the relation's display template
+
+// 4. Submit the completed item (create or update)
+const created = await nivaro.request(
+  submitFormItem('inventory_requests', { mode: 'create', values })
+)
+const updated = await nivaro.request(
+  submitFormItem('inventory_requests', { mode: 'edit', itemId: '123', values })
+)
+```
+
+| Function | Returns | Notes |
+| --- | --- | --- |
+| fetchFormSchema(collection) | FormSchema | Collection + fields + groups + relations, normalized into one object. |
+| evaluateFieldRules(collection, values) | { updates } | Server-evaluates inline field rules; returns only changed fields. Computes without saving. |
+| readRelationOptions(collection, field, opts?) | { value, label }[] | Options for an M2O/M2M field; opts accepts search and limit. |
+| submitFormItem(collection, { mode, itemId?, values }) | T | mode: 'create' calls createItem; mode: 'edit' calls updateItem against itemId. |
+
+> **Note:** The Form Schema commands use the same **snake_case** field shape as the rest of the REST API (`validation_rules`, `related_collection`, `display_field`). The `@nivaro/react` package wraps these into a camelCase form runtime (`validationRules`, `fieldType`) and is documented as a separate API — do not mix the two casing conventions.
+
+> **Note:** For end-user public submission forms (no SDK, embeddable via `widget.js`), see the Submission Forms docs — that is a separate, hosted feature distinct from the Form Schema SDK.
+
+---
+
+## SDK — React (@nivaro/react)
+
+`@nivaro/react` is a React form runtime built on top of `@nivaro/sdk`. It turns a collection into a fully-wired form: schema loading, field rules, visibility/lock evaluation, relation options, validation, and submit — all behind a single `useNivaroForm` hook. Use the headless hook with your own inputs, or `<NivaroForm>` to auto-render fields from the schema.
+
+> **Note:** The React runtime exposes a **camelCase** API (`fieldType`, `validationRules`) — distinct from the snake_case shape of the underlying SDK Form Schema commands. Treat them as separate APIs.
+
+#### Installation
+
+```typescript
+pnpm add @nivaro/react @nivaro/sdk
+```
+
+#### Setup
+
+Wrap your app in `<NivaroProvider>` with a configured SDK client. The provider supplies the client to every form hook below it.
+
+```typescript
+import { createNivaro } from '@nivaro/sdk'
+import { NivaroProvider } from '@nivaro/react'
+
+const nivaro = createNivaro('https://nivaro.example.com', { token: '...' })
+
+function App() {
+  return (
+    <NivaroProvider client={nivaro}>
+      <RequestForm />
+    </NivaroProvider>
+  )
+}
+```
+
+#### useNivaroForm
+
+The hook loads the schema, manages values and errors, and wires submit. Pass the collection and a mode (`create` or `edit`).
+
+```typescript
+const form = useNivaroForm('inventory_requests', {
+  mode: 'create',                  // 'create' | 'edit'
+  itemId: '123',                   // required when mode === 'edit'
+  defaultValues: { priority: 'low' },
+  onSuccess: (item) => navigate(`/requests/${item.id}`),
+  onError: (err) => toast.error(err.message),
+})
+```
+
+| Returned | Description |
+| --- | --- |
+| values | Current form values keyed by field name. |
+| errors | Validation errors keyed by field name (empty when valid). |
+| setValue(field, value) | Update one field; re-runs field rules and visibility/lock evaluation. |
+| handleSubmit(e?) | Validates, then creates or updates via the SDK; fires onSuccess / onError. |
+| isVisible(field) | Whether a field passes its visibility rules for the current values. |
+| isLocked(field) | Whether a field is locked (read-only) for the current values. |
+| schema | The normalized FormSchema (camelCase: fieldType, validationRules, ...). |
+| fieldsByGroup | Fields bucketed by group key for rendering sections/tabs. |
+| visibleGroups | Group definitions that currently have at least one visible field. |
+
+#### Styled example (custom inputs)
+
+Drive your own markup directly from the hook — full control over inputs and layout.
+
+```typescript
+import { useNivaroForm } from '@nivaro/react'
+
+function RequestForm() {
+  const form = useNivaroForm('inventory_requests', {
+    mode: 'create',
+    onSuccess: (item) => console.log('created', item.id),
+  })
+
+  if (!form.schema) return <p>Loading…</p>
+
+  return (
+    <form onSubmit={form.handleSubmit} className="space-y-4">
+      {form.schema.fields.map((field) =>
+        form.isVisible(field.field) ? (
+          <label key={field.field} className="block">
+            <span className="text-sm font-medium">{field.label}</span>
+            <input
+              className="mt-1 w-full rounded border px-3 py-2"
+              value={form.values[field.field] ?? ''}
+              disabled={form.isLocked(field.field)}
+              onChange={(e) => form.setValue(field.field, e.target.value)}
+            />
+            {form.errors[field.field] && (
+              <span className="text-xs text-red-600">{form.errors[field.field]}</span>
+            )}
+          </label>
+        ) : null
+      )}
+      <button type="submit" className="rounded bg-nvr-cyan px-4 py-2 text-white">
+        Submit
+      </button>
+    </form>
+  )
+}
+```
+
+#### Unstyled example (NivaroForm auto-render)
+
+`<NivaroForm form={form}>` renders every visible field from the schema automatically. Use `renderField` for a per-field override, or `components` to swap the default input element per field type.
+
+```typescript
+import { useNivaroForm, NivaroForm } from '@nivaro/react'
+
+function RequestForm() {
+  const form = useNivaroForm('inventory_requests', { mode: 'create' })
+
+  return (
+    <NivaroForm
+      form={form}
+      // Optional: override rendering for a single field
+      renderField={(field, ctx) =>
+        field.field === 'notes' ? (
+          <textarea value={ctx.value} onChange={(e) => ctx.setValue(e.target.value)} />
+        ) : undefined  // return undefined to fall back to the default
+      }
+      // Optional: swap the input component per field type
+      components={{
+        select: MySelect,
+        date: MyDatePicker,
+      }}
+    />
+  )
+}
+```
+
+---
+
 ## SDK — Notifications
 
 ```typescript
@@ -1052,7 +1233,7 @@ const { data: sessions, total } = await nivaro.request(listActivePresence())
 
 ---
 
-## SDK — Tree & Hierarchy
+## Tree & Hierarchy
 
 The Nivaro SDK provides typed commands for both same-collection trees and multi-collection hierarchies.
 
@@ -1061,38 +1242,38 @@ The Nivaro SDK provides typed commands for both same-collection trees and multi-
 ```typescript
 import { createNivaro, readTreeConfig, readTreeNodes, readTreeNested, readTreeAncestors, readTreeDescendants, readTreeChildren, moveTreeNode, reorderTreeSiblings, rebuildTreePaths } from '@nivaro/sdk'
 
-const cms = createNivaro('https://cms.example.com', { token: 'my-token' })
+const nivaro = createNivaro('https://nivaro.example.com', { token: 'my-token' })
 
 // Check if a collection has a tree config
-const config = await cms.request(readTreeConfig('org_units'))
+const config = await nivaro.request(readTreeConfig('org_units'))
 // → { data: { id, collection, parent_field, label_field, order_field } | null }
 
 // Flat node list (for custom rendering)
-const nodes = await cms.request(readTreeNodes('org_units'))
+const nodes = await nivaro.request(readTreeNodes('org_units'))
 
 // Fully nested tree (recursive children arrays)
-const tree = await cms.request(readTreeNested('org_units'))
+const tree = await nivaro.request(readTreeNested('org_units'))
 
 // Ancestors of a node (root-first breadcrumb)
-const path = await cms.request(readTreeAncestors('org_units', 42))
+const path = await nivaro.request(readTreeAncestors('org_units', 42))
 
 // Direct children of a node
-const kids = await cms.request(readTreeChildren('org_units', 42))
+const kids = await nivaro.request(readTreeChildren('org_units', 42))
 
 // All descendants (any depth)
-const all = await cms.request(readTreeDescendants('org_units', 42))
+const all = await nivaro.request(readTreeDescendants('org_units', 42))
 
 // Move a node (null = make root)
-await cms.request(moveTreeNode('org_units', 42, 7))
+await nivaro.request(moveTreeNode('org_units', 42, 7))
 
 // Reorder siblings (requires order_field on the tree config)
-await cms.request(reorderTreeSiblings('org_units', 42, [
+await nivaro.request(reorderTreeSiblings('org_units', 42, [
   { id: 42, sort: 0 },
   { id: 43, sort: 1 },
 ]))
 
 // Rebuild materialized path/depth columns (admin; maintain_path configs)
-await cms.request(rebuildTreePaths(3))
+await nivaro.request(rebuildTreePaths(3))
 ```
 
 #### Tree permission commands (admin)
@@ -1101,10 +1282,10 @@ await cms.request(rebuildTreePaths(3))
 import { listTreePermissions, createTreePermission, updateTreePermission, deleteTreePermission } from '@nivaro/sdk'
 
 // List rules (optionally for one collection)
-const rules = await cms.request(listTreePermissions('org_units'))
+const rules = await nivaro.request(listTreePermissions('org_units'))
 
 // Deny the "Contractors" role updates inside node 42's subtree
-await cms.request(createTreePermission({
+await nivaro.request(createTreePermission({
   collection: 'org_units',
   node_id: 42,
   role: '0a1b2c3d-…',     // role UUID
@@ -1112,8 +1293,8 @@ await cms.request(createTreePermission({
   allow: false,
 }))
 
-await cms.request(updateTreePermission(7, { action: '*' }))
-await cms.request(deleteTreePermission(7))
+await nivaro.request(updateTreePermission(7, { action: '*' }))
+await nivaro.request(deleteTreePermission(7))
 ```
 
 > **Note:** Item reads on tree collections may include an `_inherited` sidecar (`{ field: ancestorId }`) when inheritable fields resolved values from an ancestor — see Inherited Field Values.
@@ -1124,22 +1305,22 @@ await cms.request(deleteTreePermission(7))
 import { createNivaro, listHierarchyConfigs, readHierarchyConfig, readHierarchyTree, readHierarchyNodes, readHierarchyNodeChildren, readHierarchyNodeAncestors, createHierarchyConfig, updateHierarchyConfig, deleteHierarchyConfig } from '@nivaro/sdk'
 
 // List all hierarchy configs
-const configs = await cms.request(listHierarchyConfigs())
+const configs = await nivaro.request(listHierarchyConfigs())
 
 // Full nested tree for hierarchy #1
-const tree = await cms.request(readHierarchyTree(1))
+const tree = await nivaro.request(readHierarchyTree(1))
 
 // Flat nodes for hierarchy #1
-const nodes = await cms.request(readHierarchyNodes(1))
+const nodes = await nivaro.request(readHierarchyNodes(1))
 
 // Children of a specific node
-const children = await cms.request(readHierarchyNodeChildren(1, 'divisions', 5))
+const children = await nivaro.request(readHierarchyNodeChildren(1, 'divisions', 5))
 
 // Ancestors (breadcrumb) of a node
-const ancestors = await cms.request(readHierarchyNodeAncestors(1, 'regions', 22))
+const ancestors = await nivaro.request(readHierarchyNodeAncestors(1, 'regions', 22))
 
 // Create a new hierarchy config
-await cms.request(createHierarchyConfig({
+await nivaro.request(createHierarchyConfig({
   name: 'Org Structure',
   levels: [
     { collection: 'divisions', label_field: 'name', parent_fk: null },
@@ -1150,57 +1331,7 @@ await cms.request(createHierarchyConfig({
 
 ---
 
-## SDK — Privacy & Retention Policies
-
-Retention policies identify inactive users and redact, delete, or suspend their accounts on a schedule. All endpoints are admin-only.
-
-```typescript
-import {
-  listRetentionPolicies, getRetentionPolicy,
-  createRetentionPolicy, updateRetentionPolicy, deleteRetentionPolicy,
-  runRetentionPolicy, listRetentionRuns
-} from '@nivaro/sdk'
-
-// Create a policy: redact PII after 36 months of inactivity
-const { data: policy } = await nivaro.request(createRetentionPolicy({
-  name: '3-year inactivity redaction',
-  inactivity_threshold_months: 36,
-  action: 'redact',
-  redact_fields: ['first_name', 'last_name', 'email', 'external_id', 'job_title'],
-  redact_value_template: 'Redacted_{{id}}',
-  exclusion_emails: ['admin@example.com', 'service@example.com'],
-  exclusion_roles: [],
-  cron_schedule: '0 2 1 * *',   // 1st of every month at 2am
-  is_active: true,
-  dry_run_mode: false
-}))
-
-// Dry run — preview without writing
-const { data: preview } = await nivaro.request(runRetentionPolicy(policy.id, true))
-console.log(`Would affect ${preview.affected_count} users`, preview.affected_ids)
-
-// Execute for real
-const { data: result } = await nivaro.request(runRetentionPolicy(policy.id))
-
-// Run history
-const { data: runs } = await nivaro.request(listRetentionRuns(policy.id))
-```
-
-| Command | Method + path | Access |
-|---|---|---|
-| listRetentionPolicies() | GET /retention | Admin |
-| getRetentionPolicy(id) | GET /retention/:id | Admin |
-| createRetentionPolicy(body) | POST /retention | Admin |
-| updateRetentionPolicy(id, body) | PATCH /retention/:id | Admin |
-| deleteRetentionPolicy(id) | DELETE /retention/:id | Admin |
-| runRetentionPolicy(id, dryRun?) | POST /retention/:id/run | Admin |
-| listRetentionRuns(policyId) | GET /retention/:id/runs | Admin |
-
-Redacted users have `is_redacted: true` and are automatically excluded from all user list and picker endpoints — no changes needed in calling code.
-
----
-
-## SDK Coverage: ~182 Typed Commands
+## SDK Coverage: ~175 Typed Commands
 
 The @nivaro/sdk command surface now covers every feature area — roughly 175 typed `Command<T>` factories spanning items, files, workflows, pipelines, flows, comments, webhooks, rules, custom queries, trees and hierarchies, submission forms, field watches, notification subscriptions, imports, SLA, alerts, AI endpoints (generate, summarize, validate, check-duplicates), translations, drafts, scheduled changes, record templates, saved views, API keys, widget feeds, sync jobs, ERP submissions, PDF templates, pages, and more. If a REST route exists, there is a typed command for it.
 
@@ -1208,16 +1339,16 @@ The @nivaro/sdk command surface now covers every feature area — roughly 175 ty
 
 - Everything is exported from the package root — editor autocomplete on `import { … } from "@nivaro/sdk"` is the fastest index.
 - The SDK Playground at /sdk-playground runs snippets against the live instance with your session's permissions, with collection and field comboboxes to scaffold calls.
-- All commands flow through `cms.request(command)`, so auth, workspace headers, and error handling are uniform.
+- All commands flow through `nivaro.request(command)`, so auth, workspace headers, and error handling are uniform.
 
 ```typescript
 import { createNivaro, readItems, aiValidate, listWidgetFeeds } from '@nivaro/sdk';
 
-const cms = createNivaro('https://cms.example.com').withToken('nvk_...');
+const nivaro = createNivaro('https://nivaro.example.com').withToken('nvk_...');
 
-const articles = await cms.request(readItems('articles', { limit: 5 }));
-const check = await cms.request(aiValidate('articles', { title: 'Draft post' }));
-const feeds = await cms.request(listWidgetFeeds());
+const articles = await nivaro.request(readItems('articles', { limit: 5 }));
+const check = await nivaro.request(aiValidate('articles', { title: 'Draft post' }));
+const feeds = await nivaro.request(listWidgetFeeds());
 ```
 
 

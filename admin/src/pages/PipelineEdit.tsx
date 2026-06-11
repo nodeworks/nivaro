@@ -2033,6 +2033,13 @@ export function PipelineEditPage() {
     onError: () => toast.error('Failed to unbind')
   })
 
+  const updateBinding = useMutation({
+    mutationFn: ({ bindingId, body }: { bindingId: number; body: { auto_start?: boolean; auto_start_state?: string | null } }) =>
+      api.patch(`/pipelines/bindings/${bindingId}`, body).then((r) => r.data),
+    onSuccess: () => invalidate(),
+    onError: () => toast.error('Failed to update binding')
+  })
+
   if (isLoading || !templateData) {
     return (
       <div className='p-8 space-y-4'>
@@ -2548,6 +2555,44 @@ export function PipelineEditPage() {
                           <span className='font-mono text-slate-500'>{b.state_field}</span>
                         </div>
                       )}
+                      {/* Auto-start config */}
+                      <div className='mt-2 flex flex-wrap items-center gap-3'>
+                        <label className='flex items-center gap-1.5 cursor-pointer select-none'>
+                          <input
+                            type='checkbox'
+                            checked={!!b.auto_start}
+                            onChange={(e) =>
+                              updateBinding.mutate({
+                                bindingId: b.id,
+                                body: { auto_start: e.target.checked, auto_start_state: b.auto_start_state }
+                              })
+                            }
+                            className='rounded'
+                          />
+                          <span className='text-[12px] text-slate-600'>Auto-start on create</span>
+                        </label>
+                        {b.auto_start && (
+                          <div className='flex items-center gap-1.5'>
+                            <span className='text-[11px] text-slate-400'>Start in:</span>
+                            <SimpleCombobox
+                              value={b.auto_start_state ?? ''}
+                              onChange={(v) =>
+                                updateBinding.mutate({
+                                  bindingId: b.id,
+                                  body: { auto_start: true, auto_start_state: v || null }
+                                })
+                              }
+                              options={(templateData?.states ?? []).map((s) => ({
+                                value: s.id,
+                                label: s.label
+                              }))}
+                              noneLabel='First initial state'
+                              placeholder='First initial state'
+                              className='w-52 text-[12px]'
+                            />
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className='flex items-center gap-1 shrink-0'>
                       <button
@@ -2611,9 +2656,9 @@ export function PipelineEditPage() {
                   value: f.field,
                   label: f.field
                 }))}
-                placeholder='state_field (optional)'
+                placeholder='State field (optional)'
                 noneLabel='None'
-                className='w-48 font-mono text-[12px]'
+                className='w-64 font-mono text-[12px]'
               />
               <Button
                 type='button'

@@ -364,6 +364,23 @@ export function CollectionBrowserPage() {
     onError: () => toast.error('Move failed')
   })
 
+  // Reset on mount — must run before the init effect (effects fire in definition order)
+  useEffect(() => {
+    presetsInitialized.current = false
+    setSearch('')
+    setActiveFilters([])
+    setSort('')
+    setPage(1)
+    setSelectedIds([])
+    setHierarchyScopeParentId(null)
+    setAtRiskOnly(false)
+    setManageRulesOpen(false)
+    setAiOpen(false)
+    setAiPrompt('')
+    setAiResult(null)
+    setAiPage(1)
+  }, [])
+
   // Initialize displayColumns once when both colMeta and presetsData are available
   useEffect(() => {
     if (presetsInitialized.current) return
@@ -387,24 +404,6 @@ export function CollectionBrowserPage() {
     setDisplayColumns(cols ?? allKeys.slice(0, 7))
     presetsInitialized.current = true
   }, [colMeta, presetsData])
-
-  // Reset when collection changes
-  useEffect(() => {
-    presetsInitialized.current = false
-    setDisplayColumns([])
-    setSearch('')
-    setActiveFilters([])
-    setSort('')
-    setPage(1)
-    setSelectedIds([])
-    setHierarchyScopeParentId(null)
-    setAtRiskOnly(false)
-    setManageRulesOpen(false)
-    setAiOpen(false)
-    setAiPrompt('')
-    setAiResult(null)
-    setAiPage(1)
-  }, [])
 
   type AiQueryResponse = {
     data: Record<string, unknown>[]
@@ -793,6 +792,15 @@ export function CollectionBrowserPage() {
                 e.target.value = ''
               }}
             />
+            {!colMeta?.singleton && (
+              <Button
+                size='sm'
+                onClick={() => navigate(`/collections/${collection}/new`)}
+              >
+                <Plus className='mr-1.5 h-3.5 w-3.5' />
+                New item
+              </Button>
+            )}
             <Popover open={exportOpen} onOpenChange={setExportOpen}>
               <PopoverTrigger asChild>
                 <Button variant='outline' size='sm' disabled={isExporting}>

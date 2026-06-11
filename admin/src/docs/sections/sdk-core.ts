@@ -248,6 +248,236 @@ const { data: groups } = await nivaro.request(readOwnerGroups(templateId))
   ]
 }
 
+export const sdkForms: DocSection = {
+  id: 'sdk-forms',
+  label: 'Form Schema',
+  content: [
+    { type: 'h1', id: 'sdk-forms', text: 'SDK — Form Schema' },
+    {
+      type: 'p',
+      text: '`fetchFormSchema` aggregates collection metadata, fields, groups, and relations into a single normalized `FormSchema` — one round-trip instead of separate calls to collections, fields, field-groups, and relations. The remaining helpers cover the rest of a typical form lifecycle: evaluating inline field rules as the user types, loading relation options for M2O/M2M pickers, and submitting the completed item.'
+    },
+    {
+      type: 'pre',
+      code: `import {
+  fetchFormSchema, evaluateFieldRules, readRelationOptions, submitFormItem
+} from '@nivaro/sdk'
+
+// 1. Load the normalized schema for a collection
+const schema = await nivaro.request(fetchFormSchema('inventory_requests'))
+// schema → {
+//   collection,    // collection metadata
+//   fields,        // FormField[] — type, interface, required, validation_rules, ...
+//   groups,        // FieldGroup[] — section/tab definitions, sorted
+//   relations,     // RelationMeta[] — m2o/o2m/m2m/m2a, related_collection + display_field
+// }
+
+// 2. Evaluate inline field rules against the in-progress values (no save)
+const { updates } = await nivaro.request(
+  evaluateFieldRules('inventory_requests', { category: 'hardware', priority: null })
+)
+// updates → only the fields the rules changed, e.g. { priority: 'high' }
+
+// 3. Load options for a relation field (M2O / M2M picker)
+const { data: options } = await nivaro.request(
+  readRelationOptions('inventory_requests', 'assigned_to', { search: 'jane', limit: 25 })
+)
+// options → [{ value, label }] — label rendered from the relation's display template
+
+// 4. Submit the completed item (create or update)
+const created = await nivaro.request(
+  submitFormItem('inventory_requests', { mode: 'create', values })
+)
+const updated = await nivaro.request(
+  submitFormItem('inventory_requests', { mode: 'edit', itemId: '123', values })
+)`
+    },
+    {
+      type: 'table',
+      head: ['Function', 'Returns', 'Notes'],
+      rows: [
+        [
+          'fetchFormSchema(collection)',
+          'FormSchema',
+          'Collection + fields + groups + relations, normalized into one object.'
+        ],
+        [
+          'evaluateFieldRules(collection, values)',
+          '{ updates }',
+          'Server-evaluates inline field rules; returns only changed fields. Computes without saving.'
+        ],
+        [
+          'readRelationOptions(collection, field, opts?)',
+          '{ value, label }[]',
+          'Options for an M2O/M2M field; opts accepts search and limit.'
+        ],
+        [
+          'submitFormItem(collection, { mode, itemId?, values })',
+          'T',
+          "mode: 'create' calls createItem; mode: 'edit' calls updateItem against itemId."
+        ]
+      ]
+    },
+    {
+      type: 'note',
+      text: 'The Form Schema commands use the same **snake_case** field shape as the rest of the REST API (`validation_rules`, `related_collection`, `display_field`). The `@nivaro/react` package wraps these into a camelCase form runtime (`validationRules`, `fieldType`) and is documented as a separate API — do not mix the two casing conventions.'
+    },
+    {
+      type: 'note',
+      text: 'For end-user public submission forms (no SDK, embeddable via `widget.js`), see the Submission Forms docs — that is a separate, hosted feature distinct from the Form Schema SDK.'
+    }
+  ]
+}
+
+export const sdkReact: DocSection = {
+  id: 'sdk-react',
+  label: 'React (@nivaro/react)',
+  content: [
+    { type: 'h1', id: 'sdk-react', text: 'SDK — React (@nivaro/react)' },
+    {
+      type: 'p',
+      text: '`@nivaro/react` is a React form runtime built on top of `@nivaro/sdk`. It turns a collection into a fully-wired form: schema loading, field rules, visibility/lock evaluation, relation options, validation, and submit — all behind a single `useNivaroForm` hook. Use the headless hook with your own inputs, or `<NivaroForm>` to auto-render fields from the schema.'
+    },
+    {
+      type: 'note',
+      text: 'The React runtime exposes a **camelCase** API (`fieldType`, `validationRules`) — distinct from the snake_case shape of the underlying SDK Form Schema commands. Treat them as separate APIs.'
+    },
+    { type: 'h3', text: 'Installation' },
+    {
+      type: 'pre',
+      code: 'pnpm add @nivaro/react @nivaro/sdk'
+    },
+    { type: 'h3', text: 'Setup' },
+    {
+      type: 'p',
+      text: 'Wrap your app in `<NivaroProvider>` with a configured SDK client. The provider supplies the client to every form hook below it.'
+    },
+    {
+      type: 'pre',
+      code: `import { createNivaro } from '@nivaro/sdk'
+import { NivaroProvider } from '@nivaro/react'
+
+const nivaro = createNivaro('https://nivaro.example.com', { token: '...' })
+
+function App() {
+  return (
+    <NivaroProvider client={nivaro}>
+      <RequestForm />
+    </NivaroProvider>
+  )
+}`
+    },
+    { type: 'h3', text: 'useNivaroForm' },
+    {
+      type: 'p',
+      text: 'The hook loads the schema, manages values and errors, and wires submit. Pass the collection and a mode (`create` or `edit`).'
+    },
+    {
+      type: 'pre',
+      code: `const form = useNivaroForm('inventory_requests', {
+  mode: 'create',                  // 'create' | 'edit'
+  itemId: '123',                   // required when mode === 'edit'
+  defaultValues: { priority: 'low' },
+  onSuccess: (item) => navigate(\`/requests/\${item.id}\`),
+  onError: (err) => toast.error(err.message),
+})`
+    },
+    {
+      type: 'table',
+      head: ['Returned', 'Description'],
+      rows: [
+        ['values', 'Current form values keyed by field name.'],
+        ['errors', 'Validation errors keyed by field name (empty when valid).'],
+        [
+          'setValue(field, value)',
+          'Update one field; re-runs field rules and visibility/lock evaluation.'
+        ],
+        [
+          'handleSubmit(e?)',
+          'Validates, then creates or updates via the SDK; fires onSuccess / onError.'
+        ],
+        ['isVisible(field)', 'Whether a field passes its visibility rules for the current values.'],
+        ['isLocked(field)', 'Whether a field is locked (read-only) for the current values.'],
+        ['schema', 'The normalized FormSchema (camelCase: fieldType, validationRules, ...).'],
+        ['fieldsByGroup', 'Fields bucketed by group key for rendering sections/tabs.'],
+        ['visibleGroups', 'Group definitions that currently have at least one visible field.']
+      ]
+    },
+    { type: 'h3', text: 'Styled example (custom inputs)' },
+    {
+      type: 'p',
+      text: 'Drive your own markup directly from the hook — full control over inputs and layout.'
+    },
+    {
+      type: 'pre',
+      code: `import { useNivaroForm } from '@nivaro/react'
+
+function RequestForm() {
+  const form = useNivaroForm('inventory_requests', {
+    mode: 'create',
+    onSuccess: (item) => console.log('created', item.id),
+  })
+
+  if (!form.schema) return <p>Loading…</p>
+
+  return (
+    <form onSubmit={form.handleSubmit} className="space-y-4">
+      {form.schema.fields.map((field) =>
+        form.isVisible(field.field) ? (
+          <label key={field.field} className="block">
+            <span className="text-sm font-medium">{field.label}</span>
+            <input
+              className="mt-1 w-full rounded border px-3 py-2"
+              value={form.values[field.field] ?? ''}
+              disabled={form.isLocked(field.field)}
+              onChange={(e) => form.setValue(field.field, e.target.value)}
+            />
+            {form.errors[field.field] && (
+              <span className="text-xs text-red-600">{form.errors[field.field]}</span>
+            )}
+          </label>
+        ) : null
+      )}
+      <button type="submit" className="rounded bg-nvr-cyan px-4 py-2 text-white">
+        Submit
+      </button>
+    </form>
+  )
+}`
+    },
+    { type: 'h3', text: 'Unstyled example (NivaroForm auto-render)' },
+    {
+      type: 'p',
+      text: '`<NivaroForm form={form}>` renders every visible field from the schema automatically. Use `renderField` for a per-field override, or `components` to swap the default input element per field type.'
+    },
+    {
+      type: 'pre',
+      code: `import { useNivaroForm, NivaroForm } from '@nivaro/react'
+
+function RequestForm() {
+  const form = useNivaroForm('inventory_requests', { mode: 'create' })
+
+  return (
+    <NivaroForm
+      form={form}
+      // Optional: override rendering for a single field
+      renderField={(field, ctx) =>
+        field.field === 'notes' ? (
+          <textarea value={ctx.value} onChange={(e) => ctx.setValue(e.target.value)} />
+        ) : undefined  // return undefined to fall back to the default
+      }
+      // Optional: swap the input component per field type
+      components={{
+        select: MySelect,
+        date: MyDatePicker,
+      }}
+    />
+  )
+}`
+    }
+  ]
+}
+
 export const sdkNotifications: DocSection = {
   id: 'sdk-notifications',
   label: 'Notifications',

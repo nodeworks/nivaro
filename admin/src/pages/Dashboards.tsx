@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -59,33 +60,35 @@ function CreateDashboardDialog({
           <DialogTitle>New Dashboard</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
-          <div className='space-y-4 px-6 pb-6'>
-            <div className='space-y-1.5'>
-              <Label htmlFor='dashboard-name'>
-                Name <span className='text-red-500'>*</span>
-              </Label>
-              <Input
-                id='dashboard-name'
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder='e.g. Operations Overview'
-                required
-                autoFocus
-              />
+          <DialogBody>
+            <div className='space-y-4'>
+              <div className='space-y-1.5'>
+                <Label htmlFor='dashboard-name'>
+                  Name <span className='text-red-500'>*</span>
+                </Label>
+                <Input
+                  id='dashboard-name'
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder='e.g. Operations Overview'
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className='flex items-center gap-2'>
+                <input
+                  type='checkbox'
+                  id='dashboard-shared'
+                  checked={isShared}
+                  onChange={(e) => setIsShared(e.target.checked)}
+                  className='h-4 w-4 rounded border-slate-300 text-nvr-cyan accent-nvr-cyan'
+                />
+                <Label htmlFor='dashboard-shared' className='cursor-pointer font-normal'>
+                  Shared — visible to all users
+                </Label>
+              </div>
             </div>
-            <div className='flex items-center gap-2'>
-              <input
-                type='checkbox'
-                id='dashboard-shared'
-                checked={isShared}
-                onChange={(e) => setIsShared(e.target.checked)}
-                className='h-4 w-4 rounded border-slate-300 text-nvr-cyan accent-nvr-cyan'
-              />
-              <Label htmlFor='dashboard-shared' className='cursor-pointer font-normal'>
-                Shared — visible to all users
-              </Label>
-            </div>
-          </div>
+          </DialogBody>
           <DialogFooter>
             <Button type='button' variant='outline' onClick={() => onOpenChange(false)}>
               Cancel

@@ -2,6 +2,7 @@ packages:
   - api
   - admin
   - sdk
+  - react
 
 overrides:
   '@graphiql/react': '0.37.6-alpha.2'

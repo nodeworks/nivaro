@@ -50,6 +50,10 @@ function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
   return <div className={cn('px-6 pt-6 pb-4', className)} {...props} />
 }
 
+function DialogBody({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('px-6 pb-6', className)} {...props} />
+}
+
 function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
@@ -85,6 +89,7 @@ function DialogDescription({
 
 export {
   Dialog,
+  DialogBody,
   DialogClose,
   DialogContent,
   DialogDescription,

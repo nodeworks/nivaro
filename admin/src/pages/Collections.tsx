@@ -31,7 +31,7 @@ import { toast } from 'sonner'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type Collection } from '@/lib/api'
-import { formatNumber, titleCase } from '@/lib/utils'
+import { formatNumber, resolveCollectionIcon, titleCase } from '@/lib/utils'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -49,14 +49,23 @@ function saveCollapsed(v: Record<string, boolean>) {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function CollectionAvatar({ color, name }: { color: string | null; name: string }) {
+function CollectionAvatar({
+  color,
+  name,
+  icon,
+}: {
+  color: string | null
+  name: string
+  icon: string | null
+}) {
+  const IconComp = resolveCollectionIcon(icon)
   return (
     <div
       className='flex h-6 w-6 shrink-0 items-center justify-center rounded text-[11px] font-bold text-white select-none'
       style={{ backgroundColor: color ?? '#94a3b8' }}
       aria-hidden='true'
     >
-      {name.charAt(0).toUpperCase()}
+      {IconComp ? <IconComp className='h-3.5 w-3.5' /> : name.charAt(0).toUpperCase()}
     </div>
   )
 }
@@ -78,7 +87,7 @@ function CollectionRowInner({ col, indent }: { col: Collection; indent?: boolean
       to={`/collections/${col.collection}`}
       className={`group flex w-full flex-1 items-center gap-2.5 py-1.5 transition-colors duration-150 hover:bg-[#00ceff]/[0.04] focus-visible:bg-[#00ceff]/[0.04] focus-visible:outline-none dark:hover:bg-[#00ceff]/[0.06] ${indent ? 'pl-2 pr-4' : 'px-4'}`}
     >
-      <CollectionAvatar color={col.color} name={displayName} />
+      <CollectionAvatar color={col.color} name={displayName} icon={col.icon} />
       <div className='min-w-0 flex-1'>
         <p className='truncate text-[13px] font-semibold tracking-[-0.003em] text-slate-800 group-hover:text-slate-900 dark:text-slate-200 dark:group-hover:text-slate-100'>
           {displayName}

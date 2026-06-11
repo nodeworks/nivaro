@@ -12,9 +12,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronsUpDown,
   Circle,
   Database,
+  FolderOpen,
   GitBranch,
   Plus,
   RefreshCw,
@@ -44,7 +46,7 @@ import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { type DBTableSummary, schemaApi } from '@/lib/schema-api'
-import { cn, formatNumber } from '@/lib/utils'
+import { cn, formatNumber, resolveCollectionIcon } from '@/lib/utils'
 import { FieldRulesSection } from '@/pages/FieldRulesSection'
 
 interface TreeConfig {
@@ -73,13 +75,28 @@ interface RoleOption {
 
 // ─── Table list item ──────────────────────────────────────────────────────────
 
+function TableAvatar({ color, icon }: { color: string | null; icon: string | null }) {
+  const IC = resolveCollectionIcon(icon)
+  const bg = color ?? '#94a3b8'
+  return (
+    <span
+      className='flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-white'
+      style={{ backgroundColor: bg }}
+    >
+      {IC ? <IC className='h-3 w-3' /> : <Table2 className='h-3 w-3' />}
+    </span>
+  )
+}
+
 function TableListItem({
   table,
   selected,
+  indent,
   onClick
 }: {
   table: DBTableSummary
   selected: boolean
+  indent?: boolean
   onClick: () => void
 }) {
   return (
@@ -88,34 +105,28 @@ function TableListItem({
         type='button'
         onClick={onClick}
         className={cn(
-          'flex w-full items-center gap-3 px-4 py-3 text-left transition-colors',
+          'flex w-full items-center gap-2.5 py-2 text-left transition-colors',
+          indent ? 'pl-6 pr-3' : 'px-3',
           selected
             ? 'bg-[#00ceff]/10 dark:bg-[#00ceff]/[0.07]'
             : 'hover:bg-slate-50 dark:hover:bg-muted/50'
         )}
       >
-        <Table2 className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+        <TableAvatar color={table.color} icon={table.icon} />
         <div className='min-w-0 flex-1'>
           <span
             className={cn(
-              'block truncate font-mono text-[12.5px] font-medium',
-              selected
-                ? 'text-slate-900 dark:text-foreground'
-                : 'text-slate-700 dark:text-slate-300'
+              'block truncate text-[12.5px] font-medium',
+              selected ? 'text-slate-900 dark:text-foreground' : 'text-slate-700 dark:text-slate-300'
             )}
           >
+            {table.display_name || table.name}
+          </span>
+          <span className='block truncate font-mono text-[10.5px] text-slate-400 dark:text-muted-foreground'>
             {table.name}
           </span>
-          {table.display_name && table.display_name !== table.name && (
-            <span className='block truncate text-[11px] text-slate-400 dark:text-muted-foreground'>
-              {table.display_name}
-            </span>
-          )}
         </div>
-        <div className='flex shrink-0 items-center gap-1.5'>
-          <span className='text-[11px] text-slate-400'>{table.column_count}c</span>
-          {table.registered && <span className='h-1.5 w-1.5 rounded-full bg-emerald-500' />}
-        </div>
+        <span className='shrink-0 text-[11px] text-slate-400'>{table.column_count}c</span>
       </button>
     </li>
   )
@@ -241,20 +252,36 @@ function CreateTablePanel({
 function SectionHeader({
   icon,
   label,
-  count
+  count,
+  collapsed,
+  onToggle
 }: {
   icon: React.ReactNode
   label: string
   count: number
+  collapsed?: boolean
+  onToggle?: () => void
 }) {
+  const Wrapper = onToggle ? 'button' : 'div'
   return (
-    <div className='flex items-center gap-1.5 bg-slate-50 px-4 py-2 dark:bg-muted/30'>
+    <Wrapper
+      {...(onToggle ? { type: 'button' as const, onClick: onToggle } : {})}
+      className='flex w-full items-center gap-1.5 bg-slate-50 px-4 py-2 dark:bg-muted/30'
+    >
       {icon}
       <span className='text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
         {label}
       </span>
       <span className='ml-auto text-[11px] text-slate-400 dark:text-muted-foreground'>{count}</span>
-    </div>
+      {onToggle && (
+        <ChevronDown
+          className={cn(
+            'ml-1 h-3 w-3 text-slate-400 transition-transform',
+            collapsed && '-rotate-90'
+          )}
+        />
+      )}
+    </Wrapper>
   )
 }
 
@@ -1058,11 +1085,21 @@ export function DataModelPage() {
   const [search, setSearch] = useState('')
   const [selectedName, setSelectedName] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
+  const [unregCollapsed, setUnregCollapsed] = useState(true)
+  const [sysCollapsed, setSysCollapsed] = useState(true)
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['data-model-tables'],
     queryFn: schemaApi.listTables
   })
+
+  const { data: collectionsData } = useQuery<{ collection: string; display_name: string | null; sort: number | null; color: string | null }[]>({
+    queryKey: ['collections'],
+    queryFn: () => api.get('/collections').then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const folderSortMap = new Map((collectionsData ?? []).map((c) => [c.collection, c]))
 
   const createMutation = useMutation({
     mutationFn: (name: string) => schemaApi.createTable({ name }),
@@ -1087,7 +1124,8 @@ export function DataModelPage() {
       (t.display_name ?? '').toLowerCase().includes(search.toLowerCase())
   )
   const registered = filtered.filter((t) => t.registered)
-  const unregistered = filtered.filter((t) => !t.registered)
+  const unregistered = filtered.filter((t) => !t.registered && !t.name.startsWith('nivaro_'))
+  const systemTables = filtered.filter((t) => !t.registered && t.name.startsWith('nivaro_'))
   const selectedTable = tables.find((t) => t.name === selectedName) ?? null
 
   return (
@@ -1158,48 +1196,153 @@ export function DataModelPage() {
               </div>
             ) : (
               <>
-                {registered.length > 0 && (
+                {registered.length > 0 && (() => {
+                  const tableMap = new Map(tables.map((t) => [t.name, t]))
+                  const ungrouped = registered
+                    .filter((t) => !t.group)
+                    .sort((a, b) => {
+                      const sa = a.sort ?? null
+                      const sb = b.sort ?? null
+                      if (sa !== null && sb !== null) return sa - sb
+                      if (sa !== null) return -1
+                      if (sb !== null) return 1
+                      return (a.display_name ?? a.name).localeCompare(b.display_name ?? b.name)
+                    })
+                  const groupNames = [...new Set(
+                    registered.filter((t) => t.group).map((t) => t.group as string)
+                  )].sort((a, b) => {
+                    const sa = folderSortMap.get(a)?.sort ?? tableMap.get(a)?.sort ?? null
+                    const sb = folderSortMap.get(b)?.sort ?? tableMap.get(b)?.sort ?? null
+                    if (sa !== null && sb !== null) return sa - sb
+                    if (sa !== null) return -1
+                    if (sb !== null) return 1
+                    const la = folderSortMap.get(a)?.display_name ?? tableMap.get(a)?.display_name ?? a
+                    const lb = folderSortMap.get(b)?.display_name ?? tableMap.get(b)?.display_name ?? b
+                    return la.localeCompare(lb)
+                  })
+
+                  return (
                   <div>
                     <SectionHeader
                       icon={<CheckCircle2 className='h-3 w-3 text-emerald-500' />}
                       label='Registered'
                       count={registered.length}
                     />
-                    <ul className='divide-y divide-slate-100 dark:divide-border'>
-                      {registered.map((t) => (
-                        <TableListItem
-                          key={t.name}
-                          table={t}
-                          selected={!isCreating && selectedName === t.name}
-                          onClick={() => {
-                            setSelectedName(t.name)
-                            setIsCreating(false)
-                          }}
-                        />
-                      ))}
-                    </ul>
+
+                    {/* Groups first */}
+                    {groupNames.map((grpName) => {
+                      const grpMeta = folderSortMap.get(grpName) ?? tableMap.get(grpName)
+                      const grpColor = grpMeta?.color ?? '#94a3b8'
+                      const grpLabel = grpMeta?.display_name ?? grpName
+                      const isCollapsed = collapsedGroups.has(grpName)
+                      const members = registered
+                        .filter((t) => t.group === grpName)
+                        .sort((a, b) => {
+                          const sa = a.sort ?? null
+                          const sb = b.sort ?? null
+                          if (sa !== null && sb !== null) return sa - sb
+                          if (sa !== null) return -1
+                          if (sb !== null) return 1
+                          return (a.display_name ?? a.name).localeCompare(b.display_name ?? b.name)
+                        })
+                      return (
+                        <div key={grpName}>
+                          <button
+                            type='button'
+                            className='flex w-full items-center gap-2 px-3 py-1.5 transition-colors hover:brightness-95'
+                            style={{ backgroundColor: `${grpColor}12` }}
+                            onClick={() => setCollapsedGroups((prev) => {
+                              const next = new Set(prev)
+                              next.has(grpName) ? next.delete(grpName) : next.add(grpName)
+                              return next
+                            })}
+                          >
+                            <FolderOpen className='h-3 w-3 shrink-0' style={{ color: grpColor }} />
+                            <span className='flex-1 text-left text-[11px] font-semibold' style={{ color: grpColor }}>
+                              {grpLabel}
+                            </span>
+                            <ChevronDown
+                              className={cn('h-3 w-3 transition-transform', isCollapsed && '-rotate-90')}
+                              style={{ color: grpColor }}
+                            />
+                          </button>
+                          {!isCollapsed && (
+                            <ul>
+                              {members.map((t) => (
+                                <TableListItem
+                                  key={t.name}
+                                  table={t}
+                                  indent
+                                  selected={!isCreating && selectedName === t.name}
+                                  onClick={() => { setSelectedName(t.name); setIsCreating(false) }}
+                                />
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      )
+                    })}
+
+                    {/* Ungrouped after groups */}
+                    {ungrouped.length > 0 && (
+                      <ul>
+                        {ungrouped.map((t) => (
+                          <TableListItem
+                            key={t.name}
+                            table={t}
+                            selected={!isCreating && selectedName === t.name}
+                            onClick={() => { setSelectedName(t.name); setIsCreating(false) }}
+                          />
+                        ))}
+                      </ul>
+                    )}
                   </div>
-                )}
+                  )
+                })()}
                 {unregistered.length > 0 && (
                   <div>
                     <SectionHeader
                       icon={<Circle className='h-3 w-3 text-slate-400' />}
                       label='Unregistered'
                       count={unregistered.length}
+                      collapsed={unregCollapsed}
+                      onToggle={() => setUnregCollapsed((v) => !v)}
                     />
-                    <ul className='divide-y divide-slate-100 dark:divide-border'>
-                      {unregistered.map((t) => (
-                        <TableListItem
-                          key={t.name}
-                          table={t}
-                          selected={!isCreating && selectedName === t.name}
-                          onClick={() => {
-                            setSelectedName(t.name)
-                            setIsCreating(false)
-                          }}
-                        />
-                      ))}
-                    </ul>
+                    {!unregCollapsed && (
+                      <ul className='divide-y divide-slate-100 dark:divide-border'>
+                        {unregistered.map((t) => (
+                          <TableListItem
+                            key={t.name}
+                            table={t}
+                            selected={!isCreating && selectedName === t.name}
+                            onClick={() => { setSelectedName(t.name); setIsCreating(false) }}
+                          />
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+                {systemTables.length > 0 && (
+                  <div>
+                    <SectionHeader
+                      icon={<Database className='h-3 w-3 text-slate-400' />}
+                      label='System Tables'
+                      count={systemTables.length}
+                      collapsed={sysCollapsed}
+                      onToggle={() => setSysCollapsed((v) => !v)}
+                    />
+                    {!sysCollapsed && (
+                      <ul className='divide-y divide-slate-100 dark:divide-border'>
+                        {systemTables.map((t) => (
+                          <TableListItem
+                            key={t.name}
+                            table={t}
+                            selected={!isCreating && selectedName === t.name}
+                            onClick={() => { setSelectedName(t.name); setIsCreating(false) }}
+                          />
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 )}
               </>

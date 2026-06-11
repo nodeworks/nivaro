@@ -209,10 +209,19 @@ export const contentOpsFieldGroups: DocSection = {
         ]
       ]
     },
+    { type: 'h3', text: 'Tab group behaviour' },
+    {
+      type: 'p',
+      text: 'When a collection has at least one group of `type: "tab"`, the item editor renders a tab strip at the top of the form. Fields without a group_key appear in an implicit "General" tab alongside any section-type groups. The active tab is persisted per collection in localStorage, so editors return to the same tab on revisit.'
+    },
+    {
+      type: 'p',
+      text: 'Fields with validation errors cause a red dot indicator to appear on their tab, making it easy to spot which tab contains a problem without switching manually.'
+    },
     { type: 'h3', text: 'Managing groups' },
     {
       type: 'p',
-      text: "Go to Data Model → select a table → click the Groups tab in the right panel. Create groups with a key (slug), label, type, optional icon, and sort order. Assign a field to a group by setting its group_key to the group's key."
+      text: "Go to Data Model → select a table → click the Groups tab in the right panel. Create groups with a key (slug), label, type, optional icon, and sort order. Assign a field to a group by setting its group_key to the group's key. To toggle a group between section and tab types, click the type badge on the group row."
     },
     { type: 'h3', text: 'Field Groups API' },
     {
@@ -236,7 +245,7 @@ export const contentOpsFieldGroups: DocSection = {
     },
     {
       type: 'note',
-      text: 'Fields with no group_key appear above any grouped sections in the item editor. The is_collapsed flag sets the initial open/closed state for section-type groups.'
+      text: 'Fields with no group_key appear above any grouped sections in the item editor (or in the implicit "General" tab when tabs are active). The is_collapsed flag sets the initial open/closed state for section-type groups.'
     }
   ]
 }
@@ -662,50 +671,145 @@ export const contentOpsRichText: DocSection = {
     { type: 'h1', id: 'content-ops-rich-text', text: 'Rich Text / WYSIWYG Fields' },
     {
       type: 'p',
-      text: 'Fields with `interface: "rich_text"` render a WYSIWYG editor in the item edit page. The editor stores content as portable JSON (ProseMirror/TipTap document format) which can be rendered to HTML, Markdown, or plain text on read.'
+      text: 'Rich text fields support two interfaces: `"input-rich-text-html"` (WYSIWYG, stores HTML) and `"input-rich-text-md"` (Markdown editor, stores a Markdown string). Both render an enhanced editor in the item edit page — choose based on how the content will be consumed downstream.'
+    },
+    { type: 'h3', text: 'Interface options' },
+    {
+      type: 'table',
+      head: ['interface', 'Editor', 'Stored format', 'Best for'],
+      rows: [
+        [
+          'input-rich-text-html',
+          'TipTap WYSIWYG',
+          'HTML string (nvarchar(max))',
+          'Content rendered directly in a browser; design systems that consume HTML.'
+        ],
+        [
+          'input-rich-text-md',
+          'Markdown editor',
+          'Markdown string (nvarchar(max))',
+          'Documentation, developer-facing content, or pipelines that compile Markdown.'
+        ]
+      ]
+    },
+    { type: 'h3', text: 'Toolbar (WYSIWYG)' },
+    {
+      type: 'p',
+      text: 'The `input-rich-text-html` editor exposes: Bold, Italic, Underline, Strikethrough, H1–H3, Ordered list, Unordered list, Blockquote, Code block, Horizontal rule, and Link.'
     },
     { type: 'h3', text: 'Field definition' },
     {
       type: 'pre',
-      code: `POST /api/collections/:collection/fields
+      code: `// WYSIWYG — stores HTML:
+POST /api/collections/:collection/fields
 {
   "field": "body",
   "type": "text",
-  "interface": "rich_text"
+  "interface": "input-rich-text-html"
+}
+
+// Markdown editor — stores Markdown:
+POST /api/collections/:collection/fields
+{
+  "field": "notes",
+  "type": "text",
+  "interface": "input-rich-text-md"
 }`
     },
     { type: 'h3', text: 'Stored format' },
     {
       type: 'p',
-      text: 'Values are stored as a JSON string in the database column (nvarchar(max)). The API returns the raw JSON. Use the SDK or a TipTap-compatible renderer to convert it to HTML for display.'
+      text: "The WYSIWYG editor stores a plain HTML string — the API returns it as-is. Render it directly with your front-end framework's HTML output. The Markdown editor stores a plain Markdown string."
     },
     {
       type: 'pre',
-      code: `// Stored value (abbreviated):
-{
-  "type": "doc",
-  "content": [
-    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Introduction" }] },
-    { "type": "paragraph", "content": [{ "type": "text", "text": "Body content here." }] }
-  ]
-}`
+      code: `// input-rich-text-html stored value:
+"<h2>Introduction</h2><p>Body content here.</p>"
+
+// input-rich-text-md stored value:
+"## Introduction\\n\\nBody content here."`
     }
   ]
 }
 
-export const contentOpsLineItems: DocSection = {
-  id: 'content-ops-line-items',
-  label: 'Line Items',
+export const contentOpsDatetimeAuto: DocSection = {
+  id: 'content-ops-datetime-auto',
+  label: 'Datetime Auto-fields',
   content: [
-    { type: 'h1', id: 'content-ops-line-items', text: 'Line Items (BOM/Sub-rows)' },
+    { type: 'h1', id: 'content-ops-datetime-auto', text: 'Datetime Auto-fields' },
     {
       type: 'p',
-      text: 'Line items are ordered child rows attached to a parent record. Unlike repeater fields (JSON in a single column), line items are stored in the `nivaro_line_items` table as proper rows, making them queryable and suitable for rollup aggregation. They are ideal for bills of material, invoice lines, task lists, and similar structured sub-records.'
+      text: 'Datetime and timestamp fields can be configured to automatically stamp the current server date/time on record create, update, or both. The value is always the server timestamp (ISO 8601 UTC) — not the client clock.'
+    },
+    { type: 'h3', text: 'Configuring in the admin UI' },
+    {
+      type: 'p',
+      text: 'In Data Model → select a table → click a datetime field\'s config → set "On Create" and/or "On Update" to "Save Current Date/Time". The setting is stored in the field\'s options JSON.'
+    },
+    { type: 'h3', text: 'Options format' },
+    {
+      type: 'pre',
+      code: `// On create only (e.g. created_at):
+{ "on_create": "now" }
+
+// On update only (e.g. updated_at):
+{ "on_update": "now" }
+
+// On both (e.g. last_touched):
+{ "on_create": "now", "on_update": "now" }`
+    },
+    { type: 'h3', text: 'Execution order' },
+    {
+      type: 'p',
+      text: 'Auto-stamping is applied server-side in the items service before the write — after field rules, before computed fields. The auto value always wins over any client-supplied value for the same field.'
+    },
+    { type: 'h3', text: 'Common use cases' },
+    {
+      type: 'table',
+      head: ['Field name', 'on_create', 'on_update', 'Purpose'],
+      rows: [
+        ['created_at', 'now', '—', 'Immutable creation timestamp.'],
+        ['updated_at', '—', 'now', 'Last-modified timestamp, updated on every save.'],
+        ['last_touched', 'now', 'now', 'Tracks first and last interaction time in one field.']
+      ]
+    },
+    { type: 'h3', text: 'Configuring via API' },
+    {
+      type: 'pre',
+      code: `POST /api/collections/:collection/fields
+Authorization: Bearer <admin-token>
+
+{
+  "field": "updated_at",
+  "type": "datetime",
+  "interface": "datetime",
+  "options": "{\\"on_update\\":\\"now\\"}"
+}
+
+// Or update an existing field:
+PATCH /api/collections/:collection/fields/updated_at
+{ "options": "{\\"on_update\\":\\"now\\"}" }`
+    },
+    {
+      type: 'note',
+      text: 'The options column is stored as a JSON string (nvarchar). Always stringify when writing via the API.'
+    }
+  ]
+}
+
+export const contentOpsSubRows: DocSection = {
+  id: 'content-ops-sub-rows',
+  label: 'Sub-rows',
+  content: [
+    { type: 'h1', id: 'content-ops-sub-rows', text: 'Sub-rows' },
+    {
+      type: 'p',
+      text: 'Sub-rows are ordered child rows attached to a parent record. Unlike repeater fields (JSON in a single column), sub-rows are stored in the `nivaro_sub_rows` table as proper rows, making them queryable and suitable for rollup aggregation. They are ideal for bills of material, ingredient lists, task lists, and similar structured sub-records.'
     },
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Line items are edited inline on the item edit page as an editable grid with add/remove/reorder controls. The Templates dropdown on each line-items field saves the current rows as a reusable template or applies an existing one — handy for standard BOMs and recurring invoice structures.'
+      text: 'Sub-rows are edited inline on the item edit page as an editable grid with add/remove/reorder controls. The Templates dropdown on each sub-rows field saves the current rows as a reusable template or applies an existing one.'
     },
     { type: 'h3', text: 'API' },
     {
@@ -714,45 +818,44 @@ export const contentOpsLineItems: DocSection = {
       rows: [
         [
           'GET',
-          '/api/line-items/:collection/:itemId/:field',
-          'List all line items for a parent record + field, ordered by sort.'
+          '/api/sub-rows/:collection/:itemId/:field',
+          'List all sub-rows for a parent record + field, ordered by sort.'
         ],
         [
           'PATCH',
-          '/api/line-items/:collection/:itemId/:field',
-          'Bulk replace all line items for the parent+field combo. Body: { rows: [...] }.'
+          '/api/sub-rows/:collection/:itemId/:field',
+          'Bulk replace all sub-rows for the parent+field combo. Body: { items: [...] }.'
         ],
         [
           'POST',
-          '/api/line-items/:collection/:itemId/:field/reorder',
-          'Reorder. Body: [{ id, sort }].'
+          '/api/sub-rows/reorder',
+          'Reorder. Body: { collection, item_id, field, order: [{ id, sort }] }.'
         ]
       ]
     },
     { type: 'h3', text: 'Row format' },
     {
       type: 'pre',
-      code: `GET /api/line-items/purchase_orders/uuid/line_items
+      code: `GET /api/sub-rows/purchase_orders/uuid/components
 → {
   "data": [
-    { "id": 1, "parent_collection": "purchase_orders", "parent_id": "uuid",
-      "line_item_field": "line_items", "sort": 1,
+    { "id": 1, "sort": 1,
       "data": { "sku": "WIDGET-A", "qty": 10, "unit_price": 4.99 } }
   ]
 }
 
 // PATCH body — replaces ALL rows for this parent+field:
 {
-  "rows": [
-    { "data": { "sku": "WIDGET-A", "qty": 10, "unit_price": 4.99 } },
-    { "data": { "sku": "WIDGET-B", "qty": 5,  "unit_price": 9.99 } }
+  "items": [
+    { "sort": 1, "data": { "sku": "WIDGET-A", "qty": 10, "unit_price": 4.99 } },
+    { "sort": 2, "data": { "sku": "WIDGET-B", "qty": 5,  "unit_price": 9.99 } }
   ]
 }`
     },
-    { type: 'h3', text: 'Line item templates' },
+    { type: 'h3', text: 'Sub-row templates' },
     {
       type: 'p',
-      text: 'Reusable sets of line items can be saved as templates in `nivaro_line_item_templates` and applied to any compatible parent record.'
+      text: 'Reusable sets of sub-rows can be saved as templates in `nivaro_sub_row_templates` and applied to any compatible parent record.'
     },
     {
       type: 'table',
@@ -760,25 +863,25 @@ export const contentOpsLineItems: DocSection = {
       rows: [
         [
           'GET',
-          '/api/line-items/:collection/:itemId/:field/templates',
+          '/api/sub-rows/templates/:collection/:field',
           'List available templates for this collection+field.'
         ],
         [
           'POST',
-          '/api/line-items/:collection/:itemId/:field/templates',
-          'Save current rows as a named template. Body: { name }.'
+          '/api/sub-rows/templates',
+          'Save current rows as a named template. Body: { collection, field, name, items }.'
         ],
         [
           'POST',
-          '/api/line-items/:collection/:itemId/:field/templates/:templateId/apply',
-          'Apply a template — appends rows to the current list.'
+          '/api/sub-rows/templates/:templateId/apply',
+          'Apply a template — returns rows for merging into the editor.'
         ],
-        ['DELETE', '/api/line-items/templates/:templateId', 'Delete a template.']
+        ['DELETE', '/api/sub-rows/templates/:templateId', 'Delete a template.']
       ]
     },
     {
       type: 'note',
-      text: 'PATCH /line-items bulk-replaces all rows for the given parent+field combination. Rows are matched by sort order on re-save. There is no partial update — always send the full desired list.'
+      text: 'PATCH /sub-rows bulk-replaces all rows for the given parent+field combination. There is no partial update — always send the full desired list.'
     }
   ]
 }
@@ -1080,12 +1183,12 @@ export const contentOpsCloneItem: DocSection = {
     { type: 'h1', id: 'content-ops-clone', text: 'Duplicate / Clone Item' },
     {
       type: 'p',
-      text: "Any item can be duplicated (deep-cloned) with a single API call. The clone copies all field values, sets `_status=draft` if the collection has draft/publish enabled, and returns the new item's ID."
+      text: "Any item can be duplicated (deep-cloned) with a single API call. The clone copies all field values, sets `_status=draft` if the collection has draft/publish enabled, and returns the new item's ID. The clone body accepts optional parameters to fine-tune what is copied."
     },
     { type: 'h3', text: 'Cloning from the admin UI' },
     {
       type: 'p',
-      text: 'On the item edit page, use Duplicate in the header actions menu — the clone opens immediately for editing. The endpoint below is the programmatic equivalent.'
+      text: 'On the item edit page, use Duplicate in the header actions menu. A Clone dialog opens letting editors set field overrides, exclude fields, and choose which sub-row fields to copy — before the clone is created. The endpoint below is the programmatic equivalent.'
     },
     { type: 'h3', text: 'Clone endpoint' },
     {
@@ -1093,22 +1196,53 @@ export const contentOpsCloneItem: DocSection = {
       code: `POST /api/items/:collection/:id/clone
 Authorization: Bearer <token>
 
-// Optional body — override specific field values on the clone:
+// All body properties are optional:
 {
-  "overrides": {
+  "field_overrides": {
     "title": "Copy of Original Title",
     "status": "draft"
-  }
+  },
+  "exclude_fields": ["internal_notes", "locked_by"],
+  "include_sub_rows": ["components", "line_items"]
 }
 
-→ 201 {
-  "data": {
-    "id": "new-uuid",
-    "title": "Copy of Original Title",
-    "_status": "draft",
-    ...all other fields copied from source...
-  }
-}`
+→ 201 { "data": { "id": "new-uuid" } }`
+    },
+    { type: 'h3', text: 'Body parameters' },
+    {
+      type: 'table',
+      head: ['Parameter', 'Type', 'Description'],
+      rows: [
+        [
+          'field_overrides',
+          'Record<string, unknown>',
+          'Map of field → new value applied to the clone before insert. Useful for resetting status, renaming, or stamping a copy date.'
+        ],
+        [
+          'exclude_fields',
+          'string[]',
+          'Field names to omit from the clone entirely. The cloned record will have null/default for these fields.'
+        ],
+        [
+          'include_sub_rows',
+          'string[]',
+          'Sub-row field names whose child rows should be copied to the new record. Sub-rows are not copied by default.'
+        ]
+      ]
+    },
+    { type: 'h3', text: 'SDK usage' },
+    {
+      type: 'pre',
+      code: `import { cloneItem } from '@nivaro/sdk'
+
+const result = await cms.request(
+  cloneItem('articles', 'source-uuid', {
+    field_overrides: { title: 'Copy — review before publishing' },
+    exclude_fields: ['published_at'],
+    include_sub_rows: ['sections']
+  })
+)
+console.log(result.data.id) // new item id`
     },
     {
       type: 'note',
@@ -1238,7 +1372,7 @@ export const contentOpsAddendums: DocSection = {
     { type: 'h3', text: 'Change orders' },
     {
       type: 'p',
-      text: 'Approved addendums generate a corresponding `nivaro_change_orders` row that accumulates net cost and timeline impacts. Change orders are read-only once created — they form the immutable approved-change log.'
+      text: 'Approved addendums generate a corresponding `nivaro_addendum_approvals` row that accumulates net cost and timeline impacts. Approvals are read-only once created — they form the immutable approved-change log.'
     },
     {
       type: 'pre',

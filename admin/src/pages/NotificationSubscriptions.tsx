@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -485,11 +486,13 @@ export function NotificationSubscriptionsPage() {
           <DialogHeader>
             <DialogTitle>Add Subscription</DialogTitle>
           </DialogHeader>
-          <SubscriptionForm
-            onSave={(form) => createMut.mutate(form)}
-            onCancel={() => setCreating(false)}
-            saving={createMut.isPending}
-          />
+          <DialogBody>
+            <SubscriptionForm
+              onSave={(form) => createMut.mutate(form)}
+              onCancel={() => setCreating(false)}
+              saving={createMut.isPending}
+            />
+          </DialogBody>
         </DialogContent>
       </Dialog>
 
@@ -504,14 +507,16 @@ export function NotificationSubscriptionsPage() {
           <DialogHeader>
             <DialogTitle>Edit Subscription</DialogTitle>
           </DialogHeader>
-          {editing && (
-            <SubscriptionForm
-              initial={editingFormState(editing)}
-              onSave={(form) => updateMut.mutate({ id: editing.id, body: form })}
-              onCancel={() => setEditing(null)}
-              saving={updateMut.isPending}
-            />
-          )}
+          <DialogBody>
+            {editing && (
+              <SubscriptionForm
+                initial={editingFormState(editing)}
+                onSave={(form) => updateMut.mutate({ id: editing.id, body: form })}
+                onCancel={() => setEditing(null)}
+                saving={updateMut.isPending}
+              />
+            )}
+          </DialogBody>
         </DialogContent>
       </Dialog>
 
@@ -526,14 +531,16 @@ export function NotificationSubscriptionsPage() {
           <DialogHeader>
             <DialogTitle>Delete Subscription</DialogTitle>
           </DialogHeader>
-          <p className='text-sm text-muted-foreground px-6'>
-            Are you sure you want to delete{' '}
-            <span className='font-medium text-foreground'>
-              {deleting?.label || `${deleting?.collection} (${deleting?.event_type})`}
-            </span>
-            ? This cannot be undone.
-          </p>
-          <DialogFooter className='px-6 pb-6'>
+          <DialogBody>
+            <p className='text-sm text-muted-foreground'>
+              Are you sure you want to delete{' '}
+              <span className='font-medium text-foreground'>
+                {deleting?.label || `${deleting?.collection} (${deleting?.event_type})`}
+              </span>
+              ? This cannot be undone.
+            </p>
+          </DialogBody>
+          <DialogFooter>
             <Button
               variant='outline'
               onClick={() => setDeleting(null)}

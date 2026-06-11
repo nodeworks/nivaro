@@ -393,16 +393,18 @@ function RevisionsList({
 export function RevisionsPanel({
   collection,
   item,
-  onRollback
+  onRollback,
+  triggerClassName
 }: {
   collection: string
   item: string
   onRollback?: () => void
+  triggerClassName?: string
 }) {
   return (
     <Sheet>
       <SheetTrigger asChild>
-        <Button variant='outline' size='sm' className='gap-1.5'>
+        <Button variant='outline' size='sm' className={triggerClassName ?? 'gap-1.5'}>
           <Clock className='h-3.5 w-3.5' />
           History
         </Button>

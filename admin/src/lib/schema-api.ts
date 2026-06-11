@@ -44,6 +44,9 @@ export type DBTableSummary = {
   registered: boolean
   display_name: string | null
   icon: string | null
+  color: string | null
+  group: string | null
+  sort: number | null
   column_count: number
 }
 
@@ -74,8 +77,11 @@ export type CreateColumnBody = {
     | 'datetime'
     | 'uuid'
   nullable?: boolean
+  unique?: boolean
   default_value?: string | number | boolean | null
   max_length?: number
+  precision?: number
+  scale?: number
 }
 
 export type CMSRelationRow = {
@@ -97,6 +103,8 @@ export function detectRelationType(rel: CMSRelationRow, collection: string): Rel
   if (rel.one_collection_field) return 'm2a'
   if (rel.junction_field) return 'm2m'
   if (rel.many_collection === collection) return 'm2o'
+  if (rel.one_collection === collection) return 'o2m'
+  // Junction companion row — not a direct relation of this collection; treat as o2m fallback
   return 'o2m'
 }
 

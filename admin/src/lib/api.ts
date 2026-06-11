@@ -90,6 +90,7 @@ export type Role = {
   description: string | null
   admin_access: boolean
   app_access: boolean
+  ui_permissions?: string[]
 }
 
 export type Collection = {
@@ -325,6 +326,8 @@ export type PipelineBinding = {
   template: string
   collection: string
   state_field: string | null
+  auto_start: boolean
+  auto_start_state: string | null
   dimensions?: PipelineOwnerDimension[]
 }
 
@@ -393,6 +396,8 @@ export type CMSField = {
   remote_options_config: string | null // JSON
   repeater_schema: string | null // JSON
   is_translatable: boolean
+  options: string | null // JSON — includes col_span, slider config, choices, etc.
+  label: string | null
 }
 
 export interface CMSNotification {
@@ -592,7 +597,7 @@ export interface Addendum {
   updated_at: string
 }
 
-export interface LineItem {
+export interface SubRow {
   id: number
   sort: number
   data: Record<string, unknown>

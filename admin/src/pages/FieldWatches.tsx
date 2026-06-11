@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -331,11 +332,13 @@ export function FieldWatchesPage() {
           <DialogHeader>
             <DialogTitle>New Field Watch</DialogTitle>
           </DialogHeader>
-          <WatchForm
-            onSave={(body) => createMut.mutate(body)}
-            onCancel={() => setCreateOpen(false)}
-            saving={createMut.isPending}
-          />
+          <DialogBody>
+            <WatchForm
+              onSave={(body) => createMut.mutate(body)}
+              onCancel={() => setCreateOpen(false)}
+              saving={createMut.isPending}
+            />
+          </DialogBody>
         </DialogContent>
       </Dialog>
 
@@ -350,14 +353,16 @@ export function FieldWatchesPage() {
           <DialogHeader>
             <DialogTitle>Edit Field Watch</DialogTitle>
           </DialogHeader>
-          {editing && (
-            <WatchForm
-              initial={editing}
-              onSave={(body) => updateMut.mutate({ id: editing.id, body })}
-              onCancel={() => setEditing(null)}
-              saving={updateMut.isPending}
-            />
-          )}
+          <DialogBody>
+            {editing && (
+              <WatchForm
+                initial={editing}
+                onSave={(body) => updateMut.mutate({ id: editing.id, body })}
+                onCancel={() => setEditing(null)}
+                saving={updateMut.isPending}
+              />
+            )}
+          </DialogBody>
         </DialogContent>
       </Dialog>
 
@@ -372,12 +377,14 @@ export function FieldWatchesPage() {
           <DialogHeader>
             <DialogTitle>Delete Field Watch</DialogTitle>
           </DialogHeader>
-          <p className='text-sm text-muted-foreground px-6'>
-            Are you sure you want to delete{' '}
-            <span className='font-medium text-foreground'>{deleting?.name}</span>? All subscriptions
-            will also be removed. This cannot be undone.
-          </p>
-          <DialogFooter className='px-6 pb-4'>
+          <DialogBody>
+            <p className='text-sm text-muted-foreground'>
+              Are you sure you want to delete{' '}
+              <span className='font-medium text-foreground'>{deleting?.name}</span>? All subscriptions
+              will also be removed. This cannot be undone.
+            </p>
+          </DialogBody>
+          <DialogFooter>
             <Button
               variant='outline'
               onClick={() => setDeleting(null)}
