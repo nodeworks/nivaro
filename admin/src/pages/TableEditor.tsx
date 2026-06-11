@@ -4871,6 +4871,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       if (!merged.find(a => a.field === field)) merged.push(patchedAssignment)
       api.put(`/collection-layouts/${layoutId}/assignments`, { assignments: merged })
         .then(() => { invalidateFieldConfig() })
+        .catch(() => toast.error('Failed to save field order'))
     } else {
       api.patch(`/field-config/${tableName}/${field}`, patch)
         .then(() => { invalidateFieldConfig(); invalidateMeta() })
@@ -4973,6 +4974,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
         })
         api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
           .then(() => invalidateFieldConfig())
+          .catch(() => toast.error('Failed to save field order'))
       } else {
         fields.forEach((f, idx) => {
           api.patch(`/field-config/${tableName}/${f}`, { sort: idx, group_key: localAssignments[f] ?? null })
