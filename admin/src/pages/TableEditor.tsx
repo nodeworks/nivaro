@@ -4963,10 +4963,22 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     if (fromContainer === toContainer) {
       // Same container — already sorted in onDragOver, commit sort order to API
       const fields = localFieldOrder[fromContainer] ?? []
-      fields.forEach((f, idx) => {
-        api.patch(`/field-config/${tableName}/${f}`, { sort: idx, group_key: localAssignments[f] ?? null })
-      })
-      invalidateFieldConfig()
+      if (layoutId) {
+        // Layout-aware: flush full assignment list
+        const allFields = Object.keys(localAssignments)
+        const assignments = allFields.map((f) => {
+          const gk = localAssignments[f] ?? null
+          const order = localFieldOrder[gk ?? '__unassigned__'] ?? []
+          return { field: f, group_key: gk, sort: order.indexOf(f) >= 0 ? order.indexOf(f) : 0 }
+        })
+        api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
+          .then(() => invalidateFieldConfig())
+      } else {
+        fields.forEach((f, idx) => {
+          api.patch(`/field-config/${tableName}/${f}`, { sort: idx, group_key: localAssignments[f] ?? null })
+        })
+        invalidateFieldConfig()
+      }
       return
     }
 
