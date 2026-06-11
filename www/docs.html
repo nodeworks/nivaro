@@ -6184,6 +6184,7 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
 
         <!-- COLLECTION LAYOUTS -->
         <div class="doc-section" id="s-collection-layouts" data-toc='[{"id":"collection-layouts","label":"Collection Layouts"}]'>
+          <!-- SYNC:collection-layouts -->
           <h1 class="doc-h1" id="collection-layouts">Collection Layouts</h1>
           <p class="doc-p">Each registered collection can have multiple named layouts. A layout defines how fields are grouped and ordered in the item editor. One layout is marked active and used by ItemEdit automatically; others can be referenced by name via the SDK.</p>
 
@@ -6223,6 +6224,7 @@ const active = await cms.request(readActiveLayout('articles'))
 
 // Use a specific layout in @nivaro/react
 useNivaroForm('articles', { mode: 'create', layoutId: 42 })</code></pre>
+          <!-- /SYNC:collection-layouts -->
         </div>
 
         <!-- MULTI HIERARCHY OVERVIEW -->
