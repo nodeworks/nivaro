@@ -31,7 +31,19 @@ import {
   useSensors,
   useDroppable,
 } from '@dnd-kit/core'
-import { snapCenterToCursor } from '@dnd-kit/modifiers'
+import type { Modifier } from '@dnd-kit/core'
+
+const snapLeftEdgeToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
+  if (draggingNodeRect && activatorEvent && 'clientX' in activatorEvent) {
+    const e = activatorEvent as PointerEvent
+    return {
+      ...transform,
+      x: transform.x + e.clientX - draggingNodeRect.left,
+      y: transform.y + e.clientY - (draggingNodeRect.top + draggingNodeRect.height / 2)
+    }
+  }
+  return transform
+}
 import {
   SortableContext,
   arrayMove,
@@ -5330,7 +5342,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
         </div>{/* end main area */}
       </div>{/* end flex row */}
 
-      <DragOverlay dropAnimation={{ duration: 150, easing: 'ease' }} modifiers={[snapCenterToCursor]}>
+      <DragOverlay dropAnimation={{ duration: 150, easing: 'ease' }} modifiers={[snapLeftEdgeToCursor]}>
         {activeFieldId && (
           <FieldChip
             fieldName={activeFieldId}
