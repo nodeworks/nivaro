@@ -14,6 +14,13 @@ function parseJsonSafe(val: unknown): unknown {
 
 interface FieldRow {
   field: string
+  label: string | null
+  note: string | null
+  hidden: number | boolean | null
+  readonly: number | boolean | null
+  required: number | boolean | null
+  interface: string | null
+  options: string | null
   group_key: string | null
   visibility_rules: string | null
   dependency_config: string | null
@@ -29,6 +36,13 @@ interface FieldRow {
 function formatFieldConfig(row: FieldRow) {
   return {
     field: row.field,
+    label: row.label ?? null,
+    note: row.note ?? null,
+    hidden: !!row.hidden,
+    readonly: !!row.readonly,
+    required: !!row.required,
+    interface: row.interface ?? null,
+    options: parseJsonSafe(row.options),
     group_key: row.group_key ?? null,
     visibility_rules: parseJsonSafe(row.visibility_rules),
     dependency_config: parseJsonSafe(row.dependency_config),
@@ -108,14 +122,22 @@ function evaluateCondition(cond: Condition, values: Record<string, unknown>): bo
 }
 
 export async function fieldConfigRoutes(app: FastifyInstance) {
-  // GET /field-config/:collection — get all field configs for a collection
+  // GET /field-config/:collection — get all field configs, overlaid with active layout assignments
   app.get('/:collection', { preHandler: authenticate }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
+    const { layout_id } = req.query as { layout_id?: string }
 
     const rows = (await db('nivaro_fields')
       .where({ collection })
       .select(
         'field',
+        'label',
+        'note',
+        'hidden',
+        'readonly',
+        'required',
+        'interface',
+        'options',
         'group_key',
         'visibility_rules',
         'dependency_config',
@@ -129,7 +151,40 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       )
       .orderBy('sort', 'asc')) as FieldRow[]
 
-    return reply.send({ data: rows.map(formatFieldConfig) })
+    // Resolve layout assignments — use explicit layout_id or fall back to active layout
+    let targetLayoutId: number | null = null
+    if (layout_id) {
+      targetLayoutId = Number(layout_id)
+    } else {
+      const active = await db('nivaro_collection_layouts')
+        .where({ collection, is_active: 1 })
+        .first('id')
+      targetLayoutId = active?.id ?? null
+    }
+
+    const assignmentMap = new Map<string, { group_key: string | null; sort: number }>()
+    if (targetLayoutId !== null) {
+      const assignments = await db('nivaro_layout_field_assignments')
+        .where({ layout_id: targetLayoutId })
+        .select('field', 'group_key', 'sort')
+      for (const a of assignments) {
+        assignmentMap.set(a.field, { group_key: a.group_key, sort: a.sort })
+      }
+    }
+
+    const formatted = rows.map((row, idx) => {
+      const assignment = assignmentMap.get(row.field)
+      const base = formatFieldConfig(row)
+      return {
+        ...base,
+        group_key: assignment ? assignment.group_key : base.group_key,
+        sort: assignment ? assignment.sort : idx
+      }
+    })
+
+    formatted.sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+
+    return reply.send({ data: formatted })
   })
 
   // PATCH /field-config/:collection/:field — update field config
@@ -140,7 +195,17 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     if (!existing) return reply.code(404).send({ error: 'Field not found' })
 
     const body = req.body as Partial<{
+      label: string | null
+      note: string | null
+      hidden: boolean
+      readonly: boolean
+      required: boolean
+      interface: string | null
       group_key: string | null
+      sort: number | null
+      col_span: number | null
+      inline_relation: boolean | null
+      max_values: number | null
       visibility_rules: unknown
       dependency_config: unknown
       validation_rules: unknown
@@ -154,7 +219,32 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
     const patch: Record<string, unknown> = { updated_at: new Date() }
 
+    if ('label' in body) patch.label = body.label ?? null
+    if ('note' in body) patch.note = body.note ?? null
+    if ('hidden' in body) patch.hidden = body.hidden ? 1 : 0
+    if ('readonly' in body) patch.readonly = body.readonly ? 1 : 0
+    if ('required' in body) patch.required = body.required ? 1 : 0
+    if ('interface' in body) patch.interface = body.interface ?? null
     if ('group_key' in body) patch.group_key = body.group_key ?? null
+    if ('sort' in body) patch.sort = body.sort ?? null
+    if ('col_span' in body || 'inline_relation' in body || 'max_values' in body) {
+      let opts: Record<string, unknown> = {}
+      try { opts = JSON.parse(String(existing.options ?? '{}')) } catch { /* noop */ }
+      if ('col_span' in body) {
+        if (body.col_span == null) delete opts.col_span
+        else opts.col_span = body.col_span
+      }
+      if ('inline_relation' in body) {
+        if ((body as Record<string, unknown>).inline_relation == null) delete opts.inline_relation
+        else opts.inline_relation = (body as Record<string, unknown>).inline_relation
+      }
+      if ('max_values' in body) {
+        const mv = (body as Record<string, unknown>).max_values
+        if (mv == null) delete opts.max_values
+        else opts.max_values = mv
+      }
+      patch.options = JSON.stringify(opts)
+    }
     if ('visibility_rules' in body)
       patch.visibility_rules =
         body.visibility_rules != null ? JSON.stringify(body.visibility_rules) : null
@@ -185,6 +275,13 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       .where({ collection, field })
       .select(
         'field',
+        'label',
+        'note',
+        'hidden',
+        'readonly',
+        'required',
+        'interface',
+        'options',
         'group_key',
         'visibility_rules',
         'dependency_config',
