@@ -2775,9 +2775,11 @@ function RelationsTab({
     mutationFn: async () => {
       if (selectedType === 'm2o' && form.m2o_is_new_field && form.m2o_many_field) {
         await schemaApi.addColumn(tableName, { name: form.m2o_many_field, type: form.m2o_new_field_type, nullable: true })
+        await api.post(`/collections/${tableName}/fields`, { field: form.m2o_many_field, type: form.m2o_new_field_type })
       }
       if (selectedType === 'm2a' && form.m2a_is_new_field && form.m2a_many_field) {
         await schemaApi.addColumn(tableName, { name: form.m2a_many_field, type: form.m2a_new_field_type, nullable: true })
+        await api.post(`/collections/${tableName}/fields`, { field: form.m2a_many_field, type: form.m2a_new_field_type })
       }
       return schemaApi.createRelation(buildPayload())
     },
