@@ -4924,6 +4924,14 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
   const [localFieldOrder, setLocalFieldOrder] = useState<Record<string, string[]>>({})
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
 
+  // Refs mirror state so debounced save always reads the latest values
+  const localAssignmentsRef = useRef<Record<string, string | null>>({})
+  const localFieldOrderRef = useRef<Record<string, string[]>>({})
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => { localAssignmentsRef.current = localAssignments }, [localAssignments])
+  useEffect(() => { localFieldOrderRef.current = localFieldOrder }, [localFieldOrder])
+
   useEffect(() => {
     if (!groups.length && !allFields.length) return
     setLocalGroupOrder(groups.map(g => g.id))
@@ -4982,30 +4990,29 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       api.post('/field-groups/reorder', { collection: tableName, order })
   })
 
-  const patchField = useCallback((field: string, patch: Record<string, unknown>) => {
-    if (layoutId && ('group_key' in patch || 'sort' in patch)) {
-      // Build full assignments from current local state and flush to backend
-      const allAssignments = Object.entries(localAssignments).flatMap(([f, gk]) => {
-        const groupFields = localFieldOrder[gk ?? '__unassigned__'] ?? []
-        const sortIdx = groupFields.indexOf(f)
-        return [{ field: f, group_key: gk ?? null, sort: sortIdx >= 0 ? sortIdx : 0 }]
+  // Debounced layout save — batches rapid drops into one PUT, preventing race conditions
+  const scheduleSave = useCallback(() => {
+    if (!layoutId) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      const assignments = Object.entries(localAssignmentsRef.current).map(([f, gk]) => {
+        const order = localFieldOrderRef.current[gk ?? '__unassigned__'] ?? []
+        return { field: f, group_key: gk ?? null, sort: order.indexOf(f) >= 0 ? order.indexOf(f) : 0 }
       })
-      // Also include the field being patched with its new values
-      const patchedAssignment = {
-        field,
-        group_key: ('group_key' in patch ? patch.group_key : localAssignments[field]) as string | null,
-        sort: ('sort' in patch ? patch.sort : 0) as number
-      }
-      const merged = allAssignments.map(a => a.field === field ? patchedAssignment : a)
-      if (!merged.find(a => a.field === field)) merged.push(patchedAssignment)
-      api.put(`/collection-layouts/${layoutId}/assignments`, { assignments: merged })
+      api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
         .then(() => { invalidateFieldConfig() })
         .catch(() => toast.error('Failed to save field order'))
+    }, 400)
+  }, [layoutId, invalidateFieldConfig])
+
+  const patchField = useCallback((field: string, patch: Record<string, unknown>) => {
+    if (layoutId && ('group_key' in patch || 'sort' in patch)) {
+      scheduleSave()
     } else {
       api.patch(`/field-config/${tableName}/${field}`, patch)
         .then(() => { invalidateFieldConfig(); invalidateMeta() })
     }
-  }, [tableName, layoutId, localAssignments, localFieldOrder, invalidateFieldConfig, invalidateMeta])
+  }, [tableName, layoutId, scheduleSave, invalidateFieldConfig, invalidateMeta])
 
   // ── Add group form ──
   const [adding, setAdding] = useState(false)
@@ -5091,20 +5098,11 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     if (!toContainer) return
 
     if (fromContainer === toContainer) {
-      // Same container — already sorted in onDragOver, commit sort order to API
-      const fields = localFieldOrder[fromContainer] ?? []
+      // Same container — already sorted in onDragOver, commit via debounced save
       if (layoutId) {
-        // Layout-aware: flush full assignment list
-        const allFields = Object.keys(localAssignments)
-        const assignments = allFields.map((f) => {
-          const gk = localAssignments[f] ?? null
-          const order = localFieldOrder[gk ?? '__unassigned__'] ?? []
-          return { field: f, group_key: gk, sort: order.indexOf(f) >= 0 ? order.indexOf(f) : 0 }
-        })
-        api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
-          .then(() => invalidateFieldConfig())
-          .catch(() => toast.error('Failed to save field order'))
+        scheduleSave()
       } else {
+        const fields = localFieldOrder[fromContainer] ?? []
         fields.forEach((f, idx) => {
           api.patch(`/field-config/${tableName}/${f}`, { sort: idx, group_key: localAssignments[f] ?? null })
         })
