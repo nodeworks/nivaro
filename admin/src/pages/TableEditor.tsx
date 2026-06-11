@@ -2052,15 +2052,20 @@ function ColSel({
   value,
   onChange,
   placeholder,
-  disabled
+  disabled,
+  allowNew,
+  onNewColumn
 }: {
   table: string
   value: string
   onChange: (v: string) => void
   placeholder?: string
   disabled?: boolean
+  allowNew?: boolean
+  onNewColumn?: (name: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const { data, isFetching } = useQuery({
     queryKey: ['data-model-table', table],
     queryFn: () => schemaApi.getTable(table),
@@ -2069,31 +2074,54 @@ function ColSel({
   const cols = data?.data?.columns ?? []
   const selected = cols.find((c) => c.name === value)
   const isDisabled = disabled || !table || isFetching
+  const isNew = !!value && !selected
+
+  const trimmed = search.trim()
+  const showCreate = allowNew && !!trimmed && !cols.some((c) => c.name === trimmed)
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setSearch('') }}>
       <PopoverTrigger asChild>
         <button
           type='button'
           disabled={isDisabled}
           className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-left text-[12px] text-slate-800 focus:outline-none focus:ring-1 focus:ring-nvr-cyan disabled:opacity-50 dark:border-border dark:bg-card dark:text-foreground'
         >
-          <span className={cn('truncate', !selected && 'text-slate-400')}>
-            {isFetching ? 'Loading…' : (selected ? `${selected.name} (${selected.data_type})` : (placeholder ?? 'Select column…'))}
+          <span className={cn('flex min-w-0 flex-1 items-center gap-1 truncate', !value && 'text-slate-400')}>
+            {isFetching
+              ? 'Loading…'
+              : value
+                ? (
+                  <>
+                    <span className={cn('font-mono truncate', isNew && 'text-nvr-cyan')}>{value}</span>
+                    {isNew && (
+                      <span className='shrink-0 rounded bg-nvr-cyan/10 px-1 text-[9px] font-semibold uppercase tracking-wide text-nvr-cyan'>NEW</span>
+                    )}
+                    {selected && <span className='shrink-0 text-slate-400'>({selected.data_type})</span>}
+                  </>
+                )
+                : (placeholder ?? 'Select column…')}
           </span>
           <ChevronDown className='ml-1 h-3 w-3 shrink-0 text-slate-400' />
         </button>
       </PopoverTrigger>
       <PopoverContent className='w-[240px] p-0' align='start'>
         <Command>
-          <CommandInput placeholder='Search columns…' className='h-8 text-[12px]' />
+          <CommandInput
+            placeholder={allowNew ? 'Search or type new name…' : 'Search columns…'}
+            className='h-8 text-[12px]'
+            value={search}
+            onValueChange={setSearch}
+          />
           <CommandList>
-            <CommandEmpty className='py-2 text-center text-[12px] text-slate-400'>No columns</CommandEmpty>
+            <CommandEmpty className={cn('py-2 text-center text-[12px] text-slate-400', showCreate && 'hidden')}>
+              No columns
+            </CommandEmpty>
             {cols.map((c) => (
               <CommandItem
                 key={c.name}
                 value={`${c.name} ${c.data_type}`}
-                onSelect={() => { onChange(c.name); setOpen(false) }}
+                onSelect={() => { onChange(c.name); onNewColumn?.(''); setOpen(false); setSearch('') }}
                 className='text-[12px]'
               >
                 <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === c.name ? 'opacity-100' : 'opacity-0')} />
@@ -2101,6 +2129,17 @@ function ColSel({
                 <span className='ml-1.5 text-slate-400'>({c.data_type})</span>
               </CommandItem>
             ))}
+            {showCreate && (
+              <CommandItem
+                key='__create__'
+                value={`__create__ ${trimmed}`}
+                onSelect={() => { onChange(trimmed); onNewColumn?.(trimmed); setOpen(false); setSearch('') }}
+                className='text-[12px] text-nvr-cyan'
+              >
+                <span className='mr-1.5'>✚</span>
+                Create <span className='mx-1 font-mono font-semibold'>'{trimmed}'</span>
+              </CommandItem>
+            )}
           </CommandList>
         </Command>
       </PopoverContent>
@@ -2231,11 +2270,35 @@ function RelationFormDiagram({
               {
                 label: 'Foreign key field',
                 input: (
-                  <ColSel
-                    table={tableName}
-                    value={form.m2o_many_field}
-                    onChange={(v) => patch({ m2o_many_field: v })}
-                  />
+                  <>
+                    <ColSel
+                      table={tableName}
+                      value={form.m2o_many_field}
+                      onChange={(v) => patch({ m2o_many_field: v, m2o_is_new_field: false })}
+                      allowNew
+                      onNewColumn={(name) => patch({ m2o_is_new_field: !!name })}
+                    />
+                    {form.m2o_is_new_field && (
+                      <div className='mt-1 flex items-center gap-1.5'>
+                        <span className='text-[10px] text-slate-400'>Column type:</span>
+                        {(['integer', 'uuid'] as const).map((t) => (
+                          <button
+                            key={t}
+                            type='button'
+                            onClick={() => patch({ m2o_new_field_type: t })}
+                            className={cn(
+                              'rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
+                              form.m2o_new_field_type === t
+                                ? 'bg-nvr-cyan/10 text-nvr-cyan'
+                                : 'bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400'
+                            )}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )
               }
             ]}
@@ -2420,11 +2483,35 @@ function RelationFormDiagram({
           {
             label: 'Local ID field',
             input: (
-              <ColSel
-                table={tableName}
-                value={form.m2a_many_field}
-                onChange={(v) => patch({ m2a_many_field: v })}
-              />
+              <>
+                <ColSel
+                  table={tableName}
+                  value={form.m2a_many_field}
+                  onChange={(v) => patch({ m2a_many_field: v, m2a_is_new_field: false })}
+                  allowNew
+                  onNewColumn={(name) => patch({ m2a_is_new_field: !!name })}
+                />
+                {form.m2a_is_new_field && (
+                  <div className='mt-1 flex items-center gap-1.5'>
+                    <span className='text-[10px] text-slate-400'>Column type:</span>
+                    {(['integer', 'uuid'] as const).map((t) => (
+                      <button
+                        key={t}
+                        type='button'
+                        onClick={() => patch({ m2a_new_field_type: t })}
+                        className={cn(
+                          'rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
+                          form.m2a_new_field_type === t
+                            ? 'bg-nvr-cyan/10 text-nvr-cyan'
+                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400'
+                        )}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
             )
           }
         ]}
@@ -2471,6 +2558,8 @@ const DEFAULT_REL_FORM = {
   m2o_one_collection: '',
   m2o_one_field: '',
   m2o_create_fk: false,
+  m2o_is_new_field: false,
+  m2o_new_field_type: 'integer' as 'integer' | 'uuid',
   o2m_many_collection: '',
   o2m_many_field: '',
   m2m_junction: '',
@@ -2480,7 +2569,9 @@ const DEFAULT_REL_FORM = {
   m2m_one_field: '',
   m2a_many_field: '',
   m2a_one_collection_field: '',
-  m2a_one_allowed_collections: ''
+  m2a_one_allowed_collections: '',
+  m2a_is_new_field: false,
+  m2a_new_field_type: 'integer' as 'integer' | 'uuid'
 }
 
 function RelationsTab({
@@ -2681,11 +2772,20 @@ function RelationsTab({
   })
 
   const createMut = useMutation({
-    mutationFn: () => schemaApi.createRelation(buildPayload()),
+    mutationFn: async () => {
+      if (selectedType === 'm2o' && form.m2o_is_new_field && form.m2o_many_field) {
+        await schemaApi.addColumn(tableName, { name: form.m2o_many_field, type: form.m2o_new_field_type, nullable: true })
+      }
+      if (selectedType === 'm2a' && form.m2a_is_new_field && form.m2a_many_field) {
+        await schemaApi.addColumn(tableName, { name: form.m2a_many_field, type: form.m2a_new_field_type, nullable: true })
+      }
+      return schemaApi.createRelation(buildPayload())
+    },
     onSuccess: () => {
       toast.success('Relation created')
       resetAdd()
       invalidate()
+      onRefresh()
     },
     onError: (err: unknown) => {
       const msg =
