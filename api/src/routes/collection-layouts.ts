@@ -48,8 +48,16 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .first()
     const maxSort = (maxSortRow?.m as number | null) ?? -1
 
-    await db('nivaro_collection_layouts')
-      .insert({ collection: body.collection, name: body.name, is_active: 0, sort: maxSort + 1 })
+    try {
+      await db('nivaro_collection_layouts')
+        .insert({ collection: body.collection, name: body.name, is_active: 0, sort: maxSort + 1 })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : ''
+      if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
+        return reply.code(409).send({ error: 'A layout with that name already exists' })
+      }
+      throw err
+    }
     const created = await db('nivaro_collection_layouts')
       .where({ collection: body.collection, name: body.name })
       .orderBy('id', 'desc')
@@ -69,6 +77,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
     if (body.sort !== undefined) patch.sort = body.sort
+
+    if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 
     await db('nivaro_collection_layouts').where({ id }).update(patch)
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
@@ -91,6 +101,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     if (count <= 1) return reply.code(409).send({ error: 'Cannot delete the only layout for a collection' })
 
+    await db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).delete()
+    await db('nivaro_field_groups').where({ layout_id: Number(id) }).delete()
     await db('nivaro_collection_layouts').where({ id }).delete()
     await logActivity({ action: 'delete', user: req.user?.id, collection: 'nivaro_collection_layouts', item: id, req })
     return reply.code(204).send()
@@ -125,10 +137,18 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .where({ collection: source.collection })
       .max('sort as m')
       .first()
-    const maxSort = (maxSortRow?.m as number | null) ?? 0
+    const maxSort = (maxSortRow?.m as number | null) ?? -1
 
-    await db('nivaro_collection_layouts')
-      .insert({ collection: source.collection, name: body.name, is_active: 0, sort: maxSort + 1 })
+    try {
+      await db('nivaro_collection_layouts')
+        .insert({ collection: source.collection, name: body.name, is_active: 0, sort: maxSort + 1 })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : ''
+      if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
+        return reply.code(409).send({ error: 'A layout with that name already exists' })
+      }
+      throw err
+    }
     const newLayout = await db('nivaro_collection_layouts')
       .where({ collection: source.collection, name: body.name })
       .orderBy('id', 'desc')
@@ -172,6 +192,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // GET /collection-layouts/:id/assignments
   app.get('/:id/assignments', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    const layout = await db('nivaro_collection_layouts').where({ id }).first()
+    if (!layout) return reply.code(404).send({ error: 'Not found' })
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
       .select('field', 'group_key', 'sort')

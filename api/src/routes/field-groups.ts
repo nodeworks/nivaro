@@ -13,7 +13,9 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
     let targetLayoutId: number | null = null
 
     if (layout_id) {
-      targetLayoutId = Number(layout_id)
+      const parsed = parseInt(layout_id, 10)
+      if (!Number.isFinite(parsed)) return reply.code(400).send({ error: 'Invalid layout_id' })
+      targetLayoutId = parsed
     } else {
       const active = await db('nivaro_collection_layouts')
         .where({ collection, is_active: 1 })
@@ -103,6 +105,8 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
     if ('icon' in body) patch.icon = body.icon ?? null
     if (body.sort !== undefined) patch.sort = body.sort
     if (body.is_collapsed !== undefined) patch.is_collapsed = body.is_collapsed ? 1 : 0
+
+    if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 
     await db('nivaro_field_groups').where({ id }).update(patch)
     const updated = await db('nivaro_field_groups').where({ id }).first()
