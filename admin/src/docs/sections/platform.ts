@@ -634,6 +634,7 @@ export const collectionLayouts: DocSection = {
       type: 'pre',
       code: `GET  /api/collection-layouts?collection=articles
 POST /api/collection-layouts                    { collection, name }
+PATCH /api/collection-layouts/:id               { name?, sort? }
 POST /api/collection-layouts/:id/activate
 POST /api/collection-layouts/:id/clone          { name }
 GET  /api/collection-layouts/:id/assignments

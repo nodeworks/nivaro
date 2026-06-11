@@ -986,6 +986,17 @@ const COMMANDS: CmdDef[] = [
     params: [pc('query', true, 'articles')]
   },
   {
+    name: 'readLayoutGroups',
+    group: 'Layouts',
+    description: 'Read field groups for a specific layout.',
+    method: 'GET',
+    path: '/field-groups/{collection}',
+    params: [
+      pc('path', true, 'articles'),
+      p('layout_id', 'number', 'query', true, '1')
+    ]
+  },
+  {
     name: 'readLayoutAssignments',
     group: 'Layouts',
     description: 'Read field assignments for a specific layout by ID.',
