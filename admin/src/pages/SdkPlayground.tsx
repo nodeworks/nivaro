@@ -966,6 +966,51 @@ const COMMANDS: CmdDef[] = [
     method: 'GET',
     path: '/retention/{id}/runs',
     params: [p('id', 'number', 'path', true, '1')]
+  },
+
+  // ─── Layouts ───
+  {
+    name: 'readCollectionLayouts',
+    group: 'Layouts',
+    description: 'List all layouts for a collection.',
+    method: 'GET',
+    path: '/collection-layouts',
+    params: [pc('query', true, 'articles')]
+  },
+  {
+    name: 'readActiveLayout',
+    group: 'Layouts',
+    description: 'Read the active layout with groups + field assignments.',
+    method: 'GET',
+    path: '/collection-layouts/active',
+    params: [pc('query', true, 'articles')]
+  },
+  {
+    name: 'readLayoutAssignments',
+    group: 'Layouts',
+    description: 'Read field assignments for a specific layout by ID.',
+    method: 'GET',
+    path: '/collection-layouts/{id}/assignments',
+    params: [p('id', 'number', 'path', true, '1')]
+  },
+  {
+    name: 'activateLayout',
+    group: 'Layouts',
+    description: 'Activate a layout — deactivates all others for the collection.',
+    method: 'POST',
+    path: '/collection-layouts/{id}/activate',
+    params: [p('id', 'number', 'path', true, '1')]
+  },
+  {
+    name: 'cloneLayout',
+    group: 'Layouts',
+    description: 'Clone a layout with a new name.',
+    method: 'POST',
+    path: '/collection-layouts/{id}/clone',
+    params: [
+      p('id', 'number', 'path', true, '1'),
+      p('name', 'string', 'body', true, 'Compact copy')
+    ]
   }
 ]
 
