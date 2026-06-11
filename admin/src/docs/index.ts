@@ -9,6 +9,7 @@ export * from './sections/content-ops.js'
 export * from './sections/devex.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
+export * from './sections/field-display.js'
 export * from './sections/field-rules.js'
 export * from './sections/graphql.js'
 export * from './sections/integrations.js'
@@ -52,13 +53,13 @@ import {
   contentOpsComputedDefaults,
   contentOpsCrossRecordDefaults,
   contentOpsDataExport,
+  contentOpsDatetimeAuto,
   contentOpsDraftPublish,
   contentOpsFieldDependencies,
   contentOpsFieldGroups,
   contentOpsFieldHistory,
   contentOpsFieldLocking,
   contentOpsFieldVisibility,
-  contentOpsLineItems,
   contentOpsPercentComplete,
   contentOpsPolymorphicRelations,
   contentOpsRecordTemplates,
@@ -67,6 +68,7 @@ import {
   contentOpsRichText,
   contentOpsRollback,
   contentOpsScheduledChanges,
+  contentOpsSubRows,
   contentOpsTranslations,
   contentOpsValidationRules,
   contentOpsVirtualCollections
@@ -132,6 +134,7 @@ import {
   userWorkspacesGuide,
   workspacesApiDoc
 } from './sections/features.js'
+import { fieldDisplaySettingsGuide } from './sections/field-display.js'
 import { fieldRulesGuide } from './sections/field-rules.js'
 import {
   graphqlAuth,
@@ -196,9 +199,11 @@ import {
   aiContentValidation,
   aiDuplicateDetection,
   anomalyDetection,
+  collectionLayouts,
   digestEmails,
   ecommercePrimitives,
   publicApiDocs,
+  roleUiPermissions,
   rowLevelSecurity,
   sdkCoverage,
   smsConfig,
@@ -225,9 +230,11 @@ import {
   sdkAuth,
   sdkFiles,
   sdkFilters,
+  sdkForms,
   sdkGraphql,
   sdkNotifications,
   sdkPipeline,
+  sdkReact,
   sdkRealtime,
   sdkRest,
   sdkSetup,
@@ -405,6 +412,8 @@ export const navSections: NavGroup[] = [
       sdkRest,
       sdkWorkflow,
       sdkPipeline,
+      sdkForms,
+      sdkReact,
       sdkNotifications,
       sdkActivity,
       sdkExternalApis,
@@ -505,7 +514,8 @@ export const navSections: NavGroup[] = [
       contentOpsRemoteOptions,
       contentOpsRepeaterFields,
       contentOpsRichText,
-      contentOpsLineItems,
+      contentOpsDatetimeAuto,
+      contentOpsSubRows,
       contentOpsTranslations,
       contentOpsRecordTemplates,
       contentOpsCollectionPresets,
@@ -535,6 +545,7 @@ export const navSections: NavGroup[] = [
       securityWorkspaceTemplates,
       securityRetentionPolicies,
       rowLevelSecurity,
+      roleUiPermissions,
       zeroDowntimeMigrations
     ]
   },
@@ -617,7 +628,15 @@ export const navSections: NavGroup[] = [
   {
     id: 'data-model',
     label: 'Data Model',
-    items: [systemTables, permissionsModel, mssqlRules, fieldRulesGuide, attributesGuide]
+    items: [
+      systemTables,
+      permissionsModel,
+      mssqlRules,
+      fieldDisplaySettingsGuide,
+      fieldRulesGuide,
+      attributesGuide,
+      collectionLayouts
+    ]
   },
   {
     id: 'trees',
