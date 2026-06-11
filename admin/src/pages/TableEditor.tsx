@@ -5025,6 +5025,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
 
   function handleDragOver({ active, over }: DragOverEvent) {
     // Only handle same-container sorting here — cross-container done in onDragEnd
+    // __unassigned__ is not sortable — fields there display in fixed alphabetical order
     if (!over) return
     const activeId = String(active.id)
     const overId = String(over.id)
@@ -5033,6 +5034,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     const fromContainer = findContainer(activeId)
     const toContainer = findContainer(overId)
     if (!toContainer || fromContainer !== toContainer) return
+    if (fromContainer === '__unassigned__') return
 
     const fields = localFieldOrder[fromContainer] ?? []
     const fromIdx = fields.indexOf(activeId)
@@ -5160,7 +5162,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       onDragEnd={handleDragEnd}
     >
       <div className='flex gap-4 items-start'>
-        {/* Left sidebar — unassigned field pool */}
+        {/* Left sidebar — unassigned field pool (static palette, drag source only) */}
         <div className='w-64 shrink-0'>
           <div className='rounded-lg border border-dashed border-slate-200 bg-slate-50 sticky top-0'>
             <div className='border-b border-slate-200 px-3 py-2'>
@@ -5171,33 +5173,53 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
                 )}
               </p>
             </div>
-            <DroppableFieldZone containerId='__unassigned__'>
             <SortableContext items={localFieldOrder.__unassigned__ ?? []} strategy={verticalListSortingStrategy}>
-              <div className='overflow-y-auto min-h-[40px] space-y-1.5 p-2' style={{ maxHeight: 'calc(100vh - 220px)' }}>
+              <div className='overflow-y-auto min-h-[40px] p-2' style={{ maxHeight: 'calc(100vh - 220px)' }}>
                 {(localFieldOrder.__unassigned__ ?? []).length === 0 ? (
                   <p className='py-2 text-center text-[10px] text-slate-300'>All fields assigned</p>
-                ) : (localFieldOrder.__unassigned__ ?? []).map(f => {
-                  const ft = allFields.find(af => af.field === f)
-                  const settings = getFieldSettings(f)
-                  const kind = relKind(f)
+                ) : (() => {
+                  const unassigned = localFieldOrder.__unassigned__ ?? []
+                  const getLabel = (f: string) => getFieldSettings(f).label ?? titleCase(f)
+                  const relFields = unassigned.filter(f => relKind(f) !== null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
+                  const plainFields = unassigned.filter(f => relKind(f) === null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
+                  const renderChip = (f: string) => {
+                    const ft = allFields.find(af => af.field === f)
+                    const settings = getFieldSettings(f)
+                    const kind = relKind(f)
+                    return (
+                      <SortableFieldChip
+                        key={f}
+                        fieldName={f}
+                        displayName={settings.label ?? titleCase(f)}
+                        fieldType={kind ?? friendlyType(ft?.type, f)}
+                        abstractType={kind ? kind.toLowerCase() : ft?.type}
+                        isM2O={kind === 'M2O'}
+                        isM2M={kind === 'M2M'}
+                        colSpan={getColSpan(f)}
+                        fieldSettings={settings}
+                        onSettings={patch => handleFieldSettings(f, patch)}
+                      />
+                    )
+                  }
                   return (
-                    <SortableFieldChip
-                      key={f}
-                      fieldName={f}
-                      displayName={settings.label ?? titleCase(f)}
-                      fieldType={kind ?? friendlyType(ft?.type, f)}
-                      abstractType={kind ? kind.toLowerCase() : ft?.type}
-                      isM2O={kind === 'M2O'}
-                      isM2M={kind === 'M2M'}
-                      colSpan={getColSpan(f)}
-                      fieldSettings={settings}
-                      onSettings={patch => handleFieldSettings(f, patch)}
-                    />
+                    <div className='space-y-3'>
+                      {plainFields.length > 0 && (
+                        <div>
+                          <p className='mb-1 px-1 text-[9px] font-semibold uppercase tracking-wider text-slate-300'>Fields</p>
+                          <div className='space-y-1.5'>{plainFields.map(renderChip)}</div>
+                        </div>
+                      )}
+                      {relFields.length > 0 && (
+                        <div>
+                          <p className='mb-1 px-1 text-[9px] font-semibold uppercase tracking-wider text-slate-300'>Relations</p>
+                          <div className='space-y-1.5'>{relFields.map(renderChip)}</div>
+                        </div>
+                      )}
+                    </div>
                   )
-                })}
+                })()}
               </div>
             </SortableContext>
-            </DroppableFieldZone>
           </div>
         </div>
 
@@ -5245,6 +5267,41 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
             </div>
           </SortableContext>
         )}
+
+        {/* Ungrouped zone — permanent drop target for fields with no named group */}
+        <DroppableFieldZone containerId='__unassigned__'>
+          <SortableContext items={localFieldOrder.__unassigned__ ?? []} strategy={verticalListSortingStrategy}>
+            <div className='rounded-lg border border-dashed border-slate-300 bg-white dark:bg-card'>
+              <div className='flex items-center gap-1.5 border-b border-slate-200 px-3 py-2 dark:border-border'>
+                <span className='text-[11px] font-medium text-slate-500'>Ungrouped</span>
+                <span className='text-[10px] text-slate-300'>— fields rendered above sections in the item editor</span>
+              </div>
+              <div className='min-h-[40px] space-y-1.5 p-2'>
+                {(localFieldOrder.__unassigned__ ?? []).length === 0 ? (
+                  <p className='py-2 text-center text-[10px] text-slate-300'>Drop fields here to leave them ungrouped</p>
+                ) : (localFieldOrder.__unassigned__ ?? []).map(f => {
+                  const ft = allFields.find(af => af.field === f)
+                  const settings = getFieldSettings(f)
+                  const kind = relKind(f)
+                  return (
+                    <SortableFieldChip
+                      key={f}
+                      fieldName={f}
+                      displayName={settings.label ?? titleCase(f)}
+                      fieldType={kind ?? friendlyType(ft?.type, f)}
+                      abstractType={kind ? kind.toLowerCase() : ft?.type}
+                      isM2O={kind === 'M2O'}
+                      isM2M={kind === 'M2M'}
+                      colSpan={getColSpan(f)}
+                      fieldSettings={settings}
+                      onSettings={patch => handleFieldSettings(f, patch)}
+                    />
+                  )
+                })}
+              </div>
+            </div>
+          </SortableContext>
+        </DroppableFieldZone>
 
         {/* Add group form */}
         {adding && (
