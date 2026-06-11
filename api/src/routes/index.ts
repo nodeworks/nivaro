@@ -82,6 +82,7 @@ import { usersRoutes } from './users.js'
 import { virtualCollectionsRoutes } from './virtual-collections.js'
 import { webhooksRoutes } from './webhooks.js'
 import { buildWidgetScript, widgetRoutes } from './widget.js'
+import { retentionRoutes } from './retention.js'
 import { workflowsRoutes } from './workflows.js'
 import { workspacesRoutes } from './workspaces.js'
 import { zapierRoutes } from './zapier.js'
@@ -142,6 +143,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(treeRoutes)
   await app.register(treePermissionsRoutes)
   await app.register(atRiskRoutes, { prefix: '/at-risk' })
+  await app.register(retentionRoutes, { prefix: '/retention' })
   await app.register(bulkActionsRoutes)
   await app.register(itemActionsRoutes)
   await app.register(extensionRegistryRoutes)

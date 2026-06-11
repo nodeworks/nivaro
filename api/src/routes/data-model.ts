@@ -528,7 +528,12 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
   app.post('/tables/:table/register', async (req, reply) => {
     const { table } = req.params as { table: string }
-    const body = req.body as { display_name?: string; icon?: string; note?: string }
+    const body = req.body as {
+      display_name?: string
+      icon?: string
+      note?: string
+      display_template?: string | null
+    }
 
     try {
       const existing = await db<CMSCollection>('nivaro_collections')
@@ -542,6 +547,9 @@ export async function dataModelRoutes(app: FastifyInstance) {
             display_name: body.display_name ?? existing.display_name,
             icon: body.icon ?? existing.icon,
             note: body.note ?? existing.note,
+            ...(body.display_template !== undefined
+              ? { display_template: body.display_template }
+              : {}),
             updated_at: new Date()
           })
       } else {
@@ -550,6 +558,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
           display_name: body.display_name ?? null,
           icon: body.icon ?? null,
           note: body.note ?? null,
+          display_template: body.display_template ?? null,
           hidden: false,
           singleton: false
         })

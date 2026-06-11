@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, GitBranch } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router'
 import { RevisionsPanel } from '@/components/revisions-panel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { type ActivityEntry, api } from '@/lib/api'
+import { type ActivityEntry, type CMSField, api } from '@/lib/api'
+import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import { formatDateTime } from '@/lib/utils'
 
 const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 'secondary'> = {
@@ -14,7 +15,39 @@ const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 's
   delete: 'destructive',
   update: 'default',
   login: 'secondary',
-  logout: 'secondary'
+  logout: 'secondary',
+  'pipeline-transition': 'default',
+  'pipeline-start': 'success'
+}
+
+const PIPELINE_ACTIONS = new Set(['pipeline-transition', 'pipeline-start'])
+const LABEL_FALLBACKS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
+
+function useItemLabel(collection: string | null, item: string | null) {
+  const isSystem = !collection || collection.startsWith('nivaro_') || collection.startsWith('directus_')
+  const { data: colMeta } = useQuery({
+    queryKey: ['collection-meta', collection],
+    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
+    staleTime: 120_000,
+    enabled: !isSystem && !!collection,
+    retry: false
+  })
+  const displayTemplate: string | null = colMeta?.display_template ?? null
+  const actualFields: string[] = (colMeta?.fields ?? []).map((f: CMSField) => f.field)
+  const wantedFields = [...new Set(['id', ...extractTemplateFields(displayTemplate), ...LABEL_FALLBACKS])]
+  const safeFields = actualFields.length
+    ? wantedFields.filter((f) => f === 'id' || actualFields.includes(f)).join(',')
+    : null
+  const { data: itemData } = useQuery({
+    queryKey: ['activity-item-label', collection, item, safeFields],
+    queryFn: () =>
+      api.get(`/items/${collection}/${item}`, { params: { fields: safeFields } }).then((r) => r.data.data),
+    staleTime: 120_000,
+    enabled: !isSystem && !!safeFields && !!item,
+    retry: false
+  })
+  const label = itemData ? renderDisplayTemplate(displayTemplate, itemData) : null
+  return label && label !== item && label.trim() !== '' ? label : null
 }
 
 function userName(entry: ActivityEntry): string {
@@ -43,6 +76,18 @@ export function ActivityDetailPage() {
     queryFn: () => api.get(`/activity/${id}`).then((r) => r.data.data as ActivityEntry),
     enabled: !!id
   })
+  const itemLabel = useItemLabel(entry?.collection ?? null, entry?.item ?? null)
+  const { data: colMeta } = useQuery({
+    queryKey: ['collection-meta', entry?.collection],
+    queryFn: () => api.get(`/collections/${entry!.collection}`).then((r) => r.data.data),
+    staleTime: 120_000,
+    enabled: !!entry?.collection && !entry.collection.startsWith('nivaro_'),
+    retry: false
+  })
+  const collectionDisplayName = colMeta?.display_name
+    ?? (entry?.collection
+      ? entry.collection.replace(/^nivaro_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+      : null)
 
   return (
     <div className='p-8 max-w-3xl'>
@@ -79,13 +124,22 @@ export function ActivityDetailPage() {
               </div>
             </CardHeader>
             <CardContent>
+              {/* Pipeline transition summary banner */}
+              {PIPELINE_ACTIONS.has(entry.action) && entry.comment && (
+                <div className='mb-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5'>
+                  <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+                  <span className='text-[13px] font-medium text-slate-700'>{entry.comment}</span>
+                </div>
+              )}
               <Field label='Time' value={formatDateTime(entry.timestamp)} />
               <Field label='User' value={userName(entry)} />
               <Field
                 label='Collection'
                 value={
                   entry.collection ? (
-                    <span className='font-mono text-slate-600'>{entry.collection}</span>
+                    <span className='text-slate-600' title={entry.collection}>
+                      {collectionDisplayName ?? entry.collection}
+                    </span>
                   ) : null
                 }
               />
@@ -96,9 +150,9 @@ export function ActivityDetailPage() {
                     <button
                       type='button'
                       onClick={() => navigate(`/collections/${entry.collection}/${entry.item}`)}
-                      className='font-mono text-nvr-cyan hover:underline'
+                      className='text-nvr-cyan hover:underline'
                     >
-                      {entry.item}
+                      {itemLabel ?? <span className='font-mono'>{entry.item}</span>}
                     </button>
                   ) : entry.item ? (
                     <span className='font-mono'>{entry.item}</span>
@@ -114,7 +168,9 @@ export function ActivityDetailPage() {
                   ) : null
                 }
               />
-              {entry.comment && <Field label='Comment' value={entry.comment} />}
+              {entry.comment && !PIPELINE_ACTIONS.has(entry.action) && (
+                <Field label='Comment' value={entry.comment} />
+              )}
             </CardContent>
           </Card>
 

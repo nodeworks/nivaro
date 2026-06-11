@@ -4,8 +4,17 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { FieldPicker, type PickedField } from '@/components/field-picker'
 import { Button } from '@/components/ui/button'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api, type CMSField, type CMSRelation, type PipelineOwnerGroup, type User } from '@/lib/api'
 import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from '@/lib/relations'
 
@@ -309,6 +318,90 @@ function userSelectLabel(u: {
 }) {
   const name = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
   return name ? `${name} (${u.email})` : u.email
+}
+
+function UserCombobox({
+  value,
+  onChange,
+  users,
+  placeholder = 'Select a user…'
+}: {
+  value: string
+  onChange: (v: string) => void
+  users: User[]
+  placeholder?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const selected = users.find((u) => u.id === value)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className='flex h-8 w-full items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 hover:border-slate-300'
+        >
+          <span
+            className={selected ? 'flex-1 truncate text-left' : 'flex-1 text-left text-slate-400'}
+          >
+            {selected ? userSelectLabel(selected) : placeholder}
+          </span>
+          <svg
+            className='h-3.5 w-3.5 shrink-0 text-slate-400'
+            fill='none'
+            viewBox='0 0 24 24'
+            stroke='currentColor'
+            aria-hidden='true'
+          >
+            <path
+              strokeLinecap='round'
+              strokeLinejoin='round'
+              strokeWidth={2}
+              d='M8 9l4-4 4 4M16 15l-4 4-4-4'
+            />
+          </svg>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[280px] p-0' align='start'>
+        <Command>
+          <CommandInput placeholder='Search users…' className='h-8 text-[12px]' />
+          <CommandList>
+            <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+              No users found
+            </CommandEmpty>
+            <CommandGroup>
+              {users.map((u) => (
+                <CommandItem
+                  key={u.id}
+                  value={`${userSelectLabel(u)} ${u.email}`}
+                  onSelect={() => {
+                    onChange(value === u.id ? '' : u.id)
+                    setOpen(false)
+                  }}
+                  className='text-[12px]'
+                >
+                  <svg
+                    className={`mr-2 h-3 w-3 shrink-0 ${value === u.id ? 'opacity-100' : 'opacity-0'}`}
+                    fill='none'
+                    viewBox='0 0 24 24'
+                    stroke='currentColor'
+                    aria-hidden='true'
+                  >
+                    <path
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                      strokeWidth={2}
+                      d='M5 13l4 4L19 7'
+                    />
+                  </svg>
+                  {userSelectLabel(u)}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 function initials(u: { first_name: string | null; last_name: string | null; email: string }) {
@@ -628,18 +721,12 @@ export function PipelineStateOwners({
                         </div>
                       )}
                       <div className='flex gap-2'>
-                        <select
+                        <UserCombobox
                           value={addUserId}
-                          onChange={(e) => setAddUserId(e.target.value)}
-                          className='h-8 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[13px]'
-                        >
-                          <option value=''>Add a user…</option>
-                          {(users ?? []).map((u) => (
-                            <option key={u.id} value={u.id}>
-                              {userSelectLabel(u)}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={setAddUserId}
+                          users={users ?? []}
+                          placeholder='Add a user…'
+                        />
                         <Button
                           type='button'
                           size='sm'
@@ -747,18 +834,12 @@ export function PipelineStateOwners({
 
           <div className='space-y-1.5'>
             <Label className='text-[12px]'>Initial user (optional)</Label>
-            <select
+            <UserCombobox
               value={newGroupUserId}
-              onChange={(e) => setNewGroupUserId(e.target.value)}
-              className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[13px]'
-            >
-              <option value=''>Select a user…</option>
-              {(users ?? []).map((u) => (
-                <option key={u.id} value={u.id}>
-                  {userSelectLabel(u)}
-                </option>
-              ))}
-            </select>
+              onChange={setNewGroupUserId}
+              users={users ?? []}
+              placeholder='Select a user…'
+            />
           </div>
 
           <div className='flex items-center justify-end gap-2'>

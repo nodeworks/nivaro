@@ -35,42 +35,48 @@ export function RelationPicker({
     }
   }, [searchInput])
 
-  const { data: colMeta } = useQuery({
+  // nivaro_users is a system table — use the /users endpoint instead of /items
+  const isUserRelation = relatedCollection === 'nivaro_users'
+
+  const { data: colMeta, isError: colError } = useQuery({
     queryKey: ['collection-meta', relatedCollection],
     queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
-    staleTime: 10 * 60 * 1000
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+    enabled: !isUserRelation
   })
 
-  const displayTemplate = colMeta?.display_template ?? null
+  const displayTemplate = isUserRelation
+    ? '{{first_name}} {{last_name}}'
+    : (colMeta?.display_template ?? null)
   const fields = extractTemplateFields(displayTemplate)
 
   const hasValue = value !== null && value !== undefined && value !== ''
 
-  // Fetch the selected item immediately — parallel to colMeta, no serial dependency.
-  // fields=* avoids needing the display template before fetching.
   const { data: currentItem, isLoading: labelLoading } = useQuery({
     queryKey: ['relation-item', relatedCollection, String(value)],
     queryFn: async () => {
-      const res = await api.get(`/items/${relatedCollection}/${value}`, {
-        params: { fields: '*' }
-      })
+      const url = isUserRelation ? `/users/${value}` : `/items/${relatedCollection}/${value}`
+      const res = await api.get(url, { params: isUserRelation ? undefined : { fields: '*' } })
       return res.data.data as Record<string, unknown>
     },
     enabled: hasValue,
-    staleTime: 30 * 60 * 1000
+    staleTime: 30 * 60 * 1000,
+    retry: false
   })
 
-  // Search results — fetched when popover is open; uses template fields when available, * otherwise.
   const searchFields = colMeta ? fields.join(',') : '*'
   const { data: searchResults, isLoading: searchLoading } = useQuery({
     queryKey: ['relation-search', relatedCollection, searchFields, debouncedSearch],
     queryFn: async () => {
+      if (isUserRelation) {
+        const res = await api.get('/users', {
+          params: { limit: 50, search: debouncedSearch || undefined }
+        })
+        return (res.data.data ?? []) as Record<string, unknown>[]
+      }
       const res = await api.get(`/items/${relatedCollection}`, {
-        params: {
-          limit: 50,
-          fields: searchFields,
-          search: debouncedSearch || undefined
-        }
+        params: { limit: 50, fields: searchFields, search: debouncedSearch || undefined }
       })
       return (res.data.data ?? []) as Record<string, unknown>[]
     },
@@ -83,6 +89,18 @@ export function RelationPicker({
       ? renderDisplayTemplate(displayTemplate, currentItem)
       : String(value)
     : null
+
+  if (colError) {
+    return (
+      <Input
+        value={String(value ?? '')}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className='h-9 text-[13px]'
+        placeholder='Unknown collection'
+      />
+    )
+  }
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

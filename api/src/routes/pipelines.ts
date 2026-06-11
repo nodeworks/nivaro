@@ -28,6 +28,7 @@ interface WorkflowState {
   sort: number
   skip_criteria: string | null
   skip_if_no_owners: boolean
+  stage_visibility: string
 }
 
 interface WorkflowTransition {
@@ -173,7 +174,8 @@ function formatState(s: WorkflowState) {
     is_terminal: coerceBool(s.is_terminal),
     lock_record: coerceBool(s.lock_record),
     skip_if_no_owners: coerceBool(s.skip_if_no_owners),
-    skip_criteria: parseJson(s.skip_criteria)
+    skip_criteria: parseJson(s.skip_criteria),
+    stage_visibility: s.stage_visibility ?? 'always'
   }
 }
 
@@ -725,6 +727,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       is_terminal: body.is_terminal ? 1 : 0,
       lock_record: body.lock_record ? 1 : 0,
       skip_if_no_owners: body.skip_if_no_owners ? 1 : 0,
+      stage_visibility: body.stage_visibility ?? 'always',
       sort: body.sort ?? 0
     })
     const state = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()
@@ -762,6 +765,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
               ? 1
               : 0
             : state.skip_if_no_owners,
+        stage_visibility: body.stage_visibility ?? state.stage_visibility ?? 'always',
         sort: body.sort ?? state.sort
       })
     const updated = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()
@@ -1037,6 +1041,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         },
         states: states.map(formatState),
         available_transitions: availableTransitions,
+        all_transitions: transitions.map(formatTransition),
         history,
         binding
       }
@@ -1120,12 +1125,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .where({ id: instanceId })
       .first()
     await logActivity({
-      action: 'create',
-      collection: 'nivaro_workflow_instances',
-      item: instanceId,
+      action: 'pipeline-start',
+      collection,
+      item,
       user: req.user?.id,
       req,
-      comment: `${collection}:${item}`
+      comment: `Started pipeline${finalState ? ` — initial state: ${finalState.label}` : ''}`
     })
     return reply.code(201).send({ data: instance })
   })
@@ -1236,13 +1241,22 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const updatedInstance = await db<WorkflowInstance>('nivaro_workflow_instances')
         .where({ id: instance.id })
         .first()
+
+      const prevStateObj = previousState
+        ? await db<WorkflowState>('nivaro_workflow_states').where({ id: previousState }).first()
+        : null
+      const fromLabel = prevStateObj?.label ?? previousState ?? 'Start'
+      const toLabel = newStateObj?.label ?? newState
+      const transitionLabel = transition.label
+      const userComment = body.comment ? ` — "${body.comment}"` : ''
+
       await logActivity({
-        action: 'update',
-        collection: 'nivaro_workflow_instances',
-        item: instance.id,
+        action: 'pipeline-transition',
+        collection,
+        item,
         user: req.user?.id,
         req,
-        comment: `${collection}:${item}`
+        comment: `${fromLabel} → ${toLabel} via ${transitionLabel}${userComment}`
       })
       return reply.send({
         data: {
@@ -1694,23 +1708,27 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   app.get('/instance/:collection/:item/owners', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
-    const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
-      .where({ collection })
-      .first()
-    if (!binding) return reply.send({ data: [] })
 
     const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
       .where({ collection, item })
       .first()
-    if (!instance?.current_state) return reply.send({ data: [] })
+    if (!instance) return reply.send({ data: [] })
 
-    const owners = await resolveStateOwners(
-      instance.current_state,
-      instance.id,
-      collection,
-      item,
-      db
-    )
+    // Return the raw manually-assigned instance owners so the UI has io.id for deletion.
+    const owners = await db('nivaro_pipeline_instance_owners as io')
+      .join('nivaro_users as u', 'io.user', 'u.id')
+      .where('io.instance', instance.id)
+      .select(
+        'io.id',
+        'io.instance',
+        'io.state',
+        'io.user',
+        'io.added_by',
+        'io.added_at',
+        'u.first_name',
+        'u.last_name',
+        'u.email'
+      )
     return reply.send({ data: owners })
   })
 
@@ -1794,6 +1812,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   app.delete('/instance-owners/:ownerId', { preHandler: requireAuth }, async (req, reply) => {
     const { ownerId } = req.params as { ownerId: string }
 
+    try {
     // Load the row and join to its instance so we can authorize the caller.
     const ownerRow = (await db('nivaro_pipeline_instance_owners as io')
       .join('nivaro_workflow_instances as wi', 'io.instance', 'wi.id')
@@ -1830,6 +1849,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       req
     })
     return reply.send({ success: true })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      req.log.error({ err }, 'delete instance-owner failed')
+      return reply.code(500).send({ error: msg })
+    }
   })
 
   // ─── Skip criteria (admin only) ───────────────────────────────────────────

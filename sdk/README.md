@@ -1150,7 +1150,57 @@ await cms.request(createHierarchyConfig({
 
 ---
 
-## SDK Coverage: ~175 Typed Commands
+## SDK — Privacy & Retention Policies
+
+Retention policies identify inactive users and redact, delete, or suspend their accounts on a schedule. All endpoints are admin-only.
+
+```typescript
+import {
+  listRetentionPolicies, getRetentionPolicy,
+  createRetentionPolicy, updateRetentionPolicy, deleteRetentionPolicy,
+  runRetentionPolicy, listRetentionRuns
+} from '@nivaro/sdk'
+
+// Create a policy: redact PII after 36 months of inactivity
+const { data: policy } = await nivaro.request(createRetentionPolicy({
+  name: '3-year inactivity redaction',
+  inactivity_threshold_months: 36,
+  action: 'redact',
+  redact_fields: ['first_name', 'last_name', 'email', 'external_id', 'job_title'],
+  redact_value_template: 'Redacted_{{id}}',
+  exclusion_emails: ['admin@example.com', 'service@example.com'],
+  exclusion_roles: [],
+  cron_schedule: '0 2 1 * *',   // 1st of every month at 2am
+  is_active: true,
+  dry_run_mode: false
+}))
+
+// Dry run — preview without writing
+const { data: preview } = await nivaro.request(runRetentionPolicy(policy.id, true))
+console.log(`Would affect ${preview.affected_count} users`, preview.affected_ids)
+
+// Execute for real
+const { data: result } = await nivaro.request(runRetentionPolicy(policy.id))
+
+// Run history
+const { data: runs } = await nivaro.request(listRetentionRuns(policy.id))
+```
+
+| Command | Method + path | Access |
+|---|---|---|
+| listRetentionPolicies() | GET /retention | Admin |
+| getRetentionPolicy(id) | GET /retention/:id | Admin |
+| createRetentionPolicy(body) | POST /retention | Admin |
+| updateRetentionPolicy(id, body) | PATCH /retention/:id | Admin |
+| deleteRetentionPolicy(id) | DELETE /retention/:id | Admin |
+| runRetentionPolicy(id, dryRun?) | POST /retention/:id/run | Admin |
+| listRetentionRuns(policyId) | GET /retention/:id/runs | Admin |
+
+Redacted users have `is_redacted: true` and are automatically excluded from all user list and picker endpoints — no changes needed in calling code.
+
+---
+
+## SDK Coverage: ~182 Typed Commands
 
 The @nivaro/sdk command surface now covers every feature area — roughly 175 typed `Command<T>` factories spanning items, files, workflows, pipelines, flows, comments, webhooks, rules, custom queries, trees and hierarchies, submission forms, field watches, notification subscriptions, imports, SLA, alerts, AI endpoints (generate, summarize, validate, check-duplicates), translations, drafts, scheduled changes, record templates, saved views, API keys, widget feeds, sync jobs, ERP submissions, PDF templates, pages, and more. If a REST route exists, there is a typed command for it.
 

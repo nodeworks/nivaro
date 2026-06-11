@@ -14,6 +14,7 @@ import {
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { CollectionFieldPicker } from '@/components/field-picker'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -260,13 +261,13 @@ function buildPayload(form: RuleFormData) {
 
 function RuleForm({
   initial,
-  fields,
+  collection,
   onSave,
   onCancel,
   saving
 }: {
   initial?: DqRule
-  fields: CollectionField[]
+  collection: string
   onSave: (payload: ReturnType<typeof buildPayload>) => void
   onCancel: () => void
   saving: boolean
@@ -276,8 +277,6 @@ function RuleForm({
   function set<K extends keyof RuleFormData>(key: K, value: RuleFormData[K]) {
     setForm((prev) => ({ ...prev, [key]: value }))
   }
-
-  const fieldOptions = fields.map((f) => ({ value: f.field, label: `${f.field} (${f.type})` }))
   const needsField = form.rule_type !== 'formula'
   const isValid =
     form.name.trim() !== '' &&
@@ -311,12 +310,12 @@ function RuleForm({
       {needsField && (
         <div className='space-y-1'>
           <Label className='text-[11px] text-slate-500'>Field</Label>
-          <MonCombobox
+          <CollectionFieldPicker
+            collection={collection}
             value={form.field}
-            onChange={(v) => set('field', v)}
-            options={fieldOptions}
+            onChange={(p) => set('field', p.path.join('.'))}
+            onClear={() => set('field', '')}
             placeholder='Select field…'
-            className='font-mono'
           />
         </div>
       )}
@@ -365,17 +364,24 @@ function RuleForm({
             // biome-ignore lint/suspicious/noArrayIndexKey: condition rows keyed by position
             <div key={`cond-${idx}-${cond.field}`} className='flex items-start gap-1.5'>
               <div className='flex-1 space-y-1.5'>
-                <MonCombobox
+                <CollectionFieldPicker
+                  collection={collection}
                   value={cond.field}
-                  onChange={(v) =>
+                  onChange={(p) =>
                     set(
                       'conditions',
-                      form.conditions.map((c, i) => (i === idx ? { ...c, field: v } : c))
+                      form.conditions.map((c, i) =>
+                        i === idx ? { ...c, field: p.path.join('.') } : c
+                      )
                     )
                   }
-                  options={fieldOptions}
+                  onClear={() =>
+                    set(
+                      'conditions',
+                      form.conditions.map((c, i) => (i === idx ? { ...c, field: '' } : c))
+                    )
+                  }
                   placeholder='Field…'
-                  className='font-mono'
                 />
                 <div className='flex gap-1.5'>
                   <MonCombobox
@@ -736,7 +742,7 @@ export function DataQualityPage() {
 
               {adding && (
                 <RuleForm
-                  fields={fields}
+                  collection={collection}
                   onSave={(payload) => createMut.mutate(payload)}
                   onCancel={() => setAdding(false)}
                   saving={createMut.isPending}
@@ -749,7 +755,7 @@ export function DataQualityPage() {
                     <li key={rule.id}>
                       <RuleForm
                         initial={rule}
-                        fields={fields}
+                        collection={collection}
                         onSave={(payload) => updateMut.mutate({ id: rule.id, body: payload })}
                         onCancel={() => setEditingId(null)}
                         saving={updateMut.isPending}

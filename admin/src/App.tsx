@@ -173,6 +173,9 @@ const HealthDashboardPage = lazy(() =>
 const DataQualityPage = lazy(() =>
   import('@/pages/DataQuality').then((m) => ({ default: m.DataQualityPage }))
 )
+const RetentionPoliciesPage = lazy(() =>
+  import('@/pages/RetentionPolicies').then((m) => ({ default: m.RetentionPoliciesPage }))
+)
 const IssuesPage = lazy(() => import('@/pages/Issues').then((m) => ({ default: m.IssuesPage })))
 const WorkflowsPage = lazy(() =>
   import('@/pages/Workflows').then((m) => ({ default: m.WorkflowsPage }))
@@ -350,6 +353,7 @@ export default function App() {
                 <Route path='api-analytics' element={<ApiAnalyticsPage />} />
                 <Route path='health' element={<HealthDashboardPage />} />
                 <Route path='data-quality' element={<DataQualityPage />} />
+                <Route path='privacy-retention' element={<RetentionPoliciesPage />} />
                 <Route path='issues' element={<IssuesPage />} />
                 <Route path='workflows' element={<WorkflowsPage />} />
                 <Route path='workflows/:id' element={<WorkflowEditPage />} />

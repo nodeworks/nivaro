@@ -20,8 +20,9 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table'
-import { api } from '@/lib/api'
-import { formatDateTime, formatNumber } from '@/lib/utils'
+import { type CMSField, type Collection, api } from '@/lib/api'
+import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
+import { formatDateTime, formatNumber, titleCase } from '@/lib/utils'
 
 type ActivityRow = {
   id: number
@@ -30,6 +31,7 @@ type ActivityRow = {
   timestamp: string
   collection: string | null
   item: string | null
+  comment: string | null
   first_name: string | null
   last_name: string | null
   user_email: string | null
@@ -40,8 +42,12 @@ const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 's
   delete: 'destructive',
   update: 'default',
   login: 'secondary',
-  logout: 'secondary'
+  logout: 'secondary',
+  'pipeline-transition': 'default',
+  'pipeline-start': 'success'
 }
+
+const PIPELINE_ACTIONS = new Set(['pipeline-transition', 'pipeline-start'])
 
 function formatAction(action: string): string {
   return action.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
@@ -52,6 +58,51 @@ function userName(row: ActivityRow): string {
     return [row.first_name, row.last_name].filter(Boolean).join(' ')
   }
   return row.user_email ?? row.user?.slice(0, 8) ?? '—'
+}
+
+function collectionLabel(name: string, collections: Collection[]): string {
+  const found = collections.find((c) => c.collection === name)
+  if (found?.display_name) return found.display_name
+  return titleCase(name.replace(/^nivaro_/, '').replace(/_/g, ' '))
+}
+
+const LABEL_FALLBACKS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
+
+function ItemLabel({ collection, item }: { collection: string; item: string }) {
+  const isSystem = !collection || collection.startsWith('nivaro_') || collection.startsWith('directus_')
+
+  const { data: colMeta } = useQuery({
+    queryKey: ['collection-meta', collection],
+    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
+    staleTime: 120_000,
+    enabled: !isSystem,
+    retry: false
+  })
+
+  const displayTemplate: string | null = colMeta?.display_template ?? null
+  const actualFields: string[] = (colMeta?.fields ?? []).map((f: CMSField) => f.field)
+  const wantedFields = [...new Set(['id', ...extractTemplateFields(displayTemplate), ...LABEL_FALLBACKS])]
+  const safeFields = actualFields.length
+    ? wantedFields.filter((f) => f === 'id' || actualFields.includes(f)).join(',')
+    : null
+
+  const { data: itemData } = useQuery({
+    queryKey: ['activity-item-label', collection, item, safeFields],
+    queryFn: () =>
+      api.get(`/items/${collection}/${item}`, { params: { fields: safeFields } }).then((r) => r.data.data),
+    staleTime: 120_000,
+    enabled: !isSystem && !!safeFields,
+    retry: false
+  })
+
+  const label = itemData ? renderDisplayTemplate(displayTemplate, itemData) : null
+  const hasLabel = label && label !== item && label.trim() !== ''
+
+  return hasLabel ? (
+    <span title={item}>{label}</span>
+  ) : (
+    <span className='font-mono text-muted-foreground'>{item}</span>
+  )
 }
 
 export function ActivityPage() {
@@ -152,11 +203,13 @@ export function ActivityPage() {
                   <TableHead>User</TableHead>
                   <TableHead>Action</TableHead>
                   <TableHead>Collection</TableHead>
-                  <TableHead>Item</TableHead>
+                  <TableHead>Detail</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((row) => (
+                {rows.map((row) => {
+                  const isPipeline = PIPELINE_ACTIONS.has(row.action)
+                  return (
                   <TableRow
                     key={row.id}
                     className='cursor-pointer hover:bg-slate-50'
@@ -174,14 +227,23 @@ export function ActivityPage() {
                         {formatAction(row.action)}
                       </Badge>
                     </TableCell>
-                    <TableCell className='text-sm font-mono text-slate-600'>
-                      {row.collection ?? '—'}
+                    <TableCell className='text-sm text-slate-600'>
+                      {row.collection
+                        ? collectionLabel(row.collection, collectionsData ?? [])
+                        : '—'}
                     </TableCell>
-                    <TableCell className='text-sm font-mono text-muted-foreground'>
-                      {row.item ?? '—'}
+                    <TableCell className='max-w-xs text-sm text-slate-600'>
+                      {isPipeline && row.comment ? (
+                        <span className='block truncate' title={row.comment}>{row.comment}</span>
+                      ) : row.collection && row.item ? (
+                        <ItemLabel collection={row.collection} item={row.item} />
+                      ) : (
+                        <span className='font-mono text-muted-foreground'>{row.item ?? '—'}</span>
+                      )}
                     </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
                 {rows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={5} className='text-center text-muted-foreground py-12'>

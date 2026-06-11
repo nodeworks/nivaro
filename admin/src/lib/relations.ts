@@ -1,16 +1,31 @@
 import type { CMSRelation } from './api'
 
+const LABEL_FALLBACK_FIELDS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
+
 export function renderDisplayTemplate(
   template: string | null | undefined,
   item: Record<string, unknown>
 ): string {
-  if (!template) return String(item.id ?? '')
-  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => String(item[key as string] ?? ''))
+  if (!template) {
+    for (const f of LABEL_FALLBACK_FIELDS) {
+      if (item[f] != null && item[f] !== '') return String(item[f])
+    }
+    return String(item.id ?? '')
+  }
+  return template.replace(/\{\{([\w.]+)\}\}/g, (_, key) => {
+    const parts = key.split('.')
+    let val: unknown = item
+    for (const part of parts) {
+      if (val == null || typeof val !== 'object') { val = null; break }
+      val = (val as Record<string, unknown>)[part]
+    }
+    return String(val ?? '')
+  })
 }
 
 export function extractTemplateFields(template: string | null | undefined): string[] {
-  if (!template) return ['id']
-  const fields = [...template.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1])
+  if (!template) return ['id', ...LABEL_FALLBACK_FIELDS]
+  const fields = [...template.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1])
   return ['id', ...fields]
 }
 

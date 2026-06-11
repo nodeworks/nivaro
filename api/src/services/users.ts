@@ -124,7 +124,7 @@ export async function listUsers(
     }
   }
 
-  const listQ = db<User>('nivaro_users').select(USER_COLS)
+  const listQ = db<User>('nivaro_users').select(USER_COLS).where('is_redacted', false)
   applyConditions(listQ)
 
   if (sort) {
@@ -135,7 +135,7 @@ export async function listUsers(
     listQ.orderBy('created_at', 'desc')
   }
 
-  const countQ = db('nivaro_users').count('id as count')
+  const countQ = db('nivaro_users').count('id as count').where('is_redacted', false)
   applyConditions(countQ)
 
   const [users, [{ count }]] = await Promise.all([listQ.limit(limit).offset(offset), countQ])

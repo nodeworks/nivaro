@@ -257,6 +257,7 @@ import {
   securityMultiDb,
   securityQuotas,
   securityReadReplica,
+  securityRetentionPolicies,
   securityRowIsolation,
   securitySaml,
   securityScim,
@@ -532,6 +533,7 @@ export const navSections: NavGroup[] = [
       securityRowIsolation,
       securityQuotas,
       securityWorkspaceTemplates,
+      securityRetentionPolicies,
       rowLevelSecurity,
       zeroDowntimeMigrations
     ]

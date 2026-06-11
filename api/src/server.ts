@@ -152,6 +152,31 @@ export async function buildServer() {
       setTimeout(runRetentionPurge, 24 * 60 * 60 * 1000)
     }
     runRetentionPurge()
+
+    // ── User retention policies — schedule active crons ──────────────────────
+    async function scheduleRetentionPolicies() {
+      try {
+        const policies = await db('nivaro_retention_policies')
+          .where({ is_active: true })
+          .whereNotNull('cron_schedule')
+        for (const p of policies) {
+          const cronId = `retention-policy-${p.id}`
+          app.cron.schedule(cronId, p.cron_schedule, async () => {
+            try {
+              const fresh = await db('nivaro_retention_policies').where({ id: p.id }).first()
+              if (!fresh?.is_active) return
+              const { executeRetentionPolicy } = await import('./services/retention.js')
+              await executeRetentionPolicy(fresh, undefined, false)
+            } catch (err) {
+              app.log.error({ err }, `[retention] policy ${p.id} cron failed`)
+            }
+          })
+        }
+      } catch (err) {
+        app.log.warn({ err }, '[retention] failed to schedule cron policies')
+      }
+    }
+    scheduleRetentionPolicies()
   })
 
   return app

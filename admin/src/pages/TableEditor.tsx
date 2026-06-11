@@ -19,6 +19,7 @@ import {
 import { type ReactNode, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
+import { CollectionFieldPickerPanel, type PickedField } from '@/components/field-picker'
 import { FormulaBuilder } from '@/components/formula-builder'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -68,7 +69,7 @@ import {
   type RelationType,
   schemaApi
 } from '@/lib/schema-api'
-import { cn } from '@/lib/utils'
+import { cn, titleCase } from '@/lib/utils'
 
 // ─── Formula mode toggle (Builder | Raw) ─────────────────────────────────────
 
@@ -2559,6 +2560,112 @@ function RelationsTab({
 
 // ─── Settings tab ─────────────────────────────────────────────────────────────
 
+// ─── Display template chip editor ────────────────────────────────────────────
+
+type TemplateToken = { type: 'text'; value: string } | { type: 'field'; value: string }
+
+function parseTemplate(template: string): TemplateToken[] {
+  const tokens: TemplateToken[] = []
+  const re = /\{\{([\w.]+)\}\}/g
+  let last = 0
+  let m: RegExpExecArray | null
+  // biome-ignore lint/suspicious/noAssignInExpressions: regex loop pattern
+  while ((m = re.exec(template)) !== null) {
+    if (m.index > last) tokens.push({ type: 'text', value: template.slice(last, m.index) })
+    tokens.push({ type: 'field', value: m[1] })
+    last = m.index + m[0].length
+  }
+  if (last < template.length) tokens.push({ type: 'text', value: template.slice(last) })
+  return tokens
+}
+
+function serializeTemplate(tokens: TemplateToken[]): string {
+  return tokens.map((t) => (t.type === 'field' ? `{{${t.value}}}` : t.value)).join('')
+}
+
+function DisplayTemplateEditor({
+  value,
+  onChange,
+  collection
+}: {
+  value: string
+  onChange: (v: string) => void
+  collection: string
+}) {
+  const tokens = parseTemplate(value)
+  const [pickerOpen, setPickerOpen] = useState(false)
+
+  function updateToken(idx: number, text: string) {
+    const next = tokens.map((t, i) => (i === idx ? { ...t, value: text } : t))
+    onChange(serializeTemplate(next))
+  }
+
+  function removeToken(idx: number) {
+    onChange(serializeTemplate(tokens.filter((_, i) => i !== idx)))
+  }
+
+  function insertField(picked: PickedField) {
+    const field = picked.path.join('.')
+    const last = tokens[tokens.length - 1]
+    const next: TemplateToken[] =
+      last?.type === 'text'
+        ? [...tokens.slice(0, -1), last, { type: 'field', value: field }, { type: 'text', value: '' }]
+        : [...tokens, { type: 'field', value: field }, { type: 'text', value: '' }]
+    onChange(serializeTemplate(next))
+    setPickerOpen(false)
+  }
+
+  return (
+    <div className='flex flex-wrap items-center gap-1 min-h-8 rounded-md border border-slate-200 bg-white px-2 py-1'>
+      {tokens.length === 0 && (
+        <span className='text-[12px] text-slate-400'>e.g. {'{{name}}'} — {'{{status}}'}</span>
+      )}
+      {tokens.map((tok, idx) =>
+        tok.type === 'field' ? (
+          <span
+            key={`f-${idx}`}
+            className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[12px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+          >
+            {tok.value.split('.').map(titleCase).join(' → ')}
+            <button
+              type='button'
+              onClick={() => removeToken(idx)}
+              className='text-nvr-navy/50 hover:text-red-500 dark:text-nvr-cyan/50'
+            >
+              ×
+            </button>
+          </span>
+        ) : (
+          <input
+            key={`t-${idx}`}
+            value={tok.value}
+            onChange={(e) => updateToken(idx, e.target.value)}
+            placeholder={idx === 0 && tokens.length <= 1 ? 'text…' : undefined}
+            size={Math.max(1, tok.value.length || (idx === 0 && tokens.length <= 1 ? 6 : 1))}
+            className='flex-shrink bg-transparent text-[13px] text-slate-700 outline-none placeholder-slate-300'
+          />
+        )
+      )}
+      <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            className='inline-flex items-center gap-0.5 rounded border border-dashed border-slate-300 px-1.5 py-0.5 text-[11px] text-slate-400 hover:border-nvr-cyan hover:text-nvr-cyan'
+          >
+            <Plus className='h-3 w-3' /> field
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align='start' className='w-auto p-0' sideOffset={6}>
+          <CollectionFieldPickerPanel
+            collection={collection}
+            onSelect={(picked) => insertField(picked)}
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+}
+
 function SettingsTab({
   tableData,
   tableName,
@@ -2573,13 +2680,15 @@ function SettingsTab({
   const [displayName, setDisplayName] = useState(meta?.display_name ?? '')
   const [icon, setIcon] = useState(meta?.icon ?? '')
   const [note, setNote] = useState(meta?.note ?? '')
+  const [displayTemplate, setDisplayTemplate] = useState(meta?.display_template ?? '')
 
   const registerMutation = useMutation({
     mutationFn: () =>
       schemaApi.registerCollection(tableName, {
         display_name: displayName || undefined,
         icon: icon || undefined,
-        note: note || undefined
+        note: note || undefined,
+        display_template: displayTemplate || null
       }),
     onSuccess: () => {
       toast.success('Collection settings saved')
@@ -2635,6 +2744,17 @@ function SettingsTab({
               placeholder='A short description of this collection'
               className='text-[13px]'
             />
+          </div>
+          <div>
+            <Label className='mb-1 block text-[12px]'>Display template</Label>
+            <DisplayTemplateEditor
+              value={displayTemplate}
+              onChange={setDisplayTemplate}
+              collection={tableName}
+            />
+            <p className='mt-1 text-[11px] text-slate-400'>
+              Used in relation pickers and list previews. Insert field chips with the + button.
+            </p>
           </div>
           <Button
             type='button'

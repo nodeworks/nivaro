@@ -36,10 +36,10 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { FieldPicker } from '@/components/field-picker'
+import { FieldPicker, type PickedField } from '@/components/field-picker'
 import { OwnerMatrix } from '@/components/pipeline-owner-matrix'
 import { PipelineSkipCriteria } from '@/components/pipeline-skip-criteria'
 import { PipelineStateOwners } from '@/components/pipeline-state-owners'
@@ -52,6 +52,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import {
   api,
   type CMSField,
+  type CMSRelation,
   type Collection,
   type ConditionOp,
   type ConditionRule,
@@ -65,7 +66,8 @@ import {
   type PipelineTemplate,
   type PipelineTransition
 } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from '@/lib/relations'
+import { cn, titleCase } from '@/lib/utils'
 
 // ─── Simple combobox ──────────────────────────────────────────────────────────
 
@@ -101,34 +103,31 @@ function SimpleCombobox({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          className={cn(
-            'flex h-8 w-full items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 hover:border-slate-300',
-            className
-          )}
-        >
-          <span className={selectedLabel ? '' : 'text-slate-400'}>
-            {selectedLabel ?? placeholder}
-          </span>
-          <div className='flex items-center gap-0.5 shrink-0'>
-            {value && noneLabel !== undefined && (
-              <button
-                type='button'
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onChange('')
-                }}
-                className='flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
-              >
-                <X className='h-3 w-3' />
-              </button>
-            )}
-            <ChevronDown className='h-3.5 w-3.5 text-slate-400' />
-          </div>
-        </button>
-      </PopoverTrigger>
+      <div className={cn('relative flex h-8 w-full', className)}>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            className='flex h-full w-full items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 hover:border-slate-300'
+          >
+            <span className={selectedLabel ? '' : 'text-slate-400'}>
+              {selectedLabel ?? placeholder}
+            </span>
+            <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+          </button>
+        </PopoverTrigger>
+        {value && noneLabel !== undefined && (
+          <button
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              onChange('')
+            }}
+            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+          >
+            <X className='h-3 w-3' />
+          </button>
+        )}
+      </div>
       <PopoverContent align='start' className='w-56 p-0' sideOffset={4}>
         <div className='border-b border-slate-100 px-2 py-1.5'>
           <div className='relative'>
@@ -220,29 +219,26 @@ function MultiStateCombobox({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          className='flex h-8 w-full items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 hover:border-slate-300'
-        >
-          <span className={labelText ? '' : 'text-slate-400'}>{labelText ?? placeholder}</span>
-          <div className='flex items-center gap-0.5 shrink-0'>
-            {values.length > 0 && (
-              <button
-                type='button'
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onChange([])
-                }}
-                className='flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
-              >
-                <X className='h-3 w-3' />
-              </button>
-            )}
-            <ChevronDown className='h-3.5 w-3.5 text-slate-400' />
-          </div>
-        </button>
-      </PopoverTrigger>
+      <div className='relative flex h-8 w-full'>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            className='flex h-full w-full items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 hover:border-slate-300'
+          >
+            <span className={labelText ? '' : 'text-slate-400'}>{labelText ?? placeholder}</span>
+            <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+          </button>
+        </PopoverTrigger>
+        {values.length > 0 && (
+          <button
+            type='button'
+            onClick={(e) => { e.stopPropagation(); onChange([]) }}
+            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+          >
+            <X className='h-3 w-3' />
+          </button>
+        )}
+      </div>
       <PopoverContent align='start' className='w-56 p-0' sideOffset={4}>
         <div className='border-b border-slate-100 px-2 py-1.5'>
           <div className='relative'>
@@ -333,10 +329,10 @@ function ColorPicker({
 
 // ─── State badge ──────────────────────────────────────────────────────────────
 
-function StateBadge({ state }: { state: PipelineState }) {
+function StateBadge({ state, small }: { state: PipelineState; small?: boolean }) {
   return (
     <span
-      className='inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-medium'
+      className={`inline-flex items-center gap-1.5 rounded-full font-medium ${small ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-0.5 text-[12px]'}`}
       style={{
         backgroundColor: state.color ? `${state.color}22` : '#f1f5f9',
         color: state.color ?? '#475569',
@@ -359,6 +355,7 @@ interface StateFormData {
   is_initial: boolean
   is_terminal: boolean
   lock_record: boolean
+  stage_visibility: 'always' | 'hide' | 'hide_unless_active'
 }
 
 function StateForm({
@@ -378,7 +375,8 @@ function StateForm({
     color: initial.color ?? null,
     is_initial: initial.is_initial ?? false,
     is_terminal: initial.is_terminal ?? false,
-    lock_record: initial.lock_record ?? false
+    lock_record: initial.lock_record ?? false,
+    stage_visibility: (initial as Partial<StateFormData>).stage_visibility ?? 'always'
   })
 
   const set = <K extends keyof StateFormData>(k: K, v: StateFormData[K]) =>
@@ -452,6 +450,30 @@ function StateForm({
           />
           Lock record (read-only)
         </label>
+      </div>
+
+      <div className='space-y-1.5'>
+        <Label className='text-[12px]'>Stage progress visibility</Label>
+        <div className='flex flex-col gap-1.5'>
+          {(
+            [
+              { value: 'always', label: 'Always visible' },
+              { value: 'hide_unless_active', label: 'Hide unless active or in history' },
+              { value: 'hide', label: 'Always hidden from stages' }
+            ] as const
+          ).map((opt) => (
+            <label key={opt.value} className='flex cursor-pointer items-center gap-2 text-[13px]'>
+              <input
+                type='radio'
+                name='stage_visibility'
+                value={opt.value}
+                checked={form.stage_visibility === opt.value}
+                onChange={() => set('stage_visibility', opt.value)}
+              />
+              {opt.label}
+            </label>
+          ))}
+        </div>
       </div>
 
       <div className='flex gap-2 justify-end'>
@@ -590,59 +612,290 @@ function GroupLabelCombobox({
 }
 
 // ─── Transition grouping ──────────────────────────────────────────────────────
+// Group by `label` — the label IS the button. Routes within a label group
+// each represent one from_state → [to_states] bundle sharing the same conditions.
+// Two transitions with the same from_state but different condition_rules are
+// kept as separate routes so they can be edited and displayed independently.
 
-type TransitionGroup = {
-  key: string
-  from_state: string | null
-  group_label: string | null
-  label: string
-  color: string | null
-  required_roles: string[] | null
-  condition_rules: ConditionRule[] | null
-  to_states: string[]
+type RouteEntry = {
   ids: string[]
+  from_state: string | null
+  to_states: string[]
+  condition_rules: ConditionRule[] | null
+  required_roles: string[] | null
+  minSort: number
 }
 
-function groupTransitions(transitions: PipelineTransition[]): TransitionGroup[] {
-  const groups: TransitionGroup[] = []
-  const groupMap = new Map<string, TransitionGroup>()
+type LabelGroup = {
+  label: string
+  color: string | null
+  routes: RouteEntry[]
+  minSort: number
+}
 
+function conditionKey(rules: ConditionRule[] | null): string {
+  if (!rules || rules.length === 0) return ''
+  return [...rules]
+    .sort((a, b) =>
+      `${a.field}${a.op}${String(a.value)}`.localeCompare(`${b.field}${b.op}${String(b.value)}`)
+    )
+    .map((r) => `${r.field}:${r.op}:${String(r.value ?? '')}`)
+    .join('|')
+}
+
+function groupByLabel(transitions: PipelineTransition[]): LabelGroup[] {
+  const labelMap = new Map<string, LabelGroup>()
   for (const tx of transitions) {
-    if (tx.group_label) {
-      const key = `${tx.from_state ?? ''}|${tx.group_label}`
-      if (!groupMap.has(key)) {
-        const g: TransitionGroup = {
-          key,
-          from_state: tx.from_state,
-          group_label: tx.group_label,
-          label: tx.label,
-          color: tx.color,
-          required_roles: tx.required_roles,
-          condition_rules: tx.condition_rules,
-          to_states: [],
-          ids: []
-        }
-        groupMap.set(key, g)
-        groups.push(g)
-      }
-      const g = groupMap.get(key)!
-      g.to_states.push(tx.to_state)
-      g.ids.push(tx.id)
+    if (!labelMap.has(tx.label)) {
+      labelMap.set(tx.label, { label: tx.label, color: tx.color, routes: [], minSort: tx.sort })
+    }
+    const grp = labelMap.get(tx.label)!
+    grp.minSort = Math.min(grp.minSort, tx.sort)
+    const ck = conditionKey(tx.condition_rules)
+    const route = grp.routes.find(
+      (r) => r.from_state === tx.from_state && conditionKey(r.condition_rules) === ck
+    )
+    if (route) {
+      route.ids.push(tx.id)
+      route.to_states.push(tx.to_state)
+      route.minSort = Math.min(route.minSort, tx.sort)
     } else {
-      groups.push({
-        key: tx.id,
+      grp.routes.push({
+        ids: [tx.id],
         from_state: tx.from_state,
-        group_label: null,
-        label: tx.label,
-        color: tx.color,
-        required_roles: tx.required_roles,
-        condition_rules: tx.condition_rules,
         to_states: [tx.to_state],
-        ids: [tx.id]
+        condition_rules: tx.condition_rules,
+        required_roles: tx.required_roles,
+        minSort: tx.sort
       })
     }
   }
+  const groups = Array.from(labelMap.values())
+  groups.sort((a, b) => a.minSort - b.minSort)
+  for (const g of groups) g.routes.sort((a, b) => a.minSort - b.minSort)
   return groups
+}
+
+// ─── Sortable transition items (context-based drag handle) ────────────────────
+
+// biome-ignore lint/suspicious/noExplicitAny: dnd-kit types
+type DragCtx = { listeners: any; attributes: any }
+const TransitionDragCtx = createContext<DragCtx | null>(null)
+
+function SortableTransitionItem({ id, children }: { id: string; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  return (
+    <TransitionDragCtx.Provider value={{ listeners, attributes }}>
+      <div
+        ref={setNodeRef}
+        style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
+      >
+        {children}
+      </div>
+    </TransitionDragCtx.Provider>
+  )
+}
+
+function TransitionDragHandle() {
+  const ctx = useContext(TransitionDragCtx)
+  return (
+    <button
+      type='button'
+      // biome-ignore lint/suspicious/noExplicitAny: dnd-kit listener spread
+      {...(ctx?.listeners as any)}
+      // biome-ignore lint/suspicious/noExplicitAny: dnd-kit attribute spread
+      {...(ctx?.attributes as any)}
+      className='cursor-grab touch-none text-slate-300 hover:text-slate-400 shrink-0'
+      tabIndex={-1}
+    >
+      <GripVertical className='h-3.5 w-3.5' />
+    </button>
+  )
+}
+
+// ─── Relation value combobox (multi-select) ───────────────────────────────────
+
+function toStringArray(v: unknown): string[] {
+  if (!v) return []
+  if (Array.isArray(v)) return v.map(String).filter(Boolean)
+  if (typeof v === 'string' && v.trim()) return [v]
+  return []
+}
+
+function RelationValueCombobox({
+  relatedCollection,
+  value,
+  onChange
+}: {
+  relatedCollection: string
+  value: string[]
+  onChange: (v: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 50)
+    else setQuery('')
+  }, [open])
+
+  const { data: colMeta } = useQuery({
+    queryKey: ['collection-meta', relatedCollection],
+    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
+    staleTime: 60_000,
+    enabled: !!relatedCollection
+  })
+
+  const actualFieldNames: string[] = (colMeta?.fields ?? []).map((f: CMSField) => f.field)
+  const displayTemplate: string | null = colMeta?.display_template ?? null
+  const LABEL_FALLBACKS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
+  const wantedFields = [
+    ...new Set(['id', ...extractTemplateFields(displayTemplate), ...LABEL_FALLBACKS])
+  ]
+  const safeFields = actualFieldNames.length
+    ? wantedFields.filter((f) => f === 'id' || actualFieldNames.includes(f)).join(',')
+    : 'id'
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['relation-picker-items', relatedCollection, safeFields],
+    queryFn: () =>
+      api
+        .get<{ data: Record<string, unknown>[] }>(`/items/${relatedCollection}`, {
+          params: { limit: 200, fields: safeFields }
+        })
+        .then((r) => r.data.data),
+    staleTime: 30_000,
+    // Fetch when dropdown opens OR when there are existing values to resolve labels
+    enabled: (open || value.length > 0) && !!actualFieldNames.length,
+    retry: false,
+    refetchOnWindowFocus: false
+  })
+
+  if (isError) {
+    return (
+      <Input
+        type='text'
+        value={value.join(', ')}
+        onChange={(e) =>
+          onChange(
+            e.target.value
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean)
+          )
+        }
+        placeholder='Value (comma-separated)'
+        className='h-8 text-[12px]'
+      />
+    )
+  }
+
+  const items = data ?? []
+
+  function labelFor(id: string): string {
+    const item = items.find((i) => String(i.id) === id)
+    return item ? renderDisplayTemplate(displayTemplate, item) : id
+  }
+
+  function toggle(id: string) {
+    onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id])
+  }
+
+  const filtered = query
+    ? items.filter((i) =>
+        renderDisplayTemplate(displayTemplate, i).toLowerCase().includes(query.toLowerCase())
+      )
+    : items
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <div className='relative w-full'>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            className='flex min-h-8 w-full flex-wrap items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-left hover:border-slate-300'
+          >
+            {value.length === 0 ? (
+              <span className='text-[12px] text-slate-400 px-0.5'>Select…</span>
+            ) : isLoading ? (
+              <span className='flex items-center gap-1 text-[12px] text-slate-400'>
+                <Loader2 className='h-3 w-3 animate-spin' />
+                Loading…
+              </span>
+            ) : (
+              value.map((id) => (
+                <span
+                  key={id}
+                  className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-nvr-navy'
+                >
+                  {labelFor(id)}
+                  <span
+                    role='button'
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      toggle(id)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); toggle(id) }
+                    }}
+                    className='cursor-pointer text-nvr-navy/50 hover:text-red-500'
+                  >
+                    ×
+                  </span>
+                </span>
+              ))
+            )}
+            <ChevronDown className='ml-auto h-3.5 w-3.5 shrink-0 text-slate-400' />
+          </button>
+        </PopoverTrigger>
+      </div>
+      <PopoverContent align='start' className='w-64 p-0' sideOffset={4}>
+        <div className='border-b border-slate-100 px-2 py-1.5'>
+          <div className='relative'>
+            <Search className='absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder='Search…'
+              className='h-7 w-full rounded-md bg-slate-50 pl-7 pr-2 text-[12px] placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan/40'
+            />
+          </div>
+        </div>
+        <div className='max-h-56 overflow-y-auto py-1'>
+          {isLoading ? (
+            <div className='flex items-center gap-2 px-3 py-2 text-[12px] text-slate-400'>
+              <Loader2 className='h-3.5 w-3.5 animate-spin' />
+              Loading…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className='px-3 py-2 text-[12px] text-slate-400'>No results</div>
+          ) : (
+            filtered.map((item) => {
+              const label = renderDisplayTemplate(displayTemplate, item)
+              const id = String(item.id)
+              const selected = value.includes(id)
+              return (
+                <button
+                  key={id}
+                  type='button'
+                  onClick={() => toggle(id)}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-[12px] hover:bg-slate-50 ${selected ? 'font-medium text-slate-800' : 'text-slate-600'}`}
+                >
+                  <Check
+                    className={`h-3.5 w-3.5 shrink-0 ${selected ? 'text-nvr-cyan' : 'opacity-0'}`}
+                  />
+                  {label}
+                </button>
+              )
+            })
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 // ─── Transition condition rules (conditional branching) ──────────────────────
@@ -660,6 +913,12 @@ const CONDITION_OPS: { value: ConditionOp; label: string }[] = [
 ]
 
 const NUMERIC_FIELD_TYPES = new Set(['integer', 'bigInteger', 'float', 'decimal', 'number'])
+const DATE_FIELD_TYPES = new Set(['date', 'dateTime', 'datetime', 'timestamp'])
+const BOOLEAN_FIELD_TYPES = new Set(['boolean'])
+
+// Per-rule metadata tracked in local state (not sent to server).
+// For top-level fields we derive from `fields`; this fills the gap for dotted paths.
+type RuleMeta = { type: string; relatedCollection?: string }
 
 function TransitionConditionsSection({
   rules,
@@ -671,18 +930,42 @@ function TransitionConditionsSection({
   collection?: string
 }) {
   const [expanded, setExpanded] = useState(rules.length > 0)
+  // Keyed by field path, populated when user picks via FieldPicker
+  const [fieldMeta, setFieldMeta] = useState<Record<string, RuleMeta>>({})
 
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', collection],
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!collection
   })
-  const fields: CMSField[] = colMeta?.fields?.filter((f: CMSField) => !f.hidden) ?? []
-  const fieldType = (name: string) => fields.find((f) => f.field === name)?.type ?? ''
+  const fields: CMSField[] = [...(colMeta?.fields?.filter((f: CMSField) => !f.hidden) ?? [])].sort(
+    (a, b) => a.field.localeCompare(b.field)
+  )
+  const relations: CMSRelation[] = colMeta?.relations ?? []
+
+  // Derive field type + related collection for a field path.
+  // Top-level: from loaded fields/relations. Dotted: from fieldMeta state.
+  function getRuleMeta(fieldPath: string): RuleMeta {
+    if (!fieldPath) return { type: '' }
+    if (!fieldPath.includes('.')) {
+      const f = fields.find((fl) => fl.field === fieldPath)
+      if (f) {
+        const rel = findM2ORelation(relations, collection ?? '', fieldPath)
+        return { type: f.type, relatedCollection: rel?.one_collection ?? undefined }
+      }
+    }
+    return fieldMeta[fieldPath] ?? { type: 'string' }
+  }
 
   const updateRule = (idx: number, patch: Partial<ConditionRule>) =>
     onChange(rules.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
   const removeRule = (idx: number) => onChange(rules.filter((_, i) => i !== idx))
+
+  // Friendly label for a field path (for FieldPicker valueLabel)
+  function fieldValueLabel(fieldPath: string): string {
+    if (!fieldPath) return ''
+    return fieldPath.split('.').map(titleCase).join(' → ')
+  }
 
   return (
     <div className='space-y-2 border-t border-slate-200 pt-3'>
@@ -714,22 +997,44 @@ function TransitionConditionsSection({
 
           {rules.map((rule, idx) => {
             const noValue = rule.op === 'null' || rule.op === 'nnull'
-            const numeric = NUMERIC_FIELD_TYPES.has(fieldType(rule.field))
+            const meta = getRuleMeta(rule.field)
+            const isNumeric = NUMERIC_FIELD_TYPES.has(meta.type)
+            const isDate = DATE_FIELD_TYPES.has(meta.type)
+            const isBoolean = BOOLEAN_FIELD_TYPES.has(meta.type)
+            const isRelation = !!meta.relatedCollection
+
             return (
               <div
                 // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
                 key={idx}
                 className='flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-2'
               >
-                <div className='flex-1 min-w-[140px]'>
-                  <SimpleCombobox
+                {/* Field picker */}
+                <div className='flex-1 min-w-[160px]'>
+                  <FieldPicker
+                    collection={collection ?? ''}
+                    fields={fields}
+                    relations={relations}
                     value={rule.field}
-                    onChange={(v) => updateRule(idx, { field: v })}
-                    options={fields.map((f) => ({ value: f.field, label: f.field }))}
+                    valueLabel={fieldValueLabel(rule.field)}
                     placeholder='Field…'
+                    onChange={(picked: PickedField) => {
+                      const path = picked.path.join('.')
+                      setFieldMeta((prev) => ({
+                        ...prev,
+                        [path]: {
+                          type: picked.fieldType,
+                          relatedCollection: picked.relatedCollection
+                        }
+                      }))
+                      updateRule(idx, { field: path, value: '' })
+                    }}
+                    onClear={() => updateRule(idx, { field: '', value: '' })}
                   />
                 </div>
-                <div className='w-40 shrink-0'>
+
+                {/* Operator */}
+                <div className='w-36 shrink-0'>
                   <SimpleCombobox
                     value={rule.op}
                     onChange={(v) => updateRule(idx, { op: (v || 'eq') as ConditionOp })}
@@ -737,17 +1042,45 @@ function TransitionConditionsSection({
                     placeholder='Operator…'
                   />
                 </div>
+
+                {/* Contextual value input */}
                 {!noValue && (
-                  <div className='flex-1 min-w-[100px]'>
-                    <Input
-                      type={numeric ? 'number' : 'text'}
-                      value={String(rule.value ?? '')}
-                      onChange={(e) => updateRule(idx, { value: e.target.value })}
-                      placeholder='Value'
-                      className='h-8 text-[12px]'
-                    />
+                  <div className='flex-1 min-w-[120px]'>
+                    {isRelation ? (
+                      <RelationValueCombobox
+                        relatedCollection={meta.relatedCollection!}
+                        value={toStringArray(rule.value)}
+                        onChange={(v) => updateRule(idx, { value: v.length === 1 ? v[0] : v })}
+                      />
+                    ) : isBoolean ? (
+                      <SimpleCombobox
+                        value={String(rule.value ?? '')}
+                        onChange={(v) => updateRule(idx, { value: v })}
+                        options={[
+                          { value: 'true', label: 'Yes' },
+                          { value: 'false', label: 'No' }
+                        ]}
+                        placeholder='Yes / No…'
+                      />
+                    ) : isDate ? (
+                      <Input
+                        type={meta.type === 'date' ? 'date' : 'datetime-local'}
+                        value={String(rule.value ?? '')}
+                        onChange={(e) => updateRule(idx, { value: e.target.value })}
+                        className='h-8 text-[12px]'
+                      />
+                    ) : (
+                      <Input
+                        type={isNumeric ? 'number' : 'text'}
+                        value={String(rule.value ?? '')}
+                        onChange={(e) => updateRule(idx, { value: e.target.value })}
+                        placeholder='Value'
+                        className='h-8 text-[12px]'
+                      />
+                    )}
                   </div>
                 )}
+
                 <button
                   type='button'
                   onClick={() => removeRule(idx)}
@@ -783,7 +1116,6 @@ interface TransitionFormData {
   label: string
   color: string | null
   required_roles: string[] | null
-  group_label: string | null
   condition_rules: ConditionRule[] | null
 }
 
@@ -791,7 +1123,7 @@ function TransitionForm({
   initial,
   states,
   collection,
-  existingGroupLabels = [],
+  fixedLabel,
   onSave,
   onCancel,
   saving
@@ -799,7 +1131,8 @@ function TransitionForm({
   initial: Partial<TransitionFormData>
   states: PipelineState[]
   collection?: string
-  existingGroupLabels?: string[]
+  /** When set, the label field is shown read-only (adding a route to existing group) */
+  fixedLabel?: string
   onSave: (data: TransitionFormData) => void
   onCancel: () => void
   saving?: boolean
@@ -807,23 +1140,24 @@ function TransitionForm({
   const [form, setForm] = useState<TransitionFormData>({
     from_state: initial.from_state ?? null,
     to_states: initial.to_states ?? [],
-    label: initial.label ?? '',
+    label: fixedLabel ?? initial.label ?? '',
     color: initial.color ?? null,
     required_roles: initial.required_roles ?? null,
-    group_label: initial.group_label ?? null,
     condition_rules: initial.condition_rules ?? null
   })
 
   const set = <K extends keyof TransitionFormData>(k: K, v: TransitionFormData[K]) =>
     setForm((f) => ({ ...f, [k]: v }))
 
-  const multiTarget = form.to_states.length > 1
-  const isValid =
-    form.to_states.length > 0 && form.label.trim() && (!multiTarget || !!form.group_label?.trim())
+  const isValid = form.to_states.length > 0 && form.label.trim()
 
   return (
     <div className='space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4'>
-      <div className='grid gap-3 sm:grid-cols-2'>
+      {fixedLabel ? (
+        <p className='text-[12px] font-medium text-slate-500'>
+          Adding route for <span className='font-semibold text-slate-800'>{fixedLabel}</span>
+        </p>
+      ) : (
         <div className='space-y-1.5'>
           <Label className='text-[12px]'>Button Label</Label>
           <Input
@@ -833,23 +1167,7 @@ function TransitionForm({
             className='h-8 text-[13px]'
           />
         </div>
-        <div className='space-y-1.5'>
-          <Label className='text-[12px]'>
-            Group Label
-            {!multiTarget && <span className='ml-1.5 text-slate-400'>(optional)</span>}
-            {multiTarget && <span className='ml-1.5 text-red-400'>required for multi-target</span>}
-          </Label>
-          <GroupLabelCombobox
-            value={form.group_label}
-            onChange={(v) => set('group_label', v)}
-            existingLabels={existingGroupLabels}
-          />
-          <p className='text-[11px] text-slate-400 leading-snug'>
-            Multi-target transitions share a group label and appear as a single dropdown button in
-            the action panel.
-          </p>
-        </div>
-      </div>
+      )}
 
       <div className='grid gap-3 sm:grid-cols-2'>
         <div className='space-y-1.5'>
@@ -901,10 +1219,12 @@ function TransitionForm({
         </div>
       </div>
 
-      <div className='space-y-1.5'>
-        <Label className='text-[12px]'>Color</Label>
-        <ColorPicker value={form.color} onChange={(c) => set('color', c)} />
-      </div>
+      {!fixedLabel && (
+        <div className='space-y-1.5'>
+          <Label className='text-[12px]'>Color</Label>
+          <ColorPicker value={form.color} onChange={(c) => set('color', c)} />
+        </div>
+      )}
 
       <TransitionConditionsSection
         rules={form.condition_rules ?? []}
@@ -1470,7 +1790,10 @@ export function PipelineEditPage() {
   const [addingState, setAddingState] = useState(false)
   const [editingState, setEditingState] = useState<PipelineState | null>(null)
   const [addingTransition, setAddingTransition] = useState(false)
-  const [editingGroup, setEditingGroup] = useState<TransitionGroup | null>(null)
+  const [addingRouteTo, setAddingRouteTo] = useState<string | null>(null) // label group
+  const [editingRoute, setEditingRoute] = useState<{ label: string; route: RouteEntry } | null>(
+    null
+  )
   const [bindingCollection, setBindingCollection] = useState('')
   const [stateField, setStateField] = useState('')
   const [expandedStateId, setExpandedStateId] = useState<string | null>(null)
@@ -1499,11 +1822,21 @@ export function PipelineEditPage() {
     enabled: !!id
   })
 
+  const [localGroupOrder, setLocalGroupOrder] = useState<string[]>([])
+  const [localRouteOrder, setLocalRouteOrder] = useState<Record<string, string[]>>({})
+
   // Sync localStateOrder from server whenever templateData.states changes
   useEffect(() => {
     const serverStates = templateData?.states ?? []
     setLocalStateOrder(serverStates.map((s) => s.id))
   }, [templateData?.states])
+
+  // Sync group/route order from server
+  useEffect(() => {
+    const groups = groupByLabel(templateData?.transitions ?? [])
+    setLocalGroupOrder(groups.map((g) => g.label))
+    setLocalRouteOrder(Object.fromEntries(groups.map((g) => [g.label, g.routes.map((r) => r.ids[0])])))
+  }, [templateData?.transitions])
 
   const { data: collectionsData } = useQuery<Collection[]>({
     queryKey: ['collections', 'tables_only'],
@@ -1579,10 +1912,9 @@ export function PipelineEditPage() {
         color: data.color,
         required_roles: data.required_roles,
         condition_rules: data.condition_rules,
+        group_label: null,
         actions: null,
-        sort: 0,
-        group_label:
-          data.to_states.length > 1 ? (data.group_label ?? data.label) : (data.group_label ?? null)
+        sort: 0
       }
       for (const to_state of data.to_states) {
         await api.post(`/pipelines/${id}/transitions`, { ...shared, to_state })
@@ -1595,48 +1927,87 @@ export function PipelineEditPage() {
     onError: () => toast.error('Failed to add transition')
   })
 
-  const updateTransitionGroup = useMutation({
-    mutationFn: async ({ group, data }: { group: TransitionGroup; data: TransitionFormData }) => {
-      const shared = {
-        from_state: data.from_state,
-        label: data.label,
-        color: data.color,
-        required_roles: data.required_roles,
-        condition_rules: data.condition_rules,
-        group_label:
-          data.to_states.length > 1 ? (data.group_label ?? data.label) : (data.group_label ?? null)
-      }
-      // Delete all old rows in the group, then create new ones
-      for (const txId of group.ids) {
-        await api.delete(`/pipelines/transitions/${txId}`)
-      }
+  // Add a new route (from→to pair) to an existing label group
+  const addRoute = useMutation({
+    mutationFn: async ({
+      labelGroup,
+      data
+    }: {
+      labelGroup: LabelGroup
+      data: TransitionFormData
+    }) => {
       for (const to_state of data.to_states) {
         await api.post(`/pipelines/${id}/transitions`, {
-          ...shared,
-          to_state,
+          from_state: data.from_state,
+          label: labelGroup.label,
+          color: labelGroup.color,
+          required_roles: data.required_roles,
+          condition_rules: data.condition_rules,
+          group_label: null,
           actions: null,
-          sort: 0
+          sort: Math.max(labelGroup.minSort, ...labelGroup.routes.map((r) => r.minSort)),
+          to_state
         })
       }
     },
     onSuccess: () => {
       invalidate()
-      setEditingGroup(null)
+      setAddingRouteTo(null)
     },
-    onError: () => toast.error('Failed to update transition')
+    onError: () => toast.error('Failed to add route')
   })
 
-  const deleteTransitionGroup = useMutation({
-    mutationFn: async (ids: string[]) => {
-      for (const txId of ids) {
-        await api.delete(`/pipelines/transitions/${txId}`)
+  const updateRoute = useMutation({
+    mutationFn: async ({ route, data }: { route: RouteEntry; data: TransitionFormData }) => {
+      for (const txId of route.ids) await api.delete(`/pipelines/transitions/${txId}`)
+      for (const to_state of data.to_states) {
+        await api.post(`/pipelines/${id}/transitions`, {
+          from_state: data.from_state,
+          label: data.label,
+          color: data.color,
+          required_roles: data.required_roles,
+          condition_rules: data.condition_rules,
+          group_label: null,
+          actions: null,
+          sort: 0,
+          to_state
+        })
       }
     },
     onSuccess: () => {
       invalidate()
-      toast.success('Transition deleted')
+      setEditingRoute(null)
     },
-    onError: () => toast.error('Failed to delete transition')
+    onError: () => toast.error('Failed to update route')
+  })
+
+  const deleteRoute = useMutation({
+    mutationFn: async (ids: string[]) => {
+      for (const txId of ids) await api.delete(`/pipelines/transitions/${txId}`)
+    },
+    onSuccess: () => {
+      invalidate()
+      toast.success('Deleted')
+    },
+    onError: () => toast.error('Failed to delete')
+  })
+
+  const updateTransitionSort = useMutation({
+    mutationFn: async (updates: { id: string; sort: number }[]) => {
+      for (const { id, sort } of updates) {
+        await api.patch(`/pipelines/transitions/${id}`, { sort })
+      }
+    },
+    onSuccess: () => invalidate(),
+    onError: () => toast.error('Failed to reorder')
+  })
+
+  const patchGroupColor = useMutation({
+    mutationFn: async ({ ids, color }: { ids: string[]; color: string | null }) => {
+      for (const txId of ids) await api.patch(`/pipelines/transitions/${txId}`, { color })
+    },
+    onSuccess: () => invalidate(),
+    onError: () => toast.error('Failed to update color')
   })
 
   // ─── Binding mutations ──────────────────────────────────────────────────
@@ -1685,6 +2056,48 @@ export function PipelineEditPage() {
       : states
 
   const stateById = new Map(states.map((s) => [s.id, s]))
+  const groupsMap = new Map(groupByLabel(transitions).map((g) => [g.label, g]))
+  const displayGroups = localGroupOrder
+    .map((label) => groupsMap.get(label))
+    .filter((g): g is LabelGroup => !!g)
+
+  function applySortUpdates(
+    groupOrder: string[],
+    routeOrder: Record<string, string[]>,
+    gMap: Map<string, LabelGroup>
+  ) {
+    const updates: { id: string; sort: number }[] = []
+    let i = 0
+    for (const label of groupOrder) {
+      const grp = gMap.get(label)
+      if (!grp) continue
+      for (const routeId of (routeOrder[label] ?? [])) {
+        const route = grp.routes.find((r) => r.ids[0] === routeId)
+        if (!route) continue
+        for (const txId of route.ids) updates.push({ id: txId, sort: i })
+        i++
+      }
+    }
+    updateTransitionSort.mutate(updates)
+  }
+
+  function handleGroupDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const next = arrayMove(localGroupOrder, localGroupOrder.indexOf(active.id as string), localGroupOrder.indexOf(over.id as string))
+    setLocalGroupOrder(next)
+    applySortUpdates(next, localRouteOrder, groupsMap)
+  }
+
+  function handleRouteDragEnd(label: string, event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const cur = localRouteOrder[label] ?? []
+    const next = arrayMove(cur, cur.indexOf(active.id as string), cur.indexOf(over.id as string))
+    const nextRouteOrder = { ...localRouteOrder, [label]: next }
+    setLocalRouteOrder(nextRouteOrder)
+    applySortUpdates(localGroupOrder, nextRouteOrder, groupsMap)
+  }
   const hasMatrix = bindings.some((b) => (b.dimensions ?? []).length > 0)
   const boundCollections = new Set(bindings.map((b) => b.collection))
   const availableCollections = collections.filter((c) => !boundCollections.has(c.collection))
@@ -1923,84 +2336,140 @@ export function PipelineEditPage() {
               </p>
             )}
 
-            <div className='space-y-2'>
-              {groupTransitions(transitions).map((grp) => {
-                const fromState = grp.from_state ? stateById.get(grp.from_state) : null
-                const existingGroupLabels = [
-                  ...new Set(transitions.map((t) => t.group_label).filter(Boolean) as string[])
-                ]
+            <div className='space-y-3'>
+              <DndContext sensors={stateSensors} collisionDetection={closestCenter} onDragEnd={handleGroupDragEnd}>
+                <SortableContext items={localGroupOrder} strategy={verticalListSortingStrategy}>
+              {displayGroups.map((grp) => {
+                const routeMap = new Map(grp.routes.map((r) => [r.ids[0], r]))
+                const routeIds = localRouteOrder[grp.label] ?? grp.routes.map((r) => r.ids[0])
+                const displayRoutes = routeIds.map((rid) => routeMap.get(rid)).filter((r): r is RouteEntry => !!r)
                 return (
-                  <div key={grp.key}>
-                    {editingGroup?.key === grp.key ? (
-                      <TransitionForm
-                        initial={{
-                          from_state: grp.from_state,
-                          to_states: grp.to_states,
-                          label: grp.label,
-                          color: grp.color,
-                          required_roles: grp.required_roles,
-                          group_label: grp.group_label,
-                          condition_rules: grp.condition_rules
-                        }}
-                        states={states}
-                        collection={bindings[0]?.collection}
-                        existingGroupLabels={existingGroupLabels}
-                        saving={updateTransitionGroup.isPending}
-                        onSave={(data) => updateTransitionGroup.mutate({ group: grp, data })}
-                        onCancel={() => setEditingGroup(null)}
-                      />
-                    ) : (
-                      <div className='group flex items-center gap-3 rounded-lg border border-slate-100 px-3 py-2.5 hover:border-slate-200 hover:bg-slate-50'>
-                        {grp.color && (
-                          <div
-                            className='h-3 w-3 rounded-full shrink-0'
-                            style={{ backgroundColor: grp.color }}
+                <SortableTransitionItem key={grp.label} id={grp.label}>
+                <div
+                  className='overflow-hidden rounded-lg border border-slate-200 bg-white'
+                >
+                  {/* Label group header */}
+                  <div className='group/hdr flex items-center gap-2.5 border-b border-slate-100 bg-slate-50/60 px-3 py-2'>
+                    <TransitionDragHandle />
+                    {/* Group color swatch — click to change */}
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type='button'
+                          title='Change group color'
+                          className='h-3 w-3 shrink-0 rounded-full border border-slate-300 hover:scale-110 transition-transform'
+                          style={{ backgroundColor: grp.color ?? '#e2e8f0' }}
+                        />
+                      </PopoverTrigger>
+                      <PopoverContent align='start' className='w-auto p-3' sideOffset={6}>
+                        <p className='mb-2 text-[11px] font-medium text-slate-500'>Group color</p>
+                        <ColorPicker
+                          value={grp.color}
+                          onChange={(c) => {
+                            const allIds = grp.routes.flatMap((r) => r.ids)
+                            patchGroupColor.mutate({ ids: allIds, color: c })
+                          }}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                    <span className='flex-1 text-[13px] font-semibold text-slate-800'>
+                      {grp.label}
+                    </span>
+                    <span className='text-[11px] text-slate-400 tabular-nums'>
+                      {grp.routes.length} route{grp.routes.length !== 1 ? 's' : ''}
+                    </span>
+                    <button
+                      type='button'
+                      onClick={() => setAddingRouteTo(grp.label)}
+                      className='flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-nvr-cyan opacity-0 hover:bg-nvr-cyan/10 group-hover/hdr:opacity-100 transition-opacity'
+                    >
+                      <Plus className='h-3 w-3' />
+                      Add route
+                    </button>
+                    <button
+                      type='button'
+                      onClick={() => {
+                        const allIds = grp.routes.flatMap((r) => r.ids)
+                        if (confirm(`Delete all routes for "${grp.label}"?`))
+                          deleteRoute.mutate(allIds)
+                      }}
+                      className='rounded p-1 text-slate-300 opacity-0 hover:text-red-500 group-hover/hdr:opacity-100 transition-opacity'
+                    >
+                      <Trash2 className='h-3.5 w-3.5' />
+                    </button>
+                  </div>
+
+                  {/* Route rows */}
+                  <DndContext sensors={stateSensors} collisionDetection={closestCenter} onDragEnd={(e) => handleRouteDragEnd(grp.label, e)}>
+                    <SortableContext items={routeIds} strategy={verticalListSortingStrategy}>
+                  {displayRoutes.map((route) => {
+                    const routeKey = `${grp.label}|${route.from_state ?? '_any_'}|${route.ids[0]}`
+                    const fromState = route.from_state ? stateById.get(route.from_state) : null
+                    const isEditing =
+                      editingRoute?.label === grp.label &&
+                      editingRoute.route.ids[0] === route.ids[0]
+
+                    if (isEditing) {
+                      return (
+                        <div key={routeKey} className='border-b border-slate-100 last:border-0 p-3'>
+                          <TransitionForm
+                            initial={{
+                              from_state: route.from_state,
+                              to_states: route.to_states,
+                              label: grp.label,
+                              color: grp.color,
+                              required_roles: route.required_roles,
+                              condition_rules: route.condition_rules
+                            }}
+                            fixedLabel={grp.label}
+                            states={states}
+                            collection={bindings[0]?.collection}
+                            saving={updateRoute.isPending}
+                            onSave={(data) => updateRoute.mutate({ route, data })}
+                            onCancel={() => setEditingRoute(null)}
                           />
-                        )}
-                        <div className='flex-1 min-w-0 flex items-center gap-2 flex-wrap'>
-                          <span className='text-[13px] font-semibold text-slate-800'>
-                            {grp.label}
-                          </span>
-                          {grp.group_label && grp.to_states.length > 1 && (
-                            <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500'>
-                              {grp.group_label}
-                            </span>
+                        </div>
+                      )
+                    }
+
+                    return (
+                      <SortableTransitionItem key={routeKey} id={route.ids[0]}>
+                      <div
+                        className='group/row flex items-center gap-2 border-b border-slate-100 px-3 py-2 last:border-0 hover:bg-slate-50'
+                      >
+                        <TransitionDragHandle />
+                        <div className='flex flex-1 min-w-0 flex-wrap items-center gap-1.5 text-[12px]'>
+                          {fromState ? (
+                            <StateBadge state={fromState} />
+                          ) : (
+                            <span className='italic text-slate-400 text-[11px]'>any state</span>
                           )}
-                          {(grp.condition_rules ?? []).length > 0 && (
+                          <ArrowRight className='h-3 w-3 text-slate-300 shrink-0' />
+                          {route.to_states.map((sid, i) => {
+                            const s = stateById.get(sid)
+                            return s ? (
+                              <span key={sid} className='flex items-center gap-1'>
+                                {i > 0 && <span className='text-slate-300'>·</span>}
+                                <StateBadge state={s} small />
+                              </span>
+                            ) : null
+                          })}
+                          {(route.condition_rules ?? []).length > 0 && (
                             <span
-                              className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-nvr-navy'
-                              title={(grp.condition_rules ?? [])
-                                .map((r) => `${r.field} ${r.op} ${String(r.value ?? '')}`.trim())
+                              className='ml-1 inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy'
+                              title={(route.condition_rules ?? [])
+                                .map((r) => `${r.field} ${r.op} ${String(r.value ?? '')}`)
                                 .join(' AND ')}
                             >
-                              <Filter className='h-3 w-3' />
-                              {(grp.condition_rules ?? []).length}
+                              <Filter className='h-2.5 w-2.5' />
+                              {(route.condition_rules ?? []).length}
                             </span>
                           )}
-                          <span className='text-[12px] text-slate-400'>
-                            {fromState ? (
-                              <StateBadge state={fromState} />
-                            ) : (
-                              <span className='italic text-slate-400'>any state</span>
-                            )}
-                          </span>
-                          <ArrowRight className='h-3 w-3 text-slate-300 shrink-0' />
-                          <span className='flex items-center gap-1 flex-wrap'>
-                            {grp.to_states.map((sid, i) => {
-                              const s = stateById.get(sid)
-                              return s ? (
-                                <span key={sid} className='flex items-center gap-1'>
-                                  {i > 0 && <span className='text-slate-300 text-[11px]'>/</span>}
-                                  <StateBadge state={s} />
-                                </span>
-                              ) : null
-                            })}
-                          </span>
                         </div>
-                        <div className='flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0'>
+                        <div className='flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100'>
                           <button
                             type='button'
-                            onClick={() => setEditingGroup(grp)}
+                            onClick={() => setEditingRoute({ label: grp.label, route })}
                             className='rounded p-1 text-slate-400 hover:text-slate-700'
                           >
                             <Pencil className='h-3.5 w-3.5' />
@@ -2008,12 +2477,7 @@ export function PipelineEditPage() {
                           <button
                             type='button'
                             onClick={() => {
-                              const label =
-                                grp.to_states.length > 1
-                                  ? `group "${grp.label}" (${grp.to_states.length} transitions)`
-                                  : `"${grp.label}"`
-                              if (confirm(`Delete transition ${label}?`))
-                                deleteTransitionGroup.mutate(grp.ids)
+                              if (confirm('Delete this route?')) deleteRoute.mutate(route.ids)
                             }}
                             className='rounded p-1 text-slate-400 hover:text-red-500'
                           >
@@ -2021,19 +2485,37 @@ export function PipelineEditPage() {
                           </button>
                         </div>
                       </div>
-                    )}
-                  </div>
-                )
-              })}
+                      </SortableTransitionItem>
+                    )
+                  })}
+                    </SortableContext>
+                  </DndContext>
+
+                  {/* Add route form */}
+                  {addingRouteTo === grp.label && (
+                    <div className='border-t border-slate-100 p-3'>
+                      <TransitionForm
+                        initial={{ color: grp.color }}
+                        fixedLabel={grp.label}
+                        states={states}
+                        collection={bindings[0]?.collection}
+                        saving={addRoute.isPending}
+                        onSave={(data) => addRoute.mutate({ labelGroup: grp, data })}
+                        onCancel={() => setAddingRouteTo(null)}
+                      />
+                    </div>
+                  )}
+                </div>
+                </SortableTransitionItem>
+                )})}
+                </SortableContext>
+              </DndContext>
 
               {addingTransition && (
                 <TransitionForm
                   initial={{}}
                   states={states}
                   collection={bindings[0]?.collection}
-                  existingGroupLabels={[
-                    ...new Set(transitions.map((t) => t.group_label).filter(Boolean) as string[])
-                  ]}
                   saving={addTransitions.isPending}
                   onSave={(data) => addTransitions.mutate(data)}
                   onCancel={() => setAddingTransition(false)}

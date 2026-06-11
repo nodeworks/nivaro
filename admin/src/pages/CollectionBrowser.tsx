@@ -1,4 +1,4 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import {
   Check,
@@ -23,6 +23,7 @@ import { toast } from 'sonner'
 import { BulkActionBar } from '@/components/bulk-action-bar'
 import { ColumnPicker } from '@/components/column-picker'
 import { DataTable } from '@/components/data-table'
+import { FieldPicker } from '@/components/field-picker'
 import { type ActiveFilter, FilterBar } from '@/components/filter-bar'
 import { RelationLabel } from '@/components/relation-label'
 import { SavedViews } from '@/components/saved-views'
@@ -738,7 +739,7 @@ export function CollectionBrowserPage() {
   return (
     <>
       {/* Page header */}
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-6 py-3.5'>
+      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-6 py-2.5'>
         <div className='flex items-center justify-between gap-3'>
           <div className='flex items-center gap-1.5'>
             <button
@@ -894,7 +895,7 @@ export function CollectionBrowserPage() {
           )}
         </div>
       ) : (
-        <div className='p-6'>
+        <div className='p-4'>
           {hierarchyScope && (
             <div className='mb-3 flex items-center gap-2 text-[13px]'>
               <span className='text-slate-500 shrink-0'>
@@ -929,28 +930,71 @@ export function CollectionBrowserPage() {
               )}
             </div>
           )}
-          {/* Saved views + AI query bar */}
-          <div className='mb-2 flex flex-wrap items-center justify-between gap-2'>
-            <SavedViews
-              collection={collection!}
-              currentState={{ filters: activeFilters, sort, columns: displayColumns }}
-              onApply={(state) => {
-                setActiveFilters(state.filters ?? [])
-                setSort(state.sort ?? '')
-                if (state.columns && state.columns.length > 0) {
-                  const allKeys = allNonHiddenFields.map((f) => f.field)
-                  const valid = state.columns.filter((k) => allKeys.includes(k))
-                  if (valid.length > 0) setDisplayColumns(valid)
-                }
-                setAiResult(null)
-                setAiPage(1)
-                setPage(1)
-              }}
-            />
-            <div className='flex items-center gap-1.5'>
+          {/* Filter toolbar — single row: saved views + filters + AI */}
+          <div className='mb-3'>
+            <div className='flex items-center gap-2'>
+              <SavedViews
+                collection={collection!}
+                currentState={{ filters: activeFilters, sort, columns: displayColumns }}
+                onApply={(state) => {
+                  setActiveFilters(state.filters ?? [])
+                  setSort(state.sort ?? '')
+                  if (state.columns && state.columns.length > 0) {
+                    const allKeys = allNonHiddenFields.map((f) => f.field)
+                    const valid = state.columns.filter((k) => allKeys.includes(k))
+                    if (valid.length > 0) setDisplayColumns(valid)
+                  }
+                  setAiResult(null)
+                  setAiPage(1)
+                  setPage(1)
+                }}
+              />
+              <div className='min-w-0 flex-1'>
+                <FilterBar
+                  collection={collection!}
+                  fields={allNonHiddenFields}
+                  relations={relations}
+                  value={activeFilters}
+                  onChange={(filters) => {
+                    setActiveFilters(filters)
+                    setPage(1)
+                  }}
+                  searchValue={search}
+                  onSearchChange={(v) => {
+                    setSearch(v)
+                    setPage(1)
+                  }}
+                />
+              </div>
+              {hasActiveAtRiskRules && (
+                <button
+                  type='button'
+                  onClick={() => setAtRiskOnly((v) => !v)}
+                  className={cn(
+                    'inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors',
+                    atRiskOnly
+                      ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-background dark:text-slate-300 dark:hover:bg-slate-900'
+                  )}
+                >
+                  <Flag className='h-3 w-3' />
+                  At risk ({flaggedCount}){atRiskOnly && <X className='h-3 w-3' />}
+                </button>
+              )}
+              {isAdmin && (
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='h-7 shrink-0 px-2 text-[11px] text-slate-500 hover:text-nvr-navy dark:hover:text-nvr-cyan'
+                  onClick={() => setManageRulesOpen((v) => !v)}
+                >
+                  <ShieldAlert className='mr-1 h-3 w-3' />
+                  {manageRulesOpen ? 'Close rules' : 'Rules'}
+                </Button>
+              )}
               {aiOpen ? (
                 <form
-                  className='flex items-center gap-1.5'
+                  className='flex shrink-0 items-center gap-1.5'
                   onSubmit={(e) => {
                     e.preventDefault()
                     if (!aiPrompt.trim() || aiQuery.isPending) return
@@ -961,8 +1005,8 @@ export function CollectionBrowserPage() {
                   <Input
                     value={aiPrompt}
                     onChange={(e) => setAiPrompt(e.target.value)}
-                    placeholder='show overdue items assigned to me…'
-                    className='h-7 w-[280px] text-[12px] focus-visible:ring-nvr-cyan'
+                    placeholder='show overdue items…'
+                    className='h-7 w-[220px] text-[12px] focus-visible:ring-nvr-cyan'
                     autoFocus
                     onKeyDown={(e) => {
                       if (e.key === 'Escape') {
@@ -996,7 +1040,7 @@ export function CollectionBrowserPage() {
                 <Button
                   variant='ghost'
                   size='sm'
-                  className='h-7 px-2 text-[12px] text-slate-500 hover:text-nvr-navy dark:hover:text-nvr-cyan'
+                  className='h-7 shrink-0 px-2 text-[11px] text-slate-500 hover:text-nvr-navy dark:hover:text-nvr-cyan'
                   onClick={() => setAiOpen(true)}
                 >
                   <Sparkles className='mr-1 h-3.5 w-3.5 text-nvr-cyan' />
@@ -1004,81 +1048,36 @@ export function CollectionBrowserPage() {
                 </Button>
               )}
             </div>
-          </div>
-          {aiResult && (
-            <div className='mb-2 flex items-center gap-2 rounded-md border border-nvr-cyan/30 bg-nvr-cyan/5 px-3 py-1.5'>
-              <Sparkles className='h-3.5 w-3.5 shrink-0 text-nvr-cyan' />
-              <span className='flex-1 truncate text-[12px] text-slate-600 dark:text-slate-300'>
-                {aiResult.interpreted || 'AI results'}{' '}
-                <span className='text-slate-400'>
-                  — {aiTotal} result{aiTotal === 1 ? '' : 's'}
+            {aiResult && (
+              <div className='mt-1.5 flex items-center gap-2 rounded-md border border-nvr-cyan/30 bg-nvr-cyan/5 px-3 py-1.5'>
+                <Sparkles className='h-3.5 w-3.5 shrink-0 text-nvr-cyan' />
+                <span className='flex-1 truncate text-[12px] text-slate-600 dark:text-slate-300'>
+                  {aiResult.interpreted || 'AI results'}{' '}
+                  <span className='text-slate-400'>
+                    — {aiTotal} result{aiTotal === 1 ? '' : 's'}
+                  </span>
                 </span>
-              </span>
-              <button
-                type='button'
-                onClick={() => {
-                  setAiResult(null)
-                  setAiPage(1)
-                }}
-                className='inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 text-[11px] font-medium text-nvr-navy transition-colors hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
-              >
-                <X className='h-3 w-3' />
-                Clear AI results
-              </button>
-            </div>
-          )}
-          <div className='mb-3'>
-            <FilterBar
-              collection={collection!}
-              fields={allNonHiddenFields}
-              relations={relations}
-              value={activeFilters}
-              onChange={(filters) => {
-                setActiveFilters(filters)
-                setPage(1)
-              }}
-              searchValue={search}
-              onSearchChange={(v) => {
-                setSearch(v)
-                setPage(1)
-              }}
-            />
-            {(hasActiveAtRiskRules || isAdmin) && (
-              <div className='mt-2 flex flex-wrap items-center gap-2'>
-                {hasActiveAtRiskRules && (
-                  <button
-                    type='button'
-                    onClick={() => setAtRiskOnly((v) => !v)}
-                    className={cn(
-                      'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors',
-                      atRiskOnly
-                        ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400'
-                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-background dark:text-slate-300 dark:hover:bg-slate-900'
-                    )}
-                  >
-                    <Flag className='h-3 w-3' />
-                    At risk ({flaggedCount}){atRiskOnly && <X className='h-3 w-3' />}
-                  </button>
-                )}
-                {isAdmin && (
-                  <Button
-                    variant='ghost'
-                    size='sm'
-                    className='h-6 px-2 text-[11px] text-slate-500 hover:text-nvr-navy dark:hover:text-nvr-cyan'
-                    onClick={() => setManageRulesOpen((v) => !v)}
-                  >
-                    <ShieldAlert className='mr-1 h-3 w-3' />
-                    {manageRulesOpen ? 'Close rules' : 'Manage rules'}
-                  </Button>
-                )}
+                <button
+                  type='button'
+                  onClick={() => {
+                    setAiResult(null)
+                    setAiPage(1)
+                  }}
+                  className='inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 text-[11px] font-medium text-nvr-navy transition-colors hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
+                >
+                  <X className='h-3 w-3' />
+                  Clear
+                </button>
               </div>
             )}
             {isAdmin && manageRulesOpen && collection && (
-              <AtRiskRulesPanel
-                collection={collection}
-                fields={allNonHiddenFields}
-                relations={relations}
-              />
+              <div className='mt-2'>
+                <AtRiskRulesPanel
+                  collection={collection}
+                  fields={allNonHiddenFields}
+                  relations={relations}
+                />
+              </div>
             )}
           </div>
           <DataTable
@@ -1358,35 +1357,6 @@ function AtRiskRulesPanel({
     onError: () => toast.error('Failed to delete rule')
   })
 
-  const m2oRels = relations.filter(
-    (r) => r.many_collection === collection && r.junction_field === null && r.one_collection
-  )
-
-  // Fetch fields for each related collection so we can offer dotted-path options
-  const relatedMetaResults = useQueries({
-    queries: m2oRels.map((r) => ({
-      queryKey: ['collection-meta', r.one_collection],
-      queryFn: () => api.get(`/collections/${r.one_collection}`).then((res) => res.data.data),
-      staleTime: 10 * 60 * 1000
-    }))
-  })
-
-  const relatedFieldOptions = m2oRels.flatMap((r, i) => {
-    const meta = relatedMetaResults[i]?.data as { fields?: CMSField[] } | undefined
-    if (!meta?.fields) return []
-    return meta.fields
-      .filter((f) => !f.hidden)
-      .map((f) => ({
-        value: `${r.many_field}.${f.field}`,
-        label: `${r.many_field}.${f.field} (${r.one_collection})`
-      }))
-  })
-
-  const fieldOptions = [
-    ...fields.map((f) => ({ value: f.field, label: `${f.field} (${f.type})` })),
-    ...relatedFieldOptions
-  ]
-
   const opOptions = AT_RISK_OPS.map((o) => ({ value: o.value, label: o.label }))
 
   const draftValid =
@@ -1533,10 +1503,13 @@ function AtRiskRulesPanel({
             {draft.conditions.map((c, i) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: condition rows are positional
               <div key={i} className='flex flex-wrap items-center gap-1.5'>
-                <RuleCombobox
+                <FieldPicker
+                  collection={collection}
+                  fields={fields}
+                  relations={relations}
                   value={c.field}
-                  onChange={(v) => updateCondition(i, { field: v })}
-                  options={fieldOptions}
+                  onChange={(picked) => updateCondition(i, { field: picked.path.join('.') })}
+                  onClear={() => updateCondition(i, { field: '' })}
                   placeholder='Field…'
                 />
                 <RuleCombobox
