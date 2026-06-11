@@ -20,8 +20,8 @@ export async function up(knex: Knex): Promise<void> {
   // Drop old UNIQUE(collection, key) — cloning layouts would produce rows with same
   // collection+key but different layout_id, violating the original constraint.
   await knex.raw(`
-    IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'uq_field_group_col_key' AND object_id = OBJECT_ID('nivaro_field_groups'))
-      DROP INDEX uq_field_group_col_key ON nivaro_field_groups
+    IF EXISTS (SELECT 1 FROM sys.objects WHERE name = 'uq_field_group_col_key' AND type = 'UQ')
+      ALTER TABLE nivaro_field_groups DROP CONSTRAINT uq_field_group_col_key
   `)
   // New partial unique: within a given layout, keys must be unique per collection.
   // Rows with layout_id IS NULL (legacy, no layout) are excluded from this constraint.
@@ -86,8 +86,8 @@ export async function down(knex: Knex): Promise<void> {
   `)
   // Restore the original constraint (covers legacy rows that have layout_id IS NULL after column drop)
   await knex.raw(`
-    CREATE UNIQUE INDEX uq_field_group_col_key ON nivaro_field_groups (collection, [key])
-    WHERE layout_id IS NULL
+    IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE name = 'uq_field_group_col_key' AND type = 'UQ')
+      ALTER TABLE nivaro_field_groups ADD CONSTRAINT uq_field_group_col_key UNIQUE (collection, [key])
   `)
 
   await knex.schema.alterTable('nivaro_field_groups', (t) => {
