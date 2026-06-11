@@ -350,6 +350,7 @@ export function useFormSchema(
 
     const reqId = ++reqIdRef.current
     let active = true
+    setSchema(null)
     setLoading(true)
     setError(null)
 
