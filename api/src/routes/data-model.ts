@@ -1150,14 +1150,17 @@ export async function dataModelRoutes(app: FastifyInstance) {
         try {
           await db.raw(`
             DECLARE @fk NVARCHAR(256)
+            DECLARE @sql NVARCHAR(MAX)
             SELECT @fk = fk.name
             FROM sys.foreign_keys fk
             INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
             INNER JOIN sys.columns c ON fkc.parent_object_id = c.object_id AND fkc.parent_column_id = c.column_id
             WHERE fk.parent_object_id = OBJECT_ID(?)
               AND c.name = ?
-            IF @fk IS NOT NULL
-              EXEC('ALTER TABLE [' + ? + '] DROP CONSTRAINT [' + @fk + ']')
+            IF @fk IS NOT NULL BEGIN
+              SET @sql = N'ALTER TABLE ' + QUOTENAME(?) + N' DROP CONSTRAINT ' + QUOTENAME(@fk)
+              EXEC sp_executesql @sql
+            END
           `, [relation.many_collection, relation.many_field, relation.many_collection])
         } catch {
           // FK may not exist — non-fatal
