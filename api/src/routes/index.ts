@@ -14,6 +14,7 @@ import { attributesRoutes } from './attributes.js'
 import { authRoutes } from './auth.js'
 import { blackoutDatesRoutes } from './blackout-dates.js'
 import { bulkActionsRoutes } from './bulk-actions.js'
+import { collectionLayoutsRoutes } from './collection-layouts.js'
 import { collectionPresetsRoutes } from './collection-presets.js'
 import { collectionsRoutes } from './collections.js'
 import { commentsRoutes } from './comments.js'
@@ -46,7 +47,7 @@ import { issuesRoutes } from './issues.js'
 import { itemActionsRoutes } from './item-actions.js'
 import { itemLocksRoutes } from './item-locks.js'
 import { itemsRoutes } from './items.js'
-import { lineItemsRoutes } from './line-items.js'
+import { subRowsRoutes } from './sub-rows.js'
 import { mailRoutes } from './mail.js'
 import { messageActionsRoutes } from './message-actions.js'
 import { notificationSubscriptionsRoutes } from './notification-subscriptions.js'
@@ -154,11 +155,12 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(scheduledChangesRoutes, { prefix: '/scheduled-changes' })
   await app.register(fieldConfigRoutes, { prefix: '/field-config' })
   await app.register(fieldGroupsRoutes, { prefix: '/field-groups' })
+  await app.register(collectionLayoutsRoutes, { prefix: '/collection-layouts' })
   await app.register(virtualCollectionsRoutes, { prefix: '/virtual-collections' })
   await app.register(recordTemplatesRoutes, { prefix: '/record-templates' })
   await app.register(collectionPresetsRoutes, { prefix: '/collection-presets' })
   await app.register(fieldTranslationsRoutes, { prefix: '/field-translations' })
-  await app.register(lineItemsRoutes, { prefix: '/line-items' })
+  await app.register(subRowsRoutes, { prefix: '/sub-rows' })
   await app.register(addendumsRoutes, { prefix: '/addendums' })
   await app.register(tasksRoutes, { prefix: '/tasks' })
   await app.register(approvalsRoutes, { prefix: '/approvals' })
