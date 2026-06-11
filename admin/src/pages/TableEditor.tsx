@@ -4518,13 +4518,21 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
     [qc, tableName]
   )
 
-  const { data: layouts = [] } = useQuery<CollectionLayout[]>({
+  const { data: layouts = [], isSuccess: layoutsLoaded } = useQuery<CollectionLayout[]>({
     queryKey: ['collection-layouts', tableName],
     queryFn: () =>
       api.get<{ data: CollectionLayout[] }>('/collection-layouts', { params: { collection: tableName } })
         .then((r) => r.data.data ?? []),
     enabled: !!tableName
   })
+
+  // Auto-seed "Default" layout for collections that have none yet
+  useEffect(() => {
+    if (layoutsLoaded && layouts.length === 0 && tableName) {
+      api.post('/collection-layouts', { collection: tableName, name: 'Default' })
+        .then(() => qc.invalidateQueries({ queryKey: ['collection-layouts', tableName] }))
+    }
+  }, [layoutsLoaded, layouts.length, tableName, qc])
 
   const activeLayout = layouts.find((l) => l.is_active) ?? layouts[0] ?? null
   const [selectedId, setSelectedId] = useState<number | null>(null)
