@@ -31,6 +31,7 @@ interface FieldRow {
   remote_options_config: string | null
   repeater_schema: string | null
   is_translatable: number | boolean | null
+  sort?: number | null
 }
 
 function formatFieldConfig(row: FieldRow) {
@@ -147,14 +148,17 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         'cross_record_defaults',
         'remote_options_config',
         'repeater_schema',
-        'is_translatable'
+        'is_translatable',
+        'sort'
       )
       .orderBy('sort', 'asc')) as FieldRow[]
 
     // Resolve layout assignments — use explicit layout_id or fall back to active layout
     let targetLayoutId: number | null = null
     if (layout_id) {
-      targetLayoutId = Number(layout_id)
+      const parsed = parseInt(layout_id, 10)
+      if (!Number.isFinite(parsed)) return reply.code(400).send({ error: 'Invalid layout_id' })
+      targetLayoutId = parsed
     } else {
       const active = await db('nivaro_collection_layouts')
         .where({ collection, is_active: 1 })
@@ -178,7 +182,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       return {
         ...base,
         group_key: assignment ? assignment.group_key : base.group_key,
-        sort: assignment ? assignment.sort : idx
+        sort: assignment ? assignment.sort : (row.sort ?? idx)
       }
     })
 
