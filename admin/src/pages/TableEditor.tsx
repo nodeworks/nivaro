@@ -31,6 +31,7 @@ import {
   useSensors,
   useDroppable,
 } from '@dnd-kit/core'
+import { snapCenterToCursor } from '@dnd-kit/modifiers'
 import {
   SortableContext,
   arrayMove,
@@ -5034,8 +5035,6 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     const fromContainer = findContainer(activeId)
     const toContainer = findContainer(overId)
     if (!toContainer || fromContainer !== toContainer) return
-    if (fromContainer === '__unassigned__') return
-
     const fields = localFieldOrder[fromContainer] ?? []
     const fromIdx = fields.indexOf(activeId)
     const toIdx = fields.indexOf(overId)
@@ -5173,7 +5172,6 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
                 )}
               </p>
             </div>
-            <SortableContext items={localFieldOrder.__unassigned__ ?? []} strategy={verticalListSortingStrategy}>
               <div className='overflow-y-auto min-h-[40px] p-2' style={{ maxHeight: 'calc(100vh - 220px)' }}>
                 {(localFieldOrder.__unassigned__ ?? []).length === 0 ? (
                   <p className='py-2 text-center text-[10px] text-slate-300'>All fields assigned</p>
@@ -5219,7 +5217,6 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
                   )
                 })()}
               </div>
-            </SortableContext>
           </div>
         </div>
 
@@ -5333,7 +5330,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
         </div>{/* end main area */}
       </div>{/* end flex row */}
 
-      <DragOverlay dropAnimation={{ duration: 150, easing: 'ease' }}>
+      <DragOverlay dropAnimation={{ duration: 150, easing: 'ease' }} modifiers={[snapCenterToCursor]}>
         {activeFieldId && (
           <FieldChip
             fieldName={activeFieldId}
