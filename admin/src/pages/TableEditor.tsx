@@ -4950,7 +4950,13 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     setLocalFieldOrder(fieldOrder)
   }, [groups, fieldConfig, allFields])
 
+  // ── Mutations ──
+  const invalidateGroups = useCallback(() => qc.invalidateQueries({ queryKey: ['field-groups', tableName] }), [qc, tableName])
+  const invalidateFieldConfig = useCallback(() => qc.invalidateQueries({ queryKey: ['field-config', tableName] }), [qc, tableName])
+  const invalidateMeta = useCallback(() => qc.invalidateQueries({ queryKey: ['collection-meta', tableName] }), [qc, tableName])
+
   // Debounced layout save — watches state directly (no stale-ref risk)
+  // Must be declared after invalidateFieldConfig to avoid TDZ error
   useEffect(() => {
     if (!layoutId || !hasLocalChangeRef.current) return
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
@@ -4965,11 +4971,6 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     }, 400)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
   }, [localAssignments, localFieldOrder, layoutId, invalidateFieldConfig])
-
-  // ── Mutations ──
-  const invalidateGroups = useCallback(() => qc.invalidateQueries({ queryKey: ['field-groups', tableName] }), [qc, tableName])
-  const invalidateFieldConfig = useCallback(() => qc.invalidateQueries({ queryKey: ['field-config', tableName] }), [qc, tableName])
-  const invalidateMeta = useCallback(() => qc.invalidateQueries({ queryKey: ['collection-meta', tableName] }), [qc, tableName])
 
   const createMut = useMutation({
     mutationFn: (body: { collection: string; key: string; label: string; type: 'section' | 'tab' }) =>
@@ -5274,7 +5275,35 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
           </SortableContext>
         )}
 
-        {/* Ungrouped zone — permanent drop target for fields with no named group */}
+        {/* Add group form — above Ungrouped so new groups land before it */}
+        {adding && (
+          <div className='rounded-lg border border-slate-200 bg-white p-4 space-y-3'>
+            <p className='text-[12px] font-medium text-slate-700'>New Group</p>
+            <div className='grid grid-cols-3 gap-3'>
+              <div>
+                <Label className='mb-1 block text-[11px]'>Key (slug)</Label>
+                <Input value={newKey} onChange={e => setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))} placeholder='details' className='h-7 font-mono text-[12px]' />
+              </div>
+              <div>
+                <Label className='mb-1 block text-[11px]'>Label</Label>
+                <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder='Details' className='h-7 text-[12px]' />
+              </div>
+              <div>
+                <Label className='mb-1 block text-[11px]'>Type</Label>
+                <Sel value={newType} onChange={v => setNewType(v as 'section' | 'tab')} options={[{ value: 'section', label: 'Section' }, { value: 'tab', label: 'Tab' }]} />
+              </div>
+            </div>
+            <div className='flex justify-end gap-2'>
+              <Button type='button' variant='outline' size='sm' className='h-7 text-[12px]' onClick={() => setAdding(false)}>Cancel</Button>
+              <Button type='button' size='sm' className='h-7 bg-nvr-cyan text-[12px] text-white' disabled={!newKey.trim() || !newLabel.trim() || createMut.isPending}
+                onClick={() => createMut.mutate({ collection: tableName, key: newKey.trim(), label: newLabel.trim(), type: newType })}>
+                Create
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Ungrouped zone — below named groups and new-group form */}
         <DroppableFieldZone containerId='__unassigned__'>
           <SortableContext items={localFieldOrder.__unassigned__ ?? []} strategy={verticalListSortingStrategy}>
             <div className='rounded-lg border border-dashed border-slate-300 bg-white dark:bg-card'>
@@ -5310,33 +5339,6 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
           </SortableContext>
         </DroppableFieldZone>
 
-        {/* Add group form */}
-        {adding && (
-          <div className='rounded-lg border border-slate-200 bg-white p-4 space-y-3'>
-            <p className='text-[12px] font-medium text-slate-700'>New Group</p>
-            <div className='grid grid-cols-3 gap-3'>
-              <div>
-                <Label className='mb-1 block text-[11px]'>Key (slug)</Label>
-                <Input value={newKey} onChange={e => setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))} placeholder='details' className='h-7 font-mono text-[12px]' />
-              </div>
-              <div>
-                <Label className='mb-1 block text-[11px]'>Label</Label>
-                <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder='Details' className='h-7 text-[12px]' />
-              </div>
-              <div>
-                <Label className='mb-1 block text-[11px]'>Type</Label>
-                <Sel value={newType} onChange={v => setNewType(v as 'section' | 'tab')} options={[{ value: 'section', label: 'Section' }, { value: 'tab', label: 'Tab' }]} />
-              </div>
-            </div>
-            <div className='flex justify-end gap-2'>
-              <Button type='button' variant='outline' size='sm' className='h-7 text-[12px]' onClick={() => setAdding(false)}>Cancel</Button>
-              <Button type='button' size='sm' className='h-7 bg-nvr-cyan text-[12px] text-white' disabled={!newKey.trim() || !newLabel.trim() || createMut.isPending}
-                onClick={() => createMut.mutate({ collection: tableName, key: newKey.trim(), label: newLabel.trim(), type: newType })}>
-                Create
-              </Button>
-            </div>
-          </div>
-        )}
         </div>{/* end main area */}
       </div>{/* end flex row */}
 
