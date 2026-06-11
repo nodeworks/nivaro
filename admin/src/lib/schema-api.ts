@@ -54,6 +54,7 @@ export type DBTableDetail = {
     display_name: string | null
     icon: string | null
     note: string | null
+    display_template: string | null
   } | null
   columns: DBColumn[]
   relations: DBRelation[]
@@ -119,7 +120,7 @@ export const schemaApi = {
 
   registerCollection: (
     table: string,
-    body: { display_name?: string; icon?: string; note?: string }
+    body: { display_name?: string; icon?: string; note?: string; display_template?: string | null }
   ) => api.post(`/data-model/tables/${table}/register`, body).then((r) => r.data),
 
   unregisterCollection: (table: string) => api.delete(`/data-model/tables/${table}/unregister`),

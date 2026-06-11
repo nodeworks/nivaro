@@ -1,11 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, Check, ChevronsUpDown, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
+import { CollectionFieldPicker } from '@/components/field-picker'
 import { Button } from '@/components/ui/button'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem
+} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -15,7 +24,8 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { api } from '@/lib/api'
+import { api, type Collection } from '@/lib/api'
+import { cn, titleCase } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,6 +91,7 @@ export function AlertEditPage() {
   const [category, setCategory] = useState('general')
   const [collection, setCollection] = useState('')
   const [field, setField] = useState('')
+  const [colOpen, setColOpen] = useState(false)
   const [operator, setOperator] = useState('gt')
   const [threshold, setThreshold] = useState<number>(0)
   const [unit, setUnit] = useState('count')
@@ -90,6 +101,15 @@ export function AlertEditPage() {
   const [isActive, setIsActive] = useState(true)
   const [filterRows, setFilterRows] = useState<FilterRow[]>([])
   const [initialized, setInitialized] = useState(false)
+
+  // Collections list for the collection picker
+  const { data: allCollections = [] } = useQuery<Collection[]>({
+    queryKey: ['collections'],
+    queryFn: () => api.get('/collections').then((r) => r.data.data)
+  })
+  const realCollections = allCollections.filter(
+    (c) => !allCollections.some((x) => x.collection === c.group)
+  )
 
   // Load existing definition
   const { data: existing, isLoading } = useQuery<AlertDefinition>({
@@ -260,30 +280,86 @@ export function AlertEditPage() {
         {/* Collection + Field */}
         <div className='grid grid-cols-2 gap-4'>
           <div className='space-y-1.5'>
-            <Label htmlFor='alert-collection'>
+            <Label>
               Collection <span className='text-destructive'>*</span>
             </Label>
-            <Input
-              id='alert-collection'
-              value={collection}
-              onChange={(e) => setCollection(e.target.value)}
-              placeholder='projects'
-              required
-            />
-            <p className='text-xs text-muted-foreground'>The collection table name to monitor</p>
+            <Popover open={colOpen} onOpenChange={setColOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  role='combobox'
+                  aria-expanded={colOpen}
+                  className={cn(
+                    'flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-[13px] ring-offset-background',
+                    'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                    !collection && 'text-muted-foreground'
+                  )}
+                >
+                  {collection ? (
+                    <span>
+                      {realCollections.find((c) => c.collection === collection)?.display_name ??
+                        titleCase(collection)}{' '}
+                      <span className='font-mono text-[11px] text-muted-foreground'>
+                        ({collection})
+                      </span>
+                    </span>
+                  ) : (
+                    'Select collection…'
+                  )}
+                  <ChevronsUpDown className='ml-2 h-4 w-4 shrink-0 opacity-50' />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-[320px] p-0' align='start'>
+                <Command>
+                  <CommandInput placeholder='Search collections…' />
+                  <CommandEmpty>No collection found.</CommandEmpty>
+                  <CommandGroup className='max-h-60 overflow-y-auto'>
+                    {realCollections.map((c) => (
+                      <CommandItem
+                        key={c.collection}
+                        value={c.collection}
+                        onSelect={(val) => {
+                          setCollection(val)
+                          setField('')
+                          setColOpen(false)
+                        }}
+                      >
+                        <Check
+                          className={cn(
+                            'mr-2 h-4 w-4',
+                            collection === c.collection ? 'opacity-100' : 'opacity-0'
+                          )}
+                        />
+                        <span className='flex-1'>{c.display_name ?? titleCase(c.collection)}</span>
+                        <span className='font-mono text-[11px] text-muted-foreground'>
+                          {c.collection}
+                        </span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </Command>
+              </PopoverContent>
+            </Popover>
+            <p className='text-xs text-muted-foreground'>Collection to monitor</p>
           </div>
           <div className='space-y-1.5'>
-            <Label htmlFor='alert-field'>
+            <Label>
               Field <span className='text-destructive'>*</span>
             </Label>
-            <Input
-              id='alert-field'
-              value={field}
-              onChange={(e) => setField(e.target.value)}
-              placeholder='budget_spent'
-              required
-            />
-            <p className='text-xs text-muted-foreground'>The numeric field to evaluate</p>
+            {collection ? (
+              <CollectionFieldPicker
+                collection={collection}
+                value={field}
+                onChange={(picked) => setField(picked.path.join('.'))}
+                onClear={() => setField('')}
+                placeholder='Select field…'
+              />
+            ) : (
+              <div className='flex h-9 items-center rounded-md border border-dashed border-slate-200 px-3 text-[13px] text-muted-foreground'>
+                Select a collection first
+              </div>
+            )}
+            <p className='text-xs text-muted-foreground'>Numeric field to evaluate</p>
           </div>
         </div>
 
@@ -430,12 +506,24 @@ export function AlertEditPage() {
               {filterRows.map((row, i) => (
                 // biome-ignore lint/suspicious/noArrayIndexKey: filter rows keyed by index intentionally
                 <div key={i} className='flex items-center gap-2 px-3 py-2'>
-                  <Input
-                    value={row.field}
-                    onChange={(e) => updateFilterRow(i, 'field', e.target.value)}
-                    placeholder='field name'
-                    className='h-8 text-sm font-mono'
-                  />
+                  {collection ? (
+                    <div className='flex-1'>
+                      <CollectionFieldPicker
+                        collection={collection}
+                        value={row.field}
+                        onChange={(picked) => updateFilterRow(i, 'field', picked.path.join('.'))}
+                        onClear={() => updateFilterRow(i, 'field', '')}
+                        placeholder='Select field…'
+                      />
+                    </div>
+                  ) : (
+                    <Input
+                      value={row.field}
+                      onChange={(e) => updateFilterRow(i, 'field', e.target.value)}
+                      placeholder='field name'
+                      className='h-8 flex-1 text-sm font-mono'
+                    />
+                  )}
                   <span className='text-muted-foreground text-xs'>=</span>
                   <Input
                     value={row.value}

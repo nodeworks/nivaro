@@ -54,6 +54,8 @@ export type User = {
   delegate_expires_at: string | null
   is_out_of_office: boolean
   is_admin?: boolean
+  is_redacted?: boolean
+  redacted_at?: string | null
 }
 
 export interface Workspace {
@@ -301,6 +303,7 @@ export type PipelineState = {
   lock_record: boolean
   sort: number
   skip_criteria?: SkipCriteria | null
+  stage_visibility: 'always' | 'hide' | 'hide_unless_active'
 }
 
 export type PipelineTransition = {

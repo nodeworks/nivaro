@@ -474,3 +474,86 @@ export function deleteWidgetFeed(id: number): Command<void> {
 export function rotateWidgetFeedToken(id: number): Command<{ data: WidgetFeed }> {
   return cmd('POST', `/widget/${id}/rotate-token`)
 }
+
+// ─── Retention policies ───────────────────────────────────────────────────────
+
+export interface RetentionPolicy {
+  id: number
+  name: string
+  inactivity_threshold_months: number
+  action: 'redact' | 'delete' | 'suspend_only'
+  redact_fields: string[]
+  redact_value_template: string
+  exclusion_emails: string[]
+  exclusion_roles: string[]
+  cron_schedule: string | null
+  is_active: boolean
+  dry_run_mode: boolean
+  last_run_at: ISODate | null
+  last_run_affected_count: number | null
+  created_by: UUID | null
+  created_at: ISODate
+  updated_at: ISODate
+}
+
+export interface RetentionRun {
+  id: number
+  policy_id: number
+  started_at: ISODate
+  finished_at: ISODate | null
+  affected_count: number
+  dry_run: boolean
+  errors: string[]
+  affected_ids: string[]
+  triggered_by: UUID | null
+}
+
+export interface RetentionRunResult {
+  affected_count: number
+  affected_ids: string[]
+  dry_run: boolean
+  errors: string[]
+}
+
+export function listRetentionPolicies(): Command<{ data: RetentionPolicy[] }> {
+  return cmd('GET', '/retention')
+}
+
+export function getRetentionPolicy(id: number): Command<{ data: RetentionPolicy }> {
+  return cmd('GET', `/retention/${id}`)
+}
+
+export function createRetentionPolicy(
+  body: Omit<
+    RetentionPolicy,
+    'id' | 'created_by' | 'created_at' | 'updated_at' | 'last_run_at' | 'last_run_affected_count'
+  >
+): Command<{ data: RetentionPolicy }> {
+  return cmd('POST', '/retention', body)
+}
+
+export function updateRetentionPolicy(
+  id: number,
+  body: Partial<Omit<RetentionPolicy, 'id' | 'created_by' | 'created_at' | 'updated_at'>>
+): Command<{ data: RetentionPolicy }> {
+  return cmd('PATCH', `/retention/${id}`, body)
+}
+
+export function deleteRetentionPolicy(id: number): Command<void> {
+  return cmd('DELETE', `/retention/${id}`)
+}
+
+/**
+ * Execute a retention policy. Pass `dryRun: true` to preview affected users
+ * without writing any changes.
+ */
+export function runRetentionPolicy(
+  id: number,
+  dryRun = false
+): Command<{ data: RetentionRunResult }> {
+  return cmd('POST', `/retention/${id}/run${dryRun ? '?dry_run=true' : ''}`)
+}
+
+export function listRetentionRuns(policyId: number): Command<{ data: RetentionRun[] }> {
+  return cmd('GET', `/retention/${policyId}/runs`)
+}

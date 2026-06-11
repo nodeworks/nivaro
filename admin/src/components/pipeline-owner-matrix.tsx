@@ -50,13 +50,16 @@ function FilterCombobox({
 
   const sorted = useMemo(() => sortOptions(options), [options])
 
+  const onSearchRef = useRef(onSearch)
+  onSearchRef.current = onSearch
+
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 50)
     else {
       setQuery('')
-      onSearch('')
+      onSearchRef.current('')
     }
-  }, [open, onSearch])
+  }, [open])
 
   const handleQueryChange = (v: string) => {
     setQuery(v)

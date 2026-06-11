@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Plus, Trash2, Wand2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { FieldPicker } from '@/components/field-picker'
 import { RelationPicker } from '@/components/relation-picker'
 import { Button } from '@/components/ui/button'
 import {
@@ -243,7 +244,6 @@ function ValueInput({
 
 function RuleRow({
   rule,
-  fieldOptions,
   fields,
   relations,
   collection,
@@ -254,7 +254,6 @@ function RuleRow({
   onMove
 }: {
   rule: FieldRule
-  fieldOptions: { value: string; label: string }[]
   fields: CMSField[]
   relations: CMSRelation[]
   collection: string
@@ -279,11 +278,14 @@ function RuleRow({
       <div className='flex items-center gap-2 border-b border-slate-100 px-3 py-2.5 dark:border-border'>
         <span className='w-9 shrink-0 text-[11px] font-medium text-slate-400'>When</span>
         <div className='flex flex-1 flex-wrap items-center gap-2'>
-          <div className='w-[150px]'>
-            <Combobox
+          <div className='w-[180px]'>
+            <FieldPicker
+              collection={collection}
+              fields={fields}
+              relations={relations}
               value={rule.trigger_field}
-              onChange={(v) => onPatch({ trigger_field: v, trigger_value: '' })}
-              options={fieldOptions}
+              onChange={(p) => onPatch({ trigger_field: p.path.join('.'), trigger_value: '' })}
+              onClear={() => onPatch({ trigger_field: '', trigger_value: '' })}
               placeholder='field…'
             />
           </div>
@@ -323,11 +325,14 @@ function RuleRow({
               width={140}
             />
           </div>
-          <div className='w-[150px]'>
-            <Combobox
+          <div className='w-[180px]'>
+            <FieldPicker
+              collection={collection}
+              fields={fields}
+              relations={relations}
               value={rule.target_field}
-              onChange={(v) => onPatch({ target_field: v, target_value: '' })}
-              options={fieldOptions}
+              onChange={(p) => onPatch({ target_field: p.path.join('.'), target_value: '' })}
+              onClear={() => onPatch({ target_field: '', target_value: '' })}
               placeholder='field…'
             />
           </div>
@@ -420,20 +425,6 @@ export function FieldRulesSection({
 
   const allFields: CMSField[] = colMeta?.fields ?? []
   const relations: CMSRelation[] = colMeta?.relations ?? []
-
-  // Label M2O FK fields as "relation" rather than their raw DB type (string/integer)
-  const m2oFieldNames = new Set(
-    relations
-      .filter((r) => r.many_collection === collection && r.junction_field === null)
-      .map((r) => r.many_field)
-  )
-
-  const fieldOptions = allFields
-    .filter((f) => !f.hidden)
-    .map((f) => ({
-      value: f.field,
-      label: `${f.field} (${m2oFieldNames.has(f.field) ? 'relation' : f.type})`
-    }))
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['field-rules', collection] })
 
@@ -538,7 +529,6 @@ export function FieldRulesSection({
             <RuleRow
               key={rule.id}
               rule={rule}
-              fieldOptions={fieldOptions}
               fields={allFields}
               relations={relations}
               collection={collection}

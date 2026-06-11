@@ -334,3 +334,58 @@ export const securityWorkspaceTemplates: DocSection = {
     }
   ]
 }
+
+export const securityRetentionPolicies: DocSection = {
+  id: 'retention-policies',
+  label: 'Privacy & Retention Policies',
+  content: [
+    { type: 'h1', id: 'retention-policies', text: 'Privacy & Retention Policies' },
+    {
+      type: 'p',
+      text: 'Retention policies identify users who have been inactive for a configurable period and either redact their PII, delete the account, or suspend it. This supports GDPR/CCPA data minimisation requirements without manual intervention.'
+    },
+    { type: 'h3', text: 'How it works' },
+    {
+      type: 'ul',
+      items: [
+        'A policy defines an inactivity threshold (months), the action to take, which fields to redact, and protected addresses/roles that are never touched.',
+        'Users with no `nivaro_activity` rows since the cutoff — and not in any exclusion list — are candidates.',
+        'Redacted users get `is_redacted = true` and are automatically excluded from all user pickers and list endpoints throughout the UI.',
+        'Policies can be executed manually (with an optional dry-run preview) or scheduled via a cron expression.',
+        'Every execution is recorded in `nivaro_retention_runs` with an affected count and up to 50 sample IDs for audit.'
+      ]
+    },
+    { type: 'h3', text: 'Actions' },
+    {
+      type: 'table',
+      head: ['Action', 'What happens'],
+      rows: [
+        [
+          'redact',
+          'Wipes configured PII fields, sets is_redacted=true, suspends account. Default.'
+        ],
+        ['delete', 'Hard-deletes the user row. Irreversible — use with caution.'],
+        ['suspend_only', 'Sets status=suspended and is_redacted=true. No field values changed.']
+      ]
+    },
+    { type: 'h3', text: 'Redaction template' },
+    {
+      type: 'p',
+      text: 'The `redact_value_template` string (default `Redacted_{{id}}`) is used for email and external_id fields so they remain unique in the database. Other fields (first_name, last_name, job_title, avatar) are set to the literal string "Redacted".'
+    },
+    { type: 'h3', text: 'API' },
+    {
+      type: 'pre',
+      code: `GET    /api/retention             // list policies (admin)
+POST   /api/retention             // create policy
+PATCH  /api/retention/:id         // update policy
+DELETE /api/retention/:id         // delete policy
+POST   /api/retention/:id/run     // execute (add ?dry_run=true for preview)
+GET    /api/retention/:id/runs    // run history`
+    },
+    {
+      type: 'note',
+      text: 'All retention endpoints require admin access. The dry-run endpoint returns affected_count and up to 50 sample user IDs without writing any changes.'
+    }
+  ]
+}

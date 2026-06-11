@@ -883,6 +883,89 @@ const COMMANDS: CmdDef[] = [
     method: 'POST',
     path: '/settings/sms/test',
     params: [p('to', 'string', 'body', true, '+12125550100')]
+  },
+
+  // ─── Privacy & Retention ───
+  {
+    name: 'listRetentionPolicies',
+    group: 'Privacy & Retention',
+    description: 'List all user retention policies (admin).',
+    method: 'GET',
+    path: '/retention',
+    params: []
+  },
+  {
+    name: 'getRetentionPolicy',
+    group: 'Privacy & Retention',
+    description: 'Get a single retention policy by ID.',
+    method: 'GET',
+    path: '/retention/{id}',
+    params: [p('id', 'number', 'path', true, '1')]
+  },
+  {
+    name: 'createRetentionPolicy',
+    group: 'Privacy & Retention',
+    description: 'Create a retention policy. action: redact | delete | suspend_only.',
+    method: 'POST',
+    path: '/retention',
+    params: [
+      p('name', 'string', 'body', true, '3-year inactivity redaction'),
+      p('inactivity_threshold_months', 'number', 'body', true, '36'),
+      p('action', 'string', 'body', false, 'redact'),
+      p(
+        'redact_fields',
+        'json',
+        'body',
+        false,
+        '["first_name","last_name","email","external_id","job_title"]'
+      ),
+      p('redact_value_template', 'string', 'body', false, 'Redacted_{{id}}'),
+      p('exclusion_emails', 'json', 'body', false, '["admin@example.com"]'),
+      p('cron_schedule', 'string', 'body', false, '0 2 1 * *'),
+      p('is_active', 'string', 'body', false, 'true'),
+      p('dry_run_mode', 'string', 'body', false, 'false')
+    ]
+  },
+  {
+    name: 'updateRetentionPolicy',
+    group: 'Privacy & Retention',
+    description: 'Update a retention policy.',
+    method: 'PATCH',
+    path: '/retention/{id}',
+    params: [
+      p('id', 'number', 'path', true, '1'),
+      p('name', 'string', 'body', false, ''),
+      p('inactivity_threshold_months', 'number', 'body', false, ''),
+      p('action', 'string', 'body', false, 'redact'),
+      p('is_active', 'string', 'body', false, 'true'),
+      p('dry_run_mode', 'string', 'body', false, 'false'),
+      p('cron_schedule', 'string', 'body', false, '')
+    ]
+  },
+  {
+    name: 'deleteRetentionPolicy',
+    group: 'Privacy & Retention',
+    description: 'Delete a retention policy.',
+    method: 'DELETE',
+    path: '/retention/{id}',
+    params: [p('id', 'number', 'path', true, '1')]
+  },
+  {
+    name: 'runRetentionPolicy',
+    group: 'Privacy & Retention',
+    description:
+      'Execute a retention policy. Pass dry_run=true for a preview without writing changes.',
+    method: 'POST',
+    path: '/retention/{id}/run',
+    params: [p('id', 'number', 'path', true, '1'), p('dry_run', 'string', 'query', false, 'true')]
+  },
+  {
+    name: 'listRetentionRuns',
+    group: 'Privacy & Retention',
+    description: 'List the run history for a retention policy.',
+    method: 'GET',
+    path: '/retention/{id}/runs',
+    params: [p('id', 'number', 'path', true, '1')]
   }
 ]
 

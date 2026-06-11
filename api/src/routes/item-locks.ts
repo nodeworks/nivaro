@@ -42,12 +42,16 @@ async function lockHolderName(userId: string): Promise<string | null> {
 
 /** Returns true when item_locking_enabled is 1/true for the collection. */
 async function isLockingEnabled(collection: string): Promise<boolean> {
-  const row = (await db('nivaro_collections')
-    .where({ name: collection })
-    .select('item_locking_enabled')
-    .first()) as { item_locking_enabled: number | boolean } | undefined
-  if (!row) return true // unregistered collections default to enabled
-  return row.item_locking_enabled === 1 || row.item_locking_enabled === true
+  try {
+    const row = (await db('nivaro_collections')
+      .where({ collection })
+      .select('item_locking_enabled')
+      .first()) as { item_locking_enabled: number | boolean } | undefined
+    if (!row) return true
+    return row.item_locking_enabled === 1 || row.item_locking_enabled === true
+  } catch {
+    return true // column missing (migration pending) — default enabled
+  }
 }
 
 /**
@@ -71,8 +75,12 @@ export async function itemLocksRoutes(app: FastifyInstance) {
 
   app.get('/config/:collection', { preHandler: [requireAdmin] }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
-    const enabled = await isLockingEnabled(collection)
-    return reply.send({ data: { collection, item_locking_enabled: enabled } })
+    try {
+      const enabled = await isLockingEnabled(collection)
+      return reply.send({ data: { collection, item_locking_enabled: enabled } })
+    } catch {
+      return reply.send({ data: { collection, item_locking_enabled: true } })
+    }
   })
 
   app.patch('/config/:collection', { preHandler: [requireAdmin] }, async (req, reply) => {

@@ -39,6 +39,7 @@ import {
   ScrollText,
   Settings,
   Shield,
+  ShieldOff,
   ShieldCheck,
   SlidersHorizontal,
   Terminal,
@@ -142,6 +143,7 @@ const navCategories: NavCategory[] = [
       { icon: BarChart2, label: 'API Analytics', to: '/api-analytics' },
       { icon: HeartPulse, label: 'Health', to: '/health' },
       { icon: ShieldCheck, label: 'Data Quality', to: '/data-quality' },
+      { icon: ShieldOff, label: 'Privacy & Retention', to: '/privacy-retention' },
       { icon: AlertOctagon, label: 'Issues', to: '/issues' },
       { icon: RotateCcw, label: 'Dead Letters', to: '/dead-letters' }
     ]

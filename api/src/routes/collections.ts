@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
@@ -42,6 +43,17 @@ export async function collectionsRoutes(app: FastifyInstance) {
       req
     })
     return reply.code(201).send({ data })
+  })
+
+  app.patch('/reorder', async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    const { items } = req.body as { items: { collection: string; sort: number }[] }
+    await Promise.all(
+      items.map(({ collection, sort }) =>
+        db('nivaro_collections').where({ collection }).update({ sort })
+      )
+    )
+    return reply.send({ ok: true })
   })
 
   app.patch('/:collection', async (req, reply) => {

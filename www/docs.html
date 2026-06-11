@@ -370,6 +370,7 @@
           <a class="docs-nav-item" data-section="row-level-isolation" href="#row-level-isolation">Row-Level Workspace Isolation</a>
           <a class="docs-nav-item" data-section="usage-quotas" href="#usage-quotas">Usage Quotas</a>
           <a class="docs-nav-item" data-section="workspace-templates" href="#workspace-templates">Workspace Templates</a>
+          <a class="docs-nav-item" data-section="retention-policies" href="#retention-policies">Privacy &amp; Retention</a>
           <a class="docs-nav-item" data-section="row-level-security" href="#row-level-security">Row-Level Security</a>
           <a class="docs-nav-item" data-section="zero-downtime-migrations" href="#zero-downtime-migrations">Zero-Downtime Migrations</a>
         </div>
@@ -7746,6 +7747,35 @@ ENCRYPTION_KEY=4f8d...64-hex-chars...c2a1
           </ul>
           <div class="doc-note">Replay is additive — it creates collections and roles inside the new (empty) workspace and never touches other workspaces.</div>
           <!-- /SYNC:workspace-templates -->
+        </div>
+
+        <div class="doc-section" id="s-retention-policies" data-toc='[{"id":"retention-policies","label":"Privacy &amp; Retention Policies"}]'>
+          <!-- SYNC:retention-policies -->
+          <h1 class="doc-h1" id="retention-policies">Privacy &amp; Retention Policies</h1>
+          <p class="doc-p">Retention policies identify users who have been inactive for a configurable period and either redact their PII, delete the account, or suspend it. This supports GDPR/CCPA data minimisation requirements without manual intervention.</p>
+          <h3 class="doc-h3">How it works</h3>
+          <ul class="doc-ul">
+            <li>A policy defines an inactivity threshold (months), the action to take, which fields to redact, and protected addresses/roles that are never touched.</li>
+            <li>Users with no <code class="doc-code">nivaro_activity</code> rows since the cutoff — and not in any exclusion list — are candidates.</li>
+            <li>Redacted users get <code class="doc-code">is_redacted = true</code> and are automatically excluded from all user pickers and list endpoints throughout the UI.</li>
+            <li>Policies can be executed manually (with an optional dry-run preview) or scheduled via a cron expression.</li>
+            <li>Every execution is recorded in <code class="doc-code">nivaro_retention_runs</code> with an affected count and up to 50 sample IDs for audit.</li>
+          </ul>
+          <h3 class="doc-h3">Actions</h3>
+          <table class="doc-table"><thead><tr><th>Action</th><th>What happens</th></tr></thead><tbody>
+            <tr><td><code class="doc-code">redact</code></td><td>Wipes configured PII fields, sets is_redacted=true, suspends account. Default.</td></tr>
+            <tr><td><code class="doc-code">delete</code></td><td>Hard-deletes the user row. Irreversible.</td></tr>
+            <tr><td><code class="doc-code">suspend_only</code></td><td>Sets status=suspended and is_redacted=true. No field values changed.</td></tr>
+          </tbody></table>
+          <h3 class="doc-h3">API</h3>
+          <pre class="doc-pre"><code>GET    /api/retention             // list policies (admin)
+POST   /api/retention             // create policy
+PATCH  /api/retention/:id         // update policy
+DELETE /api/retention/:id         // delete policy
+POST   /api/retention/:id/run     // execute (add ?dry_run=true for preview)
+GET    /api/retention/:id/runs    // run history</code></pre>
+          <div class="doc-note">All retention endpoints require admin access. The dry-run endpoint returns affected_count and up to 50 sample user IDs without writing any changes.</div>
+          <!-- /SYNC:retention-policies -->
         </div>
 
         <div class="doc-section" id="s-row-level-security" data-toc='[{"id":"row-level-security","label":"Row-Level Security (RLS)"}]'>
