@@ -345,6 +345,28 @@ export const rowLevelSecurity: DocSection = {
   ]
 }
 
+export const roleUiPermissions: DocSection = {
+  id: 'role-ui-permissions',
+  label: 'Role UI Access',
+  content: [
+    {
+      type: 'p',
+      text: 'Admins can restrict which admin UI sections are visible per role. Go to Roles → select a role → "UI Access" tab. Uncheck any nav item to hide it from that role and block direct URL access.'
+    },
+    {
+      type: 'note',
+      text: 'Admin roles always have full UI access — restrictions never apply to admins. The API is not affected; use policies to restrict API access. UI permissions only control what is visible in the admin interface.'
+    },
+    {
+      type: 'table',
+      head: ['Method', 'Path', 'Description'],
+      rows: [
+        ['PATCH', '/api/roles/:id/ui-permissions', 'Update UI permissions. Body: { disabled: string[] } — array of route paths to block, e.g. ["/erp-submissions", "/workspaces"].']
+      ]
+    }
+  ]
+}
+
 export const zeroDowntimeMigrations: DocSection = {
   id: 'zero-downtime-migrations',
   label: 'Zero-Downtime Migrations',
@@ -578,6 +600,59 @@ const nivaro = createNivaro('https://nivaro.example.com').withToken('nvk_...');
 const articles = await nivaro.request(readItems('articles', { limit: 5 }));
 const check = await nivaro.request(aiValidate('articles', { title: 'Draft post' }));
 const feeds = await nivaro.request(listWidgetFeeds());`
+    }
+  ]
+}
+
+export const collectionLayouts: DocSection = {
+  id: 'collection-layouts',
+  label: 'Collection Layouts',
+  content: [
+    { type: 'h1', id: 'collection-layouts', text: 'Collection Layouts' },
+    {
+      type: 'p',
+      text: 'Each registered collection can have multiple named layouts. A layout defines how fields are grouped and ordered in the item editor. One layout is marked active and used by ItemEdit automatically; others can be referenced by name via the SDK.'
+    },
+    { type: 'h3', text: 'Managing layouts' },
+    {
+      type: 'p',
+      text: 'Open Data Model → select a collection → Layout tab. The left panel lists layouts for the collection. Click a layout to edit its groups and field assignments. The active layout (shown with a cyan dot) is what the item editor displays. Double-click a layout name to rename it inline.'
+    },
+    {
+      type: 'table',
+      head: ['Action', 'How'],
+      rows: [
+        ['Create layout', 'Click "+ Add layout" at the bottom of the left panel'],
+        ['Set active', 'Open a layout → click "Set active" in the toolbar'],
+        ['Clone layout', 'Open a layout → click "Clone" to duplicate groups + field assignments'],
+        ['Delete layout', 'Open a layout → click "Delete" (blocked if it is the only layout)'],
+        ['Rename layout', 'Double-click the layout name in the left panel']
+      ]
+    },
+    { type: 'h3', text: 'API' },
+    {
+      type: 'pre',
+      code: `GET  /api/collection-layouts?collection=articles
+POST /api/collection-layouts                    { collection, name }
+POST /api/collection-layouts/:id/activate
+POST /api/collection-layouts/:id/clone          { name }
+GET  /api/collection-layouts/:id/assignments
+PUT  /api/collection-layouts/:id/assignments    { assignments: [{field, group_key, sort}] }
+DELETE /api/collection-layouts/:id`
+    },
+    { type: 'h3', text: 'SDK' },
+    {
+      type: 'pre',
+      code: `import { readCollectionLayouts, readActiveLayout, readLayoutAssignments, activateLayout, cloneLayout } from '@nivaro/sdk'
+
+// List all layouts
+const layouts = await cms.request(readCollectionLayouts('articles'))
+
+// Read active layout with groups + assignments
+const active = await cms.request(readActiveLayout('articles'))
+
+// Use a specific layout in @nivaro/react
+useNivaroForm('articles', { mode: 'create', layoutId: 42 })`
     }
   ]
 }
