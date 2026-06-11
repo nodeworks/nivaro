@@ -90,8 +90,11 @@ interface AddColumnBody {
   name: string
   type: ColumnType
   nullable?: boolean
+  unique?: boolean
   default_value?: string | number | boolean | null
   max_length?: number
+  precision?: number
+  scale?: number
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -141,7 +144,10 @@ export async function dataModelRoutes(app: FastifyInstance) {
       const collections = await db<CMSCollection>('nivaro_collections').select(
         'collection',
         'display_name',
-        'icon'
+        'icon',
+        'color',
+        'group',
+        'sort'
       )
       const collectionMap = new Map(collections.map((c) => [c.collection, c]))
 
@@ -153,6 +159,9 @@ export async function dataModelRoutes(app: FastifyInstance) {
           registered: !!meta,
           display_name: meta?.display_name ?? null,
           icon: meta?.icon ?? null,
+          color: meta?.color ?? null,
+          group: meta?.group ?? null,
+          sort: meta?.sort ?? null,
           column_count: Number(t.column_count)
         }
       })
@@ -285,6 +294,55 @@ export async function dataModelRoutes(app: FastifyInstance) {
       const msg = err instanceof Error ? err.message : String(err)
       return reply.code(500).send({ error: msg })
     }
+  })
+
+  // ─── POST /sync-field-types — re-sync nivaro_fields.type from MSSQL column types ──
+
+  app.post('/sync-field-types', { preHandler: requireAdmin }, async (_req, reply) => {
+    const SQL_TO_ABSTRACT: Record<string, (l: number | null) => string> = {
+      nvarchar: (l) => (l === -1 ? 'text' : 'string'),
+      varchar: (l) => (l === -1 ? 'text' : 'string'),
+      char: () => 'string', nchar: () => 'string',
+      ntext: () => 'text', text: () => 'text',
+      int: () => 'integer', bigint: () => 'bigInteger',
+      smallint: () => 'integer', tinyint: () => 'boolean', bit: () => 'boolean',
+      decimal: () => 'decimal', numeric: () => 'decimal',
+      float: () => 'float', real: () => 'float',
+      money: () => 'decimal', smallmoney: () => 'decimal',
+      date: () => 'date',
+      datetime: () => 'datetime', datetime2: () => 'datetime', smalldatetime: () => 'datetime',
+      time: () => 'time', timestamp: () => 'datetime',
+      uniqueidentifier: () => 'uuid',
+    }
+    const SKIP_TYPES = new Set(['alias', 'group-detail', 'group-raw', 'presentation-divider'])
+
+    const colRows = (await db('INFORMATION_SCHEMA.COLUMNS')
+      .where('TABLE_SCHEMA', 'dbo')
+      .select('TABLE_NAME', 'COLUMN_NAME', 'DATA_TYPE', 'CHARACTER_MAXIMUM_LENGTH')) as Array<{
+      TABLE_NAME: string; COLUMN_NAME: string; DATA_TYPE: string; CHARACTER_MAXIMUM_LENGTH: number | null
+    }>
+
+    const lookup = new Map<string, string>()
+    for (const row of colRows) {
+      const mapper = SQL_TO_ABSTRACT[row.DATA_TYPE.toLowerCase()]
+      if (mapper) lookup.set(`${row.TABLE_NAME}.${row.COLUMN_NAME}`, mapper(row.CHARACTER_MAXIMUM_LENGTH))
+    }
+
+    const fields = (await db('nivaro_fields').select('id', 'collection', 'field', 'type')) as Array<{ id: number; collection: string; field: string; type: string }>
+
+    let updated = 0
+    const changes: Array<{ collection: string; field: string; from: string; to: string }> = []
+    for (const f of fields) {
+      if (SKIP_TYPES.has(f.type)) continue
+      const abstractType = lookup.get(`${f.collection}.${f.field}`)
+      if (abstractType && abstractType !== f.type) {
+        await db('nivaro_fields').where({ id: f.id }).update({ type: abstractType })
+        changes.push({ collection: f.collection, field: f.field, from: f.type, to: abstractType })
+        updated++
+      }
+    }
+
+    return reply.send({ updated, total: fields.length, changes })
   })
 
   // ─── POST /tables — create a new table ───────────────────────────────────
@@ -435,10 +493,10 @@ export async function dataModelRoutes(app: FastifyInstance) {
             col = t.boolean(body.name)
             break
           case 'decimal':
-            col = t.decimal(body.name)
+            col = t.decimal(body.name, body.precision ?? 10, body.scale ?? 2)
             break
           case 'float':
-            col = t.float(body.name)
+            col = t.float(body.name, body.precision ?? 8)
             break
           case 'date':
             col = t.date(body.name)
@@ -458,6 +516,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
         } else {
           col.notNullable()
         }
+
+        if (body.unique) col.unique()
 
         if (body.default_value !== undefined && body.default_value !== null) {
           col.defaultTo(body.default_value)
@@ -767,6 +827,26 @@ export async function dataModelRoutes(app: FastifyInstance) {
         .where({ many_collection: collection })
         .orWhere({ one_collection: collection })
         .orderBy('id')
+
+      // For matched M2M rows, also fetch companion rows from the same junction
+      // table (the other side's FK row, junction_field NOT NULL) so the admin UI
+      // can resolve the full M2M pair. Merge + dedupe by id.
+      const junctionTables = [
+        ...new Set(relations.filter((r) => r.junction_field).map((r) => r.many_collection))
+      ]
+      if (junctionTables.length > 0) {
+        const companions = await db<CMSRelation>('nivaro_relations')
+          .whereIn('many_collection', junctionTables)
+        const seen = new Set(relations.map((r) => r.id))
+        for (const c of companions) {
+          if (!seen.has(c.id)) {
+            relations.push(c)
+            seen.add(c.id)
+          }
+        }
+        relations.sort((a, b) => Number(a.id) - Number(b.id))
+      }
+
       return reply.send({ data: relations })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -799,7 +879,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
     }
 
     try {
-      const [id] = await db('nivaro_relations').insert({
+      const [row] = await db('nivaro_relations').insert({
         many_collection: body.many_collection,
         many_field: body.many_field,
         one_collection: body.one_collection ?? null,
@@ -825,6 +905,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
         }
       }
 
+      const id = typeof row === 'object' ? (row as { id: number }).id : row
       const relation = await db<CMSRelation>('nivaro_relations').where({ id }).first()
       await logActivity({
         action: 'create',
