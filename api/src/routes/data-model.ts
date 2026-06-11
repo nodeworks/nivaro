@@ -1142,10 +1142,29 @@ export async function dataModelRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
 
     try {
-      const deleted = await db('nivaro_relations')
-        .where({ id: Number(id) })
-        .delete()
-      if (!deleted) return reply.code(404).send({ error: 'Relation not found' })
+      const relation = await db('nivaro_relations').where({ id: Number(id) }).first()
+      if (!relation) return reply.code(404).send({ error: 'Relation not found' })
+
+      // Drop FK constraint if one exists on many_collection.many_field
+      if (relation.many_collection && relation.many_field) {
+        try {
+          await db.raw(`
+            DECLARE @fk NVARCHAR(256)
+            SELECT @fk = fk.name
+            FROM sys.foreign_keys fk
+            INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+            INNER JOIN sys.columns c ON fkc.parent_object_id = c.object_id AND fkc.parent_column_id = c.column_id
+            WHERE fk.parent_object_id = OBJECT_ID(?)
+              AND c.name = ?
+            IF @fk IS NOT NULL
+              EXEC('ALTER TABLE [' + ? + '] DROP CONSTRAINT [' + @fk + ']')
+          `, [relation.many_collection, relation.many_field, relation.many_collection])
+        } catch {
+          // FK may not exist — non-fatal
+        }
+      }
+
+      await db('nivaro_relations').where({ id: Number(id) }).delete()
       await logActivity({
         action: 'delete',
         collection: 'nivaro_relations',
