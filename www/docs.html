@@ -102,6 +102,8 @@
           <a class="docs-nav-item" data-section="local-dev" href="#local-dev">Local Dev</a>
           <a class="docs-nav-item" data-section="docker" href="#docker">Dev Docker</a>
           <a class="docs-nav-item" data-section="environment" href="#environment">Environment Variables</a>
+          <a class="docs-nav-item" data-section="smtp-config" href="#smtp-config">Email / SMTP</a>
+          <a class="docs-nav-item" data-section="sms-config" href="#sms-config">SMS</a>
           <a class="docs-nav-item" data-section="deployment-release" href="#deployment-release">Release Image</a>
           <a class="docs-nav-item" data-section="sdk-release" href="#sdk-release">SDK Release</a>
         </div>
@@ -170,6 +172,7 @@
           <a class="docs-nav-item" data-section="users-api" href="#users-api">Users API</a>
           <a class="docs-nav-item" data-section="delegation" href="#delegation">User Delegation</a>
           <a class="docs-nav-item" data-section="roles-api" href="#roles-api">Roles API</a>
+          <a class="docs-nav-item" data-section="role-ui-permissions" href="#role-ui-permissions">Role UI Access</a>
           <a class="docs-nav-item" data-section="flows-api" href="#flows-api">Flows API</a>
           <a class="docs-nav-item" data-section="pipeline-api" href="#pipeline-api">Pipeline API</a>
           <a class="docs-nav-item" data-section="external-apis-api" href="#external-apis-api">External APIs API</a>
@@ -214,6 +217,8 @@
           <a class="docs-nav-item" data-section="sdk-filters" href="#sdk-filters">Filter Helpers</a>
           <a class="docs-nav-item" data-section="sdk-workflow" href="#sdk-workflow">Workflow Commands</a>
           <a class="docs-nav-item" data-section="sdk-pipeline" href="#sdk-pipeline">Pipeline &amp; Owners</a>
+          <a class="docs-nav-item" data-section="sdk-forms" href="#sdk-forms">Form Schema</a>
+          <a class="docs-nav-item" data-section="sdk-react" href="#sdk-react">React (@nivaro/react)</a>
           <a class="docs-nav-item" data-section="sdk-notifications" href="#sdk-notifications">Notifications</a>
           <a class="docs-nav-item" data-section="sdk-files" href="#sdk-files">Files &amp; Upload</a>
           <a class="docs-nav-item" data-section="sdk-tokens" href="#sdk-tokens">Token Management</a>
@@ -261,6 +266,7 @@
           <a class="docs-nav-item" data-section="ext-plugin-slots" href="#ext-plugin-slots">Plugin Slots</a>
           <a class="docs-nav-item" data-section="ext-plugin-build" href="#ext-plugin-build">Building a Plugin</a>
           <a class="docs-nav-item" data-section="ext-plugin-integration-types" href="#ext-plugin-integration-types">Integration Types</a>
+          <a class="docs-nav-item" data-section="ext-registrations" href="#ext-registrations">Registration APIs</a>
         </div>
       </div>
 
@@ -338,7 +344,8 @@
           <a class="docs-nav-item" data-section="content-ops-remote-options" href="#content-ops-remote-options">Remote Option Sources</a>
           <a class="docs-nav-item" data-section="content-ops-repeater" href="#content-ops-repeater">Repeater Fields</a>
           <a class="docs-nav-item" data-section="content-ops-rich-text" href="#content-ops-rich-text">Rich Text Fields</a>
-          <a class="docs-nav-item" data-section="content-ops-line-items" href="#content-ops-line-items">Line Items</a>
+          <a class="docs-nav-item" data-section="content-ops-datetime-auto" href="#content-ops-datetime-auto">Datetime Auto-fields</a>
+          <a class="docs-nav-item" data-section="content-ops-sub-rows" href="#content-ops-sub-rows">Sub-rows</a>
           <a class="docs-nav-item" data-section="content-ops-translations" href="#content-ops-translations">Field Translations (i18n)</a>
           <a class="docs-nav-item" data-section="content-ops-record-templates" href="#content-ops-record-templates">Record Templates</a>
           <a class="docs-nav-item" data-section="content-ops-collection-presets" href="#content-ops-collection-presets">Collection Presets</a>
@@ -516,8 +523,10 @@
           <a class="docs-nav-item" data-section="system-tables" href="#system-tables">System Tables</a>
           <a class="docs-nav-item" data-section="mssql-rules" href="#mssql-rules">MSSQL Rules</a>
           <a class="docs-nav-item" data-section="permissions-model" href="#permissions-model">Permissions Model</a>
+          <a class="docs-nav-item" data-section="field-display-settings" href="#field-display-settings">Field Display Settings</a>
           <a class="docs-nav-item" data-section="field-rules" href="#field-rules">Field Rules</a>
           <a class="docs-nav-item" data-section="dynamic-attributes" href="#dynamic-attributes">Dynamic Attributes</a>
+          <a class="docs-nav-item" data-section="collection-layouts" href="#s-collection-layouts">Collection Layouts</a>
         </div>
       </div>
 
@@ -1606,6 +1615,14 @@ x-workspace: ws-uuid-here</code></pre>
             <li>History is collapsible within the panel.</li>
           </ul>
           <div class="doc-note"><code class="doc-code">lock_record</code> on a state prevents editing the record's fields while that state is active — useful for "under review" or terminal states.</div>
+          <h3 class="doc-h3">Stage Progress Visibility</h3>
+          <p class="doc-p">Each state has a <code class="doc-code">stage_visibility</code> field that controls whether it appears in the stage progress track on the item edit page.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Value</th><th>Behaviour</th></tr></thead>
+            <tbody><tr><tr><td>always</td><td>Default. State always shown in the stage progress track.</td></tr>
+              <tr><td>hide_unless_active</td><td>Hidden unless the record is currently in this state or has visited it.</td></tr>
+              <tr><td>hide</td><td>Never shown in the stage progress track.</td></tr></tr></tbody>
+          </table></div>
           <!-- /SYNC:workflow-overview -->
         </div>
 
@@ -1621,6 +1638,7 @@ x-workspace: ws-uuid-here</code></pre>
               <tr><td>is_initial</td><td>One state per template must be marked initial — this is the starting state</td></tr>
               <tr><td>is_terminal</td><td>Terminal states end the workflow. No transitions out are allowed.</td></tr>
               <tr><td>lock_record</td><td>When true, item fields become read-only while in this state</td></tr>
+              <tr><td>stage_visibility</td><td><code>always</code> (default) — always shown in stage track. <code>hide_unless_active</code> — hidden unless current or visited. <code>hide</code> — never shown.</td></tr>
             </tbody>
           </table></div>
           <h2 class="doc-h2" id="wf-transitions">Transitions</h2>
@@ -1685,7 +1703,7 @@ GET /api/workflows/:templateId/instance/articles/42</code></pre>
             <thead><tr><th>Concept</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>Template</td><td>The blueprint — same as a workflow template. States + bindings.</td></tr>
               <tr><td>State</td><td>Same as workflow states. Supports skip criteria for auto-advancing.</td></tr>
-              <tr><td>Binding</td><td>Attaches the template to a collection with a state_field.</td></tr>
+              <tr><td>Binding</td><td>Attaches the template to a collection. Supports state_field sync and auto_start on item create.</td></tr>
               <tr><td>Dimension</td><td>A filter axis on the binding — a field path (e.g. regions.short_name), label, and flags.</td></tr>
               <tr><td>Owner Group</td><td>A set of users scoped to a state + filter combination. Has a filters JSON array and a priority integer.</td></tr>
               <tr><td>Owner Matrix</td><td>The UI grid mapping dimension filter values to owner groups per state.</td></tr></tr></tbody>
@@ -2113,6 +2131,17 @@ POST /api/users/me/delegate
           <!-- /SYNC:roles-api -->
         </div>
 
+        <div class="doc-section" id="s-role-ui-permissions" data-toc='[]'>
+          <!-- SYNC:role-ui-permissions -->
+          <p class="doc-p">Admins can restrict which admin UI sections are visible per role. Go to Roles → select a role → "UI Access" tab. Uncheck any nav item to hide it from that role and block direct URL access.</p>
+          <div class="doc-note">Admin roles always have full UI access — restrictions never apply to admins. The API is not affected; use policies to restrict API access. UI permissions only control what is visible in the admin interface.</div>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+            <tbody><tr><tr><td>PATCH</td><td>/api/roles/:id/ui-permissions</td><td>Update UI permissions. Body: { disabled: string[] } — array of route paths to block, e.g. ["/erp-submissions", "/workspaces"].</td></tr></tr></tbody>
+          </table></div>
+          <!-- /SYNC:role-ui-permissions -->
+        </div>
+
         <div class="doc-section" id="s-flows-api" data-toc='[{"id":"flows-api","label":"Flows API"}]'>
           <!-- SYNC:flows-api -->
           <h1 class="doc-h1" id="flows-api">Flows API</h1>
@@ -2177,11 +2206,19 @@ POST /api/users/me/delegate
             <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>GET</td><td>/api/pipelines/bindings</td><td>List all bindings.</td></tr>
               <tr><td>POST</td><td>/api/pipelines/:id/bind</td><td>Bind a template to a collection.</td></tr>
+              <tr><td>PATCH</td><td>/api/pipelines/bindings/:bindingId</td><td>Update binding config: auto_start, auto_start_state.</td></tr>
               <tr><td>DELETE</td><td>/api/pipelines/bindings/:bindingId</td><td>Remove a binding.</td></tr>
               <tr><td>GET</td><td>/api/pipelines/bindings/:bindingId/dimensions</td><td>List dimensions for a binding.</td></tr>
               <tr><td>POST</td><td>/api/pipelines/bindings/:bindingId/dimensions</td><td>Add a dimension. Body: { field, label, is_row_axis, sort, required }.</td></tr>
               <tr><td>PATCH</td><td>/api/pipelines/dimensions/:dimId</td><td>Update dimension (field, label, is_row_axis, sort, required).</td></tr>
               <tr><td>DELETE</td><td>/api/pipelines/dimensions/:dimId</td><td>Remove a dimension.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Auto-Start</h3>
+          <p class="doc-p">A binding can be configured to automatically start a pipeline instance whenever a new item is created in the bound collection. Enable auto_start on the binding and optionally set auto_start_state to a specific state ID. If auto_start_state is null, the pipeline starts in the first initial state (ordered by sort). The auto-start is non-blocking — if it fails, the item creation still succeeds.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+            <tbody><tr><tr><td>auto_start</td><td>boolean</td><td>When true, a pipeline instance is created automatically on item create.</td></tr>
+              <tr><td>auto_start_state</td><td>UUID | null</td><td>State to start in. Null = first initial state ordered by sort.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Owner Groups (admin)</h3>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -3098,6 +3135,159 @@ const { data: groups } = await nivaro.request(readOwnerGroups(templateId))
           <!-- /SYNC:sdk-pipeline -->
         </div>
 
+        <div class="doc-section" id="s-sdk-forms" data-toc='[{"id":"sdk-forms","label":"SDK — Form Schema"}]'>
+          <!-- SYNC:sdk-forms -->
+          <h1 class="doc-h1" id="sdk-forms">SDK — Form Schema</h1>
+          <p class="doc-p"><code class="doc-code">fetchFormSchema</code> aggregates collection metadata, fields, groups, and relations into a single normalized <code class="doc-code">FormSchema</code> — one round-trip instead of separate calls to collections, fields, field-groups, and relations. The remaining helpers cover the rest of a typical form lifecycle: evaluating inline field rules as the user types, loading relation options for M2O/M2M pickers, and submitting the completed item.</p>
+          <pre class="doc-pre"><code>import {
+  fetchFormSchema, evaluateFieldRules, readRelationOptions, submitFormItem
+} from '@nivaro/sdk'
+
+// 1. Load the normalized schema for a collection
+const schema = await nivaro.request(fetchFormSchema('inventory_requests'))
+// schema → {
+//   collection,    // collection metadata
+//   fields,        // FormField[] — type, interface, required, validation_rules, ...
+//   groups,        // FieldGroup[] — section/tab definitions, sorted
+//   relations,     // RelationMeta[] — m2o/o2m/m2m/m2a, related_collection + display_field
+// }
+
+// 2. Evaluate inline field rules against the in-progress values (no save)
+const { updates } = await nivaro.request(
+  evaluateFieldRules('inventory_requests', { category: 'hardware', priority: null })
+)
+// updates → only the fields the rules changed, e.g. { priority: 'high' }
+
+// 3. Load options for a relation field (M2O / M2M picker)
+const { data: options } = await nivaro.request(
+  readRelationOptions('inventory_requests', 'assigned_to', { search: 'jane', limit: 25 })
+)
+// options → [{ value, label }] — label rendered from the relation's display template
+
+// 4. Submit the completed item (create or update)
+const created = await nivaro.request(
+  submitFormItem('inventory_requests', { mode: 'create', values })
+)
+const updated = await nivaro.request(
+  submitFormItem('inventory_requests', { mode: 'edit', itemId: '123', values })
+)</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Function</th><th>Returns</th><th>Notes</th></tr></thead>
+            <tbody><tr><tr><td>fetchFormSchema(collection)</td><td>FormSchema</td><td>Collection + fields + groups + relations, normalized into one object.</td></tr>
+              <tr><td>evaluateFieldRules(collection, values)</td><td>{ updates }</td><td>Server-evaluates inline field rules; returns only changed fields. Computes without saving.</td></tr>
+              <tr><td>readRelationOptions(collection, field, opts?)</td><td>{ value, label }[]</td><td>Options for an M2O/M2M field; opts accepts search and limit.</td></tr>
+              <tr><td>submitFormItem(collection, { mode, itemId?, values })</td><td>T</td><td>mode: 'create' calls createItem; mode: 'edit' calls updateItem against itemId.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">The Form Schema commands use the same **snake_case** field shape as the rest of the REST API (<code class="doc-code">validation_rules</code>, <code class="doc-code">related_collection</code>, <code class="doc-code">display_field</code>). The <code class="doc-code">@nivaro/react</code> package wraps these into a camelCase form runtime (<code class="doc-code">validationRules</code>, <code class="doc-code">fieldType</code>) and is documented as a separate API — do not mix the two casing conventions.</div>
+          <div class="doc-note">For end-user public submission forms (no SDK, embeddable via <code class="doc-code">widget.js</code>), see the Submission Forms docs — that is a separate, hosted feature distinct from the Form Schema SDK.</div>
+          <!-- /SYNC:sdk-forms -->
+        </div>
+
+        <div class="doc-section" id="s-sdk-react" data-toc='[{"id":"sdk-react","label":"SDK — React (@nivaro/react)"}]'>
+          <!-- SYNC:sdk-react -->
+          <h1 class="doc-h1" id="sdk-react">SDK — React (@nivaro/react)</h1>
+          <p class="doc-p"><code class="doc-code">@nivaro/react</code> is a React form runtime built on top of <code class="doc-code">@nivaro/sdk</code>. It turns a collection into a fully-wired form: schema loading, field rules, visibility/lock evaluation, relation options, validation, and submit — all behind a single <code class="doc-code">useNivaroForm</code> hook. Use the headless hook with your own inputs, or <code class="doc-code">&lt;NivaroForm&gt;</code> to auto-render fields from the schema.</p>
+          <div class="doc-note">The React runtime exposes a **camelCase** API (<code class="doc-code">fieldType</code>, <code class="doc-code">validationRules</code>) — distinct from the snake_case shape of the underlying SDK Form Schema commands. Treat them as separate APIs.</div>
+          <h3 class="doc-h3">Installation</h3>
+          <pre class="doc-pre"><code>pnpm add @nivaro/react @nivaro/sdk</code></pre>
+          <h3 class="doc-h3">Setup</h3>
+          <p class="doc-p">Wrap your app in <code class="doc-code">&lt;NivaroProvider&gt;</code> with a configured SDK client. The provider supplies the client to every form hook below it.</p>
+          <pre class="doc-pre"><code>import { createNivaro } from '@nivaro/sdk'
+import { NivaroProvider } from '@nivaro/react'
+
+const nivaro = createNivaro('https://nivaro.example.com', { token: '...' })
+
+function App() {
+  return (
+    &lt;NivaroProvider client={nivaro}&gt;
+      &lt;RequestForm /&gt;
+    &lt;/NivaroProvider&gt;
+  )
+}</code></pre>
+          <h3 class="doc-h3">useNivaroForm</h3>
+          <p class="doc-p">The hook loads the schema, manages values and errors, and wires submit. Pass the collection and a mode (<code class="doc-code">create</code> or <code class="doc-code">edit</code>).</p>
+          <pre class="doc-pre"><code>const form = useNivaroForm('inventory_requests', {
+  mode: 'create',                  // 'create' | 'edit'
+  itemId: '123',                   // required when mode === 'edit'
+  defaultValues: { priority: 'low' },
+  onSuccess: (item) =&gt; navigate(`/requests/${item.id}`),
+  onError: (err) =&gt; toast.error(err.message),
+})</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Returned</th><th>Description</th></tr></thead>
+            <tbody><tr><tr><td>values</td><td>Current form values keyed by field name.</td></tr>
+              <tr><td>errors</td><td>Validation errors keyed by field name (empty when valid).</td></tr>
+              <tr><td>setValue(field, value)</td><td>Update one field; re-runs field rules and visibility/lock evaluation.</td></tr>
+              <tr><td>handleSubmit(e?)</td><td>Validates, then creates or updates via the SDK; fires onSuccess / onError.</td></tr>
+              <tr><td>isVisible(field)</td><td>Whether a field passes its visibility rules for the current values.</td></tr>
+              <tr><td>isLocked(field)</td><td>Whether a field is locked (read-only) for the current values.</td></tr>
+              <tr><td>schema</td><td>The normalized FormSchema (camelCase: fieldType, validationRules, ...).</td></tr>
+              <tr><td>fieldsByGroup</td><td>Fields bucketed by group key for rendering sections/tabs.</td></tr>
+              <tr><td>visibleGroups</td><td>Group definitions that currently have at least one visible field.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Styled example (custom inputs)</h3>
+          <p class="doc-p">Drive your own markup directly from the hook — full control over inputs and layout.</p>
+          <pre class="doc-pre"><code>import { useNivaroForm } from '@nivaro/react'
+
+function RequestForm() {
+  const form = useNivaroForm('inventory_requests', {
+    mode: 'create',
+    onSuccess: (item) =&gt; console.log('created', item.id),
+  })
+
+  if (!form.schema) return &lt;p&gt;Loading…&lt;/p&gt;
+
+  return (
+    &lt;form onSubmit={form.handleSubmit} className="space-y-4"&gt;
+      {form.schema.fields.map((field) =&gt;
+        form.isVisible(field.field) ? (
+          &lt;label key={field.field} className="block"&gt;
+            &lt;span className="text-sm font-medium"&gt;{field.label}&lt;/span&gt;
+            &lt;input
+              className="mt-1 w-full rounded border px-3 py-2"
+              value={form.values[field.field] ?? ''}
+              disabled={form.isLocked(field.field)}
+              onChange={(e) =&gt; form.setValue(field.field, e.target.value)}
+            /&gt;
+            {form.errors[field.field] &amp;&amp; (
+              &lt;span className="text-xs text-red-600"&gt;{form.errors[field.field]}&lt;/span&gt;
+            )}
+          &lt;/label&gt;
+        ) : null
+      )}
+      &lt;button type="submit" className="rounded bg-nvr-cyan px-4 py-2 text-white"&gt;
+        Submit
+      &lt;/button&gt;
+    &lt;/form&gt;
+  )
+}</code></pre>
+          <h3 class="doc-h3">Unstyled example (NivaroForm auto-render)</h3>
+          <p class="doc-p"><code class="doc-code">&lt;NivaroForm form={form}&gt;</code> renders every visible field from the schema automatically. Use <code class="doc-code">renderField</code> for a per-field override, or <code class="doc-code">components</code> to swap the default input element per field type.</p>
+          <pre class="doc-pre"><code>import { useNivaroForm, NivaroForm } from '@nivaro/react'
+
+function RequestForm() {
+  const form = useNivaroForm('inventory_requests', { mode: 'create' })
+
+  return (
+    &lt;NivaroForm
+      form={form}
+      // Optional: override rendering for a single field
+      renderField={(field, ctx) =&gt;
+        field.field === 'notes' ? (
+          &lt;textarea value={ctx.value} onChange={(e) =&gt; ctx.setValue(e.target.value)} /&gt;
+        ) : undefined  // return undefined to fall back to the default
+      }
+      // Optional: swap the input component per field type
+      components={{
+        select: MySelect,
+        date: MyDatePicker,
+      }}
+    /&gt;
+  )
+}</code></pre>
+          <!-- /SYNC:sdk-react -->
+        </div>
+
         <!-- SDK additional sections -->
         <div class="doc-section" id="s-sdk-notifications" data-toc='[{"id":"sdk-notifications","label":"SDK — Notifications"}]'>
           <!-- SYNC:sdk-notifications -->
@@ -3635,15 +3825,15 @@ const revs = await nivaro.request(readRevisions('articles', '123'))</code></pre>
           <ul class="doc-ul">
             <li>Everything is exported from the package root — editor autocomplete on <code class="doc-code">import { … } from "@nivaro/sdk"</code> is the fastest index.</li>
             <li>The SDK Playground at /sdk-playground runs snippets against the live instance with your session's permissions, with collection and field comboboxes to scaffold calls.</li>
-            <li>All commands flow through <code class="doc-code">cms.request(command)</code>, so auth, workspace headers, and error handling are uniform.</li>
+            <li>All commands flow through <code class="doc-code">nivaro.request(command)</code>, so auth, workspace headers, and error handling are uniform.</li>
           </ul>
           <pre class="doc-pre"><code>import { createNivaro, readItems, aiValidate, listWidgetFeeds } from '@nivaro/sdk';
 
-const cms = createNivaro('https://cms.example.com').withToken('nvk_...');
+const nivaro = createNivaro('https://nivaro.example.com').withToken('nvk_...');
 
-const articles = await cms.request(readItems('articles', { limit: 5 }));
-const check = await cms.request(aiValidate('articles', { title: 'Draft post' }));
-const feeds = await cms.request(listWidgetFeeds());</code></pre>
+const articles = await nivaro.request(readItems('articles', { limit: 5 }));
+const check = await nivaro.request(aiValidate('articles', { title: 'Draft post' }));
+const feeds = await nivaro.request(listWidgetFeeds());</code></pre>
           <!-- /SYNC:sdk-coverage -->
         </div>
 
@@ -3869,7 +4059,16 @@ export default plugin;</code></pre>
               <tr><td>hooks</td><td>{ before, after }</td><td>Scoped hook helpers — tagged with the extension id for enable/disable.</td></tr>
               <tr><td>cron</td><td>{ schedule, unschedule }</td><td>Scoped cron helpers — paused/resumed when extension is toggled.</td></tr>
               <tr><td>callExternalApi</td><td>(nameOrId, options?) =&gt; Promise</td><td>Call a configured external API by name or numeric ID. Auth (bearer, api_key, basic, oauth2_cc) resolved automatically from the stored config.</td></tr>
-              <tr><td>flows</td><td>{ registerOperation, registerTrigger, emit }</td><td>Register custom flow operation types and trigger types. They appear in the flow editor automatically. Call <code class="doc-code">emit()</code> to fire flows using a custom trigger.</td></tr></tr></tbody>
+              <tr><td>flows</td><td>{ registerOperation, registerTrigger, emit }</td><td>Register custom flow operation types and trigger types. They appear in the flow editor automatically. Call <code class="doc-code">emit()</code> to fire flows using a custom trigger.</td></tr>
+              <tr><td>bulkActions</td><td>{ register(def) }</td><td>Register a bulk action that appears in the collection browser selection bar. <code class="doc-code">def.execute({ collection, ids })</code> is called server-side.</td></tr>
+              <tr><td>itemActions</td><td>{ register(def) }</td><td>Register a contextual action button in the item editor toolbar. <code class="doc-code">def.execute({ collection, itemId })</code> is called server-side.</td></tr>
+              <tr><td>notificationChannels</td><td>{ register(def) }</td><td>Register a notification delivery channel (e.g. Slack, SMS). <code class="doc-code">def.deliver(ctx)</code> is called for every notification routed to this channel.</td></tr>
+              <tr><td>dashboardWidgets</td><td>{ register(def) }</td><td>Register a custom dashboard widget type. Appears in the widget picker with the declared label, icon, and config schema.</td></tr>
+              <tr><td>storage</td><td>{ register(name, adapter), setActive(name) }</td><td>Register a named file storage adapter (e.g. S3, Azure Blob). Call <code class="doc-code">setActive()</code> to route all new uploads through it.</td></tr>
+              <tr><td>fieldTypes</td><td>{ register(def) }</td><td>Register a custom field type with optional serialize/deserialize transforms. Appears in the field type picker in Data Model.</td></tr>
+              <tr><td>collectionViews</td><td>{ register(def) }</td><td>Register a custom collection view mode (Kanban, calendar, Gantt, map). Shown in the view switcher on collection browser pages.</td></tr>
+              <tr><td>importParsers</td><td>{ register(def) }</td><td>Register a file import parser for additional formats (Excel, JSON, XML). Parser is selected automatically by MIME type or extension in the import wizard.</td></tr>
+              <tr><td>validators</td><td>{ register(def) }</td><td>Register a custom field validator operator (e.g. <code class="doc-code">phone_e164</code>, <code class="doc-code">iban</code>). The operator becomes available in Data Model → Field → Validation Rules.</td></tr></tr></tbody>
           </table></div>
           <!-- /SYNC:ext-context -->
         </div>
@@ -4739,6 +4938,111 @@ ctx.app.register(async (f) =&gt; {
           <!-- /SYNC:ext-plugin-integration-types -->
         </div>
 
+        <div class="doc-section" id="s-ext-registrations" data-toc='[{"id":"ext-registrations","label":"Extension Registration APIs"}]'>
+          <!-- SYNC:ext-registrations -->
+          <h1 class="doc-h1" id="ext-registrations">Extension Registration APIs</h1>
+          <p class="doc-p">Beyond hooks, cron, and routes, extensions can register capabilities that plug into specific admin UI surfaces and server pipelines. Working examples for every type live in <code class="doc-code">examples/my-project/extensions/</code>.</p>
+          <h3 class="doc-h3">Bulk actions</h3>
+          <p class="doc-p">Appear as buttons in the collection browser selection bar when rows are selected. The <code class="doc-code">execute</code> function runs server-side and returns a toast message.</p>
+          <pre class="doc-pre"><code>ctx.bulkActions.register({
+  id: 'mark-fulfilled',
+  label: 'Mark fulfilled',
+  icon: 'CheckCircle2',
+  collections: ['orders'],   // omit for all collections
+  async execute({ ids, collection }) {
+    const n = await ctx.database(collection).whereIn('id', ids).update({ status: 'fulfilled' });
+    return { message: `${n} order${n === 1 ? '' : 's'} marked fulfilled` };
+  },
+});</code></pre>
+          <h3 class="doc-h3">Item actions</h3>
+          <p class="doc-p">Appear as buttons in the item editor toolbar alongside Save. Useful for "Push to ERP", "Generate PDF", "Send notification" patterns.</p>
+          <pre class="doc-pre"><code>ctx.itemActions.register({
+  id: 'push-to-erp',
+  label: 'Push to ERP',
+  variant: 'outline',        // 'default' | 'outline' | 'destructive'
+  collections: ['invoices'],
+  async execute({ itemId, collection }) {
+    await ctx.callExternalApi('my-erp', { method: 'POST', path: '/invoices', body: { id: itemId } });
+    return { message: 'Invoice pushed to ERP' };
+  },
+});</code></pre>
+          <h3 class="doc-h3">Notification channels</h3>
+          <p class="doc-p">Every in-app notification is also delivered to all registered channels. Useful for Slack, Teams, SMS, email via a custom provider.</p>
+          <pre class="doc-pre"><code>ctx.notificationChannels.register({
+  id: 'slack',
+  label: 'Slack',
+  async deliver({ subject, message, recipient }) {
+    await fetch(process.env.SLACK_WEBHOOK_URL!, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: `*${subject}*\n${message}` }),
+    });
+  },
+});</code></pre>
+          <h3 class="doc-h3">Storage adapters</h3>
+          <p class="doc-p">Replace local disk storage with any cloud provider. The adapter interface matches the local adapter exactly — put, get, delete, url.</p>
+          <pre class="doc-pre"><code>ctx.storage.register('s3', {
+  async put(key, stream, meta) { /* upload to S3 */ },
+  async get(key) { /* return readable stream from S3 */ },
+  async delete(key) { /* delete from S3 */ },
+  async url(key) { return getSignedUrl(client, key); },
+});
+ctx.storage.setActive('s3');</code></pre>
+          <h3 class="doc-h3">Dashboard widgets</h3>
+          <p class="doc-p">Register custom widget types. The widget type appears in the dashboard builder widget picker alongside built-in types.</p>
+          <pre class="doc-pre"><code>ctx.dashboardWidgets.register({
+  type: 'my-ext:revenue-chart',
+  label: 'Revenue Chart',
+  icon: 'BarChart3',
+  description: 'Monthly revenue from the billing API',
+  fieldMappings: [{ key: 'period', label: 'Period', required: true }],
+});</code></pre>
+          <h3 class="doc-h3">Collection views</h3>
+          <p class="doc-p">Add view modes to the collection browser (Kanban, calendar, Gantt, map). The view renders via a UI bundle URL that receives collection data via postMessage.</p>
+          <pre class="doc-pre"><code>ctx.collectionViews.register({
+  id: 'kanban',
+  label: 'Kanban',
+  icon: 'Columns3',
+  bundleUrl: '/api/extensions/my-ext/ui.js',
+  fieldMappings: [
+    { key: 'statusField', label: 'Status field', required: true },
+    { key: 'titleField',  label: 'Title field',  required: true },
+  ],
+});</code></pre>
+          <h3 class="doc-h3">Import parsers</h3>
+          <p class="doc-p">Add file format support to the Data Import wizard. The parser is selected automatically by MIME type or file extension. Returns column-named row objects identical to CSV rows.</p>
+          <pre class="doc-pre"><code>ctx.importParsers.register({
+  mimeTypes: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  extensions: ['xlsx'],
+  label: 'Excel (.xlsx)',
+  async parse(content) {
+    const XLSX = await import('xlsx');
+    const ws = XLSX.read(content, { type: 'buffer' }).Sheets['Sheet1'];
+    return XLSX.utils.sheet_to_json(ws, { defval: '' })
+      .map(row =&gt; Object.fromEntries(Object.entries(row).map(([k,v]) =&gt; [k, String(v)])));
+  },
+});</code></pre>
+          <h3 class="doc-h3">Custom validators</h3>
+          <p class="doc-p">Add validator operators to the field validation rule system. Once registered, the operator appears in Data Model → Field → Validation Rules.</p>
+          <pre class="doc-pre"><code>ctx.validators.register({
+  operator: 'phone_e164',
+  label: 'Phone (E.164)',
+  validate(value) {
+    if (!value) return null;
+    return /^\+[1-9]\d{7,14}$/.test(String(value))
+      ? null
+      : 'Must be a valid E.164 phone number';
+  },
+});</code></pre>
+          <h3 class="doc-h3">Discovery endpoint</h3>
+          <p class="doc-p">All registered capabilities are accessible via a single endpoint, scoped to a collection when relevant:</p>
+          <pre class="doc-pre"><code>GET /api/extension-registry?collection=orders
+// Returns all 9 registries: bulkActions, itemActions, notificationChannels,
+// dashboardWidgets, fieldTypes, collectionViews, importParsers, validators,
+// storageAdapters + activeStorageAdapter</code></pre>
+          <!-- /SYNC:ext-registrations -->
+        </div>
+
         <div class="doc-section" id="s-ai-overview" data-toc='[{"id":"ai-overview","label":"AI Features"}]'>
           <!-- SYNC:ai-overview -->
           <h1 class="doc-h1" id="ai-overview">AI Features</h1>
@@ -5523,6 +5827,87 @@ docker compose up -d</code></pre>
 docker compose up -d</code></pre>
         </div>
 
+        <div class="doc-section" id="s-smtp-config" data-toc='[{"id":"smtp-config","label":"Email / SMTP Configuration"}]'>
+          <!-- SYNC:smtp-config -->
+          <h1 class="doc-h1" id="smtp-config">Email / SMTP Configuration</h1>
+          <p class="doc-p">SMTP settings are configured in Settings → Email. DB values take precedence over env vars — any field left blank falls back to the corresponding env var, so you can bootstrap with env vars and migrate to DB config without downtime.</p>
+          <h3 class="doc-h3">Provider presets</h3>
+          <p class="doc-p">Click a provider chip to auto-fill host, port, and TLS setting. Credentials (username/password) are always entered manually.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Provider</th><th>Host</th><th>Port</th><th>TLS</th></tr></thead>
+            <tbody><tr><tr><td>Gmail</td><td>smtp.gmail.com</td><td>587</td><td>STARTTLS</td></tr>
+              <tr><td>Outlook / Office 365</td><td>smtp.office365.com</td><td>587</td><td>STARTTLS</td></tr>
+              <tr><td>SendGrid</td><td>smtp.sendgrid.net</td><td>587</td><td>STARTTLS</td></tr>
+              <tr><td>Mailgun</td><td>smtp.mailgun.org</td><td>587</td><td>STARTTLS</td></tr>
+              <tr><td>Amazon SES</td><td>email-smtp.us-east-1.amazonaws.com</td><td>587</td><td>STARTTLS</td></tr>
+              <tr><td>Postmark</td><td>smtp.postmarkapp.com</td><td>587</td><td>STARTTLS</td></tr>
+              <tr><td>Resend</td><td>smtp.resend.com</td><td>465</td><td>TLS</td></tr>
+              <tr><td>Brevo</td><td>smtp-relay.brevo.com</td><td>587</td><td>STARTTLS</td></tr>
+              <tr><td>Mailchimp / Mandrill</td><td>smtp.mandrillapp.com</td><td>587</td><td>STARTTLS</td></tr>
+              <tr><td>Yahoo Mail</td><td>smtp.mail.yahoo.com</td><td>587</td><td>STARTTLS</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Fields</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Field</th><th>Env var fallback</th><th>Notes</th></tr></thead>
+            <tbody><tr><tr><td>SMTP host</td><td>SMTP_HOST</td><td>Auto-filled by provider presets</td></tr>
+              <tr><td>SMTP port</td><td>SMTP_PORT</td><td>Auto-filled by provider presets</td></tr>
+              <tr><td>Secure (TLS)</td><td>SMTP_SECURE</td><td>Auto-filled; enable for port 465, off for STARTTLS</td></tr>
+              <tr><td>SMTP username</td><td>SMTP_USER</td><td>Omit for unauthenticated relay</td></tr>
+              <tr><td>SMTP password</td><td>SMTP_PASSWORD</td><td>Masked on GET; preserved if placeholder re-submitted</td></tr>
+              <tr><td>Mail from</td><td>MAIL_FROM</td><td>Sender address, e.g. <code class="doc-code">Nivaro &lt;no-reply@example.com&gt;</code></td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">API</h3>
+          <pre class="doc-pre"><code>GET   /api/settings          # smtp_pass → ••••••
+PATCH /api/settings          # smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, smtp_secure
+
+POST  /api/settings/mail/test  { "to": "you@example.com" }
+      # → { "ok": true } | { "error": "&lt;SMTP error&gt;" }</code></pre>
+          <h3 class="doc-h3">Using from extensions</h3>
+          <pre class="doc-pre"><code>import { sendMail, sendRawMail } from '../../src/services/mail.js';
+
+await sendMail({ to: 'user@example.com', subject: 'Shipped', template: 'order-shipped', data: { orderNumber: '123' } });
+await sendRawMail({ to: 'user@example.com', subject: 'Notice', html: '&lt;p&gt;Hello&lt;/p&gt;' });</code></pre>
+          <div class="doc-note">Both functions no-op with a console.warn when no SMTP host is set — safe in local dev.</div>
+          <!-- /SYNC:smtp-config -->
+        </div>
+
+        <div class="doc-section" id="s-sms-config" data-toc='[{"id":"sms-config","label":"SMS Configuration"}]'>
+          <!-- SYNC:sms-config -->
+          <h1 class="doc-h1" id="sms-config">SMS Configuration</h1>
+          <p class="doc-p">SMS delivery is configured in Settings → SMS. Select a provider, enter credentials, and optionally send a test message. All providers are implemented without external SDKs — Twilio, Vonage, Sinch, and MessageBird use plain fetch; Amazon SNS uses native crypto.subtle for SigV4 signing.</p>
+          <h3 class="doc-h3">Supported providers</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Provider</th><th>Account ID field</th><th>Token field</th><th>Extra</th></tr></thead>
+            <tbody><tr><tr><td>Twilio</td><td>Account SID</td><td>Auth token</td><td>—</td></tr>
+              <tr><td>Amazon SNS</td><td>Access key ID</td><td>Secret access key</td><td>Region (default us-east-1)</td></tr>
+              <tr><td>Vonage (Nexmo)</td><td>API key</td><td>API secret</td><td>—</td></tr>
+              <tr><td>Sinch</td><td>Service plan ID</td><td>API token</td><td>—</td></tr>
+              <tr><td>MessageBird</td><td>API key</td><td>API key (repeated)</td><td>—</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Fields stored in nivaro_settings</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Column</th><th>Description</th></tr></thead>
+            <tbody><tr><tr><td>sms_provider</td><td>twilio | aws-sns | vonage | sinch | messagebird</td></tr>
+              <tr><td>sms_account_sid</td><td>Account ID / API key for the provider</td></tr>
+              <tr><td>sms_auth_token</td><td>Secret — masked on GET, preserved if placeholder re-submitted</td></tr>
+              <tr><td>sms_from</td><td>Sender number (E.164) or alphanumeric ID</td></tr>
+              <tr><td>sms_region</td><td>AWS region for SNS (default us-east-1)</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">API</h3>
+          <pre class="doc-pre"><code>GET   /api/settings           # sms_auth_token → ••••••
+PATCH /api/settings           # sms_provider, sms_account_sid, sms_auth_token, sms_from, sms_region
+
+POST  /api/settings/sms/test  { "to": "+12125550100" }
+      # → { "ok": true } | { "error": "&lt;provider error&gt;" }</code></pre>
+          <h3 class="doc-h3">Using from extensions</h3>
+          <pre class="doc-pre"><code>import { sendSms } from '../../src/services/sms.js';
+
+// Reads provider + credentials from nivaro_settings at call time
+await sendSms('+12125550100', 'Your verification code is 482910');</code></pre>
+          <div class="doc-note"><code class="doc-code">sendSms</code> no-ops with a console.warn when no provider is configured. Use it from notification channel extensions or hooks to add SMS delivery alongside in-app and email.</div>
+          <!-- /SYNC:sms-config -->
+        </div>
+
         <div class="doc-section" id="s-deployment-release" data-toc='[{"id":"rel-build","label":"Build image"},{"id":"rel-static","label":"SPA serving"},{"id":"rel-notfound","label":"404 handling"},{"id":"rel-cicd","label":"CI/CD"}]'>
           <h1 class="doc-h1" id="rel-build">Release Image</h1>
           <p class="doc-p"><code class="doc-code">Dockerfile.release</code> compiles the admin SPA and the TypeScript API into a single production image.</p>
@@ -5653,6 +6038,45 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
           <!-- /SYNC:permissions-model -->
         </div>
 
+        <!-- FIELD DISPLAY SETTINGS -->
+        <div class="doc-section" id="s-field-display-settings" data-toc='[{"id":"field-display-settings","label":"Field Display Settings"}]'>
+          <!-- SYNC:field-display-settings -->
+          <h1 class="doc-h1" id="field-display-settings">Field Display Settings</h1>
+          <p class="doc-p">Every field in a registered collection has per-field display settings that control how it is labelled and rendered in the item editor — without changing the underlying database column. Open Data Model → select a collection → hover a field chip in the Table Editor and click the gear icon to open the Display Settings popover. A cyan gear indicates the field already has overrides.</p>
+          <h3 class="doc-h3">Available settings</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Setting</th><th>Applies to</th><th>Behavior</th></tr></thead>
+            <tbody><tr><tr><td>Label</td><td>All fields</td><td>Overrides the auto-generated label (title-cased field name). Leave blank to fall back to the default.</td></tr>
+              <tr><td>Interface</td><td>All fields</td><td>Overrides which input component renders the field. Options depend on the field's abstract type; choose "Default" to reset to auto-detection.</td></tr>
+              <tr><td>Note</td><td>All fields</td><td>Helper text shown below the input in the item editor.</td></tr>
+              <tr><td>Required</td><td>All fields</td><td>Marks the field as required in the editor.</td></tr>
+              <tr><td>Hidden</td><td>All fields</td><td>Hides the field from the item editor entirely.</td></tr>
+              <tr><td>Read-only</td><td>All fields</td><td>Renders the field as non-editable.</td></tr>
+              <tr><td>Inline edit</td><td>M2O relations</td><td>On by default. When enabled, the related record can be opened and edited inline next to the relation picker; when disabled, the field is a plain pick-only combobox.</td></tr>
+              <tr><td>Max values</td><td>M2M relations</td><td>Integer limit on how many related records can be linked. Leave blank for unlimited. Setting it to 1 switches the field to a single-select combobox.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Storage and API</h3>
+          <ul class="doc-ul">
+            <li>Settings are stored on the nivaro_fields row for the collection + field — label, note, interface, required, hidden and readonly are real columns; max_values and inline_relation are merged into the options JSON column.</li>
+            <li>Updates go through PATCH /api/field-config/:collection/:field (admin only). Send only the keys you want to change.</li>
+            <li>GET /api/field-config/:collection (any authenticated user) returns the full per-field config, including label, note, interface and the parsed options object.</li>
+            <li>In the SDK, use readFieldConfig(collection) and updateFieldConfig(collection, field, patch) — the FieldConfig type includes label.</li>
+          </ul>
+          <pre class="doc-pre"><code>// PATCH /api/field-config/orders/customer
+{
+  "label": "Customer Account",
+  "note": "The billing account this order is invoiced to",
+  "required": true,
+  "inline_relation": false
+}
+
+// PATCH /api/field-config/orders/tags  (M2M)
+{ "max_values": 1 }   // single-select combobox
+{ "max_values": null } // back to unlimited</code></pre>
+          <div class="doc-note">Display settings are presentation-layer only — Hidden and Read-only affect the admin item editor, not API access. Use roles/policies (field-level permissions) to actually restrict reads and writes, and Validation Rules for server-side enforcement of required values.</div>
+          <!-- /SYNC:field-display-settings -->
+        </div>
+
         <!-- FIELD RULES -->
         <div class="doc-section" id="s-field-rules" data-toc='[{"id":"field-rules","label":"Field Rules"}]'>
           <!-- SYNC:field-rules -->
@@ -5756,6 +6180,49 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
 { "priority_score": "high" }   // upserts; keys without an active definition are ignored</code></pre>
           <div class="doc-note">Definition CRUD requires admin access. Reading and writing values requires any authenticated user. A value PATCH silently ignores keys that have no active definition for that collection, so stale client payloads cannot create orphaned rows.</div>
           <!-- /SYNC:dynamic-attributes -->
+        </div>
+
+        <!-- COLLECTION LAYOUTS -->
+        <div class="doc-section" id="s-collection-layouts" data-toc='[{"id":"collection-layouts","label":"Collection Layouts"}]'>
+          <h1 class="doc-h1" id="collection-layouts">Collection Layouts</h1>
+          <p class="doc-p">Each registered collection can have multiple named layouts. A layout defines how fields are grouped and ordered in the item editor. One layout is marked active and used by ItemEdit automatically; others can be referenced by name via the SDK.</p>
+
+          <h3 class="doc-h3">Managing layouts</h3>
+          <p class="doc-p">Open <strong>Data Model</strong> → select a collection → <strong>Layout tab</strong>. The left panel lists layouts. Click to edit groups and field assignments. The active layout (cyan dot) is what the item editor displays. Double-click a name to rename inline.</p>
+
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Action</th><th>How</th></tr></thead>
+            <tbody>
+              <tr><td>Create layout</td><td>Click "+ Add layout" in the left panel</td></tr>
+              <tr><td>Set active</td><td>Open a layout → click "Set active"</td></tr>
+              <tr><td>Clone layout</td><td>Open a layout → click "Clone"</td></tr>
+              <tr><td>Delete layout</td><td>Open a layout → click "Delete" (blocked if only layout)</td></tr>
+              <tr><td>Rename layout</td><td>Double-click the layout name in the left panel</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 class="doc-h3">API</h3>
+          <pre class="doc-pre"><code>GET  /api/collection-layouts?collection=articles
+POST /api/collection-layouts                    { collection, name }
+PATCH /api/collection-layouts/:id               { name?, sort? }
+POST /api/collection-layouts/:id/activate
+POST /api/collection-layouts/:id/clone          { name }
+GET  /api/collection-layouts/:id/assignments
+PUT  /api/collection-layouts/:id/assignments    { assignments: [{field, group_key, sort}] }
+DELETE /api/collection-layouts/:id</code></pre>
+
+          <h3 class="doc-h3">SDK</h3>
+          <pre class="doc-pre"><code>import { readCollectionLayouts, readActiveLayout, readLayoutAssignments,
+         activateLayout, cloneLayout } from '@nivaro/sdk'
+
+// List all layouts
+const layouts = await cms.request(readCollectionLayouts('articles'))
+
+// Read active layout with groups + assignments
+const active = await cms.request(readActiveLayout('articles'))
+
+// Use a specific layout in @nivaro/react
+useNivaroForm('articles', { mode: 'create', layoutId: 42 })</code></pre>
         </div>
 
         <!-- MULTI HIERARCHY OVERVIEW -->
@@ -6457,53 +6924,53 @@ hooks.after('categories', 'update', async ({ item, previousData }) =&gt; {
         </div>
 
         <!-- SDK — TREE & HIERARCHY -->
-        <div class="doc-section" id="s-sdk-tree-hierarchy" data-toc='[{"id":"sdk-tree-hierarchy","label":"SDK — Tree &amp; Hierarchy"}]'>
+        <div class="doc-section" id="s-sdk-tree-hierarchy" data-toc='[{"id":"sdk-tree-hierarchy","label":"Tree &amp; Hierarchy"}]'>
           <!-- SYNC:sdk-tree-hierarchy -->
-          <h1 class="doc-h1" id="sdk-tree-hierarchy">SDK — Tree &amp; Hierarchy</h1>
+          <h1 class="doc-h1" id="sdk-tree-hierarchy">Tree &amp; Hierarchy</h1>
           <p class="doc-p">The Nivaro SDK provides typed commands for both same-collection trees and multi-collection hierarchies.</p>
           <h3 class="doc-h3">Tree commands</h3>
           <pre class="doc-pre"><code>import { createNivaro, readTreeConfig, readTreeNodes, readTreeNested, readTreeAncestors, readTreeDescendants, readTreeChildren, moveTreeNode, reorderTreeSiblings, rebuildTreePaths } from '@nivaro/sdk'
 
-const cms = createNivaro('https://cms.example.com', { token: 'my-token' })
+const nivaro = createNivaro('https://nivaro.example.com', { token: 'my-token' })
 
 // Check if a collection has a tree config
-const config = await cms.request(readTreeConfig('org_units'))
+const config = await nivaro.request(readTreeConfig('org_units'))
 // → { data: { id, collection, parent_field, label_field, order_field } | null }
 
 // Flat node list (for custom rendering)
-const nodes = await cms.request(readTreeNodes('org_units'))
+const nodes = await nivaro.request(readTreeNodes('org_units'))
 
 // Fully nested tree (recursive children arrays)
-const tree = await cms.request(readTreeNested('org_units'))
+const tree = await nivaro.request(readTreeNested('org_units'))
 
 // Ancestors of a node (root-first breadcrumb)
-const path = await cms.request(readTreeAncestors('org_units', 42))
+const path = await nivaro.request(readTreeAncestors('org_units', 42))
 
 // Direct children of a node
-const kids = await cms.request(readTreeChildren('org_units', 42))
+const kids = await nivaro.request(readTreeChildren('org_units', 42))
 
 // All descendants (any depth)
-const all = await cms.request(readTreeDescendants('org_units', 42))
+const all = await nivaro.request(readTreeDescendants('org_units', 42))
 
 // Move a node (null = make root)
-await cms.request(moveTreeNode('org_units', 42, 7))
+await nivaro.request(moveTreeNode('org_units', 42, 7))
 
 // Reorder siblings (requires order_field on the tree config)
-await cms.request(reorderTreeSiblings('org_units', 42, [
+await nivaro.request(reorderTreeSiblings('org_units', 42, [
   { id: 42, sort: 0 },
   { id: 43, sort: 1 },
 ]))
 
 // Rebuild materialized path/depth columns (admin; maintain_path configs)
-await cms.request(rebuildTreePaths(3))</code></pre>
+await nivaro.request(rebuildTreePaths(3))</code></pre>
           <h3 class="doc-h3">Tree permission commands (admin)</h3>
           <pre class="doc-pre"><code>import { listTreePermissions, createTreePermission, updateTreePermission, deleteTreePermission } from '@nivaro/sdk'
 
 // List rules (optionally for one collection)
-const rules = await cms.request(listTreePermissions('org_units'))
+const rules = await nivaro.request(listTreePermissions('org_units'))
 
 // Deny the "Contractors" role updates inside node 42's subtree
-await cms.request(createTreePermission({
+await nivaro.request(createTreePermission({
   collection: 'org_units',
   node_id: 42,
   role: '0a1b2c3d-…',     // role UUID
@@ -6511,29 +6978,29 @@ await cms.request(createTreePermission({
   allow: false,
 }))
 
-await cms.request(updateTreePermission(7, { action: '*' }))
-await cms.request(deleteTreePermission(7))</code></pre>
+await nivaro.request(updateTreePermission(7, { action: '*' }))
+await nivaro.request(deleteTreePermission(7))</code></pre>
           <div class="doc-note">Item reads on tree collections may include an <code class="doc-code">_inherited</code> sidecar (<code class="doc-code">{ field: ancestorId }</code>) when inheritable fields resolved values from an ancestor — see Inherited Field Values.</div>
           <h3 class="doc-h3">Hierarchy commands</h3>
           <pre class="doc-pre"><code>import { createNivaro, listHierarchyConfigs, readHierarchyConfig, readHierarchyTree, readHierarchyNodes, readHierarchyNodeChildren, readHierarchyNodeAncestors, createHierarchyConfig, updateHierarchyConfig, deleteHierarchyConfig } from '@nivaro/sdk'
 
 // List all hierarchy configs
-const configs = await cms.request(listHierarchyConfigs())
+const configs = await nivaro.request(listHierarchyConfigs())
 
 // Full nested tree for hierarchy #1
-const tree = await cms.request(readHierarchyTree(1))
+const tree = await nivaro.request(readHierarchyTree(1))
 
 // Flat nodes for hierarchy #1
-const nodes = await cms.request(readHierarchyNodes(1))
+const nodes = await nivaro.request(readHierarchyNodes(1))
 
 // Children of a specific node
-const children = await cms.request(readHierarchyNodeChildren(1, 'divisions', 5))
+const children = await nivaro.request(readHierarchyNodeChildren(1, 'divisions', 5))
 
 // Ancestors (breadcrumb) of a node
-const ancestors = await cms.request(readHierarchyNodeAncestors(1, 'regions', 22))
+const ancestors = await nivaro.request(readHierarchyNodeAncestors(1, 'regions', 22))
 
 // Create a new hierarchy config
-await cms.request(createHierarchyConfig({
+await nivaro.request(createHierarchyConfig({
   name: 'Org Structure',
   levels: [
     { collection: 'divisions', label_field: 'name', parent_fk: null },
@@ -6813,8 +7280,11 @@ Content-Type: text/csv
             <tbody><tr><tr><td>section</td><td>Collapsible card with a label and optional icon. Fields stack vertically inside.</td></tr>
               <tr><td>tab</td><td>Named tab in a tabbed interface at the top of the form. All tab-type groups for a collection appear as tabs together.</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Tab group behaviour</h3>
+          <p class="doc-p">When a collection has at least one group of <code class="doc-code">type: "tab"</code>, the item editor renders a tab strip at the top of the form. Fields without a group_key appear in an implicit "General" tab alongside any section-type groups. The active tab is persisted per collection in localStorage, so editors return to the same tab on revisit.</p>
+          <p class="doc-p">Fields with validation errors cause a red dot indicator to appear on their tab, making it easy to spot which tab contains a problem without switching manually.</p>
           <h3 class="doc-h3">Managing groups</h3>
-          <p class="doc-p">Go to Data Model → select a table → click the Groups tab in the right panel. Create groups with a key (slug), label, type, optional icon, and sort order. Assign a field to a group by setting its group_key to the group's key.</p>
+          <p class="doc-p">Go to Data Model → select a table → click the Groups tab in the right panel. Create groups with a key (slug), label, type, optional icon, and sort order. Assign a field to a group by setting its group_key to the group's key. To toggle a group between section and tab types, click the type badge on the group row.</p>
           <h3 class="doc-h3">Field Groups API</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
@@ -6824,7 +7294,7 @@ Content-Type: text/csv
               <tr><td>DELETE</td><td>/api/field-groups/:id</td><td>Delete a group (fields are unassigned, not deleted).</td></tr>
               <tr><td>POST</td><td>/api/field-groups/reorder</td><td>Bulk reorder. Body: [{ id, sort }].</td></tr></tr></tbody>
           </table></div>
-          <div class="doc-note">Fields with no group_key appear above any grouped sections in the item editor. The is_collapsed flag sets the initial open/closed state for section-type groups.</div>
+          <div class="doc-note">Fields with no group_key appear above any grouped sections in the item editor (or in the implicit "General" tab when tabs are active). The is_collapsed flag sets the initial open/closed state for section-type groups.</div>
           <!-- /SYNC:content-ops-field-groups -->
         </div>
 
@@ -7108,68 +7578,123 @@ POST /api/collections/:collection/fields
         <div class="doc-section" id="s-content-ops-rich-text" data-toc='[{"id":"content-ops-rich-text","label":"Rich Text / WYSIWYG Fields"}]'>
           <!-- SYNC:content-ops-rich-text -->
           <h1 class="doc-h1" id="content-ops-rich-text">Rich Text / WYSIWYG Fields</h1>
-          <p class="doc-p">Fields with <code class="doc-code">interface: "rich_text"</code> render a WYSIWYG editor in the item edit page. The editor stores content as portable JSON (ProseMirror/TipTap document format) which can be rendered to HTML, Markdown, or plain text on read.</p>
+          <p class="doc-p">Rich text fields support two interfaces: <code class="doc-code">"input-rich-text-html"</code> (WYSIWYG, stores HTML) and <code class="doc-code">"input-rich-text-md"</code> (Markdown editor, stores a Markdown string). Both render an enhanced editor in the item edit page — choose based on how the content will be consumed downstream.</p>
+          <h3 class="doc-h3">Interface options</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>interface</th><th>Editor</th><th>Stored format</th><th>Best for</th></tr></thead>
+            <tbody><tr><tr><td>input-rich-text-html</td><td>TipTap WYSIWYG</td><td>HTML string (nvarchar(max))</td><td>Content rendered directly in a browser; design systems that consume HTML.</td></tr>
+              <tr><td>input-rich-text-md</td><td>Markdown editor</td><td>Markdown string (nvarchar(max))</td><td>Documentation, developer-facing content, or pipelines that compile Markdown.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Toolbar (WYSIWYG)</h3>
+          <p class="doc-p">The <code class="doc-code">input-rich-text-html</code> editor exposes: Bold, Italic, Underline, Strikethrough, H1–H3, Ordered list, Unordered list, Blockquote, Code block, Horizontal rule, and Link.</p>
           <h3 class="doc-h3">Field definition</h3>
-          <pre class="doc-pre"><code>POST /api/collections/:collection/fields
+          <pre class="doc-pre"><code>// WYSIWYG — stores HTML:
+POST /api/collections/:collection/fields
 {
   "field": "body",
   "type": "text",
-  "interface": "rich_text"
+  "interface": "input-rich-text-html"
+}
+
+// Markdown editor — stores Markdown:
+POST /api/collections/:collection/fields
+{
+  "field": "notes",
+  "type": "text",
+  "interface": "input-rich-text-md"
 }</code></pre>
           <h3 class="doc-h3">Stored format</h3>
-          <p class="doc-p">Values are stored as a JSON string in the database column (nvarchar(max)). The API returns the raw JSON. Use the SDK or a TipTap-compatible renderer to convert it to HTML for display.</p>
-          <pre class="doc-pre"><code>// Stored value (abbreviated):
-{
-  "type": "doc",
-  "content": [
-    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Introduction" }] },
-    { "type": "paragraph", "content": [{ "type": "text", "text": "Body content here." }] }
-  ]
-}</code></pre>
+          <p class="doc-p">The WYSIWYG editor stores a plain HTML string — the API returns it as-is. Render it directly with your front-end framework's HTML output. The Markdown editor stores a plain Markdown string.</p>
+          <pre class="doc-pre"><code>// input-rich-text-html stored value:
+"&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p&gt;Body content here.&lt;/p&gt;"
+
+// input-rich-text-md stored value:
+"## Introduction\n\nBody content here."</code></pre>
           <!-- /SYNC:content-ops-rich-text -->
         </div>
 
-        <div class="doc-section" id="s-content-ops-line-items" data-toc='[{"id":"content-ops-line-items","label":"Line Items (BOM/Sub-rows)"}]'>
-          <!-- SYNC:content-ops-line-items -->
-          <h1 class="doc-h1" id="content-ops-line-items">Line Items (BOM/Sub-rows)</h1>
-          <p class="doc-p">Line items are ordered child rows attached to a parent record. Unlike repeater fields (JSON in a single column), line items are stored in the <code class="doc-code">nivaro_line_items</code> table as proper rows, making them queryable and suitable for rollup aggregation. They are ideal for bills of material, invoice lines, task lists, and similar structured sub-records.</p>
+        <div class="doc-section" id="s-content-ops-datetime-auto" data-toc='[{"id":"content-ops-datetime-auto","label":"Datetime Auto-fields"}]'>
+          <!-- SYNC:content-ops-datetime-auto -->
+          <h1 class="doc-h1" id="content-ops-datetime-auto">Datetime Auto-fields</h1>
+          <p class="doc-p">Datetime and timestamp fields can be configured to automatically stamp the current server date/time on record create, update, or both. The value is always the server timestamp (ISO 8601 UTC) — not the client clock.</p>
+          <h3 class="doc-h3">Configuring in the admin UI</h3>
+          <p class="doc-p">In Data Model → select a table → click a datetime field's config → set "On Create" and/or "On Update" to "Save Current Date/Time". The setting is stored in the field's options JSON.</p>
+          <h3 class="doc-h3">Options format</h3>
+          <pre class="doc-pre"><code>// On create only (e.g. created_at):
+{ "on_create": "now" }
+
+// On update only (e.g. updated_at):
+{ "on_update": "now" }
+
+// On both (e.g. last_touched):
+{ "on_create": "now", "on_update": "now" }</code></pre>
+          <h3 class="doc-h3">Execution order</h3>
+          <p class="doc-p">Auto-stamping is applied server-side in the items service before the write — after field rules, before computed fields. The auto value always wins over any client-supplied value for the same field.</p>
+          <h3 class="doc-h3">Common use cases</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Field name</th><th>on_create</th><th>on_update</th><th>Purpose</th></tr></thead>
+            <tbody><tr><tr><td>created_at</td><td>now</td><td>—</td><td>Immutable creation timestamp.</td></tr>
+              <tr><td>updated_at</td><td>—</td><td>now</td><td>Last-modified timestamp, updated on every save.</td></tr>
+              <tr><td>last_touched</td><td>now</td><td>now</td><td>Tracks first and last interaction time in one field.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Configuring via API</h3>
+          <pre class="doc-pre"><code>POST /api/collections/:collection/fields
+Authorization: Bearer &lt;admin-token&gt;
+
+{
+  "field": "updated_at",
+  "type": "datetime",
+  "interface": "datetime",
+  "options": "{\"on_update\":\"now\"}"
+}
+
+// Or update an existing field:
+PATCH /api/collections/:collection/fields/updated_at
+{ "options": "{\"on_update\":\"now\"}" }</code></pre>
+          <div class="doc-note">The options column is stored as a JSON string (nvarchar). Always stringify when writing via the API.</div>
+          <!-- /SYNC:content-ops-datetime-auto -->
+        </div>
+
+        <div class="doc-section" id="s-content-ops-sub-rows" data-toc='[{"id":"content-ops-sub-rows","label":"Sub-rows"}]'>
+          <!-- SYNC:content-ops-sub-rows -->
+          <h1 class="doc-h1" id="content-ops-sub-rows">Sub-rows</h1>
+          <p class="doc-p">Sub-rows are ordered child rows attached to a parent record. Unlike repeater fields (JSON in a single column), sub-rows are stored in the <code class="doc-code">nivaro_sub_rows</code> table as proper rows, making them queryable and suitable for rollup aggregation. They are ideal for bills of material, ingredient lists, task lists, and similar structured sub-records.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Line items are edited inline on the item edit page as an editable grid with add/remove/reorder controls. The Templates dropdown on each line-items field saves the current rows as a reusable template or applies an existing one — handy for standard BOMs and recurring invoice structures.</p>
+          <p class="doc-p">Sub-rows are edited inline on the item edit page as an editable grid with add/remove/reorder controls. The Templates dropdown on each sub-rows field saves the current rows as a reusable template or applies an existing one.</p>
           <h3 class="doc-h3">API</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
-            <tbody><tr><tr><td>GET</td><td>/api/line-items/:collection/:itemId/:field</td><td>List all line items for a parent record + field, ordered by sort.</td></tr>
-              <tr><td>PATCH</td><td>/api/line-items/:collection/:itemId/:field</td><td>Bulk replace all line items for the parent+field combo. Body: { rows: [...] }.</td></tr>
-              <tr><td>POST</td><td>/api/line-items/:collection/:itemId/:field/reorder</td><td>Reorder. Body: [{ id, sort }].</td></tr></tr></tbody>
+            <tbody><tr><tr><td>GET</td><td>/api/sub-rows/:collection/:itemId/:field</td><td>List all sub-rows for a parent record + field, ordered by sort.</td></tr>
+              <tr><td>PATCH</td><td>/api/sub-rows/:collection/:itemId/:field</td><td>Bulk replace all sub-rows for the parent+field combo. Body: { items: [...] }.</td></tr>
+              <tr><td>POST</td><td>/api/sub-rows/reorder</td><td>Reorder. Body: { collection, item_id, field, order: [{ id, sort }] }.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Row format</h3>
-          <pre class="doc-pre"><code>GET /api/line-items/purchase_orders/uuid/line_items
+          <pre class="doc-pre"><code>GET /api/sub-rows/purchase_orders/uuid/components
 → {
   "data": [
-    { "id": 1, "parent_collection": "purchase_orders", "parent_id": "uuid",
-      "line_item_field": "line_items", "sort": 1,
+    { "id": 1, "sort": 1,
       "data": { "sku": "WIDGET-A", "qty": 10, "unit_price": 4.99 } }
   ]
 }
 
 // PATCH body — replaces ALL rows for this parent+field:
 {
-  "rows": [
-    { "data": { "sku": "WIDGET-A", "qty": 10, "unit_price": 4.99 } },
-    { "data": { "sku": "WIDGET-B", "qty": 5,  "unit_price": 9.99 } }
+  "items": [
+    { "sort": 1, "data": { "sku": "WIDGET-A", "qty": 10, "unit_price": 4.99 } },
+    { "sort": 2, "data": { "sku": "WIDGET-B", "qty": 5,  "unit_price": 9.99 } }
   ]
 }</code></pre>
-          <h3 class="doc-h3">Line item templates</h3>
-          <p class="doc-p">Reusable sets of line items can be saved as templates in <code class="doc-code">nivaro_line_item_templates</code> and applied to any compatible parent record.</p>
+          <h3 class="doc-h3">Sub-row templates</h3>
+          <p class="doc-p">Reusable sets of sub-rows can be saved as templates in <code class="doc-code">nivaro_sub_row_templates</code> and applied to any compatible parent record.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
-            <tbody><tr><tr><td>GET</td><td>/api/line-items/:collection/:itemId/:field/templates</td><td>List available templates for this collection+field.</td></tr>
-              <tr><td>POST</td><td>/api/line-items/:collection/:itemId/:field/templates</td><td>Save current rows as a named template. Body: { name }.</td></tr>
-              <tr><td>POST</td><td>/api/line-items/:collection/:itemId/:field/templates/:templateId/apply</td><td>Apply a template — appends rows to the current list.</td></tr>
-              <tr><td>DELETE</td><td>/api/line-items/templates/:templateId</td><td>Delete a template.</td></tr></tr></tbody>
+            <tbody><tr><tr><td>GET</td><td>/api/sub-rows/templates/:collection/:field</td><td>List available templates for this collection+field.</td></tr>
+              <tr><td>POST</td><td>/api/sub-rows/templates</td><td>Save current rows as a named template. Body: { collection, field, name, items }.</td></tr>
+              <tr><td>POST</td><td>/api/sub-rows/templates/:templateId/apply</td><td>Apply a template — returns rows for merging into the editor.</td></tr>
+              <tr><td>DELETE</td><td>/api/sub-rows/templates/:templateId</td><td>Delete a template.</td></tr></tr></tbody>
           </table></div>
-          <div class="doc-note">PATCH /line-items bulk-replaces all rows for the given parent+field combination. Rows are matched by sort order on re-save. There is no partial update — always send the full desired list.</div>
-          <!-- /SYNC:content-ops-line-items -->
+          <div class="doc-note">PATCH /sub-rows bulk-replaces all rows for the given parent+field combination. There is no partial update — always send the full desired list.</div>
+          <!-- /SYNC:content-ops-sub-rows -->
         </div>
 
         <div class="doc-section" id="s-content-ops-translations" data-toc='[{"id":"content-ops-translations","label":"Multi-Language Field Values (i18n)"}]'>
@@ -7366,29 +7891,42 @@ Authorization: Bearer &lt;token&gt;
         <div class="doc-section" id="s-content-ops-clone" data-toc='[{"id":"content-ops-clone","label":"Duplicate / Clone Item"}]'>
           <!-- SYNC:content-ops-clone -->
           <h1 class="doc-h1" id="content-ops-clone">Duplicate / Clone Item</h1>
-          <p class="doc-p">Any item can be duplicated (deep-cloned) with a single API call. The clone copies all field values, sets <code class="doc-code">_status=draft</code> if the collection has draft/publish enabled, and returns the new item's ID.</p>
+          <p class="doc-p">Any item can be duplicated (deep-cloned) with a single API call. The clone copies all field values, sets <code class="doc-code">_status=draft</code> if the collection has draft/publish enabled, and returns the new item's ID. The clone body accepts optional parameters to fine-tune what is copied.</p>
           <h3 class="doc-h3">Cloning from the admin UI</h3>
-          <p class="doc-p">On the item edit page, use Duplicate in the header actions menu — the clone opens immediately for editing. The endpoint below is the programmatic equivalent.</p>
+          <p class="doc-p">On the item edit page, use Duplicate in the header actions menu. A Clone dialog opens letting editors set field overrides, exclude fields, and choose which sub-row fields to copy — before the clone is created. The endpoint below is the programmatic equivalent.</p>
           <h3 class="doc-h3">Clone endpoint</h3>
           <pre class="doc-pre"><code>POST /api/items/:collection/:id/clone
 Authorization: Bearer &lt;token&gt;
 
-// Optional body — override specific field values on the clone:
+// All body properties are optional:
 {
-  "overrides": {
+  "field_overrides": {
     "title": "Copy of Original Title",
     "status": "draft"
-  }
+  },
+  "exclude_fields": ["internal_notes", "locked_by"],
+  "include_sub_rows": ["components", "line_items"]
 }
 
-→ 201 {
-  "data": {
-    "id": "new-uuid",
-    "title": "Copy of Original Title",
-    "_status": "draft",
-    ...all other fields copied from source...
-  }
-}</code></pre>
+→ 201 { "data": { "id": "new-uuid" } }</code></pre>
+          <h3 class="doc-h3">Body parameters</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Parameter</th><th>Type</th><th>Description</th></tr></thead>
+            <tbody><tr><tr><td>field_overrides</td><td>Record&lt;string, unknown&gt;</td><td>Map of field → new value applied to the clone before insert. Useful for resetting status, renaming, or stamping a copy date.</td></tr>
+              <tr><td>exclude_fields</td><td>string[]</td><td>Field names to omit from the clone entirely. The cloned record will have null/default for these fields.</td></tr>
+              <tr><td>include_sub_rows</td><td>string[]</td><td>Sub-row field names whose child rows should be copied to the new record. Sub-rows are not copied by default.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">SDK usage</h3>
+          <pre class="doc-pre"><code>import { cloneItem } from '@nivaro/sdk'
+
+const result = await cms.request(
+  cloneItem('articles', 'source-uuid', {
+    field_overrides: { title: 'Copy — review before publishing' },
+    exclude_fields: ['published_at'],
+    include_sub_rows: ['sections']
+  })
+)
+console.log(result.data.id) // new item id</code></pre>
           <div class="doc-note">Clone triggers the same before/after create hooks as a normal create. Activity log records the action as "clone" with a reference to the source item ID.</div>
           <!-- /SYNC:content-ops-clone -->
         </div>
@@ -7460,7 +7998,7 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>POST</td><td>/api/addendums/:parentCollection/:parentId/:id/reject</td><td>Reject. Body: { reason }.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Change orders</h3>
-          <p class="doc-p">Approved addendums generate a corresponding <code class="doc-code">nivaro_change_orders</code> row that accumulates net cost and timeline impacts. Change orders are read-only once created — they form the immutable approved-change log.</p>
+          <p class="doc-p">Approved addendums generate a corresponding <code class="doc-code">nivaro_addendum_approvals</code> row that accumulates net cost and timeline impacts. Approvals are read-only once created — they form the immutable approved-change log.</p>
           <pre class="doc-pre"><code>// List change orders for a parent record:
 GET /api/addendums/:parentCollection/:parentId/change-orders
 
@@ -7612,7 +8150,7 @@ POST /api/auth/totp            // { code } → completes the session</code></pre
           <pre class="doc-pre"><code>SAML_ENTRY_POINT=https://idp.example.com/sso/saml   # IdP SSO URL
 SAML_ISSUER=nivaro                                   # SP entity ID
 SAML_CERT="-----BEGIN CERTIFICATE-----..."           # IdP signing certificate
-SAML_CALLBACK_URL=https://cms.example.com/api/auth/saml/callback
+SAML_CALLBACK_URL=https://nivaro.example.com/api/auth/saml/callback
 SAML_AUDIENCE=nivaro                                 # expected audience (optional)</code></pre>
           <h3 class="doc-h3">Endpoints</h3>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -7648,7 +8186,7 @@ POST /api/api-keys
 # → { "key": "nvk_..." }   // shown once — store it now
 
 # Authenticate exactly like a Bearer token:
-curl -H "Authorization: Bearer nvk_..." https://cms.example.com/api/items/articles
+curl -H "Authorization: Bearer nvk_..." https://nivaro.example.com/api/items/articles
 
 # Manage
 GET    /api/api-keys        # list (hashes only, never plaintext)
@@ -7666,8 +8204,8 @@ DELETE /api/api-keys/:id    # revoke immediately</code></pre>
           <h3 class="doc-h3">Setup</h3>
           <ul class="doc-ul">
             <li>Create an API key with the <code class="doc-code">scim</code> scope (Admin → API Keys).</li>
-            <li>Point your IdP at <code class="doc-code">https://cms.example.com/api/scim/v2</code> with the key as the bearer token.</li>
-            <li>Provisioned users are matched/created by email; deactivation in the IdP deactivates the CMS user.</li>
+            <li>Point your IdP at <code class="doc-code">https://nivaro.example.com/api/scim/v2</code> with the key as the bearer token.</li>
+            <li>Provisioned users are matched/created by email; deactivation in the IdP deactivates the Nivaro user.</li>
           </ul>
           <pre class="doc-pre"><code>GET    /api/scim/v2/Users            # list (supports filter=userName eq "...")
 GET    /api/scim/v2/Users/:id
@@ -7762,11 +8300,14 @@ ENCRYPTION_KEY=4f8d...64-hex-chars...c2a1
             <li>Every execution is recorded in <code class="doc-code">nivaro_retention_runs</code> with an affected count and up to 50 sample IDs for audit.</li>
           </ul>
           <h3 class="doc-h3">Actions</h3>
-          <table class="doc-table"><thead><tr><th>Action</th><th>What happens</th></tr></thead><tbody>
-            <tr><td><code class="doc-code">redact</code></td><td>Wipes configured PII fields, sets is_redacted=true, suspends account. Default.</td></tr>
-            <tr><td><code class="doc-code">delete</code></td><td>Hard-deletes the user row. Irreversible.</td></tr>
-            <tr><td><code class="doc-code">suspend_only</code></td><td>Sets status=suspended and is_redacted=true. No field values changed.</td></tr>
-          </tbody></table>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Action</th><th>What happens</th></tr></thead>
+            <tbody><tr><tr><td>redact</td><td>Wipes configured PII fields, sets is_redacted=true, suspends account. Default.</td></tr>
+              <tr><td>delete</td><td>Hard-deletes the user row. Irreversible — use with caution.</td></tr>
+              <tr><td>suspend_only</td><td>Sets status=suspended and is_redacted=true. No field values changed.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Redaction template</h3>
+          <p class="doc-p">The <code class="doc-code">redact_value_template</code> string (default <code class="doc-code">Redacted_{{id}}</code>) is used for email and external_id fields so they remain unique in the database. Other fields (first_name, last_name, job_title, avatar) are set to the literal string "Redacted".</p>
           <h3 class="doc-h3">API</h3>
           <pre class="doc-pre"><code>GET    /api/retention             // list policies (admin)
 POST   /api/retention             // create policy
@@ -7835,11 +8376,11 @@ MIGRATION_LOCK_TIMEOUT_MS=60000   # how long a starting instance waits for the l
           <p class="doc-p">Generate TypeScript interfaces for every registered collection straight from the metadata registry. The endpoint returns a ready-to-commit <code class="doc-code">.ts</code> file with one interface per collection, typed by field type (including relations and computed fields).</p>
           <pre class="doc-pre"><code># Download the generated types
 curl -H "Authorization: Bearer &lt;token&gt;" \
-  https://cms.example.com/api/dev-tools/types.ts &gt; src/nivaro-types.ts
+  https://nivaro.example.com/api/dev-tools/types.ts &gt; src/nivaro-types.ts
 
 // Or via the SDK:
-const ts = await cms.request(getTypes());</code></pre>
-          <div class="doc-note">Regenerate after schema changes — the file reflects the live registry at request time. Pair with the SDK for end-to-end typed reads: cms.request(readItems&lt;Article&gt;('articles')).</div>
+const ts = await nivaro.request(getTypes());</code></pre>
+          <div class="doc-note">Regenerate after schema changes — the file reflects the live registry at request time. Pair with the SDK for end-to-end typed reads: nivaro.request(readItems&lt;Article&gt;('articles')).</div>
           <!-- /SYNC:ts-codegen -->
         </div>
 
@@ -7853,7 +8394,7 @@ GET /api/dev-tools/postman.json    # Postman v2.1 collection
 GET /api/dev-tools/bruno.json      # Bruno collection
 
 // SDK:
-const spec = await cms.request(getOpenApi());</code></pre>
+const spec = await nivaro.request(getOpenApi());</code></pre>
           <ul class="doc-ul">
             <li>Schemas are derived from nivaro_collections / nivaro_fields, so collection endpoints carry real request/response models.</li>
             <li>Import the Postman/Bruno file directly — auth is pre-wired as a Bearer token variable.</li>
@@ -7937,7 +8478,7 @@ X-RateLimit-Reset: 1718000460   # epoch seconds of window reset
           <p class="doc-p">Admins can subscribe to a server-sent-events stream of every item mutation (create/update/delete) across all collections — useful for cache invalidation, search indexing, and downstream sync without polling activity.</p>
           <pre class="doc-pre"><code># Admin-only SSE stream
 curl -N -H "Authorization: Bearer &lt;admin-token&gt;" \
-  https://cms.example.com/api/stream
+  https://nivaro.example.com/api/stream
 
 event: change
 data: {"action":"update","collection":"articles","item":"42","user":"...","timestamp":"..."}</code></pre>
@@ -8055,7 +8596,7 @@ EXTENSION_REGISTRY_URL=https://registry.example.com/extensions.json</code></pre>
           <h1 class="doc-h1" id="sdk-playground">SDK Playground</h1>
           <p class="doc-p">The /sdk-playground admin page is an in-browser REPL for @nivaro/sdk. Write SDK code against the live instance with your current session's permissions, run it, and inspect the result — handy for prototyping queries and verifying filters before they go into application code.</p>
           <pre class="doc-pre"><code>// Example playground snippet
-const articles = await cms.request(
+const articles = await nivaro.request(
   readItems('articles', { filter: { status: { _eq: 'published' } }, limit: 5 })
 );
 return articles;</code></pre>
@@ -8085,7 +8626,7 @@ return articles;</code></pre>
 pnpm docs:api
 
 # Remote mode: fetch from a running instance instead:
-pnpm docs:api -- --url https://cms.example.com --token &lt;admin-token&gt;</code></pre>
+pnpm docs:api -- --url https://nivaro.example.com --token &lt;admin-token&gt;</code></pre>
           <ul class="doc-ul">
             <li>Default mode runs <code class="doc-code">api/src/scripts/generate-openapi.ts</code> with tsx and builds the spec straight from <code class="doc-code">nivaro_collections</code> / <code class="doc-code">nivaro_fields</code> — it always reflects the actual schema registry.</li>
             <li>Remote mode (<code class="doc-code">--url</code>) fetches the live <code class="doc-code">GET /api/dev-tools/openapi.json</code> (admin only); the token defaults to <code class="doc-code">$NIVARO_TOKEN</code>.</li>
@@ -8302,12 +8843,12 @@ GET /api/cross-triggers</code></pre>
           <p class="doc-p">Open /widgets to manage feeds. Each feed (stored in <code class="doc-code">nivaro_widget_feeds</code>) defines the collection, the visible fields, optional filters and limit, and a widget type (list or form). Creating a feed generates its token and a copy-paste embed snippet.</p>
           <h3 class="doc-h3">Embedding</h3>
           <pre class="doc-pre"><code>&lt;!-- List widget --&gt;
-&lt;script src="https://cms.example.com/api/widget.js"
+&lt;script src="https://nivaro.example.com/api/widget.js"
         data-nivaro-widget="list"
         data-token="wft_..."&gt;&lt;/script&gt;
 
 &lt;!-- Form widget (public submission) --&gt;
-&lt;script src="https://cms.example.com/api/widget.js"
+&lt;script src="https://nivaro.example.com/api/widget.js"
         data-nivaro-widget="form"
         data-token="wft_..."&gt;&lt;/script&gt;</code></pre>
           <ul class="doc-ul">
@@ -8397,15 +8938,28 @@ GET  /api/approvals?collection=...&amp;item=...</code></pre>
           <!-- SYNC:item-locking -->
           <h1 class="doc-h1" id="item-locking">Item Locking &amp; Presence</h1>
           <p class="doc-p">Opening an item for editing takes a soft lock (<code class="doc-code">nivaro_item_locks</code>) with a 5-minute TTL kept alive by a heartbeat. A second user opening the same item sees an amber "being edited by …" banner and the form switches to read-only mode until the lock is released or expires. Presence viewers show who else currently has the record open.</p>
-          <pre class="doc-pre"><code>POST   /api/item-locks                 # acquire { collection, item } → lock or 409 with holder
-POST   /api/item-locks/heartbeat       # keep the lock alive
-DELETE /api/item-locks                 # release on navigate-away
+          <pre class="doc-pre"><code>GET    /api/item-locks/:col/:item/lock     # current lock state (null when free/disabled)
+POST   /api/item-locks/:col/:item/lock     # acquire or refresh — 409 with holder name if taken
+POST   /api/item-locks/:col/:item/heartbeat # extend TTL (called every ~2.5 min by the editor)
+DELETE /api/item-locks/:col/:item/lock     # release; admin ?force=1 breaks any lock
 
-GET    /api/presence/:collection/:item # current viewers of a record</code></pre>
+GET    /api/presence/:collection/:item    # current viewers of a record</code></pre>
           <ul class="doc-ul">
             <li>Locks auto-expire 5 minutes after the last heartbeat — a crashed tab never locks a record forever.</li>
-            <li>Admins can take over a lock from the banner (the previous holder is notified).</li>
+            <li>Admins can take over a lock from the amber banner; the previous holder receives a notification.</li>
+            <li>A race condition (two users acquiring simultaneously) is handled via UNIQUE(collection, item) — the DB constraint ensures only one wins; the loser gets a 409.</li>
+            <li>When disabled is returned in the response, the client suppresses all lock UI silently.</li>
           </ul>
+          <h3 class="doc-h3">Per-collection on/off toggle</h3>
+          <p class="doc-p">Locking can be disabled per collection in Data Model → (table) → Settings → Item locking. When toggled off, all active locks on that collection are immediately released and a <code class="doc-code">item-lock-disabled</code> Socket.io event is broadcast. The <code class="doc-code">item_locking_enabled</code> column on <code class="doc-code">nivaro_collections</code> defaults to 1 — all collections start locked-enabled.</p>
+          <pre class="doc-pre"><code>GET   /api/item-locks/config/:collection   # { item_locking_enabled: boolean }
+PATCH /api/item-locks/config/:collection   # { item_locking_enabled: true|false } — admin only</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Response field</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>data: null</td><td>Item is free (no active lock)</td></tr>
+              <tr><td>data: { user, locked_by_name, expires_at, is_mine }</td><td>Item is locked; is_mine=true means the current user holds it</td></tr>
+              <tr><td>locking_disabled: true</td><td>Collection has locking turned off — client should suppress all lock UI</td></tr></tr></tbody>
+          </table></div>
           <!-- /SYNC:item-locking -->
         </div>
 
@@ -8426,8 +8980,26 @@ GET    /api/presence/:collection/:item # current viewers of a record</code></pre
         <div class="doc-section" id="s-user-activity-feed" data-toc='[{"id":"user-activity-feed","label":"User Activity Feed"}]'>
           <!-- SYNC:user-activity-feed -->
           <h1 class="doc-h1" id="user-activity-feed">User Activity Feed</h1>
-          <p class="doc-p">The user editor gains an Activity tab — a chronological feed of everything that user has done: item mutations, workflow transitions, comments, logins. Useful for audits and for understanding what a teammate has been working on.</p>
-          <pre class="doc-pre"><code>GET /api/user-activity/:userId?limit=50&amp;offset=0</code></pre>
+          <p class="doc-p">An "Activity" button in the user editor and profile page header opens a right sidebar with a full chronological timeline of everything that user has done: item mutations, workflow transitions, logins, lock acquire/release — including the IP address for each event.</p>
+          <ul class="doc-ul">
+            <li>Entries are grouped by calendar date with a sticky date separator and a vertical connector line.</li>
+            <li>Action-type chips at the top (create, update, delete, login…) act as one-click filters.</li>
+            <li>Filter bar: action select, collection text input, sort toggle (newest/oldest first). Chip count badge shows active filters.</li>
+            <li>Collection and item values link directly to the record; clicking navigates and closes the sidebar.</li>
+            <li>Load-more pagination — 50 entries per page, infinite scroll.</li>
+            <li>Visible to admins on the user editor; visible to the own user on their profile page.</li>
+          </ul>
+          <pre class="doc-pre"><code>GET /api/user-activity/:userId
+  ?page=1&amp;limit=50
+  &amp;action=create        # filter by action type
+  &amp;collection=orders    # filter by collection name
+  &amp;date_from=2025-01-01 # ISO date lower bound
+  &amp;date_to=2025-12-31   # ISO date upper bound
+  &amp;sort=asc             # asc | desc (default desc)
+
+GET /api/user-activity/:userId/summary
+  # returns { total, actions: [{action, count}], collections: [{collection, count}] }</code></pre>
+          <div class="doc-note">Both endpoints require admin access. The summary endpoint drives the clickable action chips — it is fetched once when the panel opens and is not re-fetched on filter changes.</div>
           <!-- /SYNC:user-activity-feed -->
         </div>
 
