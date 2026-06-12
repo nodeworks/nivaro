@@ -176,6 +176,7 @@
           <a class="docs-nav-item" data-section="flows-api" href="#flows-api">Flows API</a>
           <a class="docs-nav-item" data-section="pipeline-api" href="#pipeline-api">Pipeline API</a>
           <a class="docs-nav-item" data-section="external-apis-api" href="#external-apis-api">External APIs API</a>
+          <a class="docs-nav-item" data-section="external-api-spec-import" href="#external-api-spec-import">Spec Import</a>
           <a class="docs-nav-item" data-section="presets-api" href="#presets-api">Column Presets API</a>
           <a class="docs-nav-item" data-section="comments-api" href="#comments-api">Comments API</a>
           <a class="docs-nav-item" data-section="dashboards-api" href="#dashboards-api">Dashboards API</a>
@@ -2346,6 +2347,44 @@ POST /api/users/me/delegate
               <tr><td>sort</td><td>number</td><td>Display order in the test panel pill list.</td></tr></tr></tbody>
           </table></div>
           <!-- /SYNC:external-apis-api -->
+        </div>
+
+        <div class="doc-section" id="s-external-api-spec-import" data-toc='[{"id":"external-api-spec-import","label":"Spec Import"}]'>
+          <!-- SYNC:external-api-spec-import -->
+          <h1 class="doc-h1" id="external-api-spec-import">External API — Spec Import</h1>
+          <p class="doc-p">The spec import feature bulk-creates predefined endpoint templates from an OpenAPI 3.x or Swagger 2.0 JSON document. Use the "Import Spec" collapsible in the Endpoints tab of any External API record, or call the API directly.</p>
+          <h3 class="doc-h3">Format requirements</h3>
+          <p class="doc-p">Only JSON is accepted. YAML must be converted to JSON before ingesting. Both OpenAPI 3.x (root key <code class="doc-code">openapi</code>) and Swagger 2.0 (root key <code class="doc-code">swagger</code>) are supported. All paths and HTTP methods are parsed into endpoint template rows. Swagger 2.0 <code class="doc-code">basePath</code> is ignored — set <code class="doc-code">base_url</code> on the External API record instead.</p>
+          <h3 class="doc-h3">Routes</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td>POST</td><td>/api/external-apis/:id/import-spec</td><td>Parse spec and bulk-create endpoint templates. Body: <code class="doc-code">{ spec: string | object }</code>. String values are JSON.parse'd; invalid JSON returns 400.</td></tr>
+              <tr><td>GET</td><td>/api/external-apis/:id/schemas</td><td>List imported schema records for an API. Returns id, title, version, endpoint_count, created_at.</td></tr>
+              <tr><td>DELETE</td><td>/api/external-apis/:id/schemas/:sid</td><td>Remove a schema record. Does not delete the endpoint templates already created from it.</td></tr>
+            </tbody>
+          </table></div>
+          <h3 class="doc-h3">Example request</h3>
+          <pre class="doc-pre"><code>// Fetch a public spec and import it
+const spec = await fetch('https://petstore3.swagger.io/api/v3/openapi.json').then(r => r.json())
+
+const res = await fetch('/api/external-apis/42/import-spec', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer &lt;admin-token&gt;'
+  },
+  body: JSON.stringify({ spec }),
+})
+// { "inserted": 23, "skipped": 0, "schema_id": 7 }
+
+// List schemas for this API
+const schemas = await fetch('/api/external-apis/42/schemas', {
+  headers: { 'Authorization': 'Bearer &lt;admin-token&gt;' }
+}).then(r => r.json())
+// [{ "id": 7, "api_id": 42, "title": "Petstore", "version": "3.0.2", "endpoint_count": 23, "created_at": "..." }]</code></pre>
+          <div class="doc-note">All spec import routes require admin access. YAML is not supported — convert to JSON first. A string body value is JSON.parse'd server-side; an object is used directly.</div>
+          <!-- /SYNC:external-api-spec-import -->
         </div>
 
         <div class="doc-section" id="s-presets-api" data-toc='[{"id":"presets-api","label":"Column Presets API"}]'>

@@ -1610,6 +1610,46 @@ const feeds = await nivaro.request(listWidgetFeeds());
 
 ---
 
+## Testing
+
+Nivaro ships three test layers. Each can be run independently.
+
+### E2E — Playwright + axe-core (`tests/e2e/`)
+
+Requires the app running locally (`pnpm dev`).
+
+```bash
+pnpm test:e2e
+```
+
+| File | What it covers |
+| --- | --- |
+| `login.spec.ts` | OIDC login flow — redirects, session cookie, post-login landing |
+| `public.spec.ts` | Public submission form rendering and submit |
+| `navigation.spec.ts` | Sidebar nav, route transitions, 404 handling |
+| `a11y.spec.ts` | WCAG 2.2 accessibility audit on key pages via axe-core |
+| `api-health.spec.ts` | `/api/health` endpoint returns 200 with expected shape |
+
+### API unit + integration — Vitest (`api/src/test/`)
+
+Runs against an in-process Fastify instance; no live database required for unit tests.
+
+```bash
+pnpm --filter @nivaro/api test
+```
+
+Covers route handlers, service logic, hook wiring, and migration helpers.
+
+### Admin unit — Vitest + Testing Library (`admin/src/test/`)
+
+Component-level tests for React pages and hooks.
+
+```bash
+pnpm --filter @nivaro/admin test
+```
+
+---
+
 ## TypeScript
 
 All commands are fully typed. Pass your collection interface as a generic to get typed responses:

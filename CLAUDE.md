@@ -252,6 +252,7 @@ All `nivaro_` prefixed. Migrations tracked in `nivaro_migrations`.
 | `nivaro_hierarchy_configs` | Multi-collection hierarchy definitions; levels stored as JSON |
 | `nivaro_attribute_definitions` | Dynamic EAV: per-collection custom field defs; collection, key (slug), label, type (text/number/boolean/date/select), options (JSON), required, sort, is_active; UNIQUE(collection, key) |
 | `nivaro_attribute_values` | Dynamic EAV: per-item values; collection, item_id (varchar — UUID or int PK), attribute_key, value (nvarchar(max), all types as text); UNIQUE(collection, item_id, attribute_key) |
+| `nivaro_external_api_schemas` | OpenAPI/Swagger spec import log; external_api FK, title, spec_version, raw_spec (nvarchar max), endpoint_count, imported_at, imported_by FK |
 | `nivaro_field_rules` | Per-collection inline field defaults; trigger_field/trigger_op/trigger_value → target_field/target_type/target_value, sort, is_active |
 | `nivaro_field_groups` | Field group/tab definitions per collection; key (slug), label, type (section/tab), icon, sort, is_collapsed bit |
 | `nivaro_collection_layouts` | Named layouts per collection; `is_active` marks the one used by ItemEdit; UNIQUE(collection, name) |
@@ -415,7 +416,7 @@ pnpm sdk:release minor   # bumps, commits, tags @sdk-x.x.x, pushes → triggers 
 | `/pipelines/:id` | Template editor: states, bindings, dimensions (dnd-kit), Owner Matrix |
 | `/flows/:id` | Flow editor |
 | `/dashboards/:id` | Dashboard builder (drag widget grid) |
-| `/external-apis/:id` | Auth type, headers, test panel |
+| `/external-apis/:id` | Auth type, headers, test panel; Endpoints tab includes "Import Spec" collapsible for bulk-creating templates from OpenAPI 3.x or Swagger 2.0 JSON |
 | `/webhooks/:id` | Webhook editor |
 | `/rules/:id` | Rule editor (condition + action builder) |
 | `/custom-queries/:id` | SQL editor + params |
@@ -534,6 +535,8 @@ Full-width `<table>` with `text-[12px]` rows. No cards. Used by **Extensions**.
 - **Socket.io auth** — client emits `auth` with `{ token }`; server joins `user:${userId}` room; emits `auth:ok`
 - **Notification columns** — `recipient/subject/status/timestamp/sender/message/collection/item` (NOT user/title/read/created_at)
 - **External API secrets masked** — `token`, `password`, `client_secret`, api_key value → `"••••••"` on GET; PATCH preserves if masked re-submitted
+- **Spec import upsert = slug-based dedup** — `POST /:id/import-spec` skips any path+method whose slug already exists for the api; does NOT update existing endpoints; YAML not supported (JSON only)
+- **`nivaro_external_api_schemas` raw_spec** — stores full spec as JSON string in `nvarchar(max)`; GET /schemas endpoint excludes raw_spec column to keep responses lean
 - **AI key DB fallback** — `getClient()` async; reads `ANTHROPIC_API_KEY` env then `nivaro_settings.anthropic_api_key`; masked on settings GET
 - **Workspace isolation = collections + roles only** — items not filtered; `resolveWorkspace` preHandler on collections + roles routes
 - **Badge default variant** — `bg-nvr-cyan/10 text-nvr-navy` (light) / `dark:bg-nvr-cyan/15 dark:text-nvr-cyan` (dark); prevents dark-on-dark in activity panels

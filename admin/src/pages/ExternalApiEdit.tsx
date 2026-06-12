@@ -6,6 +6,7 @@ import {
   ChevronRight,
   ChevronsUpDown,
   Download,
+  FileJson,
   Plus,
   RefreshCw,
   Save,
@@ -945,12 +946,22 @@ function ApiCallLogsCard({ apiId }: { apiId: number }) {
   )
 }
 
+interface SchemaRecord {
+  id: number
+  title: string | null
+  spec_version: string | null
+  endpoint_count: number
+  imported_at: string
+}
+
 function EndpointsCard({ apiId }: { apiId: number }) {
   const queryClient = useQueryClient()
   const [expandedId, setExpandedId] = useState<number | 'new' | null>(null)
   const [editForms, setEditForms] = useState<Record<number | 'new', EndpointForm>>(
     {} as Record<number | 'new', EndpointForm>
   )
+  const [specOpen, setSpecOpen] = useState(false)
+  const [specText, setSpecText] = useState('')
 
   const { data, isLoading } = useQuery<ExternalApiEndpoint[]>({
     queryKey: ['external-api-endpoints', apiId],
@@ -958,6 +969,34 @@ function EndpointsCard({ apiId }: { apiId: number }) {
       api
         .get<{ data: ExternalApiEndpoint[] }>(`/external-apis/${apiId}/endpoints`)
         .then((r) => r.data.data)
+  })
+
+  const { data: schemas } = useQuery<SchemaRecord[]>({
+    queryKey: ['external-api-schemas', apiId],
+    queryFn: () =>
+      api
+        .get<{ data: SchemaRecord[] }>(`/external-apis/${apiId}/schemas`)
+        .then((r) => r.data.data),
+    staleTime: 30_000
+  })
+
+  const importSpec = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { imported: number; skipped: number; schema_id: number } }>(
+          `/external-apis/${apiId}/import-spec`,
+          { spec: specText }
+        )
+        .then((r) => r.data.data),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['external-api-endpoints', apiId] })
+      queryClient.invalidateQueries({ queryKey: ['external-api-schemas', apiId] })
+      toast.success(`Imported ${result.imported} endpoints, skipped ${result.skipped}`)
+      setSpecText('')
+      setSpecOpen(false)
+    },
+    onError: (err: { response?: { data?: { error?: string } } }) =>
+      toast.error(err.response?.data?.error ?? 'Import failed')
   })
 
   const endpoints = data ?? []
@@ -1018,23 +1057,91 @@ function EndpointsCard({ apiId }: { apiId: number }) {
   return (
     <Card className='mt-5 p-6'>
       <div className='mb-4 flex items-center justify-between'>
-        <div>
-          <Label>Endpoints</Label>
-          <p className='text-[12px] text-slate-400'>
-            Pre-defined requests with default method, path, body, and params.
-          </p>
+        <div className='flex items-center gap-2'>
+          <div>
+            <Label>Endpoints</Label>
+            <p className='text-[12px] text-slate-400'>
+              Pre-defined requests with default method, path, body, and params.
+            </p>
+          </div>
+          {schemas && schemas.length > 0 && (
+            <span className='rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-nvr-cyan dark:bg-nvr-cyan/15'>
+              {schemas.length} spec{schemas.length !== 1 ? 's' : ''} imported
+            </span>
+          )}
         </div>
-        <Button
-          variant='outline'
-          size='sm'
-          onClick={openNew}
-          disabled={expandedId === 'new'}
-          className='gap-1.5'
-        >
-          <Plus className='h-3.5 w-3.5' />
-          Add Endpoint
-        </Button>
+        <div className='flex items-center gap-2'>
+          <Button
+            variant='outline'
+            size='sm'
+            onClick={() => setSpecOpen((o) => !o)}
+            className='gap-1.5'
+          >
+            <FileJson className='h-3.5 w-3.5' />
+            Import Spec
+          </Button>
+          <Button
+            variant='outline'
+            size='sm'
+            onClick={openNew}
+            disabled={expandedId === 'new'}
+            className='gap-1.5'
+          >
+            <Plus className='h-3.5 w-3.5' />
+            Add Endpoint
+          </Button>
+        </div>
       </div>
+
+      {specOpen && (
+        <div className='mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40'>
+          <div className='mb-2 flex items-center gap-2'>
+            <FileJson className='h-3.5 w-3.5 text-slate-400' />
+            <span className='text-[12px] font-medium text-slate-600 dark:text-slate-400'>
+              Import from OpenAPI / Swagger spec
+            </span>
+            <span className='ml-auto text-[11px] text-slate-400'>
+              JSON only — convert YAML at{' '}
+              <a
+                href='https://yaml.to-json.com'
+                target='_blank'
+                rel='noopener noreferrer'
+                className='text-nvr-cyan hover:underline'
+              >
+                yaml.to-json.com
+              </a>
+            </span>
+          </div>
+          <Textarea
+            value={specText}
+            onChange={(e) => setSpecText(e.target.value)}
+            placeholder='Paste OpenAPI 3.0 or Swagger 2.0 JSON spec here…'
+            rows={6}
+            className='mb-3 font-mono text-[12px] resize-y'
+          />
+          <div className='flex justify-end gap-2'>
+            <Button
+              variant='ghost'
+              size='sm'
+              onClick={() => {
+                setSpecOpen(false)
+                setSpecText('')
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              size='sm'
+              onClick={() => importSpec.mutate()}
+              disabled={importSpec.isPending || !specText.trim()}
+              className='gap-1.5'
+            >
+              <FileJson className='h-3.5 w-3.5' />
+              {importSpec.isPending ? 'Importing…' : 'Import'}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {isLoading && <p className='text-[13px] text-slate-400'>Loading…</p>}
 

@@ -29,11 +29,20 @@
     "lint:fix": "biome lint --write .",
     "dead-code": "fallow dead-code",
     "dupes": "fallow dupes",
-    "health": "fallow health"
+    "health": "fallow health",
+    "test:api": "pnpm --filter @nivaro/api test",
+    "test:admin": "pnpm --filter @nivaro/admin test",
+    "test:unit": "pnpm --filter @nivaro/api test && pnpm --filter @nivaro/admin test",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed --channel chrome",
+    "test:e2e:cdp": "playwright test --config playwright.cdp.config.ts"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.101.0",
+    "@axe-core/playwright": "^4.10.0",
     "@biomejs/biome": "^2.4.16",
+    "@playwright/test": "^1.49.0",
     "concurrently": "^9.1.2",
     "fallow": "^2.88.3",
     "wait-on": "^9.0.10"

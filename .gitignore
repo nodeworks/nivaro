@@ -14,3 +14,5 @@ CLAUDE.md
 .claude
 .playwright-mcp
 .impeccable
+test-results/*
+tests/e2e/reports/*
