@@ -1154,7 +1154,7 @@ export function ItemEditPage() {
     queryKey: ['active-layout', collection],
     queryFn: () =>
       api
-        .get<{ data: { layout: { id: number; disable_comments?: boolean | number; disable_tasks?: boolean | number; tab_mode?: string; validate_before_next?: boolean | number; summary_enabled?: boolean | number; summary_show_all?: boolean | number; ai_enabled?: boolean | number }; groups?: Array<{ key: string; label: string; type: string; icon?: string | null; sort?: number }>; assignments?: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean | number; default_expanded?: boolean | number }>; ungrouped_sort?: number | null } }>(`/collection-layouts/active`, { params: { collection } })
+        .get<{ data: { layout: { id: number; disable_comments?: boolean | number; disable_tasks?: boolean | number; tab_mode?: string; validate_before_next?: boolean | number; summary_enabled?: boolean | number; summary_show_all?: boolean | number; ai_enabled?: boolean | number; allow_clone?: boolean | number; allow_schedule?: boolean | number; allow_disable_pickers?: boolean | number }; groups?: Array<{ key: string; label: string; type: string; icon?: string | null; sort?: number }>; assignments?: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean | number; default_expanded?: boolean | number }>; ungrouped_sort?: number | null } }>(`/collection-layouts/active`, { params: { collection } })
         .then((r) => r.data.data)
         .catch(() => null),
     enabled: !!collection,
@@ -1531,6 +1531,10 @@ export function ItemEditPage() {
   const summaryShowAll = !!layoutMeta?.summary_show_all
   // When a layout is active, AI defaults OFF unless explicitly enabled. No layout = AI on.
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
+  // Buttons: admin always sees them; non-admins need explicit layout permission. No layout = admin-only.
+  const canClone = !!user?.is_admin || !!layoutMeta?.allow_clone
+  const canSchedule = !!user?.is_admin || !!layoutMeta?.allow_schedule
+  const canDisablePickers = !!user?.is_admin || !!layoutMeta?.allow_disable_pickers
 
   // Positioned sentinel slots — pipeline / comments / tasks placed in the layout.
   // When present, these render inside the section loop at their configured sort.
@@ -2249,7 +2253,7 @@ export function ItemEditPage() {
               triggerClassName='gap-1.5 rounded-none border-r-0'
             />
           )}
-          {id !== 'new' && (
+          {id !== 'new' && canDisablePickers && (
             <button
               type='button'
               onClick={() => toggleExclusion.mutate()}
@@ -2266,7 +2270,7 @@ export function ItemEditPage() {
               {isExcluded ? 'Excluded from pickers' : 'Disable in pickers'}
             </button>
           )}
-          {id !== 'new' && (
+          {id !== 'new' && canClone && (
             <CloneDialog
               collection={collection!}
               itemId={id!}
@@ -2277,7 +2281,7 @@ export function ItemEditPage() {
               triggerClassName='rounded-none border-r-0'
             />
           )}
-          {id !== 'new' && (
+          {id !== 'new' && canSchedule && (
             <ScheduleChangeDialog
               collection={collection!}
               itemId={id!}
