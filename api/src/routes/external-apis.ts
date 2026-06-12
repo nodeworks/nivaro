@@ -43,6 +43,47 @@ interface OAuth2CCConfig {
   scope?: string
 }
 
+// ─── Slug helper ────────────────────────────────────────────────────────────
+
+function slugifyEndpoint(method: string, path: string, operationId?: string): string {
+  if (operationId) {
+    return operationId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  }
+  return `${method.toLowerCase()}-${path.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
+}
+
+// ─── Schema skeleton builder (OpenAPI → default body) ───────────────────────
+
+function buildSchemaSkeleton(schema: Record<string, unknown>, depth = 0): unknown {
+  if (depth > 3) return null
+  if (!schema || typeof schema !== 'object') return null
+
+  if (schema.example !== undefined) return schema.example
+
+  const type = schema.type as string | undefined
+
+  if (type === 'object' || schema.properties) {
+    const props = schema.properties as Record<string, Record<string, unknown>> | undefined
+    if (!props) return {}
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(props)) {
+      out[k] = buildSchemaSkeleton(v, depth + 1) ?? ''
+    }
+    return out
+  }
+
+  if (type === 'array') {
+    const items = schema.items as Record<string, unknown> | undefined
+    return items ? [buildSchemaSkeleton(items, depth + 1)] : []
+  }
+
+  if (type === 'string') return ''
+  if (type === 'integer' || type === 'number') return 0
+  if (type === 'boolean') return false
+
+  return null
+}
+
 // ─── JSON helpers ───────────────────────────────────────────────────────────
 
 function parseJson<T = unknown>(val: string | null | undefined): T | null {
@@ -943,6 +984,216 @@ export async function externalApisRoutes(app: FastifyInstance) {
     )
     return reply.send({ data: { success: true } })
   })
+
+  // ─── Spec import ─────────────────────────────────────────────────────────
+
+  interface SchemaRow {
+    id: number
+    external_api_id: number
+    title: string | null
+    spec_version: string | null
+    raw_spec: string | null
+    endpoint_count: number
+    imported_at: Date
+    imported_by: string | null
+  }
+
+  // POST /:id/import-spec — parse OpenAPI/Swagger JSON and bulk-create endpoints
+  app.post<{
+    Params: { id: string }
+    Body: { spec: string | Record<string, unknown> }
+  }>('/:id/import-spec', { preHandler: requireAdmin }, async (req, reply) => {
+    const apiId = Number(req.params.id)
+    const exists = await db('nivaro_external_apis').where({ id: apiId }).first()
+    if (!exists) return reply.code(404).send({ error: 'Not found' })
+
+    // Parse spec — accept string or already-parsed object
+    let spec: Record<string, unknown>
+    try {
+      spec = typeof req.body?.spec === 'string'
+        ? (JSON.parse(req.body.spec) as Record<string, unknown>)
+        : (req.body?.spec as Record<string, unknown>)
+    } catch {
+      return reply.code(400).send({ error: 'Invalid JSON in spec' })
+    }
+
+    if (!spec || typeof spec !== 'object') {
+      return reply.code(400).send({ error: 'spec must be a JSON object' })
+    }
+
+    const paths = spec.paths as Record<string, Record<string, unknown>> | undefined
+    if (!paths || typeof paths !== 'object') {
+      return reply.code(400).send({ error: 'No paths found in spec' })
+    }
+
+    // Determine version
+    const specVersion = typeof spec.openapi === 'string'
+      ? spec.openapi
+      : typeof spec.swagger === 'string'
+        ? spec.swagger
+        : null
+
+    const infoObj = spec.info as Record<string, unknown> | undefined
+    const title = typeof infoObj?.title === 'string' ? infoObj.title : null
+
+    const SKIP_METHODS = new Set(['head', 'options', 'trace'])
+    const BODY_METHODS = new Set(['post', 'put', 'patch'])
+
+    // Collect existing slugs for this api to deduplicate
+    const existingSlugs = new Set<string>(
+      (await db('nivaro_external_api_endpoints')
+        .where({ api_id: apiId })
+        .pluck('slug') as string[])
+    )
+
+    const now = new Date()
+    let imported = 0
+    let skipped = 0
+
+    // Get max sort for appending
+    const maxSortRow = await db('nivaro_external_api_endpoints')
+      .where({ api_id: apiId })
+      .max('sort as m')
+      .first() as { m: number | null } | undefined
+    let nextSort = (maxSortRow?.m ?? -1) + 1
+
+    for (const [pathKey, pathItem] of Object.entries(paths)) {
+      if (!pathItem || typeof pathItem !== 'object') continue
+
+      for (const [verb, operation] of Object.entries(pathItem as Record<string, unknown>)) {
+        if (SKIP_METHODS.has(verb.toLowerCase())) continue
+        if (!operation || typeof operation !== 'object') continue
+
+        const op = operation as Record<string, unknown>
+        const method = verb.toUpperCase()
+        const operationId = typeof op.operationId === 'string' ? op.operationId : undefined
+        const slug = slugifyEndpoint(method, pathKey, operationId)
+
+        if (existingSlugs.has(slug)) {
+          skipped++
+          continue
+        }
+
+        const summary = typeof op.summary === 'string' ? op.summary : null
+        const descRaw = typeof op.description === 'string' ? op.description : null
+        const description = (summary ?? descRaw ?? '').slice(0, 500) || null
+        const name = operationId ?? `${method} ${pathKey}`
+
+        // Build default_query from parameters
+        const params = Array.isArray(op.parameters) ? op.parameters as Record<string, unknown>[] : []
+        const queryParams: Record<string, string> = {}
+        for (const p of params) {
+          if (p.in === 'query' && typeof p.name === 'string') {
+            queryParams[p.name] = ''
+          }
+        }
+
+        // Build default_body skeleton for POST/PUT/PATCH
+        let defaultBody: string | null = null
+        if (BODY_METHODS.has(verb.toLowerCase())) {
+          // OpenAPI 3.x
+          const reqBody = op.requestBody as Record<string, unknown> | undefined
+          if (reqBody) {
+            const content = reqBody.content as Record<string, unknown> | undefined
+            const jsonContent = content?.['application/json'] as Record<string, unknown> | undefined
+            const schema = (jsonContent?.schema ?? jsonContent?.example) as Record<string, unknown> | undefined
+            if (schema) {
+              const skeleton = buildSchemaSkeleton(schema)
+              if (skeleton !== null) defaultBody = JSON.stringify(skeleton, null, 2)
+            }
+          }
+          // Swagger 2.0 body parameter
+          if (!defaultBody) {
+            const bodyParam = params.find((p) => p.in === 'body')
+            if (bodyParam) {
+              const schema = bodyParam.schema as Record<string, unknown> | undefined
+              if (schema) {
+                const skeleton = buildSchemaSkeleton(schema)
+                if (skeleton !== null) defaultBody = JSON.stringify(skeleton, null, 2)
+              }
+            }
+          }
+        }
+
+        await db('nivaro_external_api_endpoints').insert({
+          api_id: apiId,
+          name,
+          slug,
+          method,
+          path: pathKey,
+          description,
+          default_body: defaultBody,
+          default_query: Object.keys(queryParams).length ? toJsonStr(queryParams) : null,
+          default_headers: null,
+          sort: nextSort++,
+          created_at: now,
+          updated_at: now
+        })
+
+        existingSlugs.add(slug)
+        imported++
+      }
+    }
+
+    // Save schema record (insert-then-select pattern for MSSQL)
+    await db('nivaro_external_api_schemas').insert({
+      external_api_id: apiId,
+      title,
+      spec_version: specVersion,
+      raw_spec: JSON.stringify(spec),
+      endpoint_count: imported,
+      imported_at: now,
+      imported_by: req.user?.id ?? null
+    })
+    const schemaRow = await db('nivaro_external_api_schemas')
+      .where({ external_api_id: apiId })
+      .orderBy('id', 'desc')
+      .first() as SchemaRow
+
+    await logActivity({
+      action: 'external-api-spec-import',
+      collection: 'nivaro_external_apis',
+      item: String(apiId),
+      user: req.user?.id,
+      req,
+      comment: `imported:${imported} skipped:${skipped}`
+    })
+
+    return { data: { imported, skipped, schema_id: schemaRow.id } }
+  })
+
+  // GET /:id/schemas — list schemas for this API (newest first)
+  app.get<{ Params: { id: string } }>(
+    '/:id/schemas',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const apiId = Number(req.params.id)
+      const exists = await db('nivaro_external_apis').where({ id: apiId }).first()
+      if (!exists) return reply.code(404).send({ error: 'Not found' })
+
+      const rows = (await db('nivaro_external_api_schemas')
+        .where({ external_api_id: apiId })
+        .orderBy('id', 'desc')
+        .select('id', 'external_api_id', 'title', 'spec_version', 'endpoint_count', 'imported_at', 'imported_by')) as Omit<SchemaRow, 'raw_spec'>[]
+
+      return { data: rows }
+    }
+  )
+
+  // DELETE /:id/schemas/:sid — delete a schema record (does NOT delete endpoints)
+  app.delete<{ Params: { id: string; sid: string } }>(
+    '/:id/schemas/:sid',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const apiId = Number(req.params.id)
+      const sid = Number(req.params.sid)
+      const deleted = await db('nivaro_external_api_schemas')
+        .where({ id: sid, external_api_id: apiId })
+        .delete()
+      if (!deleted) return reply.code(404).send({ error: 'Not found' })
+      return { data: { success: true } }
+    }
+  )
 
   // ─── Call logs ────────────────────────────────────────────────────────────
 

@@ -34,7 +34,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Dynamic Attributes (EAV)** — define custom attributes per collection at runtime without migrations; stored in `nivaro_attribute_definitions` + `nivaro_attribute_values`
 - **Multi-Workspace** — collections and roles scoped per workspace
 - **Custom Queries** — named, parameterized SQL endpoints with caching
-- **External API Configs** — managed credentials, live test panel
+- **External API Configs** — managed credentials, live test panel, OpenAPI/Swagger spec import to bulk-create endpoint templates
 - **Tree & Hierarchy** — any collection can be tree-enabled; recursive CTE queries, tree browser, drag-to-reparent, breadcrumb navigation
 - **Org Chart View** — tree collections render as a zoomable, collapsible org chart with click-to-open node cards
 - **Reorder Siblings** — drag handle in tree view persists sibling sort order (order_field-backed)
@@ -45,6 +45,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Queue SLA Timers** — live green/amber/red SLA countdown column in the collection browser for workflow-bound items
 - **Conditional Branching** — pipeline transitions carry field conditions; only matching paths are offered and the server revalidates on execute
 - **Multi-collection Hierarchy** — define named trees spanning multiple collections, one per level, linked by FK columns; each level keeps its own independent schema, workflows, and RBAC
+- **Test Suite** — Playwright E2E with WCAG accessibility checks (axe-core), Vitest API integration tests, and Vitest + Testing Library admin unit tests
 - **Reports, Schema Snapshots, Computed Fields**
 - **Data Export** — export any collection to CSV, JSON, or Excel with filters and field selection
 - **Draft / Publish States** — per-collection draft/review/published workflow with submit-for-review action

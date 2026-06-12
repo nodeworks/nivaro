@@ -112,6 +112,11 @@ export const userExternalApisGuide: DocSection = {
       type: 'p',
       text: 'Secrets (token, password, client_secret, api_key value) are masked in GET responses with `••••••`. Re-submitting the masked value on PATCH preserves the existing secret. Only admins can read or write API configs.'
     },
+    { type: 'h3', text: 'Spec import (OpenAPI / Swagger)' },
+    {
+      type: 'p',
+      text: 'The "Import Spec" collapsible in the Endpoints tab lets you bulk-create endpoint templates from an OpenAPI 3.x or Swagger 2.0 JSON document. Paste or upload the spec JSON; all paths and HTTP methods are parsed and inserted as predefined endpoint templates. YAML is not supported — convert to JSON first.'
+    },
     {
       type: 'note',
       text: 'External APIs intentionally skip SSRF protection — they are admin-only and designed to reach internal corporate services (Oracle EBS, MWF, MDSi, etc.) that would otherwise be blocked. SSRF protection applies to webhooks, not external APIs.'
@@ -213,6 +218,40 @@ export const externalApisApiDoc: DocSection = {
         ['DELETE', '/api/external-apis/endpoints/:eid', 'Delete an endpoint template.'],
         ['PATCH', '/api/external-apis/:id/endpoints/reorder', 'Bulk reorder. Body: [{ id, sort }].']
       ]
+    },
+    { type: 'h3', text: 'Spec import routes' },
+    {
+      type: 'table',
+      head: ['Method', 'Path', 'Description'],
+      rows: [
+        [
+          'POST',
+          '/api/external-apis/:id/import-spec',
+          'Parse an OpenAPI 3.x or Swagger 2.0 JSON spec and bulk-create endpoint templates. Body: { spec: string | object }.'
+        ],
+        ['GET', '/api/external-apis/:id/schemas', 'List imported schema records for an API.'],
+        ['DELETE', '/api/external-apis/:id/schemas/:sid', 'Remove an imported schema record.']
+      ]
+    },
+    {
+      type: 'pre',
+      code: `// Import a spec from a parsed JSON object
+const spec = await fetch('https://petstore3.swagger.io/api/v3/openapi.json').then(r => r.json())
+
+await fetch('/api/external-apis/42/import-spec', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer <token>' },
+  body: JSON.stringify({ spec }),
+})
+// Response: { inserted: 23, skipped: 0, schema_id: 7 }
+
+// List imported schemas
+const schemas = await fetch('/api/external-apis/42/schemas').then(r => r.json())
+// → [{ id, api_id, title, version, endpoint_count, created_at }]`
+    },
+    {
+      type: 'note',
+      text: 'Only JSON specs are accepted. YAML must be converted before posting. Both OpenAPI 3.x (detected by the "openapi" root key) and Swagger 2.0 (detected by the "swagger" root key) are supported. Swagger 2.0 basePath is ignored — set base_url on the ExternalApi record instead.'
     },
     { type: 'h3', text: 'Endpoint template shape' },
     {
