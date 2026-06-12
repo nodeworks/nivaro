@@ -82,7 +82,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     let q = db('nivaro_collection_layouts')
       .where({ collection })
       .orderBy('sort', 'asc')
-      .select('id', 'collection', 'name', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'ai_enabled', 'conditions')
+      .select('id', 'collection', 'name', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule', 'allow_disable_pickers')
     if (active === 'true') q = q.where({ is_active: 1 })
 
     const rows = await q
@@ -126,7 +126,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as Partial<{ name: string; sort: number; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null }>
+    const body = req.body as Partial<{ name: string; sort: number; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean }>
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
     if (body.sort !== undefined) patch.sort = body.sort
@@ -138,6 +138,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.summary_show_all !== undefined) patch.summary_show_all = body.summary_show_all ? 1 : 0
     if (body.ai_enabled !== undefined) patch.ai_enabled = body.ai_enabled ? 1 : 0
     if (body.conditions !== undefined) patch.conditions = body.conditions == null ? null : JSON.stringify(body.conditions)
+    if (body.allow_clone !== undefined) patch.allow_clone = body.allow_clone ? 1 : 0
+    if (body.allow_schedule !== undefined) patch.allow_schedule = body.allow_schedule ? 1 : 0
+    if (body.allow_disable_pickers !== undefined) patch.allow_disable_pickers = body.allow_disable_pickers ? 1 : 0
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 

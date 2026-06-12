@@ -5376,6 +5376,9 @@ interface CollectionLayout {
   summary_enabled?: boolean | number
   summary_show_all?: boolean | number
   ai_enabled?: boolean | number
+  allow_clone?: boolean | number
+  allow_schedule?: boolean | number
+  allow_disable_pickers?: boolean | number
   conditions?: { role_ids?: string[] } | null
 }
 
@@ -5524,7 +5527,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   })
 
   const patchLayoutMut = useMutation({
-    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'disable_comments' | 'disable_tasks' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions'>>) => {
+    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'disable_comments' | 'disable_tasks' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers'>>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
     },
@@ -5729,6 +5732,21 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                   <label className='flex cursor-pointer items-center justify-between'>
                     <span className='text-[11px] text-slate-500 dark:text-slate-400'>Enable AI features</span>
                     <input type='checkbox' checked={!!selected.ai_enabled} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, ai_enabled: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                  </label>
+                </div>
+                <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
+                  <p className='text-[10px] font-semibold text-slate-400 dark:text-slate-500 mb-1'>Show for all users</p>
+                  <label className='flex cursor-pointer items-center justify-between'>
+                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Clone button</span>
+                    <input type='checkbox' checked={!!selected.allow_clone} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, allow_clone: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                  </label>
+                  <label className='flex cursor-pointer items-center justify-between'>
+                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Schedule button</span>
+                    <input type='checkbox' checked={!!selected.allow_schedule} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, allow_schedule: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                  </label>
+                  <label className='flex cursor-pointer items-center justify-between'>
+                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Disable in pickers button</span>
+                    <input type='checkbox' checked={!!selected.allow_disable_pickers} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, allow_disable_pickers: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
                   </label>
                 </div>
                 <div className='border-t border-slate-200 dark:border-border pt-2'>
