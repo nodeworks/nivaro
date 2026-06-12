@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import knex from 'knex'
 import { config } from '../config.js'
+import { getTenantDb } from './tenant-context.js'
 
 const migrationsDir = new URL('./migrations', import.meta.url).pathname
 
@@ -68,7 +69,9 @@ function buildConnection(host: string, port: number) {
 
 const writePort = config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
 
-export const db = knex({
+// The static Knex instance — used in self-hosted mode and for migration/lock calls
+// that run outside of a request context (no ALS value set).
+export const _staticDb = knex({
   client: config.DB_CLIENT,
   connection: buildConnection(config.DB_HOST, writePort),
   pool: { min: 2, max: 10 },
@@ -77,6 +80,22 @@ export const db = knex({
     tableName: 'nivaro_migrations'
   }
 })
+
+// In cloud mode, db is a Proxy that returns the per-request tenant Knex instance
+// (set via AsyncLocalStorage by the tenant middleware). In self-hosted mode,
+// getTenantDb() returns undefined and the Proxy falls back to _staticDb —
+// behaviour is identical to before for self-hosted users.
+export const db = new Proxy(_staticDb as any, {
+  apply(_target, _thisArg, args) {
+    const d = getTenantDb() ?? _staticDb
+    return (d as any)(...args)
+  },
+  get(_target, prop) {
+    const d = getTenantDb() ?? _staticDb
+    const value = (d as any)[prop]
+    return typeof value === 'function' ? value.bind(d) : value
+  }
+}) as typeof _staticDb
 
 // ─── Read replica support ────────────────────────────────────────────────────
 // When DB_READ_HOST is set, dbRead is a second knex instance pointed at the
@@ -95,13 +114,13 @@ export const dbRead: Database = config.DB_READ_HOST
         tableName: 'nivaro_migrations'
       }
     })
-  : db
+  : _staticDb
 
-/** Graceful shutdown — destroys the write pool and, if separate, the read replica pool. */
+/** Graceful shutdown — destroys the static write pool and, if separate, the read replica pool. */
 export async function closeDb(): Promise<void> {
-  await db.destroy()
-  if (dbRead !== db) {
-    await dbRead.destroy()
+  await _staticDb.destroy()
+  if (dbRead !== _staticDb) {
+    await (dbRead as any).destroy()
   }
 }
 
