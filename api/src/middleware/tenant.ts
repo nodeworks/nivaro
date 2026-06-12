@@ -24,6 +24,7 @@ const RESERVED = new Set(['www', 'control', 'api', 'admin', 'status', 'mail'])
  *  Returns null if the hostname is a system subdomain or tenant not found.
  *  Throws if the tenant exists but is not active. */
 async function resolveTenant(hostname: string): Promise<Knex | null> {
+  // When behind Cloudflare Worker, the original host is passed via X-Forwarded-Host
   const sub = hostname.split('.')[0]
   if (!sub || RESERVED.has(sub)) return null
 
@@ -43,7 +44,9 @@ async function resolveTenant(hostname: string): Promise<Knex | null> {
  *  by calling done() from within store.run(), propagating the context to all
  *  subsequent async operations in this request's lifecycle. */
 export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?: Error) => void) {
-  resolveTenant(req.hostname)
+  // Prefer X-Forwarded-Host set by Cloudflare Worker (contains original tenant subdomain)
+  const hostname = (req.headers['x-forwarded-host'] as string | undefined) ?? req.hostname
+  resolveTenant(hostname)
     .then((tenantDb) => {
       if (!tenantDb) return done()
       runWithTenantDb(tenantDb, done)
