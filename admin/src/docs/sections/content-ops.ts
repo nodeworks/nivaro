@@ -206,6 +206,10 @@ export const contentOpsFieldGroups: DocSection = {
         [
           'tab',
           'Named tab in a tabbed interface at the top of the form. All tab-type groups for a collection appear as tabs together.'
+        ],
+        [
+          'metadata',
+          'Read-only display group. Fields inside render as a definition list (label: value) rather than editable inputs — ideal for display-only reference data on the record.'
         ]
       ]
     },
@@ -398,6 +402,89 @@ Authorization: Bearer <token>
     {
       type: 'note',
       text: 'The cascade endpoint returns only the fields that should be updated. The item editor merges these updates into the current form state without triggering a full reload.'
+    }
+  ]
+}
+
+export const contentOpsCascadeFilters: DocSection = {
+  id: 'content-ops-cascade-filters',
+  label: 'Cascade Filters',
+  content: [
+    { type: 'h1', id: 'content-ops-cascade-filters', text: 'Cascade Filters' },
+    {
+      type: 'p',
+      text: 'M2O fields support cascading option filtering via `cascade_filters` in `dependency_config`. When a parent field value is selected, the child M2O field\'s option list is automatically narrowed to only records matching that parent value. Multi-level chains (e.g. Division → Region → Site) are fully supported.'
+    },
+    { type: 'h3', text: 'How it works' },
+    {
+      type: 'p',
+      text: 'When the item editor loads or a field changes, `RelationPicker` checks for active `cascade_filters` rules. For each rule whose `parent_field` has a value, it appends a `?filter` parameter to the options fetch (`WHERE filter_column = parentValue`). If `clear_on_parent_change` is true, changing the parent field nulls this field automatically with an amber flash animation.'
+    },
+    { type: 'h3', text: 'Config format' },
+    {
+      type: 'pre',
+      code: `// dependency_config on the child M2O field:
+{
+  "cascade_filters": [
+    {
+      "parent_field": "division_id",
+      "filter_column": "division_id",
+      "clear_on_parent_change": true
+    }
+  ]
+}`
+    },
+    { type: 'h3', text: 'Properties' },
+    {
+      type: 'table',
+      head: ['Property', 'Type', 'Description'],
+      rows: [
+        ['parent_field', 'string', 'Field name in the same collection whose selected value drives the filter.'],
+        ['filter_column', 'string', 'Column on the M2O related table to filter by (WHERE filter_column = parent_value).'],
+        ['clear_on_parent_change', 'boolean?', 'If true, nulls this field whenever the parent value changes. Defaults to false.'],
+        ['clear_on_unavailable', 'boolean?', 'If true, the editor checks whether the current value is still within the filtered option set whenever the filter changes. If the selected value is not in the new options, it is automatically cleared.'],
+        ['parent_field', 'string', 'Works with both M2O and M2M parent fields. M2M parent: uses the first staged selection as the filter value.']
+      ]
+    },
+    { type: 'h3', text: 'M2M-to-M2M cascades' },
+    {
+      type: 'p',
+      text: 'Cascade filters now work correctly when both the parent and child are M2M fields. When the parent is M2M, the child option fetch uses the `_some` filter operator so that child records are matched against any of the parent\'s staged selections, rather than a single value. No extra configuration is required — set `parent_field` to the M2M parent and the editor picks the right operator automatically.'
+    },
+    { type: 'h3', text: 'Editing existing rules' },
+    {
+      type: 'p',
+      text: 'In the Cascade Filters section of the ⚙ field settings popover, each saved rule shows a pencil icon — click it to edit the rule inline. Every option is editable: parent field, filter column, clear on change, and clear if unavailable. Save field settings to persist the change.'
+    },
+    { type: 'h3', text: 'Multi-level chain example' },
+    {
+      type: 'pre',
+      code: `// Region field — filtered by Division:
+{
+  "cascade_filters": [
+    { "parent_field": "division_id", "filter_column": "division_id", "clear_on_parent_change": true }
+  ]
+}
+
+// Site field — filtered by Region:
+{
+  "cascade_filters": [
+    { "parent_field": "region_id", "filter_column": "region_id", "clear_on_parent_change": true }
+  ]
+}
+
+// Selecting a Division auto-filters Regions.
+// Selecting a Region auto-filters Sites.
+// Changing Division clears Region (and Region clearing clears Site via its own rule).`
+    },
+    { type: 'h3', text: 'Configuring in the admin UI' },
+    {
+      type: 'p',
+      text: 'Open Data Model → select the collection → click the ⚙ icon on an M2O field → scroll to the Cascade Filters section. Add a rule by picking the parent field and the filter column on the related table. Save field settings to persist.'
+    },
+    {
+      type: 'note',
+      text: 'Cascade filters are evaluated client-side only at edit time. They do not affect API list queries or server-side filtering — they are a UX convenience for narrowing picker options during data entry.'
     }
   ]
 }
@@ -1476,6 +1563,93 @@ POST /api/items/pages
     {
       type: 'note',
       text: 'M2A relations render in the item editor as a sorted list of "blocks" with a type-picker to add new ones. Drag handles allow reordering. Each block type expands to show its own fields inline.'
+    }
+  ]
+}
+
+export const pickerFilterGuide: DocSection = {
+  id: 'picker-filter',
+  label: 'Relation Picker Filter',
+  content: [
+    { type: 'h1', id: 'picker-filter', text: 'Relation Picker Filter' },
+    {
+      type: 'p',
+      text: 'A collection-level JSON filter expression that hides matching records from all M2O and M2M relation pickers targeting that collection. The filter is merged with any active cascade filter using `_and` before the options fetch. Existing FK references to excluded records are unaffected — they load and display normally.'
+    },
+    { type: 'h3', text: 'Config format' },
+    {
+      type: 'pre',
+      code: `// Stored on nivaro_collections.picker_filter
+// Example: hide records where is_disabled = true
+{"is_disabled": {"_neq": true}}
+
+// Example: hide archived records
+{"status": {"_neq": "archived"}}
+
+// Supports any Nivaro filter expression
+{"_and": [{"active": {"_eq": true}}, {"region": {"_neq": "EU"}}]}`
+    },
+    { type: 'h3', text: 'Configuring in the admin UI' },
+    {
+      type: 'p',
+      text: 'Data Model → select the collection → Settings tab → "Relation Picker Filter". Enter a JSON filter expression, click Save. The filter applies immediately to all pickers in every form.'
+    },
+    { type: 'h3', text: 'Scope' },
+    {
+      type: 'table',
+      head: ['Applies to', 'Does NOT apply to'],
+      rows: [
+        ['M2O RelationPicker option list', 'Collection browser / filter bars'],
+        ['M2M multi-select option list', 'API list reads (GET /items/:col)'],
+        ['M2M single-select option list', 'GraphQL queries'],
+        ['', 'The current-value label (fetched by ID, no filter)']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'This is UX curation, not security enforcement. Use `row_filter` RLS policies to restrict data access. Prefer attribute-based filters (`{"is_disabled":{"_neq":true}}`) over hard-coded ID exclusions — IDs break on data migration.'
+    }
+  ]
+}
+
+export const pickerExclusionsGuide: DocSection = {
+  id: 'picker-exclusions',
+  label: 'Record Picker Exclusions',
+  content: [
+    { type: 'h1', id: 'picker-exclusions', text: 'Record Picker Exclusions' },
+    {
+      type: 'p',
+      text: 'Individual records can be excluded from all M2O and M2M relation pickers without any schema changes. Exclusions are stored in `nivaro_picker_exclusions` and applied whenever pickers fetch options with `?picker=1`.'
+    },
+    { type: 'h3', text: 'How to exclude a record' },
+    {
+      type: 'p',
+      text: '**From the edit form:** open the record → click "Disable in pickers" in the item header. The button turns amber and shows "Excluded from pickers". Click again to re-enable.'
+    },
+    {
+      type: 'p',
+      text: '**Bulk:** in any collection browser, select records → click "Disable in pickers" or "Enable in pickers" above the bulk action bar.'
+    },
+    { type: 'h3', text: 'Behavior on existing references' },
+    {
+      type: 'p',
+      text: 'Excluding a record does not affect existing FK references. Forms that already reference an excluded record load and display it normally. The user can clear the field or pick a different value, but cannot re-select the excluded record.'
+    },
+    { type: 'h3', text: 'API' },
+    {
+      type: 'table',
+      head: ['Method', 'Path', 'Description'],
+      rows: [
+        ['GET', '/api/picker-exclusions/status/:collection/:itemId', 'Check exclusion status for a single record.'],
+        ['POST', '/api/picker-exclusions', 'Exclude a record. Body: `{collection, item_id}`.'],
+        ['DELETE', '/api/picker-exclusions', 'Remove exclusion. Body: `{collection, item_id}`.'],
+        ['POST', '/api/picker-exclusions/batch-status', 'Check multiple records. Body: `{collection, ids[]}`. Returns `{excluded: string[]}`.'],
+        ['POST', '/api/picker-exclusions/bulk', 'Exclude/include many records. Body: `{collection, ids[], exclude: boolean}`.']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Read endpoints require authentication. Write endpoints require admin access.'
     }
   ]
 }

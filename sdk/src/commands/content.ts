@@ -135,6 +135,20 @@ export function executeScheduledChange(
 
 // ─── Field config ─────────────────────────────────────────────────────────────
 
+export interface CascadeFilterRule {
+  parent_field: string
+  filter_column: string
+  clear_on_parent_change?: boolean
+  clear_on_unavailable?: boolean
+}
+
+export interface FieldDependencyConfig {
+  cascade_filters?: CascadeFilterRule[]
+  depends_on?: string[]
+  cascade?: 'clear' | 'recalculate'
+  [key: string]: unknown
+}
+
 export interface FieldCondition {
   field: string
   operator: 'eq' | 'neq' | 'null' | 'nnull' | 'in' | 'nin' | 'gt' | 'lt'
@@ -149,9 +163,10 @@ export interface FieldVisibilityRules {
 export interface FieldConfig {
   field: string
   label: string | null
+  placeholder?: string | null
   group_key: string | null
   visibility_rules: FieldVisibilityRules | null
-  dependency_config: Record<string, unknown> | null
+  dependency_config: FieldDependencyConfig | null
   validation_rules: unknown | null
   lock_condition: FieldCondition | null
   default_formula: string | null

@@ -12,13 +12,17 @@ interface RelationPickerProps {
   value: unknown
   onChange: (id: unknown) => void
   disabled?: boolean
+  extraFilter?: Record<string, unknown>
+  placeholder?: string
 }
 
 export function RelationPicker({
   relatedCollection,
   value,
   onChange,
-  disabled
+  disabled,
+  extraFilter,
+  placeholder
 }: RelationPickerProps) {
   const [open, setOpen] = useState(false)
   const [searchInput, setSearchInput] = useState('')
@@ -66,8 +70,16 @@ export function RelationPicker({
   })
 
   const searchFields = colMeta ? fields.join(',') : '*'
+  const pickerFilter = !isUserRelation
+    ? (colMeta?.picker_filter as Record<string, unknown> | null | undefined)
+    : null
+  const clauses = [pickerFilter, extraFilter].filter(Boolean) as Record<string, unknown>[]
+  const filterParam = clauses.length > 0
+    ? JSON.stringify(clauses.length === 1 ? clauses[0] : { _and: clauses })
+    : undefined
+
   const { data: searchResults, isLoading: searchLoading } = useQuery({
-    queryKey: ['relation-search', relatedCollection, searchFields, debouncedSearch],
+    queryKey: ['relation-search', relatedCollection, searchFields, debouncedSearch, filterParam],
     queryFn: async () => {
       if (isUserRelation) {
         const res = await api.get('/users', {
@@ -76,7 +88,7 @@ export function RelationPicker({
         return (res.data.data ?? []) as Record<string, unknown>[]
       }
       const res = await api.get(`/items/${relatedCollection}`, {
-        params: { limit: 200, fields: searchFields, search: debouncedSearch || undefined }
+        params: { limit: 200, fields: searchFields, search: debouncedSearch || undefined, filter: filterParam, picker: '1' }
       })
       return (res.data.data ?? []) as Record<string, unknown>[]
     },
@@ -115,7 +127,7 @@ export function RelationPicker({
           ) : currentLabel !== null ? (
             <span className='text-slate-800 truncate'>{currentLabel}</span>
           ) : (
-            <span className='text-slate-400'>Select…</span>
+            <span className='text-slate-400'>{placeholder ?? 'Select…'}</span>
           )}
           <ChevronDown className='h-3.5 w-3.5 text-slate-400 shrink-0 ml-2' />
         </button>
@@ -151,7 +163,11 @@ export function RelationPicker({
             )}
 
             {!searchLoading &&
-              searchResults?.map((item) => {
+              [...(searchResults ?? [])].sort((a, b) =>
+                renderDisplayTemplate(displayTemplate, a).localeCompare(
+                  renderDisplayTemplate(displayTemplate, b)
+                )
+              ).map((item) => {
                 const itemId = item.id
                 const label = renderDisplayTemplate(displayTemplate, item)
                 const isSelected = String(itemId) === String(value)

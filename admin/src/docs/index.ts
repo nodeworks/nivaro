@@ -55,6 +55,7 @@ import {
   contentOpsDataExport,
   contentOpsDatetimeAuto,
   contentOpsDraftPublish,
+  contentOpsCascadeFilters,
   contentOpsFieldDependencies,
   contentOpsFieldGroups,
   contentOpsFieldHistory,
@@ -71,7 +72,9 @@ import {
   contentOpsSubRows,
   contentOpsTranslations,
   contentOpsValidationRules,
-  contentOpsVirtualCollections
+  contentOpsVirtualCollections,
+  pickerFilterGuide,
+  pickerExclusionsGuide
 } from './sections/content-ops.js'
 import {
   devexCdcStream,
@@ -119,6 +122,7 @@ import {
   commentsApiDoc,
   dashboardsApiDoc,
   externalApisApiDoc,
+  externalApiSpecImportDoc,
   presenceGuide,
   presetsApiDoc,
   reportsApiDoc,
@@ -202,6 +206,11 @@ import {
   collectionLayouts,
   digestEmails,
   ecommercePrimitives,
+  layoutAiFeatures,
+  layoutConditional,
+  layoutPageSlots,
+  layoutStepsMode,
+  layoutSummaryPanel,
   publicApiDocs,
   roleUiPermissions,
   rowLevelSecurity,
@@ -380,6 +389,7 @@ export const navSections: NavGroup[] = [
       apiFlows,
       pipelineApi,
       externalApisApiDoc,
+      externalApiSpecImportDoc,
       presetsApiDoc,
       commentsApiDoc,
       dashboardsApiDoc,
@@ -510,6 +520,7 @@ export const navSections: NavGroup[] = [
       contentOpsFieldVisibility,
       contentOpsFieldLocking,
       contentOpsFieldDependencies,
+      contentOpsCascadeFilters,
       contentOpsValidationRules,
       contentOpsComputedDefaults,
       contentOpsCrossRecordDefaults,
@@ -528,7 +539,9 @@ export const navSections: NavGroup[] = [
       contentOpsFieldHistory,
       contentOpsAddendums,
       contentOpsPercentComplete,
-      contentOpsPolymorphicRelations
+      contentOpsPolymorphicRelations,
+      pickerFilterGuide,
+      pickerExclusionsGuide
     ]
   },
   {
@@ -637,7 +650,12 @@ export const navSections: NavGroup[] = [
       fieldDisplaySettingsGuide,
       fieldRulesGuide,
       attributesGuide,
-      collectionLayouts
+      collectionLayouts,
+      layoutStepsMode,
+      layoutSummaryPanel,
+      layoutPageSlots,
+      layoutConditional,
+      layoutAiFeatures
     ]
   },
   {

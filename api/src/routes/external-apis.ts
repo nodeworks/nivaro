@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { load as yamlLoad } from 'js-yaml'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -1007,14 +1008,27 @@ export async function externalApisRoutes(app: FastifyInstance) {
     const exists = await db('nivaro_external_apis').where({ id: apiId }).first()
     if (!exists) return reply.code(404).send({ error: 'Not found' })
 
-    // Parse spec — accept string or already-parsed object
+    // Parse spec — accept pre-parsed object, JSON string, or YAML string
     let spec: Record<string, unknown>
-    try {
-      spec = typeof req.body?.spec === 'string'
-        ? (JSON.parse(req.body.spec) as Record<string, unknown>)
-        : (req.body?.spec as Record<string, unknown>)
-    } catch {
-      return reply.code(400).send({ error: 'Invalid JSON in spec' })
+    if (typeof req.body?.spec !== 'string') {
+      spec = req.body?.spec as Record<string, unknown>
+    } else {
+      const raw = req.body.spec.trimStart()
+      try {
+        // Try JSON first (faster, unambiguous), then fall back to YAML
+        spec = raw.startsWith('{') || raw.startsWith('[')
+          ? (JSON.parse(raw) as Record<string, unknown>)
+          : (yamlLoad(raw) as Record<string, unknown>)
+      } catch {
+        // One format failed — try the other before giving up
+        try {
+          spec = raw.startsWith('{') || raw.startsWith('[')
+            ? (yamlLoad(raw) as Record<string, unknown>)
+            : (JSON.parse(raw) as Record<string, unknown>)
+        } catch {
+          return reply.code(400).send({ error: 'Invalid spec: could not parse as JSON or YAML' })
+        }
+      }
     }
 
     if (!spec || typeof spec !== 'object') {

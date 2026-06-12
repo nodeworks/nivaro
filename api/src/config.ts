@@ -44,7 +44,7 @@ const schema = z.object({
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
   SESSION_SECRET: z.string().min(32),
-  SESSION_TTL: z.coerce.number().default(86400),
+  SESSION_TTL: z.coerce.number().default(604800),
   COOKIE_SECURE: z
     .string()
     .transform((v) => v === 'true')

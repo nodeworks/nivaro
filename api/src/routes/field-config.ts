@@ -16,6 +16,7 @@ interface FieldRow {
   field: string
   label: string | null
   note: string | null
+  placeholder: string | null
   hidden: number | boolean | null
   readonly: number | boolean | null
   required: number | boolean | null
@@ -39,6 +40,7 @@ function formatFieldConfig(row: FieldRow) {
     field: row.field,
     label: row.label ?? null,
     note: row.note ?? null,
+    placeholder: row.placeholder ?? null,
     hidden: !!row.hidden,
     readonly: !!row.readonly,
     required: !!row.required,
@@ -149,7 +151,8 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         'remote_options_config',
         'repeater_schema',
         'is_translatable',
-        'sort'
+        'sort',
+        'placeholder'
       )
       .orderBy('sort', 'asc')) as FieldRow[]
 
@@ -166,15 +169,15 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       targetLayoutId = active?.id ?? null
     }
 
-    const assignmentMap = new Map<string, { group_key: string | null; sort: number }>()
+    const assignmentMap = new Map<string, { group_key: string | null; sort: number; label_override: string | null; is_visible: number | null; default_expanded: number | null }>()
     let ungrouped_sort: number | null = null
     if (targetLayoutId !== null) {
       const assignments = await db('nivaro_layout_field_assignments')
         .where({ layout_id: targetLayoutId })
-        .select('field', 'group_key', 'sort')
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded')
       for (const a of assignments) {
         if (a.field === '__ungrouped_pos__') { ungrouped_sort = a.sort; continue }
-        assignmentMap.set(a.field, { group_key: a.group_key, sort: a.sort })
+        assignmentMap.set(a.field, { group_key: a.group_key, sort: a.sort, label_override: a.label_override ?? null, is_visible: a.is_visible ?? null, default_expanded: a.default_expanded ?? null })
       }
     }
 
@@ -205,8 +208,12 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
           options: null,
           group_key: a.group_key,
           sort: a.sort,
+          label_override: a.label_override,
+          is_visible: a.is_visible,
+          default_expanded: a.default_expanded,
           layout_assigned: true,
-          is_virtual: true
+          is_virtual: true as unknown,
+          dependency_config: null
         })
       }
     }
@@ -220,8 +227,28 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
   app.patch('/:collection/:field', { preHandler: requireAdmin }, async (req, reply) => {
     const { collection, field } = req.params as { collection: string; field: string }
 
-    const existing = await db('nivaro_fields').where({ collection, field }).first()
-    if (!existing) return reply.code(404).send({ error: 'Field not found' })
+    app.log.info({ collection, field }, 'field-config PATCH')
+
+    let existing = await db('nivaro_fields').where({ collection, field }).first()
+    app.log.info({ existing: !!existing }, 'field-config PATCH existing check')
+    if (!existing) {
+      // Auto-create an alias row for virtual fields (M2M/O2M) that have no nivaro_fields row.
+      try {
+        await db('nivaro_fields').insert({
+          collection, field, type: 'alias', interface: null,
+          hidden: false, readonly: false, required: false,
+          sort: null, label: null, note: null, options: null,
+          group_key: null, visibility_rules: null, dependency_config: null,
+          validation_rules: null, lock_condition: null, default_formula: null,
+          cross_record_defaults: null, remote_options_config: null,
+          repeater_schema: null, is_translatable: false
+        })
+        existing = await db('nivaro_fields').where({ collection, field }).first()
+      } catch (insertErr) {
+        const msg = insertErr instanceof Error ? insertErr.message : String(insertErr)
+        return reply.code(500).send({ error: `Failed to create field row: ${msg}` })
+      }
+    }
 
     const body = req.body as Partial<{
       label: string | null
@@ -250,6 +277,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
     if ('label' in body) patch.label = body.label ?? null
     if ('note' in body) patch.note = body.note ?? null
+    if ('placeholder' in body) patch.placeholder = (body as Record<string, unknown>).placeholder ?? null
     if ('hidden' in body) patch.hidden = body.hidden ? 1 : 0
     if ('readonly' in body) patch.readonly = body.readonly ? 1 : 0
     if ('required' in body) patch.required = body.required ? 1 : 0

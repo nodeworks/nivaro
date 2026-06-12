@@ -38,7 +38,7 @@ import {
   type PipelineTransition,
   type User
 } from '@/lib/api'
-import { formatRelative } from '@/lib/utils'
+import { cn, formatRelative } from '@/lib/utils'
 
 // ─── State track ─────────────────────────────────────────────────────────────
 
@@ -740,12 +740,25 @@ interface PipelinePanelData {
   binding: { id: number; template: string; collection: string; state_field: string | null } | null
 }
 
-export function PipelinePanel({ collection, item }: { collection: string; item: string }) {
+export function PipelinePanel({ collection, item, defaultExpanded, title, onBeforeTransition }: { collection: string; item: string; defaultExpanded?: boolean; title?: string; onBeforeTransition?: () => boolean }) {
   if (item === 'new') return null
   const queryClient = useQueryClient()
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const trySetPending = (txId: string) => {
+    if (pendingTransition === txId) { setPendingTransition(null); return }
+    if (onBeforeTransition && !onBeforeTransition()) return
+    setPendingTransition(txId)
+  }
+  const syncedFromProp = useRef(false)
+  useEffect(() => {
+    if (!syncedFromProp.current && defaultExpanded !== undefined) {
+      syncedFromProp.current = true
+      setExpanded(defaultExpanded)
+    }
+  }, [defaultExpanded])
 
   const queryKey = ['pipeline-instance', collection, item]
 
@@ -809,31 +822,14 @@ export function PipelinePanel({ collection, item }: { collection: string; item: 
     }
   })
 
-  // ── Loading skeleton ──────────────────────────────────────────────────────
+  // ── Loading state ─────────────────────────────────────────────────────────
+  // Return null while loading rather than a skeleton: the pipeline panel is a
+  // supplementary UI element, not primary content, so it should only appear once
+  // the data is ready (with content, or null when unbound). This avoids the
+  // skeleton-flash where the panel renders a skeleton then vanishes on unbound
+  // collections.
 
-  if (isLoading) {
-    return (
-      <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
-        <div className='flex items-center justify-between border-b border-slate-100 px-5 py-3.5'>
-          <Skeleton className='h-4 w-20' />
-          <Skeleton className='h-6 w-36 rounded-full' />
-        </div>
-        <div className='divide-y divide-slate-100'>
-          <div className='space-y-2 px-5 py-4'>
-            <Skeleton className='h-3.5 w-14' />
-            <Skeleton className='h-8 w-full rounded-md' />
-            <Skeleton className='h-8 w-3/4 rounded-md' />
-          </div>
-          <div className='px-5 py-4'>
-            <div className='flex gap-2'>
-              <Skeleton className='h-8 w-24 rounded-md' />
-              <Skeleton className='h-8 w-20 rounded-md' />
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  if (isLoading) return null
 
   if (!data?.binding) return null
 
@@ -851,27 +847,108 @@ export function PipelinePanel({ collection, item }: { collection: string; item: 
 
   return (
     <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
-      {/* ── Header: label + current state ── */}
-      <div className='flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-3.5'>
-        <div className='flex items-center gap-2'>
-          <GitBranch className='h-3.5 w-3.5 text-slate-400' />
-          <span className='text-[12px] font-semibold text-slate-500'>Pipeline</span>
-        </div>
-        <div className='flex items-center gap-2'>
+      {/* ── Collapsed / header row ── */}
+      <div className='flex items-center gap-3 px-4 py-2.5'>
+        <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+        <span className='text-[12px] font-semibold text-slate-500'>{title || 'Pipeline'}</span>
+        <div className='flex items-center gap-1.5'>
           {instance?.completed_at && (
             <span className='flex items-center gap-1 text-[11px] font-medium text-emerald-600'>
               <CheckCircle2 className='h-3.5 w-3.5' />
               Completed
             </span>
           )}
-          {currentState && (
-            <StateBadge label={currentState.label} color={currentState.color} />
-          )}
-          {instance && !currentState && (
-            <span className='text-[12px] italic text-slate-400'>Unknown state</span>
-          )}
+          {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
+          {instance && !currentState && <span className='text-[12px] italic text-slate-400'>Unknown state</span>}
         </div>
+        {/* Inline transition buttons when collapsed */}
+        {!expanded && hasTransitions && (
+          <div className='flex flex-wrap items-center gap-1.5'>
+            {(() => {
+              const byLabel = new Map<string, PipelineTransition[]>()
+              for (const tx of transitions ?? []) {
+                const list = byLabel.get(tx.label) ?? []; list.push(tx); byLabel.set(tx.label, list)
+              }
+              return Array.from(byLabel.entries()).map(([label, txs]) => {
+                const txColor = txs[0]?.color ?? null
+                const isActive = txs.some(t => t.id === pendingTransition)
+                const colorStyle = (active: boolean) => txColor
+                  ? active ? { backgroundColor: txColor, borderColor: txColor } : { borderColor: txColor, color: txColor }
+                  : undefined
+                if (txs.length === 1) {
+                  const tx = txs[0]
+                  return (
+                    <Button key={label} size='sm' variant={isActive ? 'default' : 'outline'}
+                      className='h-7 gap-1 text-[11px]' style={colorStyle(isActive)}
+                      onClick={() => trySetPending(tx.id)}>
+                      {label}
+                    </Button>
+                  )
+                }
+                return (
+                  <DropdownMenu key={label}>
+                    <DropdownMenuTrigger asChild>
+                      <Button size='sm' variant={isActive ? 'default' : 'outline'}
+                        className='h-7 gap-1 text-[11px]' style={colorStyle(isActive)}>
+                        {label}<ChevronDown className='h-3 w-3' />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align='start'>
+                      {[...txs].sort((a,b)=>(stateById.get(a.to_state)?.sort??999)-(stateById.get(b.to_state)?.sort??999)).map(tx => (
+                        <DropdownMenuItem key={tx.id} onSelect={() => trySetPending(tx.id)}>
+                          {tx.color && <span className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full' style={{backgroundColor:tx.color}} />}
+                          {stateById.get(tx.to_state)?.label ?? tx.to_state}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )
+              })
+            })()}
+          </div>
+        )}
+        {!expanded && !instance && data?.binding && (
+          <Button size='sm' variant='outline' className='h-7 gap-1.5 text-[11px]'
+            onClick={() => startPipeline.mutate()} disabled={startPipeline.isPending}>
+            {startPipeline.isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : <GitBranch className='h-3 w-3' />}
+            Start
+          </Button>
+        )}
+        <button type='button' onClick={() => setExpanded(v => !v)}
+          className='ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600'>
+          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform duration-150', expanded && 'rotate-180')} />
+        </button>
       </div>
+
+      {/* Inline confirm when collapsed */}
+      {!expanded && pendingTransition && (
+        <div className='border-t border-slate-100 px-4 py-3 space-y-2'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
+            {pendingTx && <span className='text-[12px] font-medium text-slate-700'>{pendingTx.label}</span>}
+            {currentState && pendingToState && (
+              <div className='ml-auto flex items-center gap-1.5'>
+                <StateBadge label={currentState.label} color={currentState.color} small />
+                <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
+                <StateBadge label={pendingToState.label} color={pendingToState.color} small />
+              </div>
+            )}
+          </div>
+          <input type='text' value={comment} onChange={e => setComment(e.target.value)}
+            placeholder='Add a comment (optional)'
+            className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30' />
+          <div className='flex justify-end gap-2'>
+            <Button type='button' size='sm' variant='ghost' className='h-7 text-[12px]' onClick={() => setPendingTransition(null)}>Cancel</Button>
+            <Button type='button' size='sm' className='h-7 gap-1.5 text-[12px]' disabled={executeTransition.isPending}
+              onClick={() => executeTransition.mutate({ transition_id: pendingTransition, comment: comment.trim() || undefined })}>
+              {executeTransition.isPending ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : <>Confirm<Check className='h-3 w-3' /></>}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Expanded full panel ── */}
+      {expanded && <div className='border-t border-slate-100'>
 
       {/* ── Body ── */}
       {!instance ? (
@@ -944,7 +1021,7 @@ export function PipelinePanel({ collection, item }: { collection: string; item: 
                           className='gap-1.5 text-[12px]'
                           style={colorStyle(isActive)}
                           onClick={() =>
-                            setPendingTransition(pendingTransition === tx.id ? null : tx.id)
+                            trySetPending(tx.id)
                           }
                         >
                           {label}
@@ -1113,6 +1190,131 @@ export function PipelinePanel({ collection, item }: { collection: string; item: 
                 <HistoryTimeline history={history ?? []} />
               </div>
             )}
+          </div>
+        </div>
+      )}
+      </div>}
+    </div>
+  )
+}
+
+export function PipelineTransitionButtons({ collection, item, onBeforeTransition }: { collection: string; item: string; onBeforeTransition?: () => boolean }) {
+  if (item === 'new') return null
+  const queryClient = useQueryClient()
+  const [comment, setComment] = useState('')
+  const [pendingTransition, setPendingTransition] = useState<string | null>(null)
+  const trySetPending = (txId: string) => {
+    if (pendingTransition === txId) { setPendingTransition(null); return }
+    if (onBeforeTransition && !onBeforeTransition()) return
+    setPendingTransition(txId)
+  }
+
+  const queryKey = ['pipeline-instance', collection, item]
+
+  const { data } = useQuery<PipelinePanelData>({
+    queryKey,
+    queryFn: () =>
+      api.get<{ data: PipelinePanelData | null }>(`/pipelines/instance/${collection}/${item}`)
+        .then(r => r.data.data ?? { instance: null, states: [], available_transitions: [], all_transitions: [], history: [], binding: null }),
+    staleTime: 10_000
+  })
+
+  const executeTransition = useMutation({
+    mutationFn: ({ transition_id, comment }: { transition_id: string; comment?: string }) =>
+      api.post(`/pipelines/instance/${collection}/${item}/transition`, { transition_id, comment }).then(r => r.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey })
+      setComment('')
+      setPendingTransition(null)
+      toast.success('Transition executed')
+    },
+    onError: (err: unknown) => {
+      const resp = (err as { response?: { status?: number; data?: { error?: string } } })?.response
+      toast.error(resp?.data?.error ?? 'Failed to execute transition')
+      if (resp?.status === 409) { queryClient.invalidateQueries({ queryKey }); setPendingTransition(null) }
+    }
+  })
+
+  if (!data?.binding || !data?.instance || data.instance.completed_at) return null
+
+  const transitions = data.available_transitions ?? []
+  if (transitions.length === 0) return null
+
+  const stateById = new Map((data.states ?? []).map(s => [s.id, s]))
+  const currentState = data.instance.current_state_obj ?? null
+  const pendingTx = pendingTransition ? transitions.find(t => t.id === pendingTransition) : null
+  const pendingToState = pendingTx ? stateById.get(pendingTx.to_state) : null
+
+  const byLabel = new Map<string, PipelineTransition[]>()
+  for (const tx of transitions) {
+    const list = byLabel.get(tx.label) ?? []
+    list.push(tx)
+    byLabel.set(tx.label, list)
+  }
+
+  return (
+    <div className='space-y-2'>
+      <div className='flex flex-wrap gap-2'>
+        {Array.from(byLabel.entries()).map(([label, txs]) => {
+          const txColor = txs[0]?.color ?? null
+          const isActive = txs.some(t => t.id === pendingTransition)
+          const colorStyle = (active: boolean) => txColor
+            ? active ? { backgroundColor: txColor, borderColor: txColor } : { borderColor: txColor, color: txColor }
+            : undefined
+
+          if (txs.length === 1) {
+            const tx = txs[0]
+            return (
+              <Button key={label} size='sm' variant={isActive ? 'default' : 'outline'} className='gap-1.5 text-[12px]'
+                style={colorStyle(isActive)} onClick={() => trySetPending(tx.id)}>
+                {label}
+              </Button>
+            )
+          }
+
+          const sorted = [...txs].sort((a, b) => (stateById.get(a.to_state)?.sort ?? 999) - (stateById.get(b.to_state)?.sort ?? 999))
+          return (
+            <DropdownMenu key={label}>
+              <DropdownMenuTrigger asChild>
+                <Button size='sm' variant={isActive ? 'default' : 'outline'} className='gap-1.5 text-[12px]' style={colorStyle(isActive)}>
+                  {label}<ChevronDown className='h-3 w-3' />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align='start'>
+                {sorted.map(tx => (
+                  <DropdownMenuItem key={tx.id} onSelect={() => trySetPending(tx.id)}>
+                    {tx.color && <span className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full' style={{ backgroundColor: tx.color }} />}
+                    {stateById.get(tx.to_state)?.label ?? tx.to_state}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )
+        })}
+      </div>
+
+      {pendingTransition && (
+        <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3.5'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
+            {pendingTx && <span className='text-[12px] font-medium text-slate-700'>{pendingTx.label}</span>}
+            {currentState && pendingToState && (
+              <div className='ml-auto flex items-center gap-1.5'>
+                <StateBadge label={currentState.label} color={currentState.color} small />
+                <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
+                <StateBadge label={pendingToState.label} color={pendingToState.color} small />
+              </div>
+            )}
+          </div>
+          <input type='text' value={comment} onChange={e => setComment(e.target.value)}
+            placeholder='Add a comment (optional)'
+            className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30' />
+          <div className='flex items-center justify-end gap-2'>
+            <Button type='button' size='sm' variant='ghost' className='h-7 text-[12px]' onClick={() => setPendingTransition(null)}>Cancel</Button>
+            <Button type='button' size='sm' className='h-7 gap-1.5 text-[12px]' disabled={executeTransition.isPending}
+              onClick={() => executeTransition.mutate({ transition_id: pendingTransition, comment: comment.trim() || undefined })}>
+              {executeTransition.isPending ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : <>Confirm<Check className='h-3 w-3' /></>}
+            </Button>
           </div>
         </div>
       )}

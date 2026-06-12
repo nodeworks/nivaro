@@ -24,7 +24,16 @@ export const fieldDisplaySettingsGuide: DocSection = {
           'All fields',
           'Overrides which input component renders the field. Options depend on the field\'s abstract type; choose "Default" to reset to auto-detection.'
         ],
-        ['Note', 'All fields', 'Helper text shown below the input in the item editor.'],
+        [
+          'Placeholder',
+          'Text + number + textarea fields',
+          'Hint text shown inside the empty input. Stored as `placeholder`; presentation only — never saved as a value.'
+        ],
+        [
+          'Note (helper text)',
+          'All fields',
+          'Short guidance for the field. Stored as `note` and surfaced as a tooltip info icon (ⓘ) next to the field label in the item editor.'
+        ],
         ['Required', 'All fields', 'Marks the field as required in the editor.'],
         ['Hidden', 'All fields', 'Hides the field from the item editor entirely.'],
         ['Read-only', 'All fields', 'Renders the field as non-editable.'],
@@ -56,6 +65,7 @@ export const fieldDisplaySettingsGuide: DocSection = {
 {
   "label": "Customer Account",
   "note": "The billing account this order is invoiced to",
+  "placeholder": "Search accounts…",
   "required": true,
   "inline_relation": false
 }

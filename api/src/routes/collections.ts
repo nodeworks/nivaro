@@ -59,7 +59,13 @@ export async function collectionsRoutes(app: FastifyInstance) {
   app.patch('/:collection', async (req, reply) => {
     if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
     const { collection } = req.params as { collection: string }
-    const data = await svc.updateCollection(collection, req.body as Partial<CMSCollection>)
+    const body = req.body as Partial<CMSCollection> & { picker_filter?: unknown }
+    const { picker_filter: rawPickerFilter, ...restBody } = body
+    const patch: Record<string, unknown> = { ...restBody }
+    if ('picker_filter' in body) {
+      patch.picker_filter = rawPickerFilter != null ? JSON.stringify(rawPickerFilter) : null
+    }
+    const data = await svc.updateCollection(collection, patch)
     await logActivity({
       action: 'update',
       user: req.user?.id,

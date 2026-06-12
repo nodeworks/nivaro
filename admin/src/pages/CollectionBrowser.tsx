@@ -7,6 +7,8 @@ import {
   Download,
   Flag,
   FunctionSquare,
+  Eye,
+  EyeOff,
   Loader2,
   Pencil,
   Plus,
@@ -1142,20 +1144,48 @@ export function CollectionBrowserPage() {
       )}
 
       {selectedIds.length > 0 && (
-        <BulkActionBar
-          collection={collection!}
-          selectedIds={selectedIds}
-          onClear={() => setSelectedIds([])}
-          onSuccess={() => queryClient.invalidateQueries({ queryKey: ['items', collection] })}
-          hasPipeline={!!pipelineData}
-          availableTransitions={
-            pipelineTemplate?.transitions?.map((t) => ({
-              id: t.id,
-              label: t.label,
-              color: t.color
-            })) ?? []
-          }
-        />
+        <>
+          <div className='fixed bottom-[68px] left-1/2 z-50 -translate-x-1/2 flex items-center gap-2'>
+            <button
+              type='button'
+              onClick={async () => {
+                await api.post('/picker-exclusions/bulk', { collection, ids: selectedIds, exclude: true })
+                toast.success(`${selectedIds.length} record(s) excluded from pickers`)
+                setSelectedIds([])
+              }}
+              className='inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12px] font-medium text-amber-700 hover:bg-amber-100 shadow-md dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400'
+            >
+              <EyeOff className='h-3.5 w-3.5' />
+              Disable in pickers
+            </button>
+            <button
+              type='button'
+              onClick={async () => {
+                await api.post('/picker-exclusions/bulk', { collection, ids: selectedIds, exclude: false })
+                toast.success(`${selectedIds.length} record(s) re-enabled in pickers`)
+                setSelectedIds([])
+              }}
+              className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 shadow-md dark:border-border dark:bg-card dark:text-muted-foreground'
+            >
+              <Eye className='h-3.5 w-3.5' />
+              Enable in pickers
+            </button>
+          </div>
+          <BulkActionBar
+            collection={collection!}
+            selectedIds={selectedIds}
+            onClear={() => setSelectedIds([])}
+            onSuccess={() => queryClient.invalidateQueries({ queryKey: ['items', collection] })}
+            hasPipeline={!!pipelineData}
+            availableTransitions={
+              pipelineTemplate?.transitions?.map((t) => ({
+                id: t.id,
+                label: t.label,
+                color: t.color
+              })) ?? []
+            }
+          />
+        </>
       )}
     </>
   )

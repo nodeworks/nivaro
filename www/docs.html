@@ -340,6 +340,9 @@
           <a class="docs-nav-item" data-section="content-ops-field-visibility" href="#content-ops-field-visibility">Field Visibility Rules</a>
           <a class="docs-nav-item" data-section="content-ops-field-locking" href="#content-ops-field-locking">Field Locking</a>
           <a class="docs-nav-item" data-section="content-ops-field-dependencies" href="#content-ops-field-dependencies">Field Dependencies</a>
+          <a class="docs-nav-item" data-section="content-ops-cascade-filters" href="#content-ops-cascade-filters">Cascade Filters</a>
+          <a class="docs-nav-item" data-section="picker-filter" href="#picker-filter">Relation Picker Filter</a>
+          <a class="docs-nav-item" data-section="picker-exclusions" href="#picker-exclusions">Record Picker Exclusions</a>
           <a class="docs-nav-item" data-section="content-ops-validation" href="#content-ops-validation">Validation Rules</a>
           <a class="docs-nav-item" data-section="content-ops-defaults" href="#content-ops-defaults">Computed Defaults</a>
           <a class="docs-nav-item" data-section="content-ops-cross-record-defaults" href="#content-ops-cross-record-defaults">Cross-Record Defaults</a>
@@ -529,6 +532,11 @@
           <a class="docs-nav-item" data-section="field-rules" href="#field-rules">Field Rules</a>
           <a class="docs-nav-item" data-section="dynamic-attributes" href="#dynamic-attributes">Dynamic Attributes</a>
           <a class="docs-nav-item" data-section="collection-layouts" href="#s-collection-layouts">Collection Layouts</a>
+          <a class="docs-nav-item" data-section="layout-steps-mode" href="#s-layout-steps-mode">Layout Steps / Wizard</a>
+          <a class="docs-nav-item" data-section="layout-summary-panel" href="#s-layout-summary-panel">Layout Summary Panel</a>
+          <a class="docs-nav-item" data-section="layout-page-slots" href="#s-layout-page-slots">Layout Page Slots</a>
+          <a class="docs-nav-item" data-section="layout-conditional" href="#s-layout-conditional">Conditional Layouts by Role</a>
+          <a class="docs-nav-item" data-section="layout-ai-features" href="#s-layout-ai-features">Per-Layout AI Features</a>
         </div>
       </div>
 
@@ -1112,6 +1120,8 @@ const article = await nivaro.request(readItem('articles', '123'))
           <p class="doc-p">The test panel supports full request composition: method selector, path, body textarea (shown for POST/PUT/PATCH), collapsible query params and request headers editors, and a response section that shows status, body, and toggleable response headers. Use the Custom pill for ad-hoc requests or select a predefined endpoint pill to start from its defaults.</p>
           <h3 class="doc-h3">Security</h3>
           <p class="doc-p">Secrets (token, password, client_secret, api_key value) are masked in GET responses with <code class="doc-code">••••••</code>. Re-submitting the masked value on PATCH preserves the existing secret. Only admins can read or write API configs.</p>
+          <h3 class="doc-h3">Spec import (OpenAPI / Swagger)</h3>
+          <p class="doc-p">The "Import Spec" collapsible in the Endpoints tab lets you bulk-create endpoint templates from an OpenAPI 3.x or Swagger 2.0 JSON document. Paste or upload the spec JSON; all paths and HTTP methods are parsed and inserted as predefined endpoint templates. YAML is not supported — convert to JSON first.</p>
           <div class="doc-note">External APIs intentionally skip SSRF protection — they are admin-only and designed to reach internal corporate services (Oracle EBS, MWF, MDSi, etc.) that would otherwise be blocked. SSRF protection applies to webhooks, not external APIs.</div>
           <!-- /SYNC:external-apis-guide -->
         </div>
@@ -2331,6 +2341,27 @@ POST /api/users/me/delegate
               <tr><td>DELETE</td><td>/api/external-apis/endpoints/:eid</td><td>Delete an endpoint template.</td></tr>
               <tr><td>PATCH</td><td>/api/external-apis/:id/endpoints/reorder</td><td>Bulk reorder. Body: [{ id, sort }].</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Spec import routes</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+            <tbody><tr><tr><td>POST</td><td>/api/external-apis/:id/import-spec</td><td>Parse an OpenAPI 3.x or Swagger 2.0 JSON spec and bulk-create endpoint templates. Body: { spec: string | object }.</td></tr>
+              <tr><td>GET</td><td>/api/external-apis/:id/schemas</td><td>List imported schema records for an API.</td></tr>
+              <tr><td>DELETE</td><td>/api/external-apis/:id/schemas/:sid</td><td>Remove an imported schema record.</td></tr></tr></tbody>
+          </table></div>
+          <pre class="doc-pre"><code>// Import a spec from a parsed JSON object
+const spec = await fetch('https://petstore3.swagger.io/api/v3/openapi.json').then(r =&gt; r.json())
+
+await fetch('/api/external-apis/42/import-spec', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer &lt;token&gt;' },
+  body: JSON.stringify({ spec }),
+})
+// Response: { inserted: 23, skipped: 0, schema_id: 7 }
+
+// List imported schemas
+const schemas = await fetch('/api/external-apis/42/schemas').then(r =&gt; r.json())
+// → [{ id, api_id, title, version, endpoint_count, created_at }]</code></pre>
+          <div class="doc-note">Only JSON specs are accepted. YAML must be converted before posting. Both OpenAPI 3.x (detected by the "openapi" root key) and Swagger 2.0 (detected by the "swagger" root key) are supported. Swagger 2.0 basePath is ignored — set base_url on the ExternalApi record instead.</div>
           <h3 class="doc-h3">Endpoint template shape</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
@@ -2349,41 +2380,27 @@ POST /api/users/me/delegate
           <!-- /SYNC:external-apis-api -->
         </div>
 
-        <div class="doc-section" id="s-external-api-spec-import" data-toc='[{"id":"external-api-spec-import","label":"Spec Import"}]'>
+        <div class="doc-section" id="s-external-api-spec-import" data-toc='[{"id":"external-api-spec-import","label":"External API — Spec Import"}]'>
           <!-- SYNC:external-api-spec-import -->
           <h1 class="doc-h1" id="external-api-spec-import">External API — Spec Import</h1>
-          <p class="doc-p">The spec import feature bulk-creates predefined endpoint templates from an OpenAPI 3.x or Swagger 2.0 JSON document. Use the "Import Spec" collapsible in the Endpoints tab of any External API record, or call the API directly.</p>
+          <p class="doc-p">The spec import feature bulk-creates predefined endpoint templates from an OpenAPI 3.x or Swagger 2.0 JSON or YAML document. Use the "Import Spec" collapsible in the Endpoints tab of any External API record, or call the API directly.</p>
           <h3 class="doc-h3">Format requirements</h3>
-          <p class="doc-p">Only JSON is accepted. YAML must be converted to JSON before ingesting. Both OpenAPI 3.x (root key <code class="doc-code">openapi</code>) and Swagger 2.0 (root key <code class="doc-code">swagger</code>) are supported. All paths and HTTP methods are parsed into endpoint template rows. Swagger 2.0 <code class="doc-code">basePath</code> is ignored — set <code class="doc-code">base_url</code> on the External API record instead.</p>
-          <h3 class="doc-h3">Routes</h3>
+          <p class="doc-p">Both JSON and YAML are accepted. OpenAPI 3.x (root key <code class="doc-code">openapi</code>) and Swagger 2.0 (root key <code class="doc-code">swagger</code>) are both supported. Swagger 2.0 <code class="doc-code">basePath</code> is ignored — set <code class="doc-code">base_url</code> on the External API record. Endpoints are deduplicated by slug on each import.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
-            <tbody>
-              <tr><td>POST</td><td>/api/external-apis/:id/import-spec</td><td>Parse spec and bulk-create endpoint templates. Body: <code class="doc-code">{ spec: string | object }</code>. String values are JSON.parse'd; invalid JSON returns 400.</td></tr>
-              <tr><td>GET</td><td>/api/external-apis/:id/schemas</td><td>List imported schema records for an API. Returns id, title, version, endpoint_count, created_at.</td></tr>
-              <tr><td>DELETE</td><td>/api/external-apis/:id/schemas/:sid</td><td>Remove a schema record. Does not delete the endpoint templates already created from it.</td></tr>
-            </tbody>
+            <tbody><tr><tr><td>POST</td><td>/api/external-apis/:id/import-spec</td><td>Parse spec and bulk-create endpoint templates. Body: <code class="doc-code">{ spec: string | object }</code>. Returns <code class="doc-code">{ inserted, skipped, schema_id }</code>.</td></tr>
+              <tr><td>GET</td><td>/api/external-apis/:id/schemas</td><td>List imported schema records. Returns id, title, spec_version, endpoint_count, imported_at.</td></tr>
+              <tr><td>DELETE</td><td>/api/external-apis/:id/schemas/:sid</td><td>Remove a schema record (does not delete created templates).</td></tr></tr></tbody>
           </table></div>
-          <h3 class="doc-h3">Example request</h3>
-          <pre class="doc-pre"><code>// Fetch a public spec and import it
-const spec = await fetch('https://petstore3.swagger.io/api/v3/openapi.json').then(r => r.json())
+          <pre class="doc-pre"><code>const spec = await fetch('https://petstore3.swagger.io/api/v3/openapi.json').then(r =&gt; r.json())
 
-const res = await fetch('/api/external-apis/42/import-spec', {
+await fetch('/api/external-apis/42/import-spec', {
   method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': 'Bearer &lt;admin-token&gt;'
-  },
+  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer &lt;token&gt;' },
   body: JSON.stringify({ spec }),
 })
-// { "inserted": 23, "skipped": 0, "schema_id": 7 }
-
-// List schemas for this API
-const schemas = await fetch('/api/external-apis/42/schemas', {
-  headers: { 'Authorization': 'Bearer &lt;admin-token&gt;' }
-}).then(r => r.json())
-// [{ "id": 7, "api_id": 42, "title": "Petstore", "version": "3.0.2", "endpoint_count": 23, "created_at": "..." }]</code></pre>
-          <div class="doc-note">All spec import routes require admin access. YAML is not supported — convert to JSON first. A string body value is JSON.parse'd server-side; an object is used directly.</div>
+// { "inserted": 23, "skipped": 0, "schema_id": 7 }</code></pre>
+          <div class="doc-note">All spec import routes require admin access. A string body is parsed as JSON or YAML automatically. An object body is used directly.</div>
           <!-- /SYNC:external-api-spec-import -->
         </div>
 
@@ -6298,7 +6315,8 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
             <thead><tr><th>Setting</th><th>Applies to</th><th>Behavior</th></tr></thead>
             <tbody><tr><tr><td>Label</td><td>All fields</td><td>Overrides the auto-generated label (title-cased field name). Leave blank to fall back to the default.</td></tr>
               <tr><td>Interface</td><td>All fields</td><td>Overrides which input component renders the field. Options depend on the field's abstract type; choose "Default" to reset to auto-detection.</td></tr>
-              <tr><td>Note</td><td>All fields</td><td>Helper text shown below the input in the item editor.</td></tr>
+              <tr><td>Placeholder</td><td>Text + number + textarea fields</td><td>Hint text shown inside the empty input. Stored as <code class="doc-code">placeholder</code>; presentation only — never saved as a value.</td></tr>
+              <tr><td>Note (helper text)</td><td>All fields</td><td>Short guidance for the field. Stored as <code class="doc-code">note</code> and surfaced as a tooltip info icon (ⓘ) next to the field label in the item editor.</td></tr>
               <tr><td>Required</td><td>All fields</td><td>Marks the field as required in the editor.</td></tr>
               <tr><td>Hidden</td><td>All fields</td><td>Hides the field from the item editor entirely.</td></tr>
               <tr><td>Read-only</td><td>All fields</td><td>Renders the field as non-editable.</td></tr>
@@ -6316,6 +6334,7 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
 {
   "label": "Customer Account",
   "note": "The billing account this order is invoiced to",
+  "placeholder": "Search accounts…",
   "required": true,
   "inline_relation": false
 }
@@ -6468,6 +6487,76 @@ const active = await cms.request(readActiveLayout('articles'))
 // Use a specific layout in @nivaro/react
 useNivaroForm('articles', { mode: 'create', layoutId: 42 })</code></pre>
           <!-- /SYNC:collection-layouts -->
+        </div>
+
+        <!-- LAYOUT STEPS MODE -->
+        <div class="doc-section" id="s-layout-steps-mode" data-toc='[{"id":"layout-steps-mode","label":"Steps / Wizard Mode for Layouts"}]'>
+          <!-- SYNC:layout-steps-mode -->
+          <h1 class="doc-h1" id="layout-steps-mode">Steps / Wizard Mode for Layouts</h1>
+          <p class="doc-p">A layout whose tabs are configured as steps renders as a linear stepper strip instead of a tab bar — the item editor walks the user through groups one at a time with Back / Next controls. Set <code class="doc-code">tab_mode</code> to <code class="doc-code">steps</code> (vs the default <code class="doc-code">tabs</code>) in Data Model → Layout → Settings.</p>
+          <h3 class="doc-h3">Config options</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Option</th><th>Effect</th></tr></thead>
+            <tbody><tr><td>tab_mode: steps</td><td>Tab-type groups render as an ordered stepper strip with Back / Next navigation.</td></tr>
+              <tr><td>validate_before_next</td><td>Blocks advancing to the next step until all required fields on the current step are filled.</td></tr></tbody>
+          </table></div>
+          <div class="doc-note">Steps mode reuses the tab groups of the layout — there is no separate step entity. With <code class="doc-code">validate_before_next</code> off, users can move freely between steps; validation still runs on save.</div>
+          <!-- /SYNC:layout-steps-mode -->
+        </div>
+
+        <!-- LAYOUT SUMMARY PANEL -->
+        <div class="doc-section" id="s-layout-summary-panel" data-toc='[{"id":"layout-summary-panel","label":"Summary Panel"}]'>
+          <!-- SYNC:layout-summary-panel -->
+          <h1 class="doc-h1" id="layout-summary-panel">Summary Panel</h1>
+          <p class="doc-p">A layout can show a collapsible summary sidebar that lists every field and its live value as the record is edited. Toggle it on per layout with <code class="doc-code">summary_enabled</code> in layout settings; on the ItemEdit page the Summary button opens and closes it.</p>
+          <h3 class="doc-h3">Config options</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Option</th><th>Effect</th></tr></thead>
+            <tbody><tr><td>summary_enabled</td><td>Enables the summary sidebar for the layout and shows the Summary button on ItemEdit.</td></tr>
+              <tr><td>summary_show_all</td><td>Includes fields with empty values in the summary; off by default (only populated fields are listed).</td></tr></tbody>
+          </table></div>
+          <div class="doc-note">Clicking a field row in the summary navigates the editor to that field's tab or step, making the panel a fast jump-to index for long forms.</div>
+          <!-- /SYNC:layout-summary-panel -->
+        </div>
+
+        <!-- LAYOUT PAGE SLOTS -->
+        <div class="doc-section" id="s-layout-page-slots" data-toc='[{"id":"layout-page-slots","label":"Page Slots (Pipeline, Comments, Tasks)"}]'>
+          <!-- SYNC:layout-page-slots -->
+          <h1 class="doc-h1" id="layout-page-slots">Page Slots (Pipeline, Comments, Tasks)</h1>
+          <p class="doc-p">In the Layout tab, the built-in Pipeline, Comments, and Tasks panels appear as draggable "page slots" that sit in the same ordered list as field groups. Drag a slot to reposition it among the groups so the panel renders exactly where you want in the item editor.</p>
+          <h3 class="doc-h3">Per-slot settings</h3>
+          <ul class="doc-ul">
+            <li>Visibility toggle — show or hide the panel for this layout.</li>
+            <li>Custom label — rename a slot (e.g. "Comments" → "Notes").</li>
+            <li>Default state — start the panel expanded or collapsed.</li>
+            <li>Position — drag the slot anywhere in the layout order, interleaved with field groups.</li>
+          </ul>
+          <div class="doc-note">Slot settings are scoped to the layout, so different layouts of the same collection can order, rename, and hide the Pipeline / Comments / Tasks panels independently.</div>
+          <!-- /SYNC:layout-page-slots -->
+        </div>
+
+        <!-- LAYOUT CONDITIONAL -->
+        <div class="doc-section" id="s-layout-conditional" data-toc='[{"id":"layout-conditional","label":"Conditional Layouts by Role"}]'>
+          <!-- SYNC:layout-conditional -->
+          <h1 class="doc-h1" id="layout-conditional">Conditional Layouts by Role</h1>
+          <p class="doc-p">A layout can be restricted to specific roles so different users see different forms for the same collection. Set the role conditions in the "Visibility" section of layout settings; the server resolves the best-matching layout for the requesting user automatically.</p>
+          <h3 class="doc-h3">Config format</h3>
+          <pre class="doc-pre"><code>// conditions on a collection layout:
+{
+  "role_ids": ["&lt;role-uuid&gt;", "&lt;role-uuid&gt;"]
+}
+// The layout is only eligible for users in one of these roles.</code></pre>
+          <div class="doc-note">When several layouts qualify for a user, the server picks the best match — a role-scoped layout wins over the unconditional active layout. A layout with no conditions remains the default fallback for everyone else.</div>
+          <!-- /SYNC:layout-conditional -->
+        </div>
+
+        <!-- LAYOUT AI FEATURES -->
+        <div class="doc-section" id="s-layout-ai-features" data-toc='[{"id":"layout-ai-features","label":"AI Features per Layout"}]'>
+          <!-- SYNC:layout-ai-features -->
+          <h1 class="doc-h1" id="layout-ai-features">AI Features per Layout</h1>
+          <p class="doc-p">Each layout has a toggle that turns the AI helpers on or off for records edited through it. When disabled, the item editor hides the Summarize button and the per-field AI generate buttons, and skips AI validation and duplicate-detection checks entirely for that layout.</p>
+          <div class="doc-note">This is a presentation/UX gate at the layout level — collection-level AI validation rules (which are also enforced server-side) still apply to writes that come through other layouts or the API. Use it to keep AI affordances out of forms where they are not wanted.</div>
+          <!-- /SYNC:layout-ai-features -->
         </div>
 
         <!-- MULTI HIERARCHY OVERVIEW -->
@@ -7523,7 +7612,8 @@ Content-Type: text/csv
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Type</th><th>Behaviour in item editor</th></tr></thead>
             <tbody><tr><tr><td>section</td><td>Collapsible card with a label and optional icon. Fields stack vertically inside.</td></tr>
-              <tr><td>tab</td><td>Named tab in a tabbed interface at the top of the form. All tab-type groups for a collection appear as tabs together.</td></tr></tr></tbody>
+              <tr><td>tab</td><td>Named tab in a tabbed interface at the top of the form. All tab-type groups for a collection appear as tabs together.</td></tr>
+              <tr><td>metadata</td><td>Read-only display group. Fields inside render as a definition list (label: value) rather than editable inputs — ideal for display-only reference data on the record.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Tab group behaviour</h3>
           <p class="doc-p">When a collection has at least one group of <code class="doc-code">type: "tab"</code>, the item editor renders a tab strip at the top of the form. Fields without a group_key appear in an implicit "General" tab alongside any section-type groups. The active tab is persisted per collection in localStorage, so editors return to the same tab on revisit.</p>
@@ -7635,6 +7725,110 @@ Authorization: Bearer &lt;token&gt;
 }</code></pre>
           <div class="doc-note">The cascade endpoint returns only the fields that should be updated. The item editor merges these updates into the current form state without triggering a full reload.</div>
           <!-- /SYNC:content-ops-field-dependencies -->
+        </div>
+
+        <div class="doc-section" id="s-content-ops-cascade-filters" data-toc='[{"id":"content-ops-cascade-filters","label":"Cascade Filters"}]'>
+          <!-- SYNC:content-ops-cascade-filters -->
+          <h1 class="doc-h1" id="content-ops-cascade-filters">Cascade Filters</h1>
+          <p class="doc-p">M2O fields support cascading option filtering via <code class="doc-code">cascade_filters</code> in <code class="doc-code">dependency_config</code>. When a parent field value is selected, the child M2O field's option list is automatically narrowed to only records matching that parent value. Multi-level chains (e.g. Division → Region → Site) are fully supported.</p>
+          <h3 class="doc-h3">How it works</h3>
+          <p class="doc-p">When the item editor loads or a field changes, <code class="doc-code">RelationPicker</code> checks for active <code class="doc-code">cascade_filters</code> rules. For each rule whose <code class="doc-code">parent_field</code> has a value, it appends a <code class="doc-code">?filter</code> parameter to the options fetch (<code class="doc-code">WHERE filter_column = parentValue</code>). If <code class="doc-code">clear_on_parent_change</code> is true, changing the parent field nulls this field automatically with an amber flash animation.</p>
+          <h3 class="doc-h3">Config format</h3>
+          <pre class="doc-pre"><code>// dependency_config on the child M2O field:
+{
+  "cascade_filters": [
+    {
+      "parent_field": "division_id",
+      "filter_column": "division_id",
+      "clear_on_parent_change": true
+    }
+  ]
+}</code></pre>
+          <h3 class="doc-h3">Properties</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Property</th><th>Type</th><th>Description</th></tr></thead>
+            <tbody><tr><tr><td>parent_field</td><td>string</td><td>Field name in the same collection whose selected value drives the filter.</td></tr>
+              <tr><td>filter_column</td><td>string</td><td>Column on the M2O related table to filter by (WHERE filter_column = parent_value).</td></tr>
+              <tr><td>clear_on_parent_change</td><td>boolean?</td><td>If true, nulls this field whenever the parent value changes. Defaults to false.</td></tr>
+              <tr><td>clear_on_unavailable</td><td>boolean?</td><td>If true, the editor checks whether the current value is still within the filtered option set whenever the filter changes. If the selected value is not in the new options, it is automatically cleared.</td></tr>
+              <tr><td>parent_field</td><td>string</td><td>Works with both M2O and M2M parent fields. M2M parent: uses the first staged selection as the filter value.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">M2M-to-M2M cascades</h3>
+          <p class="doc-p">Cascade filters now work correctly when both the parent and child are M2M fields. When the parent is M2M, the child option fetch uses the <code class="doc-code">_some</code> filter operator so that child records are matched against any of the parent's staged selections, rather than a single value. No extra configuration is required — set <code class="doc-code">parent_field</code> to the M2M parent and the editor picks the right operator automatically.</p>
+          <h3 class="doc-h3">Editing existing rules</h3>
+          <p class="doc-p">In the Cascade Filters section of the ⚙ field settings popover, each saved rule shows a pencil icon — click it to edit the rule inline. Every option is editable: parent field, filter column, clear on change, and clear if unavailable. Save field settings to persist the change.</p>
+          <h3 class="doc-h3">Multi-level chain example</h3>
+          <pre class="doc-pre"><code>// Region field — filtered by Division:
+{
+  "cascade_filters": [
+    { "parent_field": "division_id", "filter_column": "division_id", "clear_on_parent_change": true }
+  ]
+}
+
+// Site field — filtered by Region:
+{
+  "cascade_filters": [
+    { "parent_field": "region_id", "filter_column": "region_id", "clear_on_parent_change": true }
+  ]
+}
+
+// Selecting a Division auto-filters Regions.
+// Selecting a Region auto-filters Sites.
+// Changing Division clears Region (and Region clearing clears Site via its own rule).</code></pre>
+          <h3 class="doc-h3">Configuring in the admin UI</h3>
+          <p class="doc-p">Open Data Model → select the collection → click the ⚙ icon on an M2O field → scroll to the Cascade Filters section. Add a rule by picking the parent field and the filter column on the related table. Save field settings to persist.</p>
+          <div class="doc-note">Cascade filters are evaluated client-side only at edit time. They do not affect API list queries or server-side filtering — they are a UX convenience for narrowing picker options during data entry.</div>
+          <!-- /SYNC:content-ops-cascade-filters -->
+        </div>
+
+        <div class="doc-section" id="s-picker-filter" data-toc='[{"id":"picker-filter","label":"Relation Picker Filter"}]'>
+          <!-- SYNC:picker-filter -->
+          <h1 class="doc-h1" id="picker-filter">Relation Picker Filter</h1>
+          <p class="doc-p">A collection-level JSON filter expression that hides matching records from all M2O and M2M relation pickers targeting that collection. The filter is merged with any active cascade filter using <code class="doc-code">_and</code> before the options fetch. Existing FK references to excluded records are unaffected — they load and display normally.</p>
+          <h3 class="doc-h3">Config format</h3>
+          <pre class="doc-pre"><code>// Stored on nivaro_collections.picker_filter
+// Example: hide records where is_disabled = true
+{"is_disabled": {"_neq": true}}
+
+// Example: hide archived records
+{"status": {"_neq": "archived"}}
+
+// Supports any Nivaro filter expression
+{"_and": [{"active": {"_eq": true}}, {"region": {"_neq": "EU"}}]}</code></pre>
+          <h3 class="doc-h3">Configuring in the admin UI</h3>
+          <p class="doc-p">Data Model → select the collection → Settings tab → "Relation Picker Filter". Enter a JSON filter expression, click Save. The filter applies immediately to all pickers in every form.</p>
+          <h3 class="doc-h3">Scope</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Applies to</th><th>Does NOT apply to</th></tr></thead>
+            <tbody><tr><tr><td>M2O RelationPicker option list</td><td>Collection browser / filter bars</td></tr>
+              <tr><td>M2M multi-select option list</td><td>API list reads (GET /items/:col)</td></tr>
+              <tr><td>M2M single-select option list</td><td>GraphQL queries</td></tr>
+              <tr><td></td><td>The current-value label (fetched by ID, no filter)</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">This is UX curation, not security enforcement. Use <code class="doc-code">row_filter</code> RLS policies to restrict data access. Prefer attribute-based filters (<code class="doc-code">{"is_disabled":{"_neq":true}}</code>) over hard-coded ID exclusions — IDs break on data migration.</div>
+          <!-- /SYNC:picker-filter -->
+        </div>
+
+        <div class="doc-section" id="s-picker-exclusions" data-toc='[{"id":"picker-exclusions","label":"Record Picker Exclusions"}]'>
+          <!-- SYNC:picker-exclusions -->
+          <h1 class="doc-h1" id="picker-exclusions">Record Picker Exclusions</h1>
+          <p class="doc-p">Individual records can be excluded from all M2O and M2M relation pickers without any schema changes. Exclusions are stored in <code class="doc-code">nivaro_picker_exclusions</code> and applied whenever pickers fetch options with <code class="doc-code">?picker=1</code>.</p>
+          <h3 class="doc-h3">How to exclude a record</h3>
+          <p class="doc-p">**From the edit form:** open the record → click "Disable in pickers" in the item header. The button turns amber and shows "Excluded from pickers". Click again to re-enable.</p>
+          <p class="doc-p">**Bulk:** in any collection browser, select records → click "Disable in pickers" or "Enable in pickers" above the bulk action bar.</p>
+          <h3 class="doc-h3">Behavior on existing references</h3>
+          <p class="doc-p">Excluding a record does not affect existing FK references. Forms that already reference an excluded record load and display it normally. The user can clear the field or pick a different value, but cannot re-select the excluded record.</p>
+          <h3 class="doc-h3">API</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+            <tbody><tr><tr><td>GET</td><td>/api/picker-exclusions/status/:collection/:itemId</td><td>Check exclusion status for a single record.</td></tr>
+              <tr><td>POST</td><td>/api/picker-exclusions</td><td>Exclude a record. Body: <code class="doc-code">{collection, item_id}</code>.</td></tr>
+              <tr><td>DELETE</td><td>/api/picker-exclusions</td><td>Remove exclusion. Body: <code class="doc-code">{collection, item_id}</code>.</td></tr>
+              <tr><td>POST</td><td>/api/picker-exclusions/batch-status</td><td>Check multiple records. Body: <code class="doc-code">{collection, ids[]}</code>. Returns <code class="doc-code">{excluded: string[]}</code>.</td></tr>
+              <tr><td>POST</td><td>/api/picker-exclusions/bulk</td><td>Exclude/include many records. Body: <code class="doc-code">{collection, ids[], exclude: boolean}</code>.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Read endpoints require authentication. Write endpoints require admin access.</div>
+          <!-- /SYNC:picker-exclusions -->
         </div>
 
         <div class="doc-section" id="s-content-ops-validation" data-toc='[{"id":"content-ops-validation","label":"Field Validation Rules"}]'>

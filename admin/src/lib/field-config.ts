@@ -84,7 +84,8 @@ export const INTERFACES_BY_TYPE: Record<string, InterfaceOption[]> = {
     { value: 'select-multiple-m2m', label: 'Multiselect Combobox' }
   ],
   o2m: [
-    { value: 'relation-list', label: 'Related Items List (default)' }
+    { value: 'relation-list', label: 'Related Items List (default)' },
+    { value: 'inline-grid', label: 'Inline Grid' }
   ]
 }
 

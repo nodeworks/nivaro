@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  ChevronRight,
   ChevronsUpDown,
   ChevronUp,
   Eye,
@@ -2649,8 +2650,8 @@ function RelationsTab({
       return {
         many_collection: form.m2m_junction,
         many_field: form.m2m_many_field,
-        one_collection: form.m2m_one_collection,
-        one_field: form.m2m_one_field || 'id',
+        one_collection: tableName,
+        one_field: form.m2m_one_field || form.m2m_one_collection,
         junction_field: form.m2m_junction_field
       }
     return {
@@ -2746,8 +2747,8 @@ function RelationsTab({
         many_collection: editForm.m2m_junction,
         many_field: editForm.m2m_many_field,
         junction_field: editForm.m2m_junction_field,
-        one_collection: editForm.m2m_one_collection,
-        one_field: editForm.m2m_one_field || 'id'
+        one_collection: tableName,
+        one_field: editForm.m2m_one_field || editForm.m2m_one_collection
       }
     return {
       many_field: editForm.m2a_many_field,
@@ -3304,6 +3305,7 @@ function SettingsTab({
       </div>
       <ItemLockingSection tableName={tableName} />
       <AddendumsSection tableName={tableName} />
+      <PickerFilterSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
     </div>
   )
@@ -3403,6 +3405,87 @@ function AddendumsSection({ tableName }: { tableName: string }) {
           onCheckedChange={(v) => toggleMut.mutate(v)}
           disabled={toggleMut.isPending || col === undefined}
         />
+      </div>
+    </div>
+  )
+}
+
+// ─── Relation Picker Filter (Settings tab) ────────────────────────────────────
+
+function PickerFilterSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+
+  const { data: col } = useQuery({
+    queryKey: ['collection-meta', tableName],
+    queryFn: () =>
+      api.get<{ data: { picker_filter: unknown } }>(`/collections/${tableName}`).then((r) => r.data.data),
+    enabled: !!tableName,
+    staleTime: 10 * 60 * 1000
+  })
+
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState('')
+  const [initialised, setInitialised] = useState(false)
+
+  useEffect(() => {
+    if (col !== undefined && !initialised) {
+      setDraft(col.picker_filter ? JSON.stringify(col.picker_filter, null, 2) : '')
+      setInitialised(true)
+    }
+  }, [col, initialised])
+
+  const save = async () => {
+    if (!draft.trim()) {
+      await api.patch(`/collections/${tableName}`, { picker_filter: null })
+      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      toast.success('Picker filter cleared')
+      return
+    }
+    try {
+      const parsed = JSON.parse(draft)
+      setError('')
+      await api.patch(`/collections/${tableName}`, { picker_filter: parsed })
+      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      toast.success('Picker filter saved')
+    } catch {
+      setError('Invalid JSON — check the filter expression')
+    }
+  }
+
+  const clear = async () => {
+    setDraft('')
+    setError('')
+    await api.patch(`/collections/${tableName}`, { picker_filter: null })
+    qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+    toast.success('Picker filter cleared')
+  }
+
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='px-4 py-3 space-y-2'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Relation Picker Filter</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Records not matching this filter are hidden from all relation pickers for this collection. Existing references are unaffected.
+          </p>
+        </div>
+        <Textarea
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          placeholder={'{"is_disabled": {"_neq": true}}'}
+          rows={3}
+          className='font-mono text-[12px]'
+        />
+        {error && <p className='text-[11px] text-red-500'>{error}</p>}
+        <p className='text-[11px] text-slate-400'>
+          Tip: use attribute filters — hard-coded IDs break on data migration.
+        </p>
+        <div className='flex gap-2'>
+          <Button size='sm' onClick={save} className='h-7 text-[12px]'>Save filter</Button>
+          {draft && (
+            <Button size='sm' variant='outline' onClick={clear} className='h-7 text-[12px]'>Clear</Button>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -4041,12 +4124,27 @@ function AttributesTab({ tableName }: { tableName: string }) {
 
 // ─── Layout tab ──────────────────────────────────────────────────────────────
 
+// ── Page slot sentinels (special ItemEdit panels) ──
+type SlotKey = '__pipeline__' | '__comments__' | '__tasks__'
+interface SlotState {
+  sort: number
+  label_override: string | null
+  is_visible: boolean
+  default_expanded: boolean
+}
+const SLOT_KEYS: SlotKey[] = ['__pipeline__', '__comments__', '__tasks__']
+const SLOT_META: Record<SlotKey, { name: string; defaultLabel: string; editable: boolean }> = {
+  __pipeline__: { name: 'Pipeline', defaultLabel: 'Pipeline', editable: true },
+  __comments__: { name: 'Comments', defaultLabel: 'Comments', editable: true },
+  __tasks__: { name: 'Tasks', defaultLabel: 'Tasks', editable: true }
+}
+
 interface FieldGroup {
   id: number
   collection: string
   key: string
   label: string
-  type: 'section' | 'tab'
+  type: 'section' | 'tab' | 'metadata'
   icon: string | null
   sort: number
   is_collapsed: boolean
@@ -4099,6 +4197,448 @@ interface FieldSettings {
   readonly: boolean
   inline_relation: boolean
   max_values: number | null
+  options?: string | null
+  placeholder: string | null
+}
+
+// ── Cascade Filters ───────────────────────────────────────────────────────────
+
+interface CascadeFilterRule {
+  parent_field: string
+  filter_column: string
+  clear_on_parent_change: boolean
+  clear_on_unavailable: boolean
+  filter_is_m2m?: boolean
+}
+
+interface CascadeParentField {
+  field: string
+  label: string
+  kind: 'M2O' | 'M2M'
+}
+
+function CascadeFiltersEditor({
+  rules,
+  m2oFields,
+  relatedCollection,
+  onChange,
+}: {
+  rules: CascadeFilterRule[]
+  m2oFields: CascadeParentField[]
+  relatedCollection?: string | null
+  onChange: (rules: CascadeFilterRule[]) => void
+}) {
+  const [adding, setAdding] = useState(false)
+  const [editingIdx, setEditingIdx] = useState<number | null>(null)
+  const [parentField, setParentField] = useState('')
+  const [filterColumn, setFilterColumn] = useState('')
+  const [fcOpen, setFcOpen] = useState(false)
+  const [pfOpen, setPfOpen] = useState(false)
+  const [editPfOpen, setEditPfOpen] = useState(false)
+  const [editFcOpen, setEditFcOpen] = useState(false)
+  const [editParentField, setEditParentField] = useState('')
+  const [editFilterColumn, setEditFilterColumn] = useState('')
+
+  const { data: relColMeta } = useQuery({
+    queryKey: ['collection-meta', relatedCollection],
+    queryFn: () => api.get(`/collections/${relatedCollection}`).then(r => r.data.data),
+    enabled: !!relatedCollection,
+    staleTime: 10 * 60 * 1000,
+  })
+  const relatedFields: string[] = relColMeta?.fields?.map((f: { field: string }) => f.field) ?? []
+  const [clearOnChange, setClearOnChange] = useState(true)
+  const [clearOnUnavailable, setClearOnUnavailable] = useState(false)
+
+  function openAdd() {
+    setEditingIdx(null)
+    setParentField('')
+    setFilterColumn('')
+    setClearOnChange(true)
+    setClearOnUnavailable(false)
+    setAdding(true)
+  }
+
+  function cancelAdd() {
+    setAdding(false)
+  }
+
+  function computeFilterIsMm(fc: string) {
+    const relRels = (relColMeta?.relations ?? []) as Array<{ one_field?: string; junction_field?: string }>
+    return relRels.some(r => r.one_field === fc && !!r.junction_field)
+  }
+
+  function saveAdd() {
+    if (!parentField.trim() || !filterColumn.trim()) return
+    const fc = filterColumn.trim()
+    onChange([...rules, {
+      parent_field: parentField.trim(),
+      filter_column: fc,
+      clear_on_parent_change: clearOnChange,
+      clear_on_unavailable: clearOnUnavailable,
+      filter_is_m2m: computeFilterIsMm(fc),
+    }])
+    setAdding(false)
+  }
+
+  function openEdit(idx: number) {
+    setAdding(false)
+    setEditParentField(rules[idx].parent_field)
+    setEditFilterColumn(rules[idx].filter_column)
+    setEditingIdx(idx)
+  }
+
+  function cancelEdit() {
+    setEditingIdx(null)
+  }
+
+  function saveEdit() {
+    if (editingIdx === null) return
+    if (!editParentField.trim() || !editFilterColumn.trim()) return
+    const fc = editFilterColumn.trim()
+    onChange(rules.map((r, i) => i === editingIdx ? {
+      ...r,
+      parent_field: editParentField.trim(),
+      filter_column: fc,
+      filter_is_m2m: computeFilterIsMm(fc),
+    } : r))
+    setEditingIdx(null)
+  }
+
+  function removeRule(idx: number) {
+    onChange(rules.filter((_, i) => i !== idx))
+  }
+
+  function toggleClear(idx: number, val: boolean) {
+    onChange(rules.map((r, i) => i === idx ? { ...r, clear_on_parent_change: val, clear_on_unavailable: r.clear_on_unavailable ?? false } : r))
+  }
+
+  function toggleUnavailable(idx: number, val: boolean) {
+    onChange(rules.map((r, i) => i === idx ? { ...r, clear_on_unavailable: val } : r))
+  }
+
+  return (
+    <div className='mt-4 border-t border-[#e2e8f0] pt-4'>
+      <p className='mb-2 text-[11px] font-medium text-[#6b7280]' style={{ letterSpacing: '0.01em' }}>Cascade Filters</p>
+
+      {rules.length > 0 && (
+        <div className='mb-2 space-y-2'>
+          {rules.map((rule, idx) => {
+            const parentMeta = m2oFields.find(f => f.field === rule.parent_field)
+            const parentLabel = parentMeta?.label ?? rule.parent_field
+            const isM2MParent = parentMeta?.kind === 'M2M'
+            const isEditing = editingIdx === idx
+
+            if (isEditing) {
+              return (
+                <div key={idx} className='space-y-2 rounded-md border border-nvr-cyan/40 bg-[#f6f8fa] p-2 dark:border-nvr-cyan/30 dark:bg-muted/40'>
+                  <div>
+                    <p className='mb-1 text-[10px] text-slate-500'>Parent field</p>
+                    <Popover open={editPfOpen} onOpenChange={setEditPfOpen}>
+                      <PopoverTrigger asChild>
+                        <button type='button' className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'>
+                          {(() => {
+                            const sel = m2oFields.find(f => f.field === editParentField)
+                            return sel ? (
+                              <span className='flex items-center gap-1.5'>
+                                {sel.label}
+                                {sel.kind === 'M2M' && <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>M2M</span>}
+                              </span>
+                            ) : <span className='text-slate-400'>Parent field…</span>
+                          })()}
+                          <ChevronsUpDown className='h-3 w-3 text-slate-400' />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent className='w-56 p-0' align='start'>
+                        <Command>
+                          <CommandInput placeholder='Search fields…' className='h-7 text-[11px]' />
+                          <CommandList>
+                            <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No relation fields</CommandEmpty>
+                            <CommandGroup>
+                              {m2oFields.map(item => (
+                                <CommandItem key={item.field} value={item.label} onSelect={() => { setEditParentField(item.field); setEditPfOpen(false) }} className='text-[11px]'>
+                                  <Check className={cn('mr-1.5 h-3 w-3 shrink-0', editParentField === item.field ? 'opacity-100' : 'opacity-0')} />
+                                  <span className='flex-1'>{item.label}</span>
+                                  {item.kind === 'M2M' && <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>M2M</span>}
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                  <div>
+                    <p className='mb-1 text-[10px] text-slate-500'>Filter column on{relatedCollection ? ` ${relatedCollection}` : ' related table'}</p>
+                    {relatedFields.length > 0 ? (
+                      <Popover open={editFcOpen} onOpenChange={setEditFcOpen}>
+                        <PopoverTrigger asChild>
+                          <button type='button' className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] hover:bg-slate-50 dark:border-border dark:bg-background'>
+                            <span className={editFilterColumn ? 'font-mono text-slate-700' : 'text-slate-400'}>{editFilterColumn || 'Select column…'}</span>
+                            <ChevronsUpDown className='h-3 w-3 text-slate-400' />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent className='w-52 p-0' align='start'>
+                          <Command>
+                            <CommandInput placeholder='Search columns…' className='h-7 text-[11px]' />
+                            <CommandList>
+                              <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No columns</CommandEmpty>
+                              <CommandGroup>
+                                {relatedFields.map(f => (
+                                  <CommandItem key={f} value={f} onSelect={() => { setEditFilterColumn(f); setEditFcOpen(false) }} className='font-mono text-[11px]'>
+                                    <Check className={cn('mr-1.5 h-3 w-3 shrink-0', editFilterColumn === f ? 'opacity-100' : 'opacity-0')} />
+                                    {f}
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                    ) : (
+                      <Input value={editFilterColumn} onChange={e => setEditFilterColumn(e.target.value)} placeholder='e.g. division_id' className='h-7 font-mono text-[11px]' />
+                    )}
+                  </div>
+                  <div className='flex items-center gap-2'>
+                    <span className='flex-1' />
+                    <button type='button' onClick={cancelEdit} className='rounded px-2 py-1 text-[12px] text-slate-500 hover:bg-slate-100'>Cancel</button>
+                    <Button size='sm' disabled={!editParentField || !editFilterColumn.trim()} onClick={saveEdit} className='h-7 px-3 py-1.5 text-[12px]'>Save</Button>
+                  </div>
+                </div>
+              )
+            }
+
+            return (
+              <div
+                key={idx}
+                className='rounded-md border border-[#e2e8f0] bg-[#f6f8fa] px-3 py-2 dark:border-border dark:bg-muted/40'
+              >
+                <div className='flex items-center gap-1.5'>
+                  <span className='text-[12px] font-medium text-slate-700'>{parentLabel}</span>
+                  {isM2MParent && (
+                    <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'>M2M</span>
+                  )}
+                  <span className='flex-1' />
+                  <button type='button' onClick={() => openEdit(idx)} className='rounded p-0.5 text-slate-300 transition-colors hover:text-slate-600'>
+                    <Pencil className='h-3 w-3' />
+                  </button>
+                  <button type='button' onClick={() => removeRule(idx)} className='rounded p-0.5 text-slate-300 transition-colors hover:text-red-400'>
+                    <X className='h-3.5 w-3.5' />
+                  </button>
+                </div>
+                <div className='mt-1'>
+                  <span className='font-mono text-[11px] text-[#6b7280]'>{rule.filter_column}</span>
+                  {rule.filter_is_m2m && <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'>M2M filter</span>}
+                </div>
+                <div className='mt-1.5 flex items-center gap-1.5'>
+                  <span className='text-[10px] text-slate-400'>Clear on parent change</span>
+                  <span className='flex-1' />
+                  <Switch checked={rule.clear_on_parent_change} onCheckedChange={val => toggleClear(idx, val)} className='scale-75' />
+                </div>
+                <div className='mt-1 flex items-center gap-1.5'>
+                  <span className='text-[10px] text-slate-400'>Clear if value unavailable</span>
+                  <span className='flex-1' />
+                  <Switch checked={rule.clear_on_unavailable ?? false} onCheckedChange={val => toggleUnavailable(idx, val)} className='scale-75' />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {!adding && (
+        <button
+          type='button'
+          onClick={openAdd}
+          className='flex items-center gap-1 text-[12px] text-[#00ceff] hover:text-[#00ceff]/80'
+        >
+          <Plus className='h-3 w-3' />
+          {rules.length > 0 ? 'Add another filter' : 'Add cascade filter'}
+        </button>
+      )}
+
+      {adding && (
+        <div
+          className='space-y-2 rounded-md border border-[#e2e8f0] bg-[#f6f8fa] p-2 dark:border-border dark:bg-muted/40'
+          style={{ transition: 'opacity 150ms ease-out' }}
+        >
+          {/* parent field combobox */}
+          <div>
+            <p className='mb-1 text-[10px] text-slate-500'>Parent field</p>
+            <Popover open={pfOpen} onOpenChange={setPfOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'
+                >
+                  {(() => {
+                    const sel = m2oFields.find(f => f.field === parentField)
+                    return sel ? (
+                      <span className='flex items-center gap-1.5'>
+                        {sel.label}
+                        {sel.kind === 'M2M' && (
+                          <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>M2M</span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className='text-slate-400'>Parent field…</span>
+                    )
+                  })()}
+                  <ChevronsUpDown className='h-3 w-3 text-slate-400' />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-56 p-0' align='start'>
+                <Command>
+                  <CommandInput placeholder='Search fields…' className='h-7 text-[11px]' />
+                  <CommandList>
+                    <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No relation fields</CommandEmpty>
+                    <CommandGroup>
+                      {m2oFields.map(item => (
+                        <CommandItem
+                          key={item.field}
+                          value={item.label}
+                          onSelect={() => { setParentField(item.field); setPfOpen(false) }}
+                          className='text-[11px]'
+                        >
+                          <Check className={cn('mr-1.5 h-3 w-3 shrink-0', parentField === item.field ? 'opacity-100' : 'opacity-0')} />
+                          <span className='flex-1'>{item.label}</span>
+                          {item.kind === 'M2M' && (
+                            <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>M2M</span>
+                          )}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+            {parentField && m2oFields.find(f => f.field === parentField)?.kind === 'M2M' && (
+              <p className='mt-1 text-[10px] text-amber-600 dark:text-amber-400'>
+                M2M parent: the first staged selection's value is used as the filter.
+              </p>
+            )}
+          </div>
+
+          {/* filter column */}
+          <div>
+            <p className='mb-1 text-[10px] text-slate-500'>
+              Filter column on{relatedCollection ? ` ${relatedCollection}` : ' related table'}
+            </p>
+            {relatedFields.length > 0 ? (
+              <Popover open={fcOpen} onOpenChange={setFcOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type='button'
+                    className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] hover:bg-slate-50 dark:border-border dark:bg-background'
+                  >
+                    <span className={filterColumn ? 'font-mono text-slate-700' : 'text-slate-400'}>
+                      {filterColumn || 'Select column…'}
+                    </span>
+                    <ChevronsUpDown className='h-3 w-3 text-slate-400' />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className='w-52 p-0' align='start'>
+                  <Command>
+                    <CommandInput placeholder='Search columns…' className='h-7 text-[11px]' />
+                    <CommandList>
+                      <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No columns</CommandEmpty>
+                      <CommandGroup>
+                        {relatedFields.map(f => (
+                          <CommandItem
+                            key={f}
+                            value={f}
+                            onSelect={() => { setFilterColumn(f); setFcOpen(false) }}
+                            className='font-mono text-[11px]'
+                          >
+                            <Check className={cn('mr-1.5 h-3 w-3 shrink-0', filterColumn === f ? 'opacity-100' : 'opacity-0')} />
+                            {f}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            ) : (
+              <Input
+                value={filterColumn}
+                onChange={e => setFilterColumn(e.target.value)}
+                placeholder='e.g. division_id'
+                className='h-7 font-mono text-[11px]'
+              />
+            )}
+          </div>
+
+          {/* clear options + actions */}
+          <div className='space-y-1.5'>
+            <div className='flex items-center gap-2'>
+              <Switch checked={clearOnChange} onCheckedChange={setClearOnChange} className='scale-75' />
+              <span className='text-[11px] text-slate-600'>Clear on parent change</span>
+            </div>
+            <div className='flex items-center gap-2'>
+              <Switch checked={clearOnUnavailable} onCheckedChange={setClearOnUnavailable} className='scale-75' />
+              <span className='text-[11px] text-slate-600'>Clear if value no longer in options</span>
+            </div>
+          </div>
+          <div className='flex items-center gap-2'>
+            <span className='flex-1' />
+            <button
+              type='button'
+              onClick={cancelAdd}
+              className='rounded px-2 py-1 text-[12px] text-slate-500 hover:bg-slate-100'
+            >
+              Cancel
+            </button>
+            <Button
+              size='sm'
+              disabled={!parentField || !filterColumn.trim()}
+              onClick={saveAdd}
+              className='h-7 px-3 py-1.5 text-[12px]'
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function LayoutPicker({ collection, value, onChange }: { collection?: string | null; value: number | null; onChange: (id: number | null) => void }) {
+  const [open, setOpen] = useState(false)
+  const { data: layouts = [] } = useQuery({
+    queryKey: ['collection-layouts-list', collection],
+    queryFn: () => api.get<{ data: Array<{ id: number; name: string }> }>(`/collection-layouts?collection=${collection}`).then(r => r.data.data ?? []),
+    enabled: !!collection,
+    staleTime: 60_000,
+  })
+  const selected = layouts.find(l => l.id === value)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type='button' className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'>
+          <span className={selected ? '' : 'text-slate-400'}>{selected ? selected.name : 'Select layout…'}</span>
+          <ChevronsUpDown className='h-3 w-3 text-slate-400' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-52 p-0' align='start'>
+        <Command>
+          <CommandInput placeholder='Search layouts…' className='h-7 text-[11px]' />
+          <CommandList>
+            <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No layouts</CommandEmpty>
+            <CommandGroup>
+              <CommandItem value='' onSelect={() => { onChange(null); setOpen(false) }} className='text-[11px] text-slate-400'>None</CommandItem>
+              {layouts.map(l => (
+                <CommandItem key={l.id} value={l.name} onSelect={() => { onChange(l.id); setOpen(false) }} className='text-[11px]'>
+                  <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === l.id ? 'opacity-100' : 'opacity-0')} />
+                  {l.name}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 function FieldSettingsPopover({
@@ -4107,6 +4647,9 @@ function FieldSettingsPopover({
   isM2O,
   isM2M,
   settings,
+  m2oFields,
+  dependencyConfig,
+  relatedCollection,
   onSave,
 }: {
   fieldName: string
@@ -4114,17 +4657,24 @@ function FieldSettingsPopover({
   isM2O?: boolean
   isM2M?: boolean
   settings: FieldSettings
-  onSave: (patch: Partial<FieldSettings>) => void
+  m2oFields?: CascadeParentField[]
+  dependencyConfig?: Record<string, unknown> | null
+  relatedCollection?: string | null
+  onSave: (patch: Partial<FieldSettings> & { dependency_config?: string }) => void
 }) {
   const [open, setOpen] = useState(false)
   const [label, setLabel] = useState(settings.label ?? '')
   const [iface, setIface] = useState(settings.interface ?? '')
   const [note, setNote] = useState(settings.note ?? '')
+  const [placeholder, setPlaceholder] = useState(settings.placeholder ?? '')
   const [required, setRequired] = useState(settings.required)
   const [hidden, setHidden] = useState(settings.hidden)
   const [readonly, setReadonly] = useState(settings.readonly)
   const [inlineRelation, setInlineRelation] = useState(settings.inline_relation)
   const [maxValues, setMaxValues] = useState<string>(settings.max_values != null ? String(settings.max_values) : '')
+  const [cascadeRules, setCascadeRules] = useState<CascadeFilterRule[]>([])
+  const [gridLayoutId, setGridLayoutId] = useState<number | null>(null)
+  const [gridShowTotals, setGridShowTotals] = useState(false)
 
   // Reset local state when popover opens
   function handleOpenChange(next: boolean) {
@@ -4132,27 +4682,61 @@ function FieldSettingsPopover({
       setLabel(settings.label ?? '')
       setIface(settings.interface ?? '')
       setNote(settings.note ?? '')
+      setPlaceholder(settings.placeholder ?? '')
       setRequired(settings.required)
       setHidden(settings.hidden)
       setReadonly(settings.readonly)
       setInlineRelation(settings.inline_relation)
       setMaxValues(settings.max_values != null ? String(settings.max_values) : '')
+      // dependencyConfig is already a parsed object from the API — use directly
+      const dep = (dependencyConfig && typeof dependencyConfig === 'object') ? dependencyConfig : {}
+      setCascadeRules(Array.isArray(dep.cascade_filters) ? dep.cascade_filters as CascadeFilterRule[] : [])
+      // Parse inline-grid options from settings.options
+      try {
+        const opts = settings.options ? (typeof settings.options === 'string' ? JSON.parse(settings.options) : settings.options) as Record<string, unknown> : {}
+        setGridLayoutId((opts.grid_layout_id as number | null) ?? null)
+        setGridShowTotals(!!(opts.grid_show_totals))
+      } catch { setGridLayoutId(null); setGridShowTotals(false) }
     }
     setOpen(next)
   }
 
   function save() {
     const maxV = maxValues.trim() ? parseInt(maxValues, 10) : null
-    onSave({
+    // Merge cascade_filters into dependency_config object and send to API (API will JSON.stringify it)
+    let depPatch: Record<string, unknown> | null = null
+    if (isM2O || isM2M) {
+      const existing = (dependencyConfig && typeof dependencyConfig === 'object') ? dependencyConfig : {}
+      const merged: Record<string, unknown> = { ...existing }
+      if (cascadeRules.length > 0) {
+        merged.cascade_filters = cascadeRules
+      } else {
+        delete merged.cascade_filters
+      }
+      depPatch = Object.keys(merged).length > 0 ? merged : null
+    }
+    // Inline-grid options for O2M
+    let optionsPatch: string | null = null
+    if (abstractType === 'o2m' && iface === 'inline-grid') {
+      try {
+        const existing = settings.options ? (typeof settings.options === 'string' ? JSON.parse(settings.options) : settings.options) as Record<string, unknown> : {}
+        optionsPatch = JSON.stringify({ ...existing, grid_layout_id: gridLayoutId, grid_show_totals: gridShowTotals })
+      } catch { optionsPatch = JSON.stringify({ grid_layout_id: gridLayoutId, grid_show_totals: gridShowTotals }) }
+    }
+    const patch: Partial<FieldSettings> & { dependency_config?: Record<string, unknown> | null; options?: string | null } = {
       label: label.trim() || null,
       interface: iface || null,
       note: note.trim() || null,
+      placeholder: placeholder.trim() || null,
       required,
       hidden,
       readonly,
       inline_relation: inlineRelation,
       max_values: maxV && maxV > 0 ? maxV : null,
-    })
+    }
+    if (isM2O || isM2M) patch.dependency_config = depPatch
+    if (optionsPatch !== null) patch.options = optionsPatch
+    onSave(patch as Partial<FieldSettings> & { dependency_config?: string })
     setOpen(false)
   }
 
@@ -4214,13 +4798,24 @@ function FieldSettingsPopover({
             </div>
           )}
 
+          {/* Placeholder */}
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-slate-600'>Placeholder</Label>
+            <Input
+              value={placeholder}
+              onChange={e => setPlaceholder(e.target.value)}
+              placeholder='e.g. Enter a value…'
+              className='h-7 text-[12px]'
+            />
+          </div>
+
           {/* Note */}
           <div className='space-y-1'>
-            <Label className='text-[11px] text-slate-600'>Note</Label>
+            <Label className='text-[11px] text-slate-600'>Helper text</Label>
             <Textarea
               value={note}
               onChange={e => setNote(e.target.value)}
-              placeholder='Helper text shown below the field'
+              placeholder='Description shown below the field'
               className='min-h-[56px] resize-none text-[12px]'
             />
           </div>
@@ -4237,7 +4832,7 @@ function FieldSettingsPopover({
                 <Switch checked={row.value} onCheckedChange={row.set} className='scale-90' />
               </div>
             ))}
-            {isM2O && (
+            {(isM2O || isM2M) && (
               <div className='flex items-center justify-between border-t border-slate-200 pt-2'>
                 <span className='text-[12px] text-slate-600'>Inline edit</span>
                 <Switch checked={inlineRelation} onCheckedChange={setInlineRelation} className='scale-90' />
@@ -4257,6 +4852,26 @@ function FieldSettingsPopover({
                 className='h-7 text-[12px]'
               />
               <p className='text-[10px] text-slate-400'>Leave blank for unlimited. Set to 1 for single-select.</p>
+            </div>
+          )}
+
+          {(isM2O || isM2M) && (
+            <CascadeFiltersEditor
+              rules={cascadeRules}
+              m2oFields={(m2oFields ?? []).filter(f => f.field !== fieldName)}
+              relatedCollection={relatedCollection}
+              onChange={setCascadeRules}
+            />
+          )}
+
+          {abstractType === 'o2m' && iface === 'inline-grid' && (
+            <div className='mt-4 border-t border-[#e2e8f0] pt-4 space-y-2'>
+              <p className='text-[11px] font-medium text-[#6b7280]'>Grid Layout</p>
+              <LayoutPicker collection={relatedCollection} value={gridLayoutId} onChange={setGridLayoutId} />
+              <div className='flex items-center gap-2'>
+                <Switch checked={gridShowTotals} onCheckedChange={setGridShowTotals} className='scale-75' />
+                <span className='text-[11px] text-slate-600'>Show column totals</span>
+              </div>
             </div>
           )}
 
@@ -4287,6 +4902,9 @@ function FieldChip({
   onColSpan,
   fieldSettings,
   onSettings,
+  m2oFields,
+  dependencyConfig,
+  relatedCollection,
   dragHandleProps = {},
   style = {},
   isDragging = false,
@@ -4301,7 +4919,10 @@ function FieldChip({
   colSpan: number
   onColSpan?: (span: number) => void
   fieldSettings?: FieldSettings
-  onSettings?: (patch: Partial<FieldSettings>) => void
+  onSettings?: (patch: Partial<FieldSettings> & { dependency_config?: string }) => void
+  m2oFields?: CascadeParentField[]
+  dependencyConfig?: Record<string, unknown> | null
+  relatedCollection?: string | null
   dragHandleProps?: Record<string, unknown>
   style?: React.CSSProperties
   isDragging?: boolean
@@ -4349,6 +4970,9 @@ function FieldChip({
           isM2O={isM2O}
           isM2M={isM2M}
           settings={fieldSettings}
+          m2oFields={m2oFields}
+          dependencyConfig={dependencyConfig}
+          relatedCollection={relatedCollection}
           onSave={onSettings}
         />
       )}
@@ -4411,6 +5035,9 @@ function SortableFieldChip({
   onColSpan,
   fieldSettings,
   onSettings,
+  m2oFields,
+  dependencyConfig,
+  relatedCollection,
   onUnassign,
   inGrid = false,
 }: {
@@ -4423,7 +5050,10 @@ function SortableFieldChip({
   colSpan: number
   onColSpan?: (span: number) => void
   fieldSettings?: FieldSettings
-  onSettings?: (patch: Partial<FieldSettings>) => void
+  onSettings?: (patch: Partial<FieldSettings> & { dependency_config?: string }) => void
+  m2oFields?: CascadeParentField[]
+  dependencyConfig?: Record<string, unknown> | null
+  relatedCollection?: string | null
   onUnassign?: () => void
   inGrid?: boolean
 }) {
@@ -4453,6 +5083,9 @@ function SortableFieldChip({
         onColSpan={onColSpan}
         fieldSettings={fieldSettings}
         onSettings={onSettings}
+        m2oFields={m2oFields}
+        dependencyConfig={dependencyConfig}
+          relatedCollection={relatedCollection}
         onUnassign={onUnassign}
         dragHandleProps={listeners ?? {}}
       />
@@ -4462,19 +5095,23 @@ function SortableFieldChip({
 
 // ── SortableUngroupedZone ─────────────────────────────────────────────────────
 
-function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, onUnassign }: {
+function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll }: {
   localFieldOrder: Record<string, string[]>
   allFields: Array<{ field: string; type?: string; options?: string | null }>
   getColSpan: (f: string) => number
   patchField: (field: string, patch: Record<string, unknown>) => void
   getFieldSettings: (f: string) => FieldSettings
-  handleFieldSettings: (f: string, patch: Partial<FieldSettings>) => void
+  handleFieldSettings: (f: string, patch: Partial<FieldSettings> & { dependency_config?: string }) => void
   relKind: (f: string) => string | null
   friendlyType: (type: string | undefined, field: string) => string | undefined
+  getM2OFields?: () => CascadeParentField[]
+  getDependencyConfig?: (f: string) => Record<string, unknown> | null
+  getRelatedCollection?: (f: string) => string | null
   onUnassign?: (f: string) => void
+  onReturnAll?: () => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'group:__ungrouped__' })
-  const style = { transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }
+  const style = { transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0 : 1 }
   const fields = localFieldOrder.__unassigned__ ?? []
   return (
     <div ref={setNodeRef} style={style} className='rounded-lg border border-dashed border-slate-300 bg-white dark:bg-card'>
@@ -4484,6 +5121,15 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
         </button>
         <span className='text-[11px] font-medium text-slate-500'>Ungrouped</span>
         <span className='text-[10px] text-slate-300'>— fields rendered above sections in the item editor</span>
+        {fields.length > 0 && onReturnAll && (
+          <button
+            type='button'
+            onClick={onReturnAll}
+            className='ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800'
+          >
+            Return all
+          </button>
+        )}
       </div>
       <DroppableFieldZone containerId='__unassigned__'>
         <SortableContext items={fields} strategy={rectSortingStrategy}>
@@ -4507,6 +5153,9 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                   onColSpan={(span) => patchField(f, { col_span: span })}
                   fieldSettings={settings}
                   onSettings={patch => handleFieldSettings(f, patch)}
+                  m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields?.() : undefined}
+                  dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
+                  relatedCollection={(kind === 'M2O' || kind === 'M2M') ? getRelatedCollection?.(f) : undefined}
                   onUnassign={onUnassign ? () => onUnassign(f) : undefined}
                   inGrid
                 />
@@ -4535,6 +5184,9 @@ function SortableGroupCard({
   getFriendlyType,
   getFieldSettings,
   onFieldSettings,
+  getM2OFields,
+  getDependencyConfig,
+  getRelatedCollection,
   onUnassign,
 }: {
   group: FieldGroup
@@ -4549,7 +5201,10 @@ function SortableGroupCard({
   getRelKind?: (f: string) => string | null
   getFriendlyType?: (t?: string, fieldName?: string) => string | undefined
   getFieldSettings?: (f: string) => FieldSettings
-  onFieldSettings?: (f: string, patch: Partial<FieldSettings>) => void
+  onFieldSettings?: (f: string, patch: Partial<FieldSettings> & { dependency_config?: string }) => void
+  getM2OFields?: () => CascadeParentField[]
+  getDependencyConfig?: (f: string) => Record<string, unknown> | null
+  getRelatedCollection?: (f: string) => string | null
   onUnassign?: (f: string) => void
 }) {
   const [editing, setEditing] = useState(false)
@@ -4571,7 +5226,7 @@ function SortableGroupCard({
     <div
       ref={setNodeRef}
       style={{ transform: DndCSS.Transform.toString(transform), transition }}
-      className={cn('rounded-lg border border-slate-200 bg-white', isDragging && 'opacity-50 ring-2 ring-nvr-cyan/40')}
+      className={cn('rounded-lg border border-slate-200 bg-white', isDragging && 'opacity-0')}
     >
       {/* Group header */}
       <div className='group flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2.5'>
@@ -4623,13 +5278,22 @@ function SortableGroupCard({
           </button>
         )}
         <span className='font-mono text-[10px] text-slate-400'>{group.key}</span>
+        {group.type === 'metadata' && (
+          <span className='rounded bg-slate-600 px-1.5 py-0.5 text-[10px] font-medium text-white' title='Fields in this group are displayed read-only'>
+            meta
+          </span>
+        )}
         <button
           type='button'
-          title='Click to toggle section / tab'
+          title='Click to cycle section / tab / metadata'
           onClick={onToggleType}
           className={cn(
             'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80',
-            group.type === 'tab' ? 'bg-nvr-cyan/10 text-nvr-cyan' : 'bg-slate-100 text-slate-500'
+            group.type === 'tab'
+              ? 'bg-nvr-cyan/10 text-nvr-cyan'
+              : group.type === 'metadata'
+                ? 'bg-slate-600/10 text-slate-600'
+                : 'bg-slate-100 text-slate-500'
           )}
         >
           {group.type}
@@ -4670,6 +5334,9 @@ function SortableGroupCard({
                   onColSpan={span => onColSpan(f, span)}
                   fieldSettings={settings}
                   onSettings={onFieldSettings ? patch => onFieldSettings(f, patch) : undefined}
+                  m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields?.() : undefined}
+                  dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
+                  relatedCollection={(kind === 'M2O' || kind === 'M2M') ? getRelatedCollection?.(f) : undefined}
                   onUnassign={onUnassign ? () => onUnassign(f) : undefined}
                   inGrid
                 />
@@ -4702,6 +5369,87 @@ interface CollectionLayout {
   name: string
   is_active: boolean | number
   sort: number
+  disable_comments?: boolean | number
+  disable_tasks?: boolean | number
+  tab_mode?: string
+  validate_before_next?: boolean | number
+  summary_enabled?: boolean | number
+  summary_show_all?: boolean | number
+  ai_enabled?: boolean | number
+  conditions?: { role_ids?: string[] } | null
+}
+
+function LayoutVisibilitySection({
+  selected,
+  roles,
+  onChange
+}: {
+  selected: CollectionLayout
+  roles: Array<{ id: string; name: string }>
+  onChange: (roleIds: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const roleIds = selected.conditions?.role_ids ?? []
+  const roleName = (id: string) => roles.find((r) => r.id === id)?.name ?? id
+  const available = roles.filter((r) => !roleIds.includes(r.id))
+
+  const addRole = (id: string) => {
+    if (!roleIds.includes(id)) onChange([...roleIds, id])
+    setOpen(false)
+  }
+  const removeRole = (id: string) => onChange(roleIds.filter((x) => x !== id))
+
+  return (
+    <div className='space-y-1.5'>
+      <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Visibility</span>
+      <div className='flex flex-wrap items-center gap-1.5'>
+        {roleIds.length === 0 ? (
+          <span className='text-[11px] text-slate-400 dark:text-slate-500'>Visible to everyone</span>
+        ) : (
+          roleIds.map((id) => (
+            <span key={id} className='inline-flex items-center gap-1 rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan'>
+              {roleName(id)}
+              <button type='button' onClick={() => removeRole(id)} className='hover:text-nvr-navy dark:hover:text-white'>
+                <X className='h-2.5 w-2.5' />
+              </button>
+            </span>
+          ))
+        )}
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type='button'
+              disabled={available.length === 0}
+              className='inline-flex items-center gap-1 rounded border border-dashed border-slate-300 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-nvr-cyan hover:text-nvr-cyan disabled:opacity-40 dark:border-border'
+            >
+              <Plus className='h-2.5 w-2.5' />
+              Add role
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-[200px] p-0' align='start'>
+            <Command>
+              <CommandInput placeholder='Search roles…' className='h-8 text-[12px]' />
+              <CommandList>
+                <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>No roles</CommandEmpty>
+                <CommandGroup>
+                  {available.map((r) => (
+                    <CommandItem key={r.id} value={r.name} onSelect={() => addRole(r.id)} className='text-[12px]'>
+                      {r.name}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+      </div>
+      <p className='text-[10px] text-slate-400 dark:text-slate-500'>
+        {roleIds.length === 0
+          ? 'Shows for all users. Restrict to specific roles below.'
+          : 'Only activates for users with the selected roles.'}
+      </p>
+    </div>
+  )
 }
 
 function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Array<{ name: string; data_type: string }> }) {
@@ -4717,6 +5465,11 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
       api.get<{ data: CollectionLayout[] }>('/collection-layouts', { params: { collection: tableName } })
         .then((r) => r.data.data ?? []),
     enabled: !!tableName
+  })
+
+  const { data: roles = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['roles'],
+    queryFn: () => api.get('/roles').then((r) => r.data.data ?? [])
   })
 
   // Auto-seed "Default" layout for collections that have none yet
@@ -4770,7 +5523,16 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
     onSuccess: () => { invalidateLayouts(); setEditingId(null) }
   })
 
+  const patchLayoutMut = useMutation({
+    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'disable_comments' | 'disable_tasks' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions'>>) => {
+      const { id, ...rest } = patch
+      return api.patch(`/collection-layouts/${id}`, rest)
+    },
+    onSuccess: () => invalidateLayouts()
+  })
+
   const selected = layouts.find((l) => l.id === effectiveId) ?? null
+  const [settingsExpanded, setSettingsExpanded] = useState(false)
 
   return (
     <div className='flex min-h-0 gap-4'>
@@ -4904,6 +5666,82 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
             </div>
           </div>
         )}
+        {selected && (
+          <div className='mb-3 rounded-md border border-slate-200 bg-slate-50 dark:border-border dark:bg-muted/30'>
+            {/* Collapsed summary row */}
+            <button
+              type='button'
+              onClick={() => setSettingsExpanded(v => !v)}
+              className='flex w-full items-center gap-2 px-3 py-2 text-left'
+            >
+              <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>Settings</span>
+              <div className='flex flex-1 flex-wrap items-center gap-1.5'>
+                <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium capitalize text-slate-600 dark:bg-muted dark:text-slate-300'>
+                  {selected.tab_mode ?? 'tabs'}
+                </span>
+                {!!selected.summary_enabled && <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>summary</span>}
+                {!!selected.ai_enabled && <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>AI</span>}
+                {(selected.conditions?.role_ids?.length ?? 0) > 0 && (
+                  <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>
+                    {selected.conditions?.role_ids?.length} {(selected.conditions?.role_ids?.length ?? 0) === 1 ? 'role' : 'roles'}
+                  </span>
+                )}
+              </div>
+              <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150', settingsExpanded && 'rotate-180')} />
+            </button>
+
+            {/* Expanded edit panel */}
+            {settingsExpanded && (
+              <div className='space-y-2 border-t border-slate-200 px-3 py-3 dark:border-border'>
+                <div className='flex items-center justify-between'>
+                  <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Tab mode</span>
+                  <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
+                    {(['tabs', 'steps'] as const).map((mode) => (
+                      <button key={mode} type='button' onClick={() => patchLayoutMut.mutate({ id: selected.id, tab_mode: mode })}
+                        className={cn('px-2.5 py-1 text-[11px] font-medium transition-colors capitalize',
+                          (selected.tab_mode ?? 'tabs') === mode
+                            ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
+                            : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200')}>
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {(selected.tab_mode ?? 'tabs') === 'steps' && (
+                  <label className='flex cursor-pointer items-center justify-between'>
+                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Validate before Next</span>
+                    <input type='checkbox' checked={!!selected.validate_before_next} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, validate_before_next: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                  </label>
+                )}
+                <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
+                  <label className='flex cursor-pointer items-center justify-between'>
+                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Summary panel</span>
+                    <input type='checkbox' checked={!!selected.summary_enabled} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_enabled: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                  </label>
+                  {!!selected.summary_enabled && (
+                    <label className='flex cursor-pointer items-center justify-between'>
+                      <span className='text-[11px] text-slate-500 dark:text-slate-400'>Show all fields in summary</span>
+                      <input type='checkbox' checked={!!selected.summary_show_all} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_show_all: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                    </label>
+                  )}
+                </div>
+                <div className='border-t border-slate-200 dark:border-border pt-2'>
+                  <label className='flex cursor-pointer items-center justify-between'>
+                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Enable AI features</span>
+                    <input type='checkbox' checked={!!selected.ai_enabled} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, ai_enabled: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                  </label>
+                </div>
+                <div className='border-t border-slate-200 dark:border-border pt-2'>
+                  <LayoutVisibilitySection
+                    selected={selected}
+                    roles={roles}
+                    onChange={(roleIds) => patchLayoutMut.mutate({ id: selected.id, conditions: roleIds.length > 0 ? { role_ids: roleIds } : null })}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         <FieldGroupsTab tableName={tableName} dbColumns={dbColumns} layoutId={effectiveId} />
       </div>
     </div>
@@ -4911,6 +5749,73 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
 }
 
 // ── LayoutTab ─────────────────────────────────────────────────────────────────
+
+function SortableSlotCard({
+  slotKey, slots, updateSlot, editingSlot, setEditingSlot, slotLabelDraft, setSlotLabelDraft
+}: {
+  slotKey: SlotKey
+  slots: Record<SlotKey, SlotState>
+  updateSlot: (key: SlotKey, patch: Partial<SlotState>) => void
+  editingSlot: SlotKey | null
+  setEditingSlot: (k: SlotKey | null) => void
+  slotLabelDraft: string
+  setSlotLabelDraft: (v: string) => void
+}) {
+  const meta = SLOT_META[slotKey]
+  const s = slots[slotKey]
+  const label = s.label_override?.trim() || meta.defaultLabel
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `slot:${slotKey}`,
+    data: { type: 'slot' },
+  })
+  const isEditing = editingSlot === slotKey
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: DndCSS.Transform.toString(transform), transition }}
+      className={cn('flex items-center gap-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2', isDragging && 'opacity-0')}
+    >
+      <button type='button' {...attributes} {...listeners} className='cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing'>
+        <GripVertical className='h-3.5 w-3.5' />
+      </button>
+      <span className='shrink-0 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>{meta.name}</span>
+      {meta.editable && isEditing ? (
+        <input autoFocus value={slotLabelDraft}
+          onChange={e => setSlotLabelDraft(e.target.value)}
+          onBlur={() => {
+            const v = slotLabelDraft.trim()
+            updateSlot(slotKey, { label_override: v && v !== meta.defaultLabel ? v : null })
+            setEditingSlot(null)
+          }}
+          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditingSlot(null) }}
+          placeholder={meta.defaultLabel}
+          className='flex-1 rounded border border-nvr-cyan/50 bg-white px-1.5 py-0.5 text-[12px] font-medium text-slate-800 outline-none ring-1 ring-nvr-cyan/30'
+        />
+      ) : meta.editable ? (
+        <button type='button' onClick={() => { setSlotLabelDraft(label); setEditingSlot(slotKey) }}
+          className='group/slot flex flex-1 items-center gap-1 truncate text-left text-[12px] font-medium text-slate-700 hover:text-nvr-cyan'>
+          <span className='truncate'>{label}</span>
+          <Pencil className='h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/slot:opacity-50' />
+        </button>
+      ) : (
+        <span className='flex-1 truncate text-[12px] font-medium text-slate-700'>{label}</span>
+      )}
+      {!s.is_visible && <span className='shrink-0 rounded bg-slate-500 px-1.5 py-0.5 text-[10px] font-medium text-white'>hidden</span>}
+      <button type='button' title={s.default_expanded ? 'Start collapsed' : 'Start expanded'}
+        onClick={() => updateSlot(slotKey, { default_expanded: !s.default_expanded })}
+        className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'
+      >
+        {s.default_expanded
+          ? <ChevronDown className='h-3.5 w-3.5' />
+          : <ChevronRight className='h-3.5 w-3.5' />}
+      </button>
+      <button type='button' title={s.is_visible ? 'Hide' : 'Show'} onClick={() => updateSlot(slotKey, { is_visible: !s.is_visible })}
+        className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'>
+        {s.is_visible ? <Eye className='h-3.5 w-3.5' /> : <EyeOff className='h-3.5 w-3.5' />}
+      </button>
+    </div>
+  )
+}
 
 function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: string; dbColumns?: Array<{ name: string; data_type: string }>; layoutId: number | null }) {
   const qc = useQueryClient()
@@ -4948,6 +5853,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
           required: boolean
           interface: string | null
           options: Record<string, unknown> | null
+          dependency_config: string | null
         }>; ungrouped_sort: number | null }>(
           `/field-config/${tableName}`,
           { params: layoutId ? { layout_id: layoutId } : {} }
@@ -4963,6 +5869,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
   // Memoized — new array reference every render would fire the init effect infinitely
   const allFields = useMemo(() => {
     const base: Array<{ field: string; type?: string; options?: string | null }> = colMeta?.fields ?? []
+    const seenO2m = new Set<string>()
     const o2mVirtuals = (colMeta?.relations ?? [])
       .filter((r: { one_field?: string | null; junction_field: string | null; many_collection?: string }) => {
         if (!r.one_field || r.junction_field !== null) return false
@@ -4973,13 +5880,40 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
         field: r.one_field === 'id' ? (r.many_collection ?? r.one_field) : r.one_field,
         type: 'o2m' as const
       }))
-    return [...base, ...o2mVirtuals]
+      .filter((v: { field: string; type: 'o2m' }) => {
+        if (seenO2m.has(v.field)) return false
+        seenO2m.add(v.field)
+        return true
+      })
+    // M2M alias fields — junction_field is set; use one_field if set (not 'id'),
+    // else fall back to many_collection (junction table name) for legacy one_field='id' rows
+    const seenM2m = new Set<string>()
+    const m2mVirtuals = (colMeta?.relations ?? [])
+      .filter((r: { one_field?: string | null; junction_field: string | null; many_collection?: string }) => {
+        if (!r.junction_field) return false
+        const name = (r.one_field && r.one_field !== 'id') ? r.one_field : (r.many_collection ?? '')
+        return !!name && !base.find((f) => f.field === name)
+      })
+      .map((r: { one_field?: string | null; many_collection?: string }) => ({
+        field: (r.one_field && r.one_field !== 'id') ? r.one_field! : (r.many_collection ?? r.one_field ?? ''),
+        type: 'm2m' as const
+      }))
+      .filter((v: { field: string; type: 'm2m' }) => {
+        if (!v.field || seenM2m.has(v.field)) return false
+        seenM2m.add(v.field)
+        return true
+      })
+    return [...base, ...o2mVirtuals, ...m2mVirtuals]
   }, [colMeta])
 
   // field → relation kind label
   const relKind = (fieldName: string): string | null => {
-    // Virtual M2M field — this collection is the "one" side of the junction
-    const m2m = relations.find(r => r.one_field === fieldName && r.junction_field !== null)
+    // Virtual M2M field — match by one_field, or by many_collection when one_field='id'
+    const m2m = relations.find(r =>
+      r.junction_field !== null &&
+      ((r.one_field && r.one_field !== 'id' && r.one_field === fieldName) ||
+       ((!r.one_field || r.one_field === 'id') && r.many_collection === fieldName))
+    )
     if (m2m) return 'M2M'
     // Virtual O2M field
     const o2m = relations.find(r =>
@@ -5016,10 +5950,22 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
   }
 
   // ── Local optimistic state ──
-  const [localGroupOrder, setLocalGroupOrder] = useState<(number | '__ungrouped__')[]>([])
+  const [localGroupOrder, setLocalGroupOrder] = useState<(number | '__ungrouped__' | SlotKey)[]>([])
   const [localAssignments, setLocalAssignments] = useState<Record<string, string | null>>({})
   const [localFieldOrder, setLocalFieldOrder] = useState<Record<string, string[]>>({})
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
+
+  // ── Page slot state ──
+  // Special panels (pipeline/comments/tasks) persisted as sentinel assignments.
+  // sort = position relative to groups/ungrouped; label_override only for comments/tasks.
+  const [slots, setSlots] = useState<Record<SlotKey, SlotState>>(() => ({
+    __pipeline__: { sort: 0, label_override: null, is_visible: true, default_expanded: true },
+    __comments__: { sort: 0, label_override: null, is_visible: true, default_expanded: true },
+    __tasks__: { sort: 0, label_override: null, is_visible: true, default_expanded: true }
+  }))
+  const [editingSlot, setEditingSlot] = useState<SlotKey | null>(null)
+  const [slotLabelDraft, setSlotLabelDraft] = useState('')
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // True only after user makes a drag change — prevents saving on server-data reloads
@@ -5033,8 +5979,15 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     // must not clobber them or cancel the pending debounced save
     if (hasLocalChangeRef.current) return
     const ungroupedIdx = ungroupedSortFromServer !== null ? Math.min(ungroupedSortFromServer, groups.length) : groups.length
-    const baseOrder: (number | '__ungrouped__')[] = groups.map(g => g.id)
+    const baseOrder: (number | '__ungrouped__' | SlotKey)[] = groups.map(g => g.id)
     baseOrder.splice(ungroupedIdx, 0, '__ungrouped__')
+    // Interleave slot keys at their saved positions (after groups/ungrouped are placed)
+    for (const key of SLOT_KEYS) {
+      const row = fieldConfig.find(fc => fc.field === key) as Record<string, unknown> | undefined
+      const slotSort = row ? (typeof row.sort === 'number' ? row.sort : baseOrder.length) : baseOrder.length + SLOT_KEYS.indexOf(key)
+      const insertAt = Math.min(Math.max(0, slotSort), baseOrder.length)
+      baseOrder.splice(insertAt, 0, key)
+    }
     setLocalGroupOrder(baseOrder)
     const assignments: Record<string, string | null> = {}
     // __pool__ = Unassigned sidebar (never explicitly placed); __unassigned__ = Ungrouped zone
@@ -5060,6 +6013,24 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     }
     setLocalAssignments(assignments)
     setLocalFieldOrder(fieldOrder)
+
+    // ── Parse page slot sentinels from the same assignments payload ──
+    const nextSlots: Record<SlotKey, SlotState> = {
+      __pipeline__: { sort: groups.length + 1, label_override: null, is_visible: true, default_expanded: true },
+      __comments__: { sort: groups.length + 2, label_override: null, is_visible: true, default_expanded: true },
+      __tasks__: { sort: groups.length + 3, label_override: null, is_visible: true, default_expanded: true }
+    }
+    for (const key of SLOT_KEYS) {
+      const row = fieldConfig.find(fc => fc.field === key) as Record<string, unknown> | undefined
+      if (!row) continue
+      nextSlots[key] = {
+        sort: typeof row.sort === 'number' ? row.sort : nextSlots[key].sort,
+        label_override: (row.label_override as string | null | undefined) ?? null,
+        is_visible: row.is_visible === undefined || row.is_visible === null ? true : !!row.is_visible,
+        default_expanded: row.default_expanded === undefined || row.default_expanded === null ? true : !!row.default_expanded
+      }
+    }
+    setSlots(nextSlots)
   }, [groups, fieldConfig, allFields, ungroupedSortFromServer])
 
   // ── Mutations ──
@@ -5076,14 +6047,23 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       const seq = changeSeqRef.current
       const pool = new Set(localFieldOrder.__pool__ ?? [])
       const ungroupedPos = localGroupOrder.indexOf('__ungrouped__')
-      const assignments = [
+      const assignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean }> = [
         ...Object.entries(localAssignments)
           .filter(([f]) => !pool.has(f))
           .map(([f, gk]) => {
             const order = localFieldOrder[gk ?? '__unassigned__'] ?? []
             return { field: f, group_key: gk ?? null, sort: order.indexOf(f) >= 0 ? order.indexOf(f) : 0 }
           }),
-        { field: '__ungrouped_pos__', group_key: null, sort: ungroupedPos >= 0 ? ungroupedPos : localGroupOrder.length }
+        { field: '__ungrouped_pos__', group_key: null, sort: ungroupedPos >= 0 ? ungroupedPos : localGroupOrder.length },
+        // Page slot sentinels — sort derived from position in localGroupOrder
+        ...SLOT_KEYS.map(key => ({
+          field: key,
+          group_key: null,
+          sort: localGroupOrder.indexOf(key as SlotKey) >= 0 ? localGroupOrder.indexOf(key as SlotKey) : localGroupOrder.length,
+          label_override: slots[key].label_override,
+          is_visible: slots[key].is_visible,
+          default_expanded: slots[key].default_expanded
+        }))
       ]
       api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
         .then(() => {
@@ -5101,10 +6081,10 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
         })
     }, 400)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [localAssignments, localFieldOrder, layoutId, invalidateFieldConfig])
+  }, [localAssignments, localFieldOrder, localGroupOrder, slots, layoutId, invalidateFieldConfig])
 
   const createMut = useMutation({
-    mutationFn: (body: { collection: string; key: string; label: string; type: 'section' | 'tab' }) =>
+    mutationFn: (body: { collection: string; key: string; label: string; type: 'section' | 'tab' | 'metadata' }) =>
       api.post('/field-groups', { ...body, layout_id: layoutId }),
     onSuccess: () => { invalidateGroups(); setAdding(false); setNewKey(''); setNewLabel(''); toast.success('Group created') },
     onError: () => toast.error('Failed to create group')
@@ -5116,7 +6096,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
   })
 
   const patchTypeMut = useMutation({
-    mutationFn: ({ id, type }: { id: number; type: 'section' | 'tab' }) => api.patch(`/field-groups/${id}`, { type }),
+    mutationFn: ({ id, type }: { id: number; type: 'section' | 'tab' | 'metadata' }) => api.patch(`/field-groups/${id}`, { type }),
     onSuccess: () => invalidateGroups()
   })
 
@@ -5143,6 +6123,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     } else {
       api.patch(`/field-config/${tableName}/${field}`, patch)
         .then(() => { invalidateFieldConfig(); invalidateMeta() })
+        .catch(() => { toast.error(`Failed to save settings for field "${field}"`) })
     }
   }, [tableName, layoutId, invalidateFieldConfig, invalidateMeta])
 
@@ -5150,7 +6131,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
   const [adding, setAdding] = useState(false)
   const [newKey, setNewKey] = useState('')
   const [newLabel, setNewLabel] = useState('')
-  const [newType, setNewType] = useState<'section' | 'tab'>('section')
+  const [newType, setNewType] = useState<'section' | 'tab' | 'metadata'>('section')
 
   // ── dnd ──
   const sensors = useSensors(
@@ -5160,7 +6141,11 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
 
   // orderedItems includes '__ungrouped__' sentinel at its saved position
   const orderedItems = useMemo(
-    () => localGroupOrder.map(id => id === '__ungrouped__' ? '__ungrouped__' : (groups.find(g => g.id === id) ?? null)).filter(Boolean) as (FieldGroup | '__ungrouped__')[],
+    () => localGroupOrder.map(id => {
+      if (id === '__ungrouped__') return '__ungrouped__'
+      if (SLOT_KEYS.includes(id as SlotKey)) return id as SlotKey
+      return groups.find(g => g.id === id) ?? null
+    }).filter(Boolean) as (FieldGroup | '__ungrouped__' | SlotKey)[],
     [localGroupOrder, groups]
   )
   const orderedGroups = useMemo(
@@ -5177,7 +6162,14 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
   }
 
   function handleDragStart({ active }: DragStartEvent) {
-    if (!String(active.id).startsWith('group:')) setActiveFieldId(String(active.id))
+    const id = String(active.id)
+    if (id.startsWith('group:') || id.startsWith('slot:')) setActiveGroupId(id)
+    else setActiveFieldId(id)
+  }
+
+  function handleDragCancel() {
+    setActiveFieldId(null)
+    setActiveGroupId(null)
   }
 
   function handleDragOver({ active, over }: DragOverEvent) {
@@ -5211,20 +6203,32 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
 
   function handleDragEnd({ active, over }: DragEndEvent) {
     setActiveFieldId(null)
+    setActiveGroupId(null)
     if (!over) return
     const activeId = String(active.id)
     const overId = String(over.id)
 
-    // ── Group reorder (includes __ungrouped__ sentinel) ──
-    if (activeId.startsWith('group:')) {
-      const activeKey = activeId.replace('group:', '')
-      const overKey = overId.replace('group:', '')
-      const activeIdx = localGroupOrder.findIndex(id => (id === '__ungrouped__' ? '__ungrouped__' : groups.find(g => g.id === id)?.key) === activeKey)
-      const overIdx = localGroupOrder.findIndex(id => (id === '__ungrouped__' ? '__ungrouped__' : groups.find(g => g.id === id)?.key) === overKey)
+    // ── Group / slot reorder (includes __ungrouped__ and slot sentinels) ──
+    if (activeId.startsWith('group:') || activeId.startsWith('slot:')) {
+      const activeKey = activeId.startsWith('slot:') ? activeId.replace('slot:', '') : activeId.replace('group:', '')
+      const overKey = overId.startsWith('slot:') ? overId.replace('slot:', '') : overId.replace('group:', '')
+      const resolveKey = (id: number | '__ungrouped__' | SlotKey): string => {
+        if (id === '__ungrouped__') return '__ungrouped__'
+        if (SLOT_KEYS.includes(id as SlotKey)) return id as string
+        return groups.find(g => g.id === id)?.key ?? ''
+      }
+      const activeIdx = localGroupOrder.findIndex(id => resolveKey(id) === activeKey)
+      const overIdx = localGroupOrder.findIndex(id => resolveKey(id) === overKey)
       if (activeIdx === -1 || overIdx === -1 || activeIdx === overIdx) return
+      if (layoutId) { hasLocalChangeRef.current = true; changeSeqRef.current++ }
       const newOrder = arrayMove(localGroupOrder, activeIdx, overIdx)
       setLocalGroupOrder(newOrder)
-      reorderGroupsMut.mutate(newOrder.filter((id): id is number => id !== '__ungrouped__').map((id, sort) => ({ id, sort })))
+      reorderGroupsMut.mutate(
+        newOrder
+          .map((id, pos) => ({ id, pos }))
+          .filter((x): x is { id: number; pos: number } => typeof x.id === 'number')
+          .map(({ id, pos }) => ({ id, sort: pos }))
+      )
       // Persist ungrouped position to DB immediately — reorderGroupsMut only updates group sort values
       if (layoutId) {
         const ungroupedPos = newOrder.indexOf('__ungrouped__')
@@ -5303,15 +6307,16 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       label: fc?.label ?? null,
       interface: fc?.interface ?? null,
       note: fc?.note ?? null,
+      placeholder: (fc as Record<string, unknown> | undefined)?.placeholder as string | null ?? null,
       required: !!fc?.required,
       hidden: !!fc?.hidden,
       readonly: !!fc?.readonly,
-      inline_relation: opts.inline_relation !== false,
+      inline_relation: opts.inline_relation === true,
       max_values: typeof opts.max_values === 'number' ? opts.max_values : null,
     }
   }, [fieldConfig])
 
-  const handleFieldSettings = useCallback((f: string, patch: Partial<FieldSettings>) => {
+  const handleFieldSettings = useCallback((f: string, patch: Partial<FieldSettings> & { dependency_config?: string }) => {
     patchField(f, patch)
   }, [patchField])
 
@@ -5328,31 +6333,148 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
     changeSeqRef.current++
   }, [findContainer])
 
+  // Bulk: move every field from the Unassigned pool into the Ungrouped zone
+  const handleAddAllToUngrouped = useCallback(() => {
+    setLocalFieldOrder(prev => {
+      const pool = prev.__pool__ ?? []
+      if (pool.length === 0) return prev
+      setLocalAssignments(a => {
+        const next = { ...a }
+        for (const f of pool) next[f] = null
+        return next
+      })
+      return {
+        ...prev,
+        __pool__: [],
+        __unassigned__: [...(prev.__unassigned__ ?? []), ...pool],
+      }
+    })
+    hasLocalChangeRef.current = true
+    changeSeqRef.current++
+  }, [])
+
+  // Bulk: move every field from the Ungrouped zone back into the Unassigned pool
+  const handleReturnAllToPool = useCallback(() => {
+    setLocalFieldOrder(prev => {
+      const ungrouped = prev.__unassigned__ ?? []
+      if (ungrouped.length === 0) return prev
+      setLocalAssignments(a => {
+        const next = { ...a }
+        for (const f of ungrouped) next[f] = null
+        return next
+      })
+      return {
+        ...prev,
+        __unassigned__: [],
+        __pool__: [...(prev.__pool__ ?? []), ...ungrouped],
+      }
+    })
+    hasLocalChangeRef.current = true
+    changeSeqRef.current++
+  }, [])
+
+  // ── Slot mutators ──
+  const markSlotDirty = useCallback(() => {
+    if (!layoutId) return
+    hasLocalChangeRef.current = true
+    changeSeqRef.current++
+  }, [layoutId])
+
+  const updateSlot = useCallback((key: SlotKey, patch: Partial<SlotState>) => {
+    setSlots(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }))
+    markSlotDirty()
+  }, [markSlotDirty])
+
+  // Move a slot up/down within the combined ordering of groups + ungrouped + slots.
+  // We only renumber the slots' sort values; group/ungrouped positions are untouched.
+  const moveSlot = useCallback((key: SlotKey, dir: -1 | 1) => {
+    setSlots(prev => {
+      const ordered = [...SLOT_KEYS].sort((a, b) => prev[a].sort - prev[b].sort)
+      const idx = ordered.indexOf(key)
+      const swapIdx = idx + dir
+      if (swapIdx < 0 || swapIdx >= ordered.length) return prev
+      const other = ordered[swapIdx]
+      return {
+        ...prev,
+        [key]: { ...prev[key], sort: prev[other].sort },
+        [other]: { ...prev[other], sort: prev[key].sort }
+      }
+    })
+    markSlotDirty()
+  }, [markSlotDirty])
+
+  const slotLabel = useCallback((key: SlotKey) => slots[key].label_override?.trim() || SLOT_META[key].defaultLabel, [slots])
+  const orderedSlots = useMemo(() => [...SLOT_KEYS].sort((a, b) => slots[a].sort - slots[b].sort), [slots])
+
+  // M2O helpers for cascade filter editor
+  const getM2OFields = useCallback((): CascadeParentField[] =>
+    allFields
+      .filter(f => relKind(f.field) === 'M2O' || relKind(f.field) === 'M2M')
+      .map(f => ({
+        field: f.field,
+        label: getFieldSettings(f.field).label ?? titleCase(f.field),
+        kind: relKind(f.field) as 'M2O' | 'M2M',
+      }))
+  , [allFields, relKind, getFieldSettings])
+
+  const getDependencyConfig = useCallback((f: string): Record<string, unknown> | null =>
+    (fieldConfig.find(c => c.field === f)?.dependency_config ?? null) as Record<string, unknown> | null
+  , [fieldConfig])
+
+  // Returns the far-end related collection for M2O or M2M fields (used for filter_column suggestions)
+  const getRelatedCollection = useCallback((fieldName: string): string | null => {
+    const kind = relKind(fieldName)
+    if (kind === 'M2O') {
+      return relations.find(r => r.many_field === fieldName)?.one_collection ?? null
+    }
+    if (kind === 'M2M') {
+      const junction = relations.find(r => r.one_field === fieldName && r.junction_field !== null)
+      if (!junction) return null
+      return relations.find(r => r.many_collection === junction.many_collection && r.many_field === junction.junction_field && r.one_field !== fieldName)?.one_collection ?? null
+    }
+    return null
+  }, [relations, relKind])
+
   const activeFieldData = activeFieldId ? allFields.find(f => f.field === activeFieldId) : null
 
   return (
     <DndContext
       sensors={sensors}
       collisionDetection={(args) => {
-        if (String(args.active.id).startsWith('group:')) return closestCenter(args)
+        const id = String(args.active.id)
+        if (id.startsWith('group:') || id.startsWith('slot:')) {
+          // Use pointer position for group/slot — makes it feel natural with variable-height items
+          const pointer = pointerWithin(args)
+          return pointer.length > 0 ? pointer : closestCenter(args)
+        }
         const pointer = pointerWithin(args)
         return pointer.length > 0 ? pointer : rectIntersection(args)
       }}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
     >
       <div className='flex gap-4 items-start'>
         {/* Left sidebar — unassigned field pool (static palette, drag source only) */}
         <div className='w-64 shrink-0'>
           <div className='rounded-lg border border-dashed border-slate-200 bg-slate-50 sticky top-0'>
-            <div className='border-b border-slate-200 px-3 py-2'>
+            <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2'>
               <p className='text-[11px] font-medium text-slate-400'>
                 Unassigned
                 {(localFieldOrder.__pool__ ?? []).length > 0 && (
                   <span className='ml-1 text-slate-300'>({(localFieldOrder.__pool__ ?? []).length})</span>
                 )}
               </p>
+              {(localFieldOrder.__pool__ ?? []).length > 0 && (
+                <button
+                  type='button'
+                  onClick={handleAddAllToUngrouped}
+                  className='ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10'
+                >
+                  Add all
+                </button>
+              )}
             </div>
               <div className='overflow-y-auto min-h-[40px] p-2' style={{ maxHeight: 'calc(100vh - 220px)' }}>
                 {(localFieldOrder.__pool__ ?? []).length === 0 ? (
@@ -5378,6 +6500,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
                         colSpan={getColSpan(f)}
                         fieldSettings={settings}
                         onSettings={patch => handleFieldSettings(f, patch)}
+                        m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields() : undefined}
+                        dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig(f) : undefined}
+                        relatedCollection={(kind === 'M2O' || kind === 'M2M') ? getRelatedCollection(f) : undefined}
                       />
                     )
                   }
@@ -5429,7 +6554,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
               </div>
               <div>
                 <Label className='mb-1 block text-[11px]'>Type</Label>
-                <Sel value={newType} onChange={v => setNewType(v as 'section' | 'tab')} options={[{ value: 'section', label: 'Section' }, { value: 'tab', label: 'Tab' }]} />
+                <Sel value={newType} onChange={v => setNewType(v as 'section' | 'tab' | 'metadata')} options={[{ value: 'section', label: 'Section' }, { value: 'tab', label: 'Tab' }, { value: 'metadata', label: 'Metadata (read-only)' }]} />
               </div>
             </div>
             <div className='flex justify-end gap-2'>
@@ -5445,11 +6570,15 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
         {groupsLoading ? (
           <div className='space-y-2'>{[1,2].map(k => <Skeleton key={k} className='h-24 w-full rounded-lg' />)}</div>
         ) : (
-          <SortableContext items={orderedItems.map(x => x === '__ungrouped__' ? 'group:__ungrouped__' : `group:${(x as FieldGroup).key}`)} strategy={verticalListSortingStrategy}>
+          <SortableContext items={orderedItems.map(x => x === '__ungrouped__' ? 'group:__ungrouped__' : SLOT_KEYS.includes(x as SlotKey) ? `slot:${x}` : `group:${(x as FieldGroup).key}`)} strategy={verticalListSortingStrategy}>
             <div className='space-y-3'>
               {orderedItems.map(item => {
                 if (item === '__ungrouped__') return (
-                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} onUnassign={handleUnassign} />
+                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} onReturnAll={handleReturnAllToPool} />
+                )
+                if (SLOT_KEYS.includes(item as SlotKey)) return (
+                  <SortableSlotCard key={item as SlotKey} slotKey={item as SlotKey} slots={slots} updateSlot={updateSlot}
+                    editingSlot={editingSlot} setEditingSlot={setEditingSlot} slotLabelDraft={slotLabelDraft} setSlotLabelDraft={setSlotLabelDraft} />
                 )
                 const g = item as FieldGroup
                 return (
@@ -5460,7 +6589,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
                     allFields={allFields}
                     getColSpan={getColSpan}
                     onColSpan={(f, span) => patchField(f, { col_span: span })}
-                    onToggleType={() => patchTypeMut.mutate({ id: g.id, type: g.type === 'tab' ? 'section' : 'tab' })}
+                    onToggleType={() => patchTypeMut.mutate({ id: g.id, type: g.type === 'section' ? 'tab' : g.type === 'tab' ? 'metadata' : 'section' })}
                     onDelete={() => { if (confirm(`Delete "${g.label}"? Fields will be unassigned.`)) deleteMut.mutate(g.id) }}
                     onRename={(label) => renameMut.mutate({ id: g.id, label })}
                     onIconChange={(icon) => iconMut.mutate({ id: g.id, icon })}
@@ -5468,6 +6597,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
                     getFriendlyType={friendlyType}
                     getFieldSettings={getFieldSettings}
                     onFieldSettings={handleFieldSettings}
+                    getM2OFields={getM2OFields}
+                    getDependencyConfig={getDependencyConfig}
+                    getRelatedCollection={getRelatedCollection}
                     onUnassign={handleUnassign}
                   />
                 )
@@ -5482,6 +6614,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
         )}
 
 
+
         </div>{/* end main area */}
       </div>{/* end flex row */}
 
@@ -5494,6 +6627,26 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
             isDragging
           />
         )}
+        {activeGroupId && (() => {
+          if (activeGroupId.startsWith('slot:')) {
+            const key = activeGroupId.replace('slot:', '') as SlotKey
+            const label = slots[key].label_override?.trim() || SLOT_META[key].defaultLabel
+            return (
+              <div className='flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-md text-[12px] font-medium text-slate-700 w-48'>
+                <GripVertical className='h-3.5 w-3.5 text-slate-300 shrink-0' />
+                {label}
+              </div>
+            )
+          }
+          const key = activeGroupId.replace('group:', '')
+          const label = key === '__ungrouped__' ? 'Ungrouped' : (groups.find(g => g.key === key)?.label ?? key)
+          return (
+            <div className='flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-md text-[12px] font-medium text-slate-700 w-48'>
+              <GripVertical className='h-3.5 w-3.5 text-slate-300 shrink-0' />
+              {label}
+            </div>
+          )
+        })()}
       </DragOverlay>
     </DndContext>
   )

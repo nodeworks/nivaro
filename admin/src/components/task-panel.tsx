@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, ChevronsUpDown, ClipboardList, Plus, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -99,8 +99,26 @@ function AssigneeCombobox({
  * Per-record task list. Shows open tasks (with assignee + due date), a checkbox
  * to complete each one, an inline add form, and a collapsed completed section.
  */
-export function TaskPanel({ collection, item }: { collection: string; item: string }) {
+export function TaskPanel({
+  collection,
+  item,
+  title,
+  defaultExpanded
+}: {
+  collection: string
+  item: string
+  title?: string
+  defaultExpanded?: boolean
+}) {
   const qc = useQueryClient()
+  const [expanded, setExpanded] = useState(false)
+  const syncedFromProp = useRef(false)
+  useEffect(() => {
+    if (!syncedFromProp.current && defaultExpanded !== undefined) {
+      syncedFromProp.current = true
+      setExpanded(defaultExpanded)
+    }
+  }, [defaultExpanded])
   const [adding, setAdding] = useState(false)
   const [showCompleted, setShowCompleted] = useState(false)
   const [newTitle, setNewTitle] = useState('')
@@ -169,32 +187,25 @@ export function TaskPanel({ collection, item }: { collection: string; item: stri
   const now = Date.now()
 
   return (
-    <Card>
-      <CardHeader className='pb-2'>
-        <div className='flex items-center justify-between'>
-          <CardTitle className='text-sm font-medium text-slate-500 flex items-center gap-1.5'>
-            <ClipboardList className='h-3.5 w-3.5' />
-            Tasks
-            {openTasks.length > 0 && (
-              <span className='ml-0.5 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
-                {openTasks.length}
-              </span>
-            )}
-          </CardTitle>
+    <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
+      <button type='button' onClick={() => setExpanded(v => !v)}
+        className='flex w-full items-center gap-2 px-4 py-2.5'>
+        <ClipboardList className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+        <span className='text-[12px] font-semibold text-slate-500'>{title || 'Tasks'}</span>
+        {!expanded && openTasks.length > 0 && (
+          <span className='ml-1 text-[11px] text-slate-400'>{openTasks.length} open</span>
+        )}
+        <ChevronDown className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`} />
+      </button>
+      {expanded && <div className='border-t border-slate-100'>
+        <div className='flex items-center justify-between px-4 py-2'>
           {!adding && (
-            <Button
-              size='sm'
-              variant='outline'
-              className='h-7 text-[12px]'
-              onClick={() => setAdding(true)}
-            >
-              <Plus className='mr-1 h-3.5 w-3.5' />
-              Add task
+            <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding(true)}>
+              <Plus className='mr-1 h-3.5 w-3.5' />Add task
             </Button>
           )}
         </div>
-      </CardHeader>
-      <CardContent className='space-y-3'>
+        <div className='space-y-3 px-4 pb-4'>
         {openTasks.length === 0 && !adding && (
           <p className='py-1 text-[13px] text-slate-400'>No open tasks</p>
         )}
@@ -324,7 +335,8 @@ export function TaskPanel({ collection, item }: { collection: string; item: stri
             )}
           </div>
         )}
-      </CardContent>
-    </Card>
+        </div>
+      </div>}
+    </div>
   )
 }

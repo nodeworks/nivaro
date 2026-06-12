@@ -41,6 +41,9 @@ export type {
   ComponentOverrides
 } from './types'
 
+// SDK re-exports (types useful in form consumers)
+export type { CascadeFilterRule, FieldDependencyConfig } from '@nivaro/sdk'
+
 // Layout hooks
 export {
   useFieldState,

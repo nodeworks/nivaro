@@ -422,12 +422,26 @@ export interface CollectionLayout {
   is_active: boolean | number
   sort: number
   created_at: string
+  // Layout behaviour
+  tab_mode?: 'tabs' | 'steps'
+  validate_before_next?: boolean | number
+  summary_enabled?: boolean | number
+  summary_show_all?: boolean | number
+  ai_enabled?: boolean | number
+  disable_comments?: boolean | number
+  disable_tasks?: boolean | number
+  // Conditional layout: only activates for users with these roles
+  conditions?: { role_ids?: string[] } | null
 }
 
 export interface LayoutAssignment {
   field: string
   group_key: string | null
   sort: number
+  // Slot sentinel fields (present when field is __pipeline__, __comments__, __tasks__)
+  label_override?: string | null
+  is_visible?: boolean | number
+  default_expanded?: boolean | number
 }
 
 export interface LayoutGroup {
@@ -435,11 +449,24 @@ export interface LayoutGroup {
   collection: string
   key: string
   label: string
-  type: 'section' | 'tab'
+  type: 'section' | 'tab' | 'metadata'
   icon: string | null
   sort: number
   is_collapsed: boolean | number
   layout_id: number
+}
+
+export type PageSlotKey = '__pipeline__' | '__comments__' | '__tasks__'
+
+/** Check if an assignment is a page slot sentinel. */
+export function isPageSlot(
+  assignment: LayoutAssignment
+): assignment is LayoutAssignment & { field: PageSlotKey } {
+  return (
+    assignment.field === '__pipeline__' ||
+    assignment.field === '__comments__' ||
+    assignment.field === '__tasks__'
+  )
 }
 
 /** List all layouts for a collection. */
@@ -477,4 +504,53 @@ export function activateLayout(layoutId: number): Command<{ data: CollectionLayo
 /** Clone a layout under a new name. */
 export function cloneLayout(layoutId: number, name: string): Command<{ data: CollectionLayout }> {
   return cmd('POST', `/collection-layouts/${layoutId}/clone`, undefined, { name })
+}
+
+/** Create a new layout for a collection. */
+export function createCollectionLayout(
+  collection: string,
+  name: string
+): Command<{ data: CollectionLayout }> {
+  return cmd('POST', '/collection-layouts', undefined, { collection, name })
+}
+
+/** Update layout behaviour/metadata. */
+export function updateCollectionLayout(
+  layoutId: number,
+  patch: Partial<
+    Pick<
+      CollectionLayout,
+      | 'name'
+      | 'sort'
+      | 'tab_mode'
+      | 'validate_before_next'
+      | 'summary_enabled'
+      | 'summary_show_all'
+      | 'ai_enabled'
+      | 'disable_comments'
+      | 'disable_tasks'
+      | 'conditions'
+    >
+  >
+): Command<{ data: CollectionLayout }> {
+  return cmd('PATCH', `/collection-layouts/${layoutId}`, undefined, patch)
+}
+
+export function deleteCollectionLayout(layoutId: number): Command<void> {
+  return cmd('DELETE', `/collection-layouts/${layoutId}`)
+}
+
+/** Bulk-replace a layout's field→group assignments (and slot sentinels). */
+export function updateLayoutAssignments(
+  layoutId: number,
+  assignments: Array<{
+    field: string
+    group_key: string | null
+    sort: number
+    label_override?: string | null
+    is_visible?: boolean
+    default_expanded?: boolean
+  }>
+): Command<{ data: LayoutAssignment[] }> {
+  return cmd('PUT', `/collection-layouts/${layoutId}/assignments`, undefined, { assignments })
 }
