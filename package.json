@@ -6,7 +6,7 @@
     "dev": "concurrently --kill-others-on-fail -n redis,inngest,api,admin -c cyan,magenta,blue,green \"pnpm dev:redis\" \"wait-on tcp:6379 && pnpm dev:inngest\" \"wait-on tcp:6379 && pnpm dev:api\" \"pnpm --filter @nivaro/admin dev\"",
     "dev:api": "pnpm --filter @nivaro/api dev",
     "dev:admin": "pnpm --filter @nivaro/admin dev",
-    "dev:redis": "docker run --rm -p 6379:6379 redis:7-alpine",
+    "dev:redis": "docker run --rm -p 6379:6379 -v nivaro_redis_data:/data redis:7-alpine redis-server --appendonly yes",
     "dev:inngest": "npx inngest-cli@latest dev -u http://localhost:3055/api/inngest",
     "dev:docker": "docker compose up --build",
     "dev:docker:down": "docker compose down",

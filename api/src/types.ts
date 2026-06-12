@@ -65,6 +65,7 @@ export interface CMSCollection {
   accountability: string
   versioning: boolean
   workspace: string | null
+  picker_filter: unknown | null
   created_at: Date
   updated_at: Date
 }

@@ -1238,6 +1238,117 @@ const { data: collections } = await nivaro.request(readCollections())
 
 ---
 
+## SDK — Layouts
+
+Collection layouts control how the item editor arranges fields into named groups (sections/tabs), where the workflow/comments/tasks panels sit, and per-layout behaviour like step validation, summary, and AI assist. A collection can have many layouts but only one **active** layout at a time — and conditional layouts can activate automatically based on the current user's role.
+
+```typescript
+import {
+  readCollectionLayouts, readActiveLayout,
+  createCollectionLayout, updateCollectionLayout, updateLayoutAssignments,
+  activateLayout, cloneLayout, deleteCollectionLayout,
+  isPageSlot,
+} from '@nivaro/sdk'
+
+// List layouts for a collection
+const layouts = await cms.request(readCollectionLayouts('projects'))
+// layouts.data → CollectionLayout[]
+
+// Get the active layout (resolves by current user's role if conditional layouts are configured)
+const { layout, groups, assignments } = (await cms.request(readActiveLayout('projects'))).data
+// layout      → CollectionLayout
+// groups      → LayoutGroup[]  — section / tab / metadata definitions
+// assignments → LayoutAssignment[] — field → group placement + page slot sentinels
+
+// Create a new layout
+const layout = await cms.request(createCollectionLayout('projects', 'Reviewer Layout'))
+
+// Update layout settings
+await cms.request(updateCollectionLayout(layout.data.id, {
+  tab_mode: 'steps',              // 'tabs' | 'steps' — render tab groups as a stepper
+  validate_before_next: true,    // block advancing to the next step until valid
+  summary_enabled: true,         // show a review summary step
+  ai_enabled: false,             // toggle AI assist for this layout
+  // Restrict to specific roles — see Conditional layouts below:
+  conditions: { role_ids: ['role-uuid-1', 'role-uuid-2'] },
+}))
+
+// Update field assignments (positioning, page slots) — bulk replace
+await cms.request(updateLayoutAssignments(layout.data.id, [
+  { field: 'title', group_key: 'basic', sort: 0 },
+  { field: '__pipeline__', group_key: null, sort: 10, is_visible: true, default_expanded: false },
+  { field: '__comments__', group_key: null, sort: 11, label_override: 'Notes', is_visible: true, default_expanded: true },
+]))
+
+// Activate a layout (deactivates all others for the collection)
+await cms.request(activateLayout(layout.data.id))
+
+// Clone a layout under a new name
+await cms.request(cloneLayout(layout.data.id, 'Layout Copy'))
+
+// Delete a layout
+await cms.request(deleteCollectionLayout(layout.data.id))
+```
+
+> **Note:** `updateLayoutAssignments` is a **bulk replace** — send the full desired set of assignments for the layout, not a partial patch. Omitted fields fall back to their `group_key` on `nivaro_fields`.
+
+#### Page slot sentinels
+
+Three reserved `field` values are **page slot sentinels** rather than real fields — they control the placement and behaviour of the item editor's side panels:
+
+| Sentinel | Panel | Notes |
+| --- | --- | --- |
+| `__pipeline__` | Workflow / Pipeline panel | Positioned by `sort` alongside groups. |
+| `__comments__` | Comments & mentions | `label_override` renames the panel header. |
+| `__tasks__` | Tasks panel | Toggle visibility with `is_visible`. |
+
+Each slot assignment supports `is_visible` (show/hide the panel), `default_expanded` (initial open state), and `label_override` (custom header text). Use the exported `isPageSlot()` type guard to distinguish slots from data fields when iterating assignments:
+
+```typescript
+import { isPageSlot } from '@nivaro/sdk'
+
+for (const a of assignments) {
+  if (isPageSlot(a)) {
+    // a.field is narrowed to '__pipeline__' | '__comments__' | '__tasks__'
+    renderPanel(a.field, { visible: a.is_visible, expanded: a.default_expanded })
+  } else {
+    renderField(a.field, a.group_key)
+  }
+}
+```
+
+#### Conditional layouts
+
+Setting `conditions: { role_ids: [...] }` on a layout makes it activate **only for users whose role is in the list**. When multiple layouts are eligible, the server picks the best-matching one automatically — so `readActiveLayout(collection)` returns the correct layout for the requesting user without any client-side role logic. A layout with no `conditions` (or `conditions: null`) is the unconditional default.
+
+#### LayoutGroup type
+
+Each group in `groups` has a `type`:
+
+| `type` | Rendering |
+| --- | --- |
+| `section` | A collapsible section of fields. |
+| `tab` | A tab (or a step when the layout's `tab_mode` is `'steps'`). |
+| `metadata` | A read-only group — its fields are displayed but not editable. |
+
+#### Field placeholder
+
+`FieldConfig.placeholder` (from `readFieldConfig` / the form schema) sets the input placeholder text shown in an empty field. It is independent of the field label and any default value.
+
+| Function | Route | Auth |
+| --- | --- | --- |
+| readCollectionLayouts(collection) | GET /collection-layouts?collection= | Authenticated |
+| readActiveLayout(collection) | GET /collection-layouts/active?collection= | Authenticated |
+| createCollectionLayout(collection, name) | POST /collection-layouts | Admin |
+| updateCollectionLayout(id, patch) | PATCH /collection-layouts/:id | Admin |
+| updateLayoutAssignments(id, assignments) | PUT /collection-layouts/:id/assignments | Admin |
+| activateLayout(id) | POST /collection-layouts/:id/activate | Admin |
+| cloneLayout(id, name) | POST /collection-layouts/:id/clone | Admin |
+| deleteCollectionLayout(id) | DELETE /collection-layouts/:id | Admin |
+| isPageSlot(assignment) | — | Client-side type guard |
+
+---
+
 ## SDK — Blackout Dates
 
 Blackout dates block scheduling on specific calendar days. Scoped per business unit or left global.
@@ -1607,46 +1718,6 @@ const check = await nivaro.request(aiValidate('articles', { title: 'Draft post' 
 const feeds = await nivaro.request(listWidgetFeeds());
 ```
 
-
----
-
-## Testing
-
-Nivaro ships three test layers. Each can be run independently.
-
-### E2E — Playwright + axe-core (`tests/e2e/`)
-
-Requires the app running locally (`pnpm dev`).
-
-```bash
-pnpm test:e2e
-```
-
-| File | What it covers |
-| --- | --- |
-| `login.spec.ts` | OIDC login flow — redirects, session cookie, post-login landing |
-| `public.spec.ts` | Public submission form rendering and submit |
-| `navigation.spec.ts` | Sidebar nav, route transitions, 404 handling |
-| `a11y.spec.ts` | WCAG 2.2 accessibility audit on key pages via axe-core |
-| `api-health.spec.ts` | `/api/health` endpoint returns 200 with expected shape |
-
-### API unit + integration — Vitest (`api/src/test/`)
-
-Runs against an in-process Fastify instance; no live database required for unit tests.
-
-```bash
-pnpm --filter @nivaro/api test
-```
-
-Covers route handlers, service logic, hook wiring, and migration helpers.
-
-### Admin unit — Vitest + Testing Library (`admin/src/test/`)
-
-Component-level tests for React pages and hooks.
-
-```bash
-pnpm --filter @nivaro/admin test
-```
 
 ---
 

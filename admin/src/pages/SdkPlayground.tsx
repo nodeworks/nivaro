@@ -56,7 +56,7 @@ type CmdDef = {
   name: string
   group: string
   description: string
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   path: string // `{param}` placeholders
   params: ParamDef[]
 }
@@ -1023,6 +1023,52 @@ const COMMANDS: CmdDef[] = [
       p('id', 'number', 'path', true, '1'),
       p('name', 'string', 'body', true, 'Compact copy')
     ]
+  },
+  {
+    name: 'createCollectionLayout',
+    group: 'Layouts',
+    description: 'Create a new layout for a collection.',
+    method: 'POST',
+    path: '/collection-layouts',
+    params: [pc('body', true, 'articles'), p('name', 'string', 'body', true, 'Reviewer Layout')]
+  },
+  {
+    name: 'updateCollectionLayout',
+    group: 'Layouts',
+    description:
+      'Update layout settings — tab_mode, validate_before_next, summary_enabled, ai_enabled, conditions.',
+    method: 'PATCH',
+    path: '/collection-layouts/{id}',
+    params: [
+      p('id', 'number', 'path', true, '1'),
+      p('data', 'json', 'body-raw', true, '{ "tab_mode": "steps", "validate_before_next": true }')
+    ]
+  },
+  {
+    name: 'updateLayoutAssignments',
+    group: 'Layouts',
+    description:
+      'Bulk-replace a layout’s field→group assignments and page slot sentinels (__pipeline__ / __comments__ / __tasks__).',
+    method: 'PUT',
+    path: '/collection-layouts/{id}/assignments',
+    params: [
+      p('id', 'number', 'path', true, '1'),
+      p(
+        'assignments',
+        'json',
+        'body',
+        true,
+        '[{ "field": "title", "group_key": "basic", "sort": 0 }]'
+      )
+    ]
+  },
+  {
+    name: 'deleteCollectionLayout',
+    group: 'Layouts',
+    description: 'Delete a layout.',
+    method: 'DELETE',
+    path: '/collection-layouts/{id}',
+    params: [p('id', 'number', 'path', true, '1')]
   }
 ]
 
@@ -1033,6 +1079,7 @@ const METHOD_CLS: Record<CmdDef['method'], string> = {
   POST: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800',
   PATCH:
     'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800',
+  PUT: 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/20 dark:text-violet-400 dark:border-violet-800',
   DELETE:
     'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800'
 }

@@ -1,0 +1,1611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nivaro Cloud — SaaS Launch Plan</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --cyan: #00ceff;
+  --navy: #0b1f3a;
+  --navy-mid: #132d52;
+  --navy-light: #1e3f6e;
+  --slate: #64748b;
+  --slate-light: #94a3b8;
+  --border: #e2e8f0;
+  --bg: #f8fafc;
+  --green: #10b981;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --purple: #8b5cf6;
+  --azure: #0078d4;
+  --aws: #ff9900;
+  --gcp: #4285f4;
+  --indie: #10b981;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', -apple-system, sans-serif;
+  background: #e2e8f0;
+  color: #1e293b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.page {
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto 20px;
+  background: white;
+  box-shadow: 0 4px 24px rgba(0,0,0,.1);
+  position: relative;
+  overflow: hidden;
+}
+
+@media print {
+  body { background: white; }
+  .page { margin: 0; box-shadow: none; page-break-after: always; width: 100%; }
+  .no-print { display: none !important; }
+  .provider-bar { display: none !important; }
+}
+
+/* ── PROVIDER FILTER BAR ── */
+.provider-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  background: var(--navy);
+  border-bottom: 2px solid rgba(0,206,255,.2);
+  padding: 10px 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 1000;
+  box-shadow: 0 2px 12px rgba(0,0,0,.3);
+}
+
+.provider-bar-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255,255,255,.5);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  white-space: nowrap;
+}
+
+.provider-btn {
+  padding: 5px 14px;
+  border-radius: 20px;
+  border: 1.5px solid rgba(255,255,255,.15);
+  background: transparent;
+  color: rgba(255,255,255,.6);
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.provider-btn:hover { border-color: rgba(255,255,255,.35); color: white; }
+.provider-btn.active-all { border-color: var(--cyan); color: var(--cyan); background: rgba(0,206,255,.1); }
+.provider-btn.active-azure { border-color: var(--azure); color: var(--azure); background: rgba(0,120,212,.12); }
+.provider-btn.active-aws { border-color: var(--aws); color: var(--aws); background: rgba(255,153,0,.1); }
+.provider-btn.active-gcp { border-color: var(--gcp); color: var(--gcp); background: rgba(66,133,244,.1); }
+.provider-btn.active-indie { border-color: var(--indie); color: var(--indie); background: rgba(16,185,129,.1); }
+
+.provider-btn .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+}
+
+.dot-azure { background: var(--azure); }
+.dot-aws { background: var(--aws); }
+.dot-gcp { background: var(--gcp); }
+.dot-indie { background: var(--indie); }
+.dot-all { background: var(--cyan); }
+
+.provider-sep { width: 1px; height: 20px; background: rgba(255,255,255,.1); }
+
+.print-btn {
+  margin-left: auto;
+  padding: 5px 16px;
+  border-radius: 6px;
+  background: rgba(0,206,255,.12);
+  border: 1px solid rgba(0,206,255,.3);
+  color: var(--cyan);
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.print-btn:hover { background: rgba(0,206,255,.2); }
+
+body.showing-all .pages-wrap { margin-top: 52px; }
+body.showing-azure .pages-wrap { margin-top: 52px; }
+body.showing-aws .pages-wrap { margin-top: 52px; }
+body.showing-gcp .pages-wrap { margin-top: 52px; }
+body.showing-indie .pages-wrap { margin-top: 52px; }
+.pages-wrap { margin-top: 52px; padding: 20px 0; }
+
+/* Provider-specific row dimming */
+.provider-row { transition: opacity .2s; }
+
+body.showing-azure .provider-row.aws,
+body.showing-azure .provider-row.gcp,
+body.showing-azure .provider-row.indie { opacity: .25; }
+
+body.showing-aws .provider-row.azure,
+body.showing-aws .provider-row.gcp,
+body.showing-aws .provider-row.indie { opacity: .25; }
+
+body.showing-gcp .provider-row.azure,
+body.showing-gcp .provider-row.aws,
+body.showing-gcp .provider-row.indie { opacity: .25; }
+
+body.showing-indie .provider-row.azure,
+body.showing-indie .provider-row.aws,
+body.showing-indie .provider-row.gcp { opacity: .25; }
+
+/* ── COVER ── */
+.cover {
+  background: linear-gradient(145deg, var(--navy) 0%, var(--navy-mid) 60%, #0d2847 100%);
+  color: white;
+  padding: 56px;
+  display: flex;
+  flex-direction: column;
+  min-height: 297mm;
+  position: relative;
+}
+
+.cover::before {
+  content: '';
+  position: absolute; top: -100px; right: -100px;
+  width: 500px; height: 500px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(0,206,255,.1) 0%, transparent 70%);
+}
+
+.cover-logo { display: flex; align-items: center; gap: 10px; }
+.cover-logo-mark {
+  width: 38px; height: 38px;
+  background: linear-gradient(135deg, var(--cyan), #0098cc);
+  border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 17px; color: var(--navy);
+}
+.cover-logo-name { font-size: 21px; font-weight: 700; letter-spacing: -.5px; }
+
+.cover-badge {
+  display: inline-block;
+  background: rgba(0,206,255,.15);
+  border: 1px solid rgba(0,206,255,.3);
+  color: var(--cyan);
+  padding: 4px 14px;
+  border-radius: 20px;
+  font-size: 11px; font-weight: 700;
+  letter-spacing: .6px; text-transform: uppercase;
+  margin: 52px 0 20px;
+  width: fit-content;
+}
+
+.cover-title {
+  font-size: 44px; font-weight: 800;
+  line-height: 1.1; letter-spacing: -2px;
+  margin-bottom: 18px;
+}
+.cover-title span { color: var(--cyan); }
+
+.cover-subtitle {
+  font-size: 15px; color: rgba(255,255,255,.55);
+  max-width: 480px; line-height: 1.65; margin-bottom: 44px;
+}
+
+.cover-provider-chips {
+  display: flex; gap: 10px; margin-bottom: 44px; flex-wrap: wrap;
+}
+
+.provider-chip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 12px; font-weight: 600;
+}
+.provider-chip.azure { background: rgba(0,120,212,.2); border: 1px solid rgba(0,120,212,.4); color: #60a5fa; }
+.provider-chip.aws { background: rgba(255,153,0,.15); border: 1px solid rgba(255,153,0,.3); color: #fcd34d; }
+.provider-chip.gcp { background: rgba(66,133,244,.15); border: 1px solid rgba(66,133,244,.35); color: #93c5fd; }
+.provider-chip.indie { background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.3); color: #6ee7b7; }
+.provider-chip .chip-dot { width: 8px; height: 8px; border-radius: 50%; }
+.provider-chip.azure .chip-dot { background: #60a5fa; }
+.provider-chip.aws .chip-dot { background: #fcd34d; }
+.provider-chip.gcp .chip-dot { background: #93c5fd; }
+.provider-chip.indie .chip-dot { background: #6ee7b7; }
+
+.cover-toc {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 44px;
+}
+.cover-toc-item {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; color: rgba(255,255,255,.6);
+}
+.cover-toc-num {
+  width: 22px; height: 22px;
+  background: rgba(0,206,255,.12);
+  border: 1px solid rgba(0,206,255,.22);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: var(--cyan); flex-shrink: 0;
+}
+
+.cover-footer {
+  margin-top: auto;
+  display: flex; justify-content: space-between; align-items: center;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255,255,255,.1);
+  font-size: 11px; color: rgba(255,255,255,.3);
+}
+
+/* ── CONTENT PAGES ── */
+.cp { padding: 44px 52px; min-height: 297mm; display: flex; flex-direction: column; }
+
+.ph {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 32px;
+}
+.ph-logo { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--navy); }
+.ph-lm {
+  width: 22px; height: 22px;
+  background: linear-gradient(135deg, var(--cyan), #0098cc);
+  border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 9px; color: var(--navy);
+}
+.ph-sec { font-size: 11px; color: var(--slate-light); font-weight: 500; text-transform: uppercase; letter-spacing: .5px; }
+
+.eyebrow { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--cyan); margin-bottom: 6px; }
+.sec-title { font-size: 22px; font-weight: 800; color: var(--navy); letter-spacing: -.5px; margin-bottom: 6px; line-height: 1.2; }
+.sec-desc { font-size: 13px; color: var(--slate); margin-bottom: 24px; max-width: 560px; line-height: 1.6; }
+
+h3 { font-size: 14px; font-weight: 700; color: var(--navy); margin: 20px 0 10px; }
+h3:first-of-type { margin-top: 0; }
+p { margin-bottom: 10px; color: #374151; line-height: 1.65; }
+
+/* ── CALLOUT ── */
+.callout {
+  border-radius: 10px; padding: 14px 18px; margin: 14px 0;
+  display: flex; gap: 12px; align-items: flex-start;
+}
+.ci { font-size: 17px; line-height: 1; flex-shrink: 0; margin-top: 1px; }
+.cb { flex: 1; }
+.ct { font-weight: 700; font-size: 12px; margin-bottom: 3px; }
+.cx { font-size: 12px; line-height: 1.55; margin: 0; }
+.callout.info { background: #eff6ff; border-left: 3px solid #3b82f6; }
+.callout.info .ct { color: #1d4ed8; } .callout.info .cx { color: #1e40af; }
+.callout.success { background: #f0fdf4; border-left: 3px solid var(--green); }
+.callout.success .ct { color: #065f46; } .callout.success .cx { color: #047857; }
+.callout.warning { background: #fffbeb; border-left: 3px solid var(--amber); }
+.callout.warning .ct { color: #92400e; } .callout.warning .cx { color: #b45309; }
+.callout.key { background: linear-gradient(135deg, #f0f9ff, #e0f2fe); border-left: 3px solid var(--cyan); }
+.callout.key .ct { color: #0369a1; } .callout.key .cx { color: #0284c7; }
+
+/* ── TABLE ── */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 12px; }
+th {
+  background: var(--navy); color: white; padding: 9px 13px;
+  text-align: left; font-weight: 600; font-size: 11px; letter-spacing: .3px;
+}
+th:first-child { border-radius: 8px 0 0 0; } th:last-child { border-radius: 0 8px 0 0; }
+td { padding: 8px 13px; border-bottom: 1px solid #f1f5f9; color: #374151; }
+tr:last-child td { border-bottom: none; }
+tr:nth-child(even) td { background: #f8fafc; }
+.tw { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 14px 0; }
+
+/* ── BADGE ── */
+.badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 700;
+}
+.b-azure { background: rgba(0,120,212,.12); color: #0078d4; border: 1px solid rgba(0,120,212,.25); }
+.b-aws { background: rgba(255,153,0,.12); color: #b45309; border: 1px solid rgba(255,153,0,.3); }
+.b-gcp { background: rgba(66,133,244,.12); color: #1d4ed8; border: 1px solid rgba(66,133,244,.25); }
+.b-indie { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+.b-green { background: #dcfce7; color: #15803d; }
+.b-amber { background: #fef3c7; color: #b45309; }
+.b-red { background: #fee2e2; color: #b91c1c; }
+.b-cyan { background: rgba(0,206,255,.1); color: #0284c7; border: 1px solid rgba(0,206,255,.3); }
+.b-navy { background: var(--navy); color: white; }
+
+/* ── PROVIDER SECTION HEADERS ── */
+.provider-section {
+  border-radius: 12px;
+  margin: 14px 0;
+  overflow: hidden;
+  border: 1.5px solid;
+}
+.provider-section.azure { border-color: rgba(0,120,212,.3); }
+.provider-section.aws { border-color: rgba(255,153,0,.35); }
+.provider-section.gcp { border-color: rgba(66,133,244,.3); }
+.provider-section.indie { border-color: rgba(16,185,129,.3); }
+
+.provider-section-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px;
+  font-size: 12px; font-weight: 700;
+}
+.provider-section.azure .provider-section-head { background: rgba(0,120,212,.07); color: #0078d4; }
+.provider-section.aws .provider-section-head { background: rgba(255,153,0,.07); color: #b45309; }
+.provider-section.gcp .provider-section-head { background: rgba(66,133,244,.07); color: #1d4ed8; }
+.provider-section.indie .provider-section-head { background: rgba(16,185,129,.07); color: #047857; }
+
+.provider-section-body { padding: 14px 16px; background: white; }
+
+.provider-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 7px; border-radius: 4px;
+  font-size: 10px; font-weight: 700;
+  letter-spacing: .3px;
+}
+.pt-azure { background: rgba(0,120,212,.1); color: #0078d4; }
+.pt-aws { background: rgba(255,153,0,.12); color: #92400e; }
+.pt-gcp { background: rgba(66,133,244,.1); color: #1d4ed8; }
+.pt-indie { background: rgba(16,185,129,.1); color: #047857; }
+.pt-rec { background: var(--cyan); color: var(--navy); }
+
+/* ── ARCH DIAGRAM ── */
+.arch {
+  background: var(--navy); border-radius: 12px;
+  padding: 24px; margin: 16px 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.arch-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: stretch; }
+.arch-box { border-radius: 8px; padding: 10px 14px; border: 1px solid rgba(255,255,255,.12); flex: 1; }
+.arch-box-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; margin-bottom: 3px; }
+.arch-box-name { font-size: 12px; font-weight: 600; color: white; line-height: 1.3; }
+.arch-box-sub { font-size: 10px; color: rgba(255,255,255,.4); margin-top: 2px; font-family: 'Inter', sans-serif; }
+.arch-box.c-cyan { background: rgba(0,206,255,.1); border-color: rgba(0,206,255,.28); } .arch-box.c-cyan .arch-box-lbl { color: var(--cyan); }
+.arch-box.c-blue { background: rgba(59,130,246,.1); border-color: rgba(59,130,246,.28); } .arch-box.c-blue .arch-box-lbl { color: #60a5fa; }
+.arch-box.c-green { background: rgba(16,185,129,.08); border-color: rgba(16,185,129,.28); } .arch-box.c-green .arch-box-lbl { color: #34d399; }
+.arch-box.c-purple { background: rgba(139,92,246,.08); border-color: rgba(139,92,246,.28); } .arch-box.c-purple .arch-box-lbl { color: #a78bfa; }
+.arch-box.c-amber { background: rgba(245,158,11,.08); border-color: rgba(245,158,11,.28); } .arch-box.c-amber .arch-box-lbl { color: #fcd34d; }
+.arch-arrow { display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,.25); font-size: 14px; padding: 0 3px; flex-shrink: 0; }
+.arch-lbl { font-size: 11px; font-weight: 600; color: rgba(255,255,255,.45); text-transform: uppercase; letter-spacing: .5px; font-family: 'Inter', sans-serif; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.arch-lbl::after { content: ''; flex: 1; height: 1px; background: rgba(255,255,255,.07); }
+.arch-conn { display: flex; justify-content: center; color: rgba(255,255,255,.18); font-size: 16px; margin: 3px 0; line-height: 1; }
+
+/* ── SERVICE MAP TABLE ── */
+.svc-table table th:first-child { border-radius: 8px 0 0 0; }
+td.svc-azure { color: #0078d4; font-weight: 500; font-size: 11px; }
+td.svc-aws { color: #92400e; font-weight: 500; font-size: 11px; }
+td.svc-gcp { color: #1d4ed8; font-weight: 500; font-size: 11px; }
+td.svc-indie { color: #047857; font-weight: 500; font-size: 11px; }
+
+/* ── CODE BLOCK ── */
+.code {
+  background: var(--navy); border-radius: 10px;
+  padding: 16px 18px; margin: 14px 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: #e2e8f0; line-height: 1.7;
+}
+.code .cm { color: #64748b; }
+.code .kw { color: #7dd3fc; }
+.code .st { color: #86efac; }
+.code .fn { color: var(--cyan); }
+.code .tp { color: #f0abfc; }
+
+/* ── FLOW STEPS ── */
+.flow { display: flex; flex-direction: column; gap: 0; margin: 14px 0; }
+.fs { display: flex; gap: 14px; }
+.fsl { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; width: 30px; }
+.fsn { width: 30px; height: 30px; background: var(--navy); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: var(--cyan); flex-shrink: 0; z-index: 1; }
+.fsl-line { flex: 1; width: 1px; background: linear-gradient(to bottom, var(--border), transparent); margin-top: 4px; min-height: 14px; }
+.fc { padding-bottom: 18px; flex: 1; padding-top: 3px; }
+.ft { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 3px; }
+.fd { font-size: 12px; color: var(--slate); line-height: 1.5; margin: 0; }
+.fcode { background: #f1f5f9; border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin-top: 6px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--navy); line-height: 1.5; }
+
+/* ── PRICING ── */
+.pgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0; }
+.pcard { border: 1.5px solid var(--border); border-radius: 12px; padding: 16px 14px; background: white; position: relative; }
+.pcard.feat { border-color: var(--cyan); background: linear-gradient(160deg, #f0f9ff, white); }
+.pcard.feat::before { content: 'POPULAR'; position: absolute; top: -9px; left: 50%; transform: translateX(-50%); background: var(--cyan); color: var(--navy); font-size: 9px; font-weight: 800; letter-spacing: .7px; padding: 2px 10px; border-radius: 10px; white-space: nowrap; }
+.ptier { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--slate); margin-bottom: 7px; }
+.pprice { font-size: 26px; font-weight: 800; color: var(--navy); letter-spacing: -1px; line-height: 1; margin-bottom: 2px; }
+.pprice span { font-size: 13px; font-weight: 500; color: var(--slate); letter-spacing: 0; }
+.pdesc { font-size: 11px; color: var(--slate); margin-bottom: 12px; line-height: 1.4; }
+.pf { font-size: 11px; color: #374151; padding: 3px 0; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #f8fafc; }
+.pf::before { content: '✓'; color: var(--green); font-weight: 700; font-size: 10px; flex-shrink: 0; }
+
+/* ── TIMELINE ── */
+.tl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin: 14px 0; position: relative; }
+.tl::before { content: ''; position: absolute; top: 19px; left: 10%; right: 10%; height: 2px; background: linear-gradient(to right, var(--cyan), rgba(0,206,255,.15)); }
+.tli { padding: 0 8px; }
+.tld { width: 20px; height: 20px; border-radius: 50%; background: var(--navy); border: 2px solid var(--cyan); margin: 0 auto 10px; position: relative; z-index: 1; }
+.tlph { text-align: center; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: var(--cyan); margin-bottom: 3px; }
+.tllbl { text-align: center; font-size: 12px; font-weight: 700; color: var(--navy); margin-bottom: 6px; line-height: 1.2; }
+.tltasks { list-style: none; font-size: 11px; color: var(--slate); line-height: 1.5; }
+.tltasks li::before { content: '→ '; color: var(--cyan); }
+
+/* ── METRICS ── */
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0; }
+.metric { background: var(--navy); border-radius: 10px; padding: 14px; color: white; text-align: center; }
+.mv { font-size: 22px; font-weight: 800; color: var(--cyan); letter-spacing: -1px; line-height: 1; margin-bottom: 3px; }
+.ml { font-size: 10px; color: rgba(255,255,255,.45); text-transform: uppercase; letter-spacing: .4px; }
+
+/* ── 2-COL ── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 14px 0; }
+.ic { background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.ic h4 { font-size: 12px; font-weight: 700; color: var(--navy); margin-bottom: 9px; display: flex; align-items: center; gap: 7px; }
+.ic h4 span { width: 24px; height: 24px; background: var(--navy); border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+.ic ul { list-style: none; }
+.ic ul li { font-size: 12px; color: #475569; padding: 3px 0; border-bottom: 1px solid #f1f5f9; display: flex; gap: 6px; }
+.ic ul li:last-child { border-bottom: none; }
+.ic ul li::before { content: '·'; color: var(--cyan); font-weight: 800; flex-shrink: 0; }
+
+.divider { height: 1px; background: var(--border); margin: 20px 0; }
+
+.pf-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f1f5f9; font-size: 12px; }
+.pf-row:last-child { border-bottom: none; }
+
+.cost-total td { font-weight: 700 !important; background: var(--navy) !important; color: white !important; border: none; }
+.cost-total td .mv-inline { color: var(--cyan); }
+
+/* ── PAGE FOOTER ── */
+.pfoot { margin-top: auto; padding-top: 18px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: var(--slate-light); }
+
+/* ── PROVIDER COMPARISON VISUAL ── */
+.pcomp {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.pcomp-card {
+  border-radius: 12px;
+  padding: 16px;
+  border: 1.5px solid;
+  position: relative;
+}
+
+.pcomp-card.azure { border-color: rgba(0,120,212,.35); background: linear-gradient(160deg, rgba(0,120,212,.04), white); }
+.pcomp-card.aws { border-color: rgba(255,153,0,.35); background: linear-gradient(160deg, rgba(255,153,0,.04), white); }
+.pcomp-card.gcp { border-color: rgba(66,133,244,.35); background: linear-gradient(160deg, rgba(66,133,244,.04), white); }
+.pcomp-card.indie { border-color: rgba(16,185,129,.3); background: linear-gradient(160deg, rgba(16,185,129,.04), white); }
+
+.pcomp-rec {
+  position: absolute; top: -9px; right: 12px;
+  background: var(--cyan); color: var(--navy);
+  font-size: 9px; font-weight: 800; letter-spacing: .5px;
+  padding: 2px 8px; border-radius: 8px;
+}
+
+.pcomp-logo { font-size: 24px; margin-bottom: 8px; }
+.pcomp-name { font-size: 13px; font-weight: 800; margin-bottom: 3px; }
+.pcomp-card.azure .pcomp-name { color: #0078d4; }
+.pcomp-card.aws .pcomp-name { color: #b45309; }
+.pcomp-card.gcp .pcomp-name { color: #1d4ed8; }
+.pcomp-card.indie .pcomp-name { color: #047857; }
+.pcomp-tag { font-size: 10px; color: var(--slate); margin-bottom: 12px; }
+.pcomp-feature { font-size: 11px; padding: 2px 0; color: #374151; display: flex; align-items: center; gap: 5px; }
+.pcomp-feature.good::before { content: '✓'; color: var(--green); font-weight: 800; font-size: 10px; }
+.pcomp-feature.ok::before { content: '~'; color: var(--amber); font-weight: 800; font-size: 10px; }
+.pcomp-feature.bad::before { content: '✗'; color: var(--red); font-weight: 800; font-size: 10px; }
+
+.score-bar { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.score-label { font-size: 10px; font-weight: 700; color: var(--slate); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 5px; }
+.score-row { display: flex; gap: 6px; }
+.score-dot { width: 16px; height: 6px; border-radius: 3px; }
+.score-dot.filled.azure { background: #0078d4; }
+.score-dot.filled.aws { background: var(--aws); }
+.score-dot.filled.gcp { background: var(--gcp); }
+.score-dot.filled.indie { background: var(--indie); }
+.score-dot.empty { background: #e2e8f0; }
+
+code { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: #f1f5f9; padding: 1px 5px; border-radius: 3px; color: var(--navy); }
+</style>
+</head>
+<body class="showing-all">
+
+<!-- PROVIDER BAR -->
+<div class="provider-bar no-print">
+  <span class="provider-bar-label">Filter by Cloud</span>
+  <button class="provider-btn active-all" onclick="setProvider('all',this)"><span class="dot dot-all"></span>All Providers</button>
+  <div class="provider-sep"></div>
+  <button class="provider-btn" onclick="setProvider('azure',this)"><span class="dot dot-azure"></span>Azure</button>
+  <button class="provider-btn" onclick="setProvider('aws',this)"><span class="dot dot-aws"></span>AWS</button>
+  <button class="provider-btn" onclick="setProvider('gcp',this)"><span class="dot dot-gcp"></span>GCP</button>
+  <button class="provider-btn" onclick="setProvider('indie',this)"><span class="dot dot-indie"></span>Simple / Indie</button>
+  <button class="print-btn" onclick="window.print()">⬇ Save as PDF</button>
+</div>
+
+<div class="pages-wrap">
+
+<!-- ═══════════════════ PAGE 1 — COVER ═══════════════════ -->
+<div class="page">
+<div class="cover">
+  <div class="cover-logo">
+    <div class="cover-logo-mark">N</div>
+    <div class="cover-logo-name">Nivaro</div>
+  </div>
+  <div class="cover-badge">Cloud SaaS — Option A Plan</div>
+  <div class="cover-title">Launching Nivaro<br>as a <span>Cloud Product</span></div>
+  <div class="cover-subtitle">
+    Complete infrastructure, multi-tenancy, migration, pricing, and go-to-market plan
+    for Option A — dedicated database per tenant. Covers four cloud deployment paths.
+  </div>
+
+  <div class="cover-provider-chips">
+    <div class="provider-chip azure"><div class="chip-dot"></div>Microsoft Azure</div>
+    <div class="provider-chip aws"><div class="chip-dot"></div>Amazon AWS</div>
+    <div class="provider-chip gcp"><div class="chip-dot"></div>Google Cloud</div>
+    <div class="provider-chip indie"><div class="chip-dot"></div>Simple / Indie Stack</div>
+  </div>
+
+  <div class="cover-toc">
+    <div class="cover-toc-item"><div class="cover-toc-num">1</div>Cloud Provider Comparison</div>
+    <div class="cover-toc-item"><div class="cover-toc-num">2</div>Architecture Overview</div>
+    <div class="cover-toc-item"><div class="cover-toc-num">3</div>Database Strategy</div>
+    <div class="cover-toc-item"><div class="cover-toc-num">4</div>Provider Deep-Dives</div>
+    <div class="cover-toc-item"><div class="cover-toc-num">5</div>Tenant Provisioning</div>
+    <div class="cover-toc-item"><div class="cover-toc-num">6</div>Migration Strategy</div>
+    <div class="cover-toc-item"><div class="cover-toc-num">7</div>Pricing Model</div>
+    <div class="cover-toc-item"><div class="cover-toc-num">8</div>Cost Projections</div>
+    <div class="cover-toc-item"><div class="cover-toc-num">9</div>Launch Roadmap</div>
+    <div class="cover-toc-item"><div class="cover-toc-num">10</div>Operations & Security</div>
+  </div>
+
+  <div class="cover-footer">
+    <span>Confidential — Internal Planning Document</span>
+    <span>June 2026</span>
+  </div>
+</div>
+</div>
+
+
+<!-- ═══════════════════ PAGE 2 — PROVIDER COMPARISON ═══════════════════ -->
+<div class="page">
+<div class="cp">
+  <div class="ph">
+    <div class="ph-logo"><div class="ph-lm">N</div>Nivaro Cloud</div>
+    <div class="ph-sec">01 — Cloud Provider Comparison</div>
+  </div>
+
+  <div class="eyebrow">Section 01</div>
+  <div class="sec-title">Choosing Your Cloud Provider</div>
+  <div class="sec-desc">
+    Nivaro supports three database dialects out of the box — <code>mssql</code>, <code>pg</code>, and <code>mysql2</code> — selected via the <code>DB_CLIENT</code>
+    environment variable. The rest of the system is dialect-agnostic. This means you pick the dialect that matches your cloud's
+    managed database offering, not the other way around.
+  </div>
+
+  <div class="pcomp">
+    <div class="pcomp-card azure">
+      <div class="pcomp-rec">MSSQL OPTIMAL</div>
+      <div class="pcomp-logo">☁️</div>
+      <div class="pcomp-name">Microsoft Azure</div>
+      <div class="pcomp-tag"><code style="font-size:10px;">DB_CLIENT=mssql</code> — native fit</div>
+      <div class="pcomp-feature good">Azure SQL Elastic Pools (unique to Azure)</div>
+      <div class="pcomp-feature good">200 tenant DBs share one pool</div>
+      <div class="pcomp-feature good">Per-tenant DB cost ~$2–8/mo</div>
+      <div class="pcomp-feature good">AKS / Container Apps for compute</div>
+      <div class="pcomp-feature good">Azure Blob for file storage</div>
+      <div class="pcomp-feature ok">More complex billing console</div>
+      <div class="score-bar">
+        <div class="score-label">Overall Fit</div>
+        <div class="score-row">
+          <div class="score-dot filled azure"></div><div class="score-dot filled azure"></div><div class="score-dot filled azure"></div><div class="score-dot filled azure"></div><div class="score-dot filled azure"></div>
+        </div>
+      </div>
+    </div>
+    <div class="pcomp-card aws">
+      <div class="pcomp-logo">🟠</div>
+      <div class="pcomp-name">Amazon AWS</div>
+      <div class="pcomp-tag"><code style="font-size:10px;">DB_CLIENT=pg</code> → Aurora Serverless v2</div>
+      <div class="pcomp-feature good">Aurora Serverless v2 (Postgres)</div>
+      <div class="pcomp-feature good">ACU auto-scaling across tenants</div>
+      <div class="pcomp-feature good">Per-tenant DB cost ~$4–8/mo in cluster</div>
+      <div class="pcomp-feature good">ECS Fargate / EKS mature</div>
+      <div class="pcomp-feature good">S3 best-in-class object storage</div>
+      <div class="pcomp-feature ok">RDS SQL Server available but costly</div>
+      <div class="score-bar">
+        <div class="score-label">Overall Fit</div>
+        <div class="score-row">
+          <div class="score-dot filled aws"></div><div class="score-dot filled aws"></div><div class="score-dot filled aws"></div><div class="score-dot filled aws"></div><div class="score-dot empty"></div>
+        </div>
+      </div>
+    </div>
+    <div class="pcomp-card gcp">
+      <div class="pcomp-logo">🔵</div>
+      <div class="pcomp-name">Google Cloud</div>
+      <div class="pcomp-tag"><code style="font-size:10px;">DB_CLIENT=pg</code> → Cloud SQL / AlloyDB</div>
+      <div class="pcomp-feature good">Cloud SQL PostgreSQL (shared instance)</div>
+      <div class="pcomp-feature good">Multiple tenant DBs on one instance</div>
+      <div class="pcomp-feature good">Cloud Run scales to zero</div>
+      <div class="pcomp-feature good">AlloyDB for high-performance tier</div>
+      <div class="pcomp-feature good">Cloud Storage solid</div>
+      <div class="pcomp-feature ok">More operational complexity than Render</div>
+      <div class="score-bar">
+        <div class="score-label">Overall Fit</div>
+        <div class="score-row">
+          <div class="score-dot filled gcp"></div><div class="score-dot filled gcp"></div><div class="score-dot filled gcp"></div><div class="score-dot filled gcp"></div><div class="score-dot empty"></div>
+        </div>
+      </div>
+    </div>
+    <div class="pcomp-card indie">
+      <div class="pcomp-logo">🟢</div>
+      <div class="pcomp-name">Simple / Indie</div>
+      <div class="pcomp-tag">Railway · Render · Hetzner</div>
+      <div class="pcomp-feature good">Any dialect — pg, mysql2, or mssql</div>
+      <div class="pcomp-feature good">Railway Postgres: managed, cheap</div>
+      <div class="pcomp-feature good">Cheapest total infra (&lt;$200/mo)</div>
+      <div class="pcomp-feature good">Railway / Render simple deploy DX</div>
+      <div class="pcomp-feature ok">Less DB automation tooling</div>
+      <div class="pcomp-feature good">Right for first 50 customers</div>
+      <div class="score-bar">
+        <div class="score-label">Overall Fit</div>
+        <div class="score-row">
+          <div class="score-dot filled indie"></div><div class="score-dot filled indie"></div><div class="score-dot filled indie"></div><div class="score-dot filled indie"></div><div class="score-dot empty"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout key">
+    <div class="ci">🔑</div>
+    <div class="cb">
+      <div class="ct">DB_CLIENT is the only dial you turn — no code changes needed</div>
+      <div class="cx">Nivaro's dialect-agnostic design means you set <code>DB_CLIENT=mssql|pg|mysql2</code> in the environment and point at your cloud's managed database. There is no migration, no code rewrite. Azure works best with <code>mssql</code> and Elastic Pools. AWS and GCP work best with <code>pg</code> and their Postgres-flavoured managed databases. Indie stacks work with any of the three.</div>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <div class="ci">✅</div>
+    <div class="cb">
+      <div class="ct">All four paths are fully supported — choose on cost and familiarity</div>
+      <div class="cx">Azure wins on MSSQL multi-tenant economics (Elastic Pools are unique to Azure SQL). AWS and GCP are equally viable with <code>DB_CLIENT=pg</code> pointing at Aurora Serverless v2 or Cloud SQL — both have shared-compute multi-tenant models comparable to Elastic Pools. The Simple/Indie path works for any dialect and keeps infra costs under $200/mo for your first 50 customers.</div>
+    </div>
+  </div>
+
+  <div class="pfoot">
+    <span>Nivaro Cloud — SaaS Launch Plan</span>
+    <span>Page 2</span>
+  </div>
+</div>
+</div>
+
+
+<!-- ═══════════════════ PAGE 3 — ARCHITECTURE OVERVIEW ═══════════════════ -->
+<div class="page">
+<div class="cp">
+  <div class="ph">
+    <div class="ph-logo"><div class="ph-lm">N</div>Nivaro Cloud</div>
+    <div class="ph-sec">02 — Architecture Overview</div>
+  </div>
+
+  <div class="eyebrow">Section 02</div>
+  <div class="sec-title">Architecture Overview</div>
+  <div class="sec-desc">
+    Provider-agnostic layers on top, provider-specific services at the bottom.
+    Every provider maps to the same logical architecture — only the managed service names and <code>DB_CLIENT</code> value change.
+  </div>
+
+  <div class="arch">
+    <div class="arch-lbl">Edge / DNS</div>
+    <div class="arch-row">
+      <div class="arch-box c-cyan">
+        <div class="arch-box-lbl">DNS + Routing</div>
+        <div class="arch-box-name">Cloudflare (all providers)</div>
+        <div class="arch-box-sub">*.nivaro.io → compute ingress · DDoS · WAF · SSL</div>
+      </div>
+      <div class="arch-box c-cyan">
+        <div class="arch-box-lbl">CDN / Static</div>
+        <div class="arch-box-name">Cloudflare CDN (all providers)</div>
+        <div class="arch-box-sub">Admin SPA · uploaded files · edge cache</div>
+      </div>
+    </div>
+    <div class="arch-conn">↓</div>
+    <div class="arch-lbl">Compute</div>
+    <div class="arch-row">
+      <div class="arch-box c-blue">
+        <div class="arch-box-lbl">Container Runtime</div>
+        <div class="arch-box-name">Kubernetes / Containers</div>
+        <div class="arch-box-sub">Azure: AKS · AWS: ECS Fargate / EKS · GCP: Cloud Run / GKE · Indie: Railway / Render / Docker</div>
+      </div>
+      <div class="arch-box c-purple">
+        <div class="arch-box-lbl">Job Queue</div>
+        <div class="arch-box-name">Inngest (self-hosted)</div>
+        <div class="arch-box-sub">Tenant provisioning · migration runner · digest crons</div>
+      </div>
+    </div>
+    <div class="arch-conn">↓</div>
+    <div class="arch-lbl">Cache</div>
+    <div class="arch-row">
+      <div class="arch-box c-amber">
+        <div class="arch-box-lbl">Redis</div>
+        <div class="arch-box-name">Managed Redis</div>
+        <div class="arch-box-sub">Azure: Azure Cache for Redis · AWS: ElastiCache · GCP: Memorystore · Indie: Upstash / Railway Redis</div>
+      </div>
+    </div>
+    <div class="arch-conn">↓</div>
+    <div class="arch-lbl">Data — the provider split happens here</div>
+    <div class="arch-row">
+      <div class="arch-box c-green" style="flex: 0 0 130px;">
+        <div class="arch-box-lbl">Meta DB</div>
+        <div class="arch-box-name">Single DB</div>
+        <div class="arch-box-sub">Tenant registry<br>Billing state<br>Migration status</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-box c-green">
+        <div class="arch-box-lbl">Tenant DBs — Free/Starter Pool</div>
+        <div class="arch-box-name">Azure: Elastic Pool · AWS/GCP: shared schema or Aurora</div>
+        <div class="arch-box-sub">100–200 databases · shared compute · acme, beta, gamma…</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-box c-green">
+        <div class="arch-box-lbl">Tenant DBs — Pro / Business</div>
+        <div class="arch-box-name">Higher-tier pool / dedicated instance</div>
+        <div class="arch-box-sub">Larger DTU/vCore allocation or dedicated compute</div>
+      </div>
+    </div>
+    <div class="arch-row" style="margin-top: 8px;">
+      <div class="arch-box c-amber">
+        <div class="arch-box-lbl">File Storage</div>
+        <div class="arch-box-name">Object Storage (per-tenant containers)</div>
+        <div class="arch-box-sub">Azure: Blob · AWS: S3 · GCP: Cloud Storage · Indie: Backblaze B2 / Tigris</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Service Mapping by Provider</h3>
+  <div class="tw svc-table">
+    <table>
+      <thead><tr><th>Layer</th><th>Azure</th><th>AWS</th><th>GCP</th><th>Simple/Indie</th></tr></thead>
+      <tbody>
+        <tr><td>Containers</td><td class="svc-azure">AKS / Container Apps</td><td class="svc-aws">ECS Fargate / EKS</td><td class="svc-gcp">Cloud Run / GKE</td><td class="svc-indie">Railway / Render</td></tr>
+        <tr><td>DB_CLIENT</td><td class="svc-azure"><code>mssql</code></td><td class="svc-aws"><code>pg</code></td><td class="svc-gcp"><code>pg</code></td><td class="svc-indie"><code>pg</code> / <code>mysql2</code> / <code>mssql</code></td></tr>
+        <tr><td>SQL Database</td><td class="svc-azure">Azure SQL Elastic Pool</td><td class="svc-aws">Aurora Serverless v2 (PG)</td><td class="svc-gcp">Cloud SQL PostgreSQL</td><td class="svc-indie">Railway PG / managed MySQL</td></tr>
+        <tr><td>Redis</td><td class="svc-azure">Azure Cache for Redis</td><td class="svc-aws">ElastiCache</td><td class="svc-gcp">Memorystore</td><td class="svc-indie">Upstash / Railway</td></tr>
+        <tr><td>Object Storage</td><td class="svc-azure">Azure Blob Storage</td><td class="svc-aws">Amazon S3</td><td class="svc-gcp">Cloud Storage</td><td class="svc-indie">Backblaze B2 / Tigris</td></tr>
+        <tr><td>CDN</td><td class="svc-azure">Cloudflare or Azure CDN</td><td class="svc-aws">CloudFront or CF</td><td class="svc-gcp">Cloud CDN or CF</td><td class="svc-indie">Cloudflare (free)</td></tr>
+        <tr><td>DNS</td><td class="svc-azure">Cloudflare</td><td class="svc-aws">Route 53 or CF</td><td class="svc-gcp">Cloud DNS or CF</td><td class="svc-indie">Cloudflare (free)</td></tr>
+        <tr><td>Secrets</td><td class="svc-azure">Azure Key Vault</td><td class="svc-aws">Secrets Manager</td><td class="svc-gcp">Secret Manager</td><td class="svc-indie">Doppler / Infisical</td></tr>
+        <tr><td>Monitoring</td><td class="svc-azure">App Insights + Monitor</td><td class="svc-aws">CloudWatch</td><td class="svc-gcp">Cloud Monitoring</td><td class="svc-indie">Better Stack + Sentry</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:11px;color:var(--slate);">Set <code>DB_CLIENT</code> to match your provider's managed database. No code changes required — the connection is built per-dialect automatically.</p>
+
+  <div class="pfoot">
+    <span>Nivaro Cloud — SaaS Launch Plan</span>
+    <span>Page 3</span>
+  </div>
+</div>
+</div>
+
+
+<!-- ═══════════════════ PAGE 4 — DATABASE STRATEGY ═══════════════════ -->
+<div class="page">
+<div class="cp">
+  <div class="ph">
+    <div class="ph-logo"><div class="ph-lm">N</div>Nivaro Cloud</div>
+    <div class="ph-sec">03 — Database Strategy</div>
+  </div>
+
+  <div class="eyebrow">Section 03</div>
+  <div class="sec-title">Database Strategy</div>
+  <div class="sec-desc">
+    Nivaro creates real SQL tables for user-defined collections — two customers both creating "articles" would collide in a shared database.
+    DB-per-tenant eliminates this without changing the schema builder. The dialect (<code>mssql</code> / <code>pg</code> / <code>mysql2</code>) is a deployment-time decision driven purely by which managed database your cloud provider offers cheaply.
+  </div>
+
+  <div class="callout key">
+    <div class="ci">💡</div>
+    <div class="cb">
+      <div class="ct">Why DB-per-tenant is the right architecture for Nivaro</div>
+      <div class="cx">When a customer creates a collection called "articles", Nivaro runs CREATE TABLE articles. In a shared database, two customers with the same collection name collide. Separate databases mean each customer's "articles" is just "articles" — no prefixing, no schema builder changes, no cross-tenant data risk. The dialect is set via <code>DB_CLIENT</code> — the rest of Nivaro doesn't care which one.</div>
+    </div>
+  </div>
+
+  <h3>Dialect Selection by Provider</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>DB_CLIENT</th><th>Provider fit</th><th>100 Tenant DBs / mo</th><th>Cost model</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr class="provider-row azure">
+          <td><code>mssql</code></td>
+          <td><span class="badge b-azure">Azure</span> SQL Elastic Pool</td>
+          <td><strong>~$500–900</strong></td>
+          <td>Pool vCores shared — pay per pool, not per DB</td>
+          <td><span class="badge b-green">✓ Excellent</span></td>
+        </tr>
+        <tr class="provider-row aws">
+          <td><code>pg</code></td>
+          <td><span class="badge b-aws">AWS</span> Aurora Serverless v2</td>
+          <td><strong>~$400–800</strong></td>
+          <td>ACU auto-scaling across cluster — near-Elastic Pool economics</td>
+          <td><span class="badge b-green">✓ Excellent</span></td>
+        </tr>
+        <tr class="provider-row gcp">
+          <td><code>pg</code></td>
+          <td><span class="badge b-gcp">GCP</span> Cloud SQL PostgreSQL</td>
+          <td><strong>~$400–800</strong></td>
+          <td>Multiple DBs on shared instance; serverless tier available</td>
+          <td><span class="badge b-green">✓ Good</span></td>
+        </tr>
+        <tr class="provider-row indie">
+          <td><code>pg</code> / <code>mysql2</code></td>
+          <td><span class="badge b-indie">Indie</span> Railway / Render / Supabase</td>
+          <td><strong>~$50–200</strong></td>
+          <td>Managed Postgres on shared infra; manual provisioning scripts</td>
+          <td><span class="badge b-green">✓ Cheapest</span></td>
+        </tr>
+        <tr class="provider-row azure">
+          <td><code>mssql</code></td>
+          <td><span class="badge b-aws">AWS</span> / <span class="badge b-gcp">GCP</span> SQL Server</td>
+          <td><strong>~$3,000–8,000</strong></td>
+          <td>Per-instance compute + SQL Server license — no pool equivalent</td>
+          <td><span class="badge b-red">✗ Avoid</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The Meta Database (all providers)</h3>
+  <p>One small database your platform controls. Stores tenant routing data — not customer content.</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Table</th><th>Purpose</th><th>Key Columns</th></tr></thead>
+      <tbody>
+        <tr><td><code>cloud_tenants</code></td><td>Tenant registry</td><td>slug, subdomain, db_client, db_connection_string, plan, status</td></tr>
+        <tr><td><code>cloud_tenant_migrations</code></td><td>Migration state per tenant</td><td>tenant_id, migration_name, applied_at, status</td></tr>
+        <tr><td><code>cloud_billing</code></td><td>Stripe subscription</td><td>tenant_id, stripe_customer_id, stripe_subscription_id, plan</td></tr>
+        <tr><td><code>cloud_usage_snapshots</code></td><td>Daily overage billing</td><td>tenant_id, date, record_count, storage_gb, api_calls</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Connection Routing (all providers — same pattern)</h3>
+  <div class="code">
+<span class="cm">// Runs before every request — resolves the correct tenant DB + dialect</span>
+<span class="kw">async function</span> <span class="fn">resolveTenantDb</span>(req, reply) {
+  <span class="kw">const</span> subdomain = req.hostname.split(<span class="st">'.'</span>)[0]        <span class="cm">// 'acme' from acme.nivaro.io</span>
+  <span class="kw">const</span> cacheKey  = <span class="st">`tenant:${subdomain}`</span>
+  <span class="kw">let</span>   cached    = <span class="kw">await</span> redis.<span class="fn">get</span>(cacheKey)
+
+  <span class="kw">if</span> (!cached) {
+    <span class="kw">const</span> tenant = <span class="kw">await</span> metaDb(<span class="st">'cloud_tenants'</span>).<span class="fn">where</span>({ subdomain }).<span class="fn">first</span>()
+    <span class="kw">if</span> (!tenant) <span class="kw">return</span> reply.<span class="fn">code</span>(404).<span class="fn">send</span>({ error: <span class="st">'Not found'</span> })
+    cached = <span class="tp">JSON</span>.<span class="fn">stringify</span>({ client: tenant.db_client, conn: tenant.db_connection_string })
+    <span class="kw">await</span> redis.<span class="fn">setex</span>(cacheKey, 300, cached)  <span class="cm">// 5-min cache → ~1ms lookup</span>
+  }
+  <span class="kw">const</span> { client, conn } = <span class="tp">JSON</span>.<span class="fn">parse</span>(cached)
+  req.tenantDb = <span class="fn">getOrCreatePool</span>(client, conn)  <span class="cm">// Map keyed by connStr — never creates per-request</span>
+}
+
+<span class="cm">// Pool factory — reuses existing Knex instance for same connection string</span>
+<span class="kw">const</span> pools = <span class="kw">new</span> <span class="tp">Map</span>()
+<span class="kw">function</span> <span class="fn">getOrCreatePool</span>(client, conn) {
+  <span class="kw">if</span> (!pools.<span class="fn">has</span>(conn)) pools.<span class="fn">set</span>(conn, <span class="fn">knex</span>({ client, connection: conn, pool: { min: 0, max: 5 } }))
+  <span class="kw">return</span> pools.<span class="fn">get</span>(conn)
+}</div>
+
+  <div class="pfoot">
+    <span>Nivaro Cloud — SaaS Launch Plan</span>
+    <span>Page 4</span>
+  </div>
+</div>
+</div>
+
+
+<!-- ═══════════════════ PAGE 5 — PROVIDER DEEP-DIVES ═══════════════════ -->
+<div class="page">
+<div class="cp">
+  <div class="ph">
+    <div class="ph-logo"><div class="ph-lm">N</div>Nivaro Cloud</div>
+    <div class="ph-sec">04 — Provider Deep-Dives</div>
+  </div>
+
+  <div class="eyebrow">Section 04</div>
+  <div class="sec-title">Provider Deep-Dives</div>
+  <div class="sec-desc">Full stack breakdown for each provider path. Use the filter bar above to focus on one.</div>
+
+  <!-- AZURE -->
+  <div class="provider-section azure provider-row azure">
+    <div class="provider-section-head">
+      ☁️ &nbsp;<span>Microsoft Azure</span>
+      <span class="provider-tag pt-rec" style="margin-left:auto;">RECOMMENDED</span>
+    </div>
+    <div class="provider-section-body">
+      <div class="tw" style="margin-top:0;">
+        <table>
+          <thead><tr><th>Component</th><th>Service</th><th>Tier to Start</th><th>Est. Cost/mo</th></tr></thead>
+          <tbody>
+            <tr><td>Containers</td><td>Azure Container Apps <em>or</em> AKS</td><td>2–3 nodes (D2s_v3)</td><td>$150–$300</td></tr>
+            <tr><td>Database Pools</td><td>Azure SQL Elastic Pool</td><td>4 vCore pool (Free/Starter)</td><td>$300–$500</td></tr>
+            <tr><td>Redis</td><td>Azure Cache for Redis</td><td>C1 Standard</td><td>$55</td></tr>
+            <tr><td>File Storage</td><td>Azure Blob Storage (LRS)</td><td>Pay-as-you-go</td><td>$30–$80</td></tr>
+            <tr><td>Secrets</td><td>Azure Key Vault</td><td>Standard</td><td>$5</td></tr>
+            <tr><td>DNS provisioning</td><td>Cloudflare API</td><td>Pro plan</td><td>$20</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:12px;color:var(--slate);margin:0;"><strong>Why Azure wins:</strong> Elastic Pools are purpose-built for this pattern. 200 idle SaaS tenant DBs share one pool's compute — you pay for the pool, not per-DB compute. No other major cloud offers this for SQL Server.</p>
+    </div>
+  </div>
+
+  <!-- AWS -->
+  <div class="provider-section aws provider-row aws">
+    <div class="provider-section-head">🟠 &nbsp;<span>Amazon AWS</span><span class="provider-tag pt-aws" style="margin-left:auto;">DB_CLIENT=pg → Aurora Serverless v2</span></div>
+    <div class="provider-section-body">
+      <div class="tw" style="margin-top:0;">
+        <table>
+          <thead><tr><th>Component</th><th>Service</th><th>Tier to Start</th><th>Est. Cost/mo</th></tr></thead>
+          <tbody>
+            <tr><td>Containers</td><td>ECS Fargate <em>or</em> EKS</td><td>2 Fargate tasks (0.5 vCPU)</td><td>$150–$400</td></tr>
+            <tr><td>Database</td><td>Aurora Serverless v2 (PostgreSQL) — <code>DB_CLIENT=pg</code></td><td>0.5–4 ACU auto-scaling cluster</td><td>$400–$800</td></tr>
+            <tr><td>Redis</td><td>ElastiCache (Redis)</td><td>cache.t3.micro</td><td>$65–$130</td></tr>
+            <tr><td>File Storage</td><td>Amazon S3</td><td>Standard, pay-as-you-go</td><td>$25–$70</td></tr>
+            <tr><td>Secrets</td><td>AWS Secrets Manager</td><td>Per-secret pricing</td><td>$10</td></tr>
+            <tr><td>CDN</td><td>CloudFront <em>or</em> Cloudflare</td><td>Cloudflare Pro preferred</td><td>$20–$50</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:12px;color:var(--slate);margin:0;"><strong>Set <code>DB_CLIENT=pg</code></strong> and point at Aurora Serverless v2. ACUs auto-scale across all tenant databases in the cluster — economics are comparable to Azure Elastic Pools. No code changes required; Nivaro's dialect-agnostic layer handles everything. Avoid RDS SQL Server on AWS — per-instance compute plus the SQL Server license makes it 8–10× more expensive.</p>
+    </div>
+  </div>
+
+  <!-- GCP -->
+  <div class="provider-section gcp provider-row gcp">
+    <div class="provider-section-head">🔵 &nbsp;<span>Google Cloud Platform</span><span class="provider-tag pt-gcp" style="margin-left:auto;">DB_CLIENT=pg → Cloud SQL / AlloyDB</span></div>
+    <div class="provider-section-body">
+      <div class="tw" style="margin-top:0;">
+        <table>
+          <thead><tr><th>Component</th><th>Service</th><th>Est. Cost/mo</th></tr></thead>
+          <tbody>
+            <tr><td>Containers</td><td>Cloud Run (serverless) or GKE</td><td>$80–$300 (Cloud Run scales to zero)</td></tr>
+            <tr><td>Database</td><td>Cloud SQL for PostgreSQL (shared instance, multiple DBs)</td><td>$200–$600 for 100 tenant DBs</td></tr>
+            <tr><td>Redis</td><td>Memorystore (Redis)</td><td>$50–$120</td></tr>
+            <tr><td>File Storage</td><td>Cloud Storage</td><td>$25–$70</td></tr>
+            <tr><td>Secrets</td><td>Secret Manager</td><td>$5</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:12px;color:var(--slate);margin:0;"><strong>Set <code>DB_CLIENT=pg</code></strong> — no code changes needed. Cloud SQL PostgreSQL supports multiple databases on one shared instance, keeping per-tenant cost low. <strong>Cloud Run</strong> is the standout compute choice here — scales to zero, no cluster management, billed per request. AlloyDB is the upgrade path for high-performance Pro/Enterprise tenants.</p>
+    </div>
+  </div>
+
+  <!-- INDIE -->
+  <div class="provider-section indie provider-row indie">
+    <div class="provider-section-head">🟢 &nbsp;<span>Simple / Indie Stack</span><span class="provider-tag pt-indie" style="margin-left:auto;">Best for first 50 customers</span></div>
+    <div class="provider-section-body">
+      <div class="tw" style="margin-top:0;">
+        <table>
+          <thead><tr><th>Component</th><th>Service</th><th>Est. Cost/mo</th></tr></thead>
+          <tbody>
+            <tr><td>API</td><td>Railway or Render (Docker deploy)</td><td>$20–$100</td></tr>
+            <tr><td>Database</td><td>Railway Postgres <em>or</em> Supabase (<code>DB_CLIENT=pg</code>) — or MySQL on PlanetScale (<code>DB_CLIENT=mysql2</code>)</td><td>$0–$50 managed, or $15–$30/VPS self-hosted</td></tr>
+            <tr><td>Redis</td><td>Upstash (serverless Redis)</td><td>$0–$30</td></tr>
+            <tr><td>File Storage</td><td>Backblaze B2 or Cloudflare R2 (S3-compatible)</td><td>$6–$30</td></tr>
+            <tr><td>CDN + DNS</td><td>Cloudflare (free tier)</td><td>$0–$20</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:12px;color:var(--slate);margin:0;"><strong>Total infra under $200/mo</strong> for your first 50 customers. Use Railway Postgres (<code>DB_CLIENT=pg</code>) for zero-ops managed databases, or self-host on a Hetzner VPS. Both work natively — just set the env var and point at the connection string. Migrate to Azure/AWS when you need elastic multi-tenant DB compute at scale.</p>
+    </div>
+  </div>
+
+  <div class="pfoot">
+    <span>Nivaro Cloud — SaaS Launch Plan</span>
+    <span>Page 5</span>
+  </div>
+</div>
+</div>
+
+
+<!-- ═══════════════════ PAGE 6 — PROVISIONING ═══════════════════ -->
+<div class="page">
+<div class="cp">
+  <div class="ph">
+    <div class="ph-logo"><div class="ph-lm">N</div>Nivaro Cloud</div>
+    <div class="ph-sec">05 — Tenant Provisioning</div>
+  </div>
+
+  <div class="eyebrow">Section 05</div>
+  <div class="sec-title">Tenant Provisioning Flow</div>
+  <div class="sec-desc">
+    Signup to live tenant in under 60 seconds. Orchestrated by Inngest — fully automated,
+    no manual steps. The provider-specific step is DB creation (Step 3); everything else is identical.
+  </div>
+
+  <div class="flow">
+    <div class="fs">
+      <div class="fsl"><div class="fsn">1</div><div class="fsl-line"></div></div>
+      <div class="fc">
+        <div class="ft">Customer pays via Stripe Checkout</div>
+        <div class="fd">Stripe fires <code>checkout.session.completed</code> webhook. Handler validates signature, immediately returns 200, then fires an Inngest event.</div>
+      </div>
+    </div>
+    <div class="fs">
+      <div class="fsl"><div class="fsn">2</div><div class="fsl-line"></div></div>
+      <div class="fc">
+        <div class="ft">Inngest <code>tenant/provision</code> function starts</div>
+        <div class="fd">Durable, retryable, observable. Each step below is an Inngest step — failures retry automatically without re-running completed steps.</div>
+      </div>
+    </div>
+    <div class="fs">
+      <div class="fsl"><div class="fsn">3</div><div class="fsl-line"></div></div>
+      <div class="fc">
+        <div class="ft">Database created <span style="font-size:11px;font-weight:400;color:var(--slate);">— provider-specific</span></div>
+        <div class="fd" style="margin-bottom:6px;">Call the cloud provider's management API to create the tenant database:</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="fcode provider-row azure" style="border-left:3px solid #0078d4;"><strong style="color:#0078d4;">Azure</strong><br>azure.sql.databases<br>.beginCreateOrUpdate(<br>&nbsp;&nbsp;resourceGroup, server,<br>&nbsp;&nbsp;`tenant_${slug}`,<br>&nbsp;&nbsp;{ elasticPoolId: pool.free })</div>
+          <div class="fcode provider-row aws" style="border-left:3px solid var(--aws);"><strong style="color:#b45309;">AWS</strong> (DB_CLIENT=pg)<br>rds.createDBCluster({<br>&nbsp;&nbsp;DBClusterIdentifier:<br>&nbsp;&nbsp;&nbsp;&nbsp;`tenant-${slug}`,<br>&nbsp;&nbsp;Engine: 'aurora-postgresql',<br>&nbsp;&nbsp;EngineMode: 'provisioned',<br>&nbsp;&nbsp;ServerlessV2ScalingConfig:<br>&nbsp;&nbsp;&nbsp;&nbsp;{ MinCapacity: 0.5, MaxCapacity: 4 } })</div>
+          <div class="fcode provider-row gcp" style="border-left:3px solid var(--gcp);"><strong style="color:#1d4ed8;">GCP</strong> (DB_CLIENT=pg)<br>// Multiple DBs on one Cloud SQL instance<br>sql.databases.insert({<br>&nbsp;&nbsp;project, instance,<br>&nbsp;&nbsp;requestBody: {<br>&nbsp;&nbsp;&nbsp;&nbsp;name: `tenant_${slug}` }})</div>
+          <div class="fcode provider-row indie" style="border-left:3px solid var(--indie);"><strong style="color:#047857;">Indie</strong> (DB_CLIENT=pg)<br>// Railway / self-hosted Postgres<br>await db.raw(<br>&nbsp;&nbsp;`CREATE DATABASE<br>&nbsp;&nbsp; tenant_${slug}`)</div>
+        </div>
+      </div>
+    </div>
+    <div class="fs">
+      <div class="fsl"><div class="fsn">4</div><div class="fsl-line"></div></div>
+      <div class="fc">
+        <div class="ft">Migrations run on fresh DB</div>
+        <div class="fd">Connect to new DB with provisioning-scoped Knex instance, run <code>migrate.latest()</code>. All Nivaro system tables created. ~10–20 seconds.</div>
+      </div>
+    </div>
+    <div class="fs">
+      <div class="fsl"><div class="fsn">5</div><div class="fsl-line"></div></div>
+      <div class="fc">
+        <div class="ft">Admin user & workspace seeded</div>
+        <div class="fd">Insert <code>nivaro_workspaces</code>, <code>nivaro_roles</code> (admin), and <code>nivaro_users</code> with the customer's email and a temporary static token for first login.</div>
+      </div>
+    </div>
+    <div class="fs">
+      <div class="fsl"><div class="fsn">6</div><div class="fsl-line"></div></div>
+      <div class="fc">
+        <div class="ft">Tenant registered in Meta DB + DNS provisioned</div>
+        <div class="fd">Insert into <code>cloud_tenants</code> with the DB connection string — subdomain is now live. Cloudflare API creates the CNAME for <code>{slug}.nivaro.io</code>.</div>
+      </div>
+    </div>
+    <div class="fs">
+      <div class="fsl"><div class="fsn">7</div></div>
+      <div class="fc" style="padding-bottom:0;">
+        <div class="ft">Welcome email sent</div>
+        <div class="fd">Nivaro's own mail service sends login URL + temp credentials. <strong>Total: ~45–60 seconds.</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pfoot">
+    <span>Nivaro Cloud — SaaS Launch Plan</span>
+    <span>Page 6</span>
+  </div>
+</div>
+</div>
+
+
+<!-- ═══════════════════ PAGE 7 — MIGRATION STRATEGY ═══════════════════ -->
+<div class="page">
+<div class="cp">
+  <div class="ph">
+    <div class="ph-logo"><div class="ph-lm">N</div>Nivaro Cloud</div>
+    <div class="ph-sec">06 — Migration Strategy</div>
+  </div>
+
+  <div class="eyebrow">Section 06</div>
+  <div class="sec-title">Migration Strategy</div>
+  <div class="sec-desc">
+    With N tenant databases, every schema migration must fan out to every tenant. The solution is an Inngest function
+    that runs on deploy and nightly — applying pending migrations to all active tenants in sequence.
+  </div>
+
+  <div class="callout warning">
+    <div class="ci">⚠️</div>
+    <div class="cb">
+      <div class="ct">This is the #1 operational challenge of DB-per-tenant</div>
+      <div class="cx">A single-DB deploy takes seconds. With 200 tenant DBs, a migration runner iterates every DB — fine for additive changes, but destructive changes (DROP COLUMN, rename, type change) need the expand/contract pattern across two separate deploys.</div>
+    </div>
+  </div>
+
+  <h3>The Migration Runner (Inngest)</h3>
+  <div class="code">
+<span class="cm">// Fires on every deploy + nightly at 02:00 UTC as catchup</span>
+inngest.<span class="fn">createFunction</span>(
+  { id: <span class="st">'run-tenant-migrations'</span>, retries: 3 },
+  [{ event: <span class="st">'deploy/completed'</span> }, { cron: <span class="st">'0 2 * * *'</span> }],
+  <span class="kw">async</span> ({ step }) => {
+    <span class="kw">const</span> tenants = <span class="kw">await</span> step.<span class="fn">run</span>(<span class="st">'fetch-tenants'</span>, () =>
+      metaDb(<span class="st">'cloud_tenants'</span>).<span class="fn">where</span>({ status: <span class="st">'active'</span> })
+    )
+    <span class="kw">for</span> (<span class="kw">const</span> tenant <span class="kw">of</span> tenants) {
+      <span class="kw">await</span> step.<span class="fn">run</span>(<span class="st">`migrate-${tenant.slug}`</span>, <span class="kw">async</span> () => {
+        <span class="kw">const</span> db = <span class="fn">knex</span>({ client: <span class="st">'mssql'</span>, connection: tenant.db_connection_string })
+        <span class="kw">try</span> {
+          <span class="kw">await</span> db.migrate.<span class="fn">latest</span>()
+          <span class="kw">await</span> metaDb(<span class="st">'cloud_tenant_migrations'</span>)
+            .<span class="fn">insert</span>({ tenant_id: tenant.id, status: <span class="st">'ok'</span>, applied_at: <span class="kw">new</span> <span class="tp">Date</span>() })
+        } <span class="kw">finally</span> { <span class="kw">await</span> db.<span class="fn">destroy</span>() }
+      })
+    }
+  }
+)</div>
+
+  <h3>Expand / Contract for Destructive Changes</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Deploy 1 (Expand)</th><th>Gap — code reads both</th><th>Deploy 2 (Contract)</th></tr></thead>
+      <tbody>
+        <tr><td>Add <code>new_column</code> (nullable)</td><td>App writes to both columns</td><td>Drop <code>old_column</code></td></tr>
+        <tr><td>Create new table + copy data</td><td>Dual-write to both tables</td><td>Drop old table</td></tr>
+        <tr><td>Add new index</td><td>Both indexes exist</td><td>Drop old index</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="two-col">
+    <div class="ic">
+      <h4><span>✅</span> Safe for immediate fan-out</h4>
+      <ul>
+        <li>Add new nullable column</li>
+        <li>Add new index (ONLINE=ON)</li>
+        <li>Create new table</li>
+        <li>Add NOT NULL with default</li>
+        <li>Extend enum / add new option</li>
+      </ul>
+    </div>
+    <div class="ic">
+      <h4><span>⛔</span> Use expand/contract instead</h4>
+      <ul>
+        <li>DROP COLUMN or DROP TABLE</li>
+        <li>Rename column or table</li>
+        <li>Change column data type</li>
+        <li>Add NOT NULL to existing rows</li>
+        <li>Remove an enum option</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <div class="ci">✅</div>
+    <div class="cb">
+      <div class="ct">Build a migration health dashboard</div>
+      <div class="cx">The meta DB <code>cloud_tenant_migrations</code> table tracks status per tenant. A simple internal admin page showing green/amber/red per tenant makes it immediately visible if any tenant is stuck on an old migration version. Failed migrations auto-retry via Inngest's built-in retry logic.</div>
+    </div>
+  </div>
+
+  <div class="pfoot">
+    <span>Nivaro Cloud — SaaS Launch Plan</span>
+    <span>Page 7</span>
+  </div>
+</div>
+</div>
+
+
+<!-- ═══════════════════ PAGE 8 — PRICING ═══════════════════ -->
+<div class="page">
+<div class="cp">
+  <div class="ph">
+    <div class="ph-logo"><div class="ph-lm">N</div>Nivaro Cloud</div>
+    <div class="ph-sec">07 — Pricing Model</div>
+  </div>
+
+  <div class="eyebrow">Section 07</div>
+  <div class="sec-title">Pricing Model</div>
+  <div class="sec-desc">
+    Four tiers targeting individuals, small teams, agencies, and enterprise. Users and Workspaces as the primary dimensions.
+    Records and storage as soft overage gates — charge overages rather than hard-blocking to reduce churn.
+  </div>
+
+  <div class="pgrid">
+    <div class="pcard">
+      <div class="ptier">Free</div>
+      <div class="pprice">$0</div>
+      <div class="pdesc">Personal projects & evaluation</div>
+      <div class="pf">1 workspace</div>
+      <div class="pf">3 users</div>
+      <div class="pf">10,000 records</div>
+      <div class="pf">1 GB storage</div>
+      <div class="pf">REST + GraphQL API</div>
+      <div class="pf">Community support</div>
+    </div>
+    <div class="pcard feat">
+      <div class="ptier">Starter</div>
+      <div class="pprice">$49<span>/mo</span></div>
+      <div class="pdesc">Small teams shipping products</div>
+      <div class="pf">1 workspace</div>
+      <div class="pf">10 users</div>
+      <div class="pf">100,000 records</div>
+      <div class="pf">10 GB storage</div>
+      <div class="pf">Webhooks + flows</div>
+      <div class="pf">Email support 48h</div>
+    </div>
+    <div class="pcard">
+      <div class="ptier">Pro</div>
+      <div class="pprice">$149<span>/mo</span></div>
+      <div class="pdesc">Agencies and growing teams</div>
+      <div class="pf">3 workspaces</div>
+      <div class="pf">25 users</div>
+      <div class="pf">1M records</div>
+      <div class="pf">50 GB storage</div>
+      <div class="pf">SSO (Microsoft OIDC)</div>
+      <div class="pf">Email support 24h</div>
+    </div>
+    <div class="pcard">
+      <div class="ptier">Business</div>
+      <div class="pprice">$499<span>/mo</span></div>
+      <div class="pdesc">Large teams, compliance needs</div>
+      <div class="pf">10 workspaces</div>
+      <div class="pf">Unlimited users</div>
+      <div class="pf">10M records</div>
+      <div class="pf">200 GB storage</div>
+      <div class="pf">SLA + uptime guarantee</div>
+      <div class="pf">Priority support 4h</div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <h3>Overage Pricing</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Resource</th><th>Overage Rate</th></tr></thead>
+          <tbody>
+            <tr><td>Records over limit</td><td>$0.005 / 1k records / mo</td></tr>
+            <tr><td>Storage over limit</td><td>$0.05 / GB / mo</td></tr>
+            <tr><td>Extra workspace</td><td>$29 / workspace / mo</td></tr>
+            <tr><td>Extra user (Business)</td><td>$8 / user / mo</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <h3>Annual Billing (20% discount)</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Plan</th><th>Annual Price</th><th>Saving</th></tr></thead>
+          <tbody>
+            <tr><td>Starter</td><td>$470/yr</td><td>$118</td></tr>
+            <tr><td>Pro</td><td>$1,430/yr</td><td>$358</td></tr>
+            <tr><td>Business</td><td>$4,790/yr</td><td>$1,198</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <h3>Enterprise (Custom Contract)</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>What's Included</th><th>Provider Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Dedicated database instance (not Elastic Pool)</td><td class="provider-row azure svc-azure">Azure: dedicated Azure SQL, custom region</td></tr>
+        <tr><td>Custom data residency (EU, US, APAC)</td><td class="provider-row aws svc-aws">AWS: any RDS region with Multi-AZ</td></tr>
+        <tr><td>SOC 2 Type II, DPA, custom SLA</td><td class="provider-row gcp svc-gcp">GCP: Cloud SQL in chosen region</td></tr>
+        <tr><td>Dedicated Slack channel + Customer Success Manager</td><td>On-prem Docker deployment also available</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="pfoot">
+    <span>Nivaro Cloud — SaaS Launch Plan</span>
+    <span>Page 8</span>
+  </div>
+</div>
+</div>
+
+
+<!-- ═══════════════════ PAGE 9 — COST PROJECTIONS ═══════════════════ -->
+<div class="page">
+<div class="cp">
+  <div class="ph">
+    <div class="ph-logo"><div class="ph-lm">N</div>Nivaro Cloud</div>
+    <div class="ph-sec">08 — Cost Projections</div>
+  </div>
+
+  <div class="eyebrow">Section 08</div>
+  <div class="sec-title">Cost Projections</div>
+  <div class="sec-desc">
+    Infrastructure costs at three growth stages across all provider options.
+    Target 70–80%+ gross margin at scale — typical for best-in-class SaaS infra businesses.
+  </div>
+
+  <h3>Monthly Infrastructure Cost by Stage</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Provider</th><th>Launch (0–50 tenants)</th><th>Growth (50–200)</th><th>Scale (200–500)</th></tr></thead>
+      <tbody>
+        <tr class="provider-row azure">
+          <td><span class="badge b-azure">Azure</span> SQL Elastic Pools</td>
+          <td><strong>~$635/mo</strong></td>
+          <td><strong>~$1,980/mo</strong></td>
+          <td><strong>~$4,620/mo</strong></td>
+        </tr>
+        <tr class="provider-row indie">
+          <td><span class="badge b-indie">Indie</span> Railway + Docker SQL</td>
+          <td><strong>~$150/mo</strong></td>
+          <td><strong>~$500/mo</strong></td>
+          <td><strong>~$1,200/mo</strong> (add VPS)</td>
+        </tr>
+        <tr class="provider-row gcp">
+          <td><span class="badge b-gcp">GCP</span> Cloud Run + Cloud SQL PG</td>
+          <td><strong>~$400/mo</strong></td>
+          <td><strong>~$1,200/mo</strong></td>
+          <td><strong>~$3,200/mo</strong></td>
+        </tr>
+        <tr class="provider-row aws">
+          <td><span class="badge b-aws">AWS</span> ECS + Aurora Serverless PG</td>
+          <td><strong>~$450/mo</strong></td>
+          <td><strong>~$1,400/mo</strong></td>
+          <td><strong>~$3,800/mo</strong></td>
+        </tr>
+        <tr class="provider-row aws" style="opacity:.4;">
+          <td><span class="badge b-aws">AWS</span> ECS + RDS SQL Server <em>(avoid)</em></td>
+          <td><strong>~$2,000/mo</strong></td>
+          <td><strong>~$8,000/mo</strong></td>
+          <td><strong>~$20,000/mo</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Revenue vs. Infrastructure (Gross Margin)</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Stage</th><th>Tenant Mix</th><th>MRR</th><th>Infra (Azure)</th><th>Gross Margin</th></tr></thead>
+      <tbody>
+        <tr><td>Launch</td><td>20 Free, 15 Starter, 8 Pro</td><td>$1,927</td><td>$635</td><td><span class="badge b-amber">67%</span></td></tr>
+        <tr><td>Growth</td><td>50 Starter, 30 Pro, 10 Business</td><td>$11,920</td><td>$1,980</td><td><span class="badge b-green">83%</span></td></tr>
+        <tr><td>Scale</td><td>100 Starter, 80 Pro, 25 Business</td><td>$31,375</td><td>$4,620</td><td><span class="badge b-green">85%</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="metrics">
+    <div class="metric"><div class="mv">$10k</div><div class="ml">MRR target</div></div>
+    <div class="metric"><div class="mv">83%</div><div class="ml">Gross margin at growth</div></div>
+    <div class="metric"><div class="mv">67</div><div class="ml">Pro customers needed</div></div>
+    <div class="metric"><div class="mv">~$8</div><div class="ml">Avg infra / paid tenant</div></div>
+  </div>
+
+  <div class="callout success">
+    <div class="ci">📈</div>
+    <div class="cb">
+      <div class="ct">Infra scales sub-linearly on Azure and Indie paths</div>
+      <div class="cx">Elastic Pools and a shared Docker SQL Server instance both exhibit the same economics: adding your 50th idle tenant costs near-zero marginal compute. At 200 tenants, average infra cost per paid tenant drops below $10/mo — well inside a 75%+ gross margin at any of the paid tier price points.</div>
+    </div>
+  </div>
+
+  <div class="pfoot">
+    <span>Nivaro Cloud — SaaS Launch Plan</span>
+    <span>Page 9</span>
+  </div>
+</div>
+</div>
+
+
+<!-- ═══════════════════ PAGE 10 — ROADMAP ═══════════════════ -->
+<div class="page">
+<div class="cp">
+  <div class="ph">
+    <div class="ph-logo"><div class="ph-lm">N</div>Nivaro Cloud</div>
+    <div class="ph-sec">09 — Launch Roadmap</div>
+  </div>
+
+  <div class="eyebrow">Section 09</div>
+  <div class="sec-title">Launch Roadmap</div>
+  <div class="sec-desc">
+    Four phases from infrastructure foundation to public launch. Each phase ends with a shippable milestone.
+    Provider choice affects Month 1 only — everything else is identical across all paths.
+  </div>
+
+  <div class="tl">
+    <div class="tli">
+      <div class="tld"></div>
+      <div class="tlph">Month 1</div>
+      <div class="tllbl">Foundation</div>
+      <ul class="tltasks">
+        <li>Choose provider (see pg 2)</li>
+        <li>Provision core infra</li>
+        <li>Blob/S3 file storage swap</li>
+        <li>Meta DB schema created</li>
+        <li>Tenant routing middleware</li>
+        <li>Connection pool map</li>
+        <li>Stripe account + products</li>
+      </ul>
+    </div>
+    <div class="tli">
+      <div class="tld"></div>
+      <div class="tlph">Month 2</div>
+      <div class="tllbl">Automation</div>
+      <ul class="tltasks">
+        <li>Inngest provision function</li>
+        <li>Migration runner job</li>
+        <li>Cloudflare DNS API wired</li>
+        <li>Stripe webhook handler</li>
+        <li>Email/password auth added</li>
+        <li>Welcome email flow</li>
+        <li>Usage metering cron</li>
+      </ul>
+    </div>
+    <div class="tli">
+      <div class="tld"></div>
+      <div class="tlph">Month 3</div>
+      <div class="tllbl">Beta</div>
+      <ul class="tltasks">
+        <li>10 design partners (free)</li>
+        <li>Stripe billing portal live</li>
+        <li>Status page (Better Stack)</li>
+        <li>Internal migration dashboard</li>
+        <li>Bug fixes from partners</li>
+        <li>Docs + marketing site</li>
+      </ul>
+    </div>
+    <div class="tli">
+      <div class="tld"></div>
+      <div class="tlph">Month 4</div>
+      <div class="tllbl">Launch</div>
+      <ul class="tltasks">
+        <li>Public signup live</li>
+        <li>Starter + Pro tiers only</li>
+        <li>Product Hunt launch</li>
+        <li>First paid customers</li>
+        <li>Monitoring + alerting live</li>
+        <li>On-call rotation starts</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <h3>Post-Launch Backlog (Month 5+)</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Feature</th><th>Why</th><th>Priority</th></tr></thead>
+      <tbody>
+        <tr><td>Self-serve plan upgrade/downgrade</td><td>Eliminates manual support for plan changes</td><td><span class="badge b-cyan">High</span></td></tr>
+        <tr><td>Tenant usage dashboard</td><td>Reduces surprise overage churn; builds trust</td><td><span class="badge b-cyan">High</span></td></tr>
+        <tr><td>DB backup &amp; restore UI</td><td>Enterprise requirement; reduces support tickets</td><td><span class="badge b-amber">Medium</span></td></tr>
+        <tr><td>Custom domain support</td><td>Business customers want <code>cms.their-domain.com</code></td><td><span class="badge b-amber">Medium</span></td></tr>
+        <tr><td>SOC 2 Type II</td><td>Required to close Enterprise deals — 6–12 months</td><td><span class="badge b-amber">Medium</span></td></tr>
+        <tr><td>EU data residency option</td><td>GDPR-strict customers; just deploy to EU region</td><td><span class="badge b-amber">Medium</span></td></tr>
+        <tr><td>Postgres migration (if on AWS/GCP)</td><td>Unlocks cost-efficient multi-tenant DB model</td><td><span class="badge b-cyan">High (if AWS/GCP)</span></td></tr>
+        <tr><td>Template library / marketplace</td><td>Reduces time-to-value; drives growth</td><td><span class="badge b-green">Normal</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="pfoot">
+    <span>Nivaro Cloud — SaaS Launch Plan</span>
+    <span>Page 10</span>
+  </div>
+</div>
+</div>
+
+
+<!-- ═══════════════════ PAGE 11 — OPERATIONS & SECURITY ═══════════════════ -->
+<div class="page">
+<div class="cp">
+  <div class="ph">
+    <div class="ph-logo"><div class="ph-lm">N</div>Nivaro Cloud</div>
+    <div class="ph-sec">10 — Operations & Security</div>
+  </div>
+
+  <div class="eyebrow">Section 10</div>
+  <div class="sec-title">Operational Playbook & Security</div>
+  <div class="sec-desc">What needs to be running before you take your first paid customer — provider-agnostic.</div>
+
+  <div class="two-col">
+    <div>
+      <h3>Monitoring Stack</h3>
+      <div class="ic">
+        <h4><span>📊</span> Required before launch</h4>
+        <ul>
+          <li>Better Stack — status page + uptime per subdomain</li>
+          <li>Sentry — JS + Node error tracking (free tier)</li>
+          <li>PagerDuty — on-call alerts for P0/P1</li>
+          <li>Migration status dashboard (internal)</li>
+          <li>Provider-native metrics (App Insights / CloudWatch / Cloud Monitoring)</li>
+        </ul>
+      </div>
+
+      <h3>Backup Strategy</h3>
+      <div class="ic">
+        <h4><span>💾</span> Data Protection</h4>
+        <ul>
+          <li class="provider-row azure">Azure: SQL auto-backups, 7-day PITR included</li>
+          <li class="provider-row aws">AWS: RDS automated snapshots (7–35 days)</li>
+          <li class="provider-row gcp">GCP: Cloud SQL automated backups daily</li>
+          <li class="provider-row indie">Indie: pg_dump / sqlcmd cron → offsite storage</li>
+          <li>Blob/S3/GCS: geo-redundant storage for files</li>
+          <li>Meta DB daily backup to separate account</li>
+          <li>Quarterly restore drill — test before needed</li>
+        </ul>
+      </div>
+
+      <h3>Incident Response</h3>
+      <div class="ic">
+        <h4><span>🚨</span> SLA levels</h4>
+        <ul>
+          <li>P0 full outage: 15min response + status page update</li>
+          <li>P1 degraded: 1hr response + affected tenants notified</li>
+          <li>P2 single tenant: 4hr Business, 24hr others</li>
+          <li>Public post-mortems for P0/P1 — builds trust</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <h3>Security Baseline</h3>
+      <div class="ic">
+        <h4><span>🔐</span> Before first customer</h4>
+        <ul>
+          <li>DB connections over TLS (DB_ENCRYPT=true — already set)</li>
+          <li>Connection strings in secrets manager (Key Vault / Secrets Manager / Secret Manager)</li>
+          <li>Tenant DB user has minimal permissions — no DROP TABLE</li>
+          <li>Separate provisioning service account (CREATE DATABASE only)</li>
+          <li>Stripe webhook signature validation</li>
+          <li>Rate limiting on all public routes</li>
+          <li>CORS locked to *.nivaro.io</li>
+        </ul>
+      </div>
+
+      <h3>Compliance Checklist</h3>
+      <div class="ic">
+        <h4><span>📋</span> Legal requirements</h4>
+        <ul>
+          <li>Privacy Policy — required before launch</li>
+          <li>DPA (Data Processing Agreement) — EU customers</li>
+          <li>Terms of Service with acceptable use policy</li>
+          <li>GDPR data export + deletion (already built in Nivaro)</li>
+          <li>SOC 2 Type II — start Month 4–5</li>
+        </ul>
+      </div>
+
+      <h3>Tenant Isolation Guarantee</h3>
+      <div class="ic">
+        <h4><span>🏠</span> DB-per-tenant means</h4>
+        <ul>
+          <li>Bug in tenant A cannot read tenant B data</li>
+          <li>Noisy tenant cannot degrade others (pool throttling)</li>
+          <li>Compromised credentials scoped to one tenant</li>
+          <li>Delete tenant = drop database, no data leaks</li>
+          <li>Satisfies most enterprise security questionnaires</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <div class="ci">🚀</div>
+    <div class="cb">
+      <div class="ct">You're further along than you think</div>
+      <div class="cx">Nivaro already ships: multi-workspace isolation, usage counters, RBAC, audit logs, revision history, notifications, OIDC auth, retention/redaction, PDF templates, and rate limiting. The gap to a launchable SaaS is provisioning automation, file storage swap, tenant routing middleware, and Stripe integration — realistically 6–8 weeks of focused engineering.</div>
+    </div>
+  </div>
+
+  <div class="pfoot">
+    <span>Nivaro Cloud — SaaS Launch Plan</span>
+    <span>Page 11 of 11</span>
+  </div>
+</div>
+</div>
+
+</div><!-- .pages-wrap -->
+
+<script>
+function setProvider(p, btn) {
+  document.body.className = 'showing-' + p;
+  document.querySelectorAll('.provider-btn').forEach(b => {
+    b.className = 'provider-btn';
+  });
+  btn.className = 'provider-btn active-' + p;
+}
+</script>
+</body>
+</html>

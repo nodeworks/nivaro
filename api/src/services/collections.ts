@@ -13,6 +13,13 @@ function parseJson<T>(val: unknown): T | null {
   return val as T
 }
 
+function serializeCollection(col: CMSCollection): CMSCollection {
+  return {
+    ...col,
+    picker_filter: parseJson(col.picker_filter)
+  }
+}
+
 export async function listCollections(workspaceId?: string | null): Promise<CMSCollection[]> {
   const q = db<CMSCollection>('nivaro_collections')
     .orderBy('sort', 'asc')
@@ -22,7 +29,8 @@ export async function listCollections(workspaceId?: string | null): Promise<CMSC
       this.where('workspace', workspaceId).orWhereNull('workspace')
     })
   }
-  return q
+  const rows = await q
+  return rows.map(serializeCollection)
 }
 
 export async function listTableCollections(): Promise<CMSCollection[]> {
@@ -35,7 +43,8 @@ export async function listTableCollections(): Promise<CMSCollection[]> {
 }
 
 export async function getCollection(name: string): Promise<CMSCollection | undefined> {
-  return db<CMSCollection>('nivaro_collections').where({ collection: name }).first()
+  const col = await db<CMSCollection>('nivaro_collections').where({ collection: name }).first()
+  return col ? serializeCollection(col) : undefined
 }
 
 export async function createCollection(

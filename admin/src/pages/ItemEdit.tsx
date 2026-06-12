@@ -12,10 +12,14 @@ import {
   FunctionSquare,
   LayoutTemplate,
   Loader2,
+  Info,
   Network,
+  EyeOff,
+  PanelRight,
   Play,
   Plus,
   Save,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   X
@@ -31,7 +35,7 @@ import { ErpStatusBadge } from '@/components/erp-status-badge'
 import { FieldHistorySparkline } from '@/components/field-history-sparkline'
 import { InlineRelationEditor } from '@/components/inline-relation-editor'
 import { ItemLockBanner, useItemLock } from '@/components/item-lock-banner'
-import { PipelinePanel } from '@/components/pipeline-panel'
+import { PipelinePanel, PipelineTransitionButtons } from '@/components/pipeline-panel'
 import { RelationLabel } from '@/components/relation-label'
 import { RelationPicker } from '@/components/relation-picker'
 import { RevisionsPanel } from '@/components/revisions-panel'
@@ -56,6 +60,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { WorkflowPanel } from '@/components/workflow-panel'
 import {
   type Addendum,
@@ -140,13 +145,87 @@ function toLocalDatetime(value: unknown): string {
   }
 }
 
+interface CascadeFilterRule {
+  parent_field: string
+  filter_column: string
+  clear_on_parent_change?: boolean
+  clear_on_unavailable?: boolean
+  filter_is_m2m?: boolean
+}
+
+function getCascadeFilters(depConfig: string | null | undefined): CascadeFilterRule[] {
+  if (!depConfig) return []
+  try {
+    const parsed = typeof depConfig === 'string' ? JSON.parse(depConfig) : depConfig
+    return Array.isArray(parsed?.cascade_filters) ? (parsed.cascade_filters as CascadeFilterRule[]) : []
+  } catch { return [] }
+}
+
+// Null-rendering component that fires cascade clear effects when the parent field value changes.
+// Works for both M2O children (clears draft via onClear) and M2M children (onClear unstages links).
+// For "clear if unavailable": fetches the related collection and removes value only if not in options.
+function CascadeEffectController({
+  cascadeRules,
+  cascadeFilter,
+  currentValue,
+  relatedCollection,
+  onClear,
+}: {
+  cascadeRules: CascadeFilterRule[]
+  cascadeFilter?: Record<string, unknown>
+  currentValue?: unknown
+  relatedCollection?: string   // for clear_on_unavailable only
+  onClear: () => void
+}) {
+  const cascadeFilterStr = JSON.stringify(cascadeFilter)
+  // undefined = not yet seen (mount or remount) — never clear on mount/remount
+  const prevFilterRef = useRef<string | undefined>(undefined)
+  const handleClearRef = useRef(onClear)
+  handleClearRef.current = onClear
+
+  useEffect(() => {
+    const prev = prevFilterRef.current
+    prevFilterRef.current = cascadeFilterStr
+    // Skip mount and remount (prev is undefined when component first renders or re-mounts after tab switch)
+    if (prev === undefined) return
+    // Skip if filter didn't actually change
+    if (prev === cascadeFilterStr) return
+    if (cascadeRules.some(r => r.clear_on_parent_change)) {
+      handleClearRef.current()
+    }
+  // Only re-run when the filter value actually changes (parent changed)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cascadeFilterStr])
+
+  useEffect(() => {
+    if (!cascadeFilter || Object.keys(cascadeFilter).length === 0) return
+    if (!cascadeRules.some(r => r.clear_on_unavailable)) return
+    if (currentValue == null || !relatedCollection) return
+    api.get(`/items/${relatedCollection}`, {
+      params: {
+        filter: JSON.stringify({ ...cascadeFilter, id: { _eq: currentValue } }),
+        limit: 1, fields: 'id',
+      },
+    }).then(res => {
+      if (((res.data.data ?? []) as unknown[]).length === 0) handleClearRef.current()
+    }).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cascadeFilterStr])
+
+  return null
+}
+
 function FieldInput({
   field,
   value,
   onChange,
   relations,
   collection,
-  id: itemId
+  id: itemId,
+  cascadeFilter,
+  unsatisfiedParentLabel,
+  cascadeParentLabel,
+  placeholder
 }: {
   field: CMSField
   value: unknown
@@ -154,6 +233,10 @@ function FieldInput({
   relations: CMSRelation[]
   collection: string
   id?: string
+  cascadeFilter?: Record<string, unknown>
+  unsatisfiedParentLabel?: string | null
+  cascadeParentLabel?: string | null
+  placeholder?: string | null
 }) {
   const iface = field.interface ?? ''
   // Relation interfaces: anything starting with 'relation-', the legacy
@@ -164,16 +247,20 @@ function FieldInput({
     : null
   if (m2oRelation) {
     const opts = (() => { try { return typeof field.options === 'string' ? JSON.parse(field.options) : (field.options ?? {}) } catch { return {} } })()
-    const inlineEdit = opts.inline_relation !== false
+    const inlineEdit = opts.inline_relation === true
+    const hasActiveFilter = cascadeFilter && Object.keys(cascadeFilter).length > 0
+    const isUnsatisfied = !!unsatisfiedParentLabel
     const picker = (
       <RelationPicker
         relatedCollection={m2oRelation.one_collection!}
         value={value}
         onChange={onChange}
-        disabled={field.readonly}
+        disabled={field.readonly || isUnsatisfied}
+        extraFilter={hasActiveFilter ? cascadeFilter : undefined}
+        placeholder={isUnsatisfied ? `Select ${unsatisfiedParentLabel} first` : undefined}
       />
     )
-    return inlineEdit ? (
+    return inlineEdit && !isUnsatisfied ? (
       <InlineRelationEditor relatedCollection={m2oRelation.one_collection!} relatedId={value}>
         {picker}
       </InlineRelationEditor>
@@ -201,14 +288,15 @@ function FieldInput({
     if (!itemId || itemId === 'new') {
       return <p className='text-[12px] text-slate-400 py-1'>Save the record first to manage related items</p>
     }
+    const hasActiveFilter = !!(cascadeFilter && Object.keys(cascadeFilter).length > 0)
     if (field.interface === 'relation-m2m') {
       return <InlineM2MPicker relation={m2mRelation} parentId={itemId} allRelations={relations} />
     }
     const fieldOpts = (() => { try { return typeof field.options === 'string' ? JSON.parse(field.options) : (field.options ?? {}) } catch { return {} } })()
     if (fieldOpts.max_values === 1) {
-      return <M2MSingleSelectCombobox relation={m2mRelation} parentId={itemId} allRelations={relations} />
+      return <M2MSingleSelectCombobox relation={m2mRelation} parentId={itemId} allRelations={relations} extraFilter={hasActiveFilter ? cascadeFilter : undefined} />
     }
-    return <M2MMultiSelectCombobox relation={m2mRelation} parentId={itemId} allRelations={relations} />
+    return <M2MMultiSelectCombobox relation={m2mRelation} parentId={itemId} allRelations={relations} extraFilter={hasActiveFilter ? cascadeFilter : undefined} />
   }
 
   const strVal = value === null || value === undefined ? '' : String(value)
@@ -249,6 +337,7 @@ function FieldInput({
         step={isInt ? '1' : 'any'}
         value={strVal}
         onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+        placeholder={placeholder ?? undefined}
       />
     )
   }
@@ -334,6 +423,7 @@ function FieldInput({
         value={typeof value === 'string' ? value : value ? JSON.stringify(value) : ''}
         onChange={onChange}
         disabled={field.readonly}
+        placeholder={placeholder}
       />
     )
   }
@@ -350,11 +440,11 @@ function FieldInput({
   }
 
   if (field.interface === 'input') {
-    return <Input value={strVal} onChange={(e) => onChange(e.target.value || null)} />
+    return <Input value={strVal} onChange={(e) => onChange(e.target.value || null)} placeholder={placeholder ?? undefined} />
   }
 
   if (field.type === 'text' || (field.interface ?? '').includes('textarea')) {
-    return <Textarea value={strVal} rows={3} onChange={(e) => onChange(e.target.value || null)} />
+    return <Textarea value={strVal} rows={3} onChange={(e) => onChange(e.target.value || null)} placeholder={placeholder ?? undefined} />
   }
 
   // O2M interface: match relation by field name OR by many_collection (backward compat when one_field='id')
@@ -371,7 +461,7 @@ function FieldInput({
     }
   }
 
-  return <Input value={strVal} onChange={(e) => onChange(e.target.value || null)} />
+  return <Input value={strVal} onChange={(e) => onChange(e.target.value || null)} placeholder={placeholder ?? undefined} />
 }
 
 interface AttributeDef {
@@ -539,6 +629,367 @@ const SYSTEM_FIELDS = new Set([
   'user_updated'
 ])
 
+// ── StepperStrip ─────────────────────────────────────────────────────────────
+
+interface StepDef { key: string; label: string; icon: string | null }
+
+function StepperStrip({
+  steps,
+  activeKey,
+  completedKeys,
+  errorKeys,
+  onStep,
+}: {
+  steps: StepDef[]
+  activeKey: string
+  completedKeys: Set<string>
+  errorKeys: Set<string>
+  onStep: (key: string) => void
+}) {
+  return (
+    <div className='mb-6 -mt-1 w-full'>
+      <div
+        className='grid w-full'
+        style={{ gridTemplateColumns: `repeat(${steps.length}, 1fr)` }}
+      >
+        {steps.map((step, idx) => {
+          const isActive = step.key === activeKey
+          const isDone = completedKeys.has(step.key) && !isActive
+          const hasErr = errorKeys.has(step.key)
+          return (
+            <div key={step.key} className='relative flex flex-col items-center gap-1.5 px-1'>
+              {/* connector line: from this step's center to the next step's center */}
+              {idx < steps.length - 1 && (
+                <div className='absolute top-3.5 left-1/2 w-full -translate-y-1/2 px-0' style={{ right: 0 }}>
+                  <div className={cn('h-px w-full transition-colors duration-300', isDone ? 'bg-emerald-400' : 'bg-slate-200 dark:bg-border')} />
+                </div>
+              )}
+              <button
+                type='button'
+                onClick={() => onStep(step.key)}
+                className={cn(
+                  'relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-[11px] font-semibold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00ceff] focus-visible:ring-offset-2',
+                  isActive
+                    ? 'border-[#00ceff] bg-[#00ceff] text-[#172940]'
+                    : hasErr
+                      ? 'border-red-500 bg-red-500 text-white'
+                      : isDone
+                        ? 'border-emerald-500 bg-emerald-500 text-white'
+                        : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300 dark:bg-background'
+                )}
+              >
+                {isDone && !hasErr ? (
+                  <Check className='h-3.5 w-3.5' strokeWidth={2.5} />
+                ) : (
+                  <span>{idx + 1}</span>
+                )}
+              </button>
+              <span className={cn(
+                'text-center text-[11px] font-medium leading-tight',
+                isActive ? 'text-slate-900 dark:text-slate-100' : isDone ? 'text-slate-600 dark:text-slate-400' : 'text-slate-400'
+              )}>
+                {step.label}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── SummaryPanel ──────────────────────────────────────────────────────────────
+
+const WYSIWYG_INTERFACES = new Set(['wysiwyg', 'rich-text', 'input-rich-text-html', 'input-rich-text-md', 'markdown'])
+
+function SummaryFieldRow({
+  f, kind, val, m2mIds, formatted, isEmpty, isRequiredEmpty,
+  m2oRelMap, m2mRelMap, relations, onNavigate,
+}: {
+  f: { field: string; label?: string | null; required?: boolean; type?: string; interface?: string | null }
+  kind: 'm2o' | 'm2m' | 'wysiwyg' | 'scalar'
+  val: unknown
+  m2mIds: unknown[]
+  formatted: string | null
+  isEmpty: boolean
+  isRequiredEmpty: boolean
+  m2oRelMap: Map<string, string>
+  m2mRelMap: Map<string, CMSRelation>
+  relations: CMSRelation[]
+  onNavigate?: () => void
+}) {
+  const valueRef = useRef<HTMLDivElement>(null)
+
+  function stripHtml(html: string) {
+    return html.replace(/<[^>]*>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim()
+  }
+
+  const [copied, setCopied] = useState(false)
+
+  function handleCopy() {
+    const text = valueRef.current?.innerText?.trim() ?? ''
+    if (!text) return
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {})
+  }
+
+  const fieldLbl = f.label || titleCase(f.field)
+
+  return (
+    <div
+      onClick={() => onNavigate?.()}
+      className={cn(
+        'group border-b border-slate-100 px-4 py-2 transition-colors last:border-b-0 hover:bg-slate-50 dark:border-border dark:hover:bg-muted/40',
+        onNavigate && 'cursor-pointer',
+        isRequiredEmpty && 'bg-red-50 dark:bg-red-900/10'
+      )}
+    >
+      <div className='flex items-center gap-1'>
+        {isRequiredEmpty && <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-red-400' />}
+        <span className={cn('flex-1 truncate text-[10px] font-medium', isRequiredEmpty ? 'text-red-500 dark:text-red-400' : 'text-slate-400 dark:text-slate-500')}>
+          {fieldLbl}
+        </span>
+        {!isEmpty && (
+          <button
+            type='button'
+            onClick={(e) => { e.stopPropagation(); handleCopy() }}
+            title='Copy'
+            className={cn(
+            'shrink-0 rounded p-0.5 transition-all',
+            copied
+              ? 'opacity-100 text-emerald-500'
+              : 'opacity-0 group-hover:opacity-100 text-slate-300 hover:text-slate-500 dark:hover:text-slate-300'
+          )}
+          >
+            {copied ? (
+              <Check className='h-3 w-3' strokeWidth={2.5} />
+            ) : (
+              <svg className='h-3 w-3' viewBox='0 0 16 16' fill='none' stroke='currentColor' strokeWidth='1.5'>
+                <rect x='5' y='5' width='9' height='9' rx='1.5' />
+                <path d='M3 11V3a1 1 0 011-1h8' />
+              </svg>
+            )}
+          </button>
+        )}
+      </div>
+      <div ref={valueRef} className='mt-0.5 text-[12px] text-slate-900 dark:text-slate-100'>
+        {isEmpty ? (
+          <span className='text-slate-300 dark:text-slate-600'>—</span>
+        ) : kind === 'm2o' ? (
+          <RelationLabel relatedCollection={m2oRelMap.get(f.field)!} id={val} />
+        ) : kind === 'm2m' ? (
+          <div className='flex flex-wrap gap-x-1.5 gap-y-0.5'>
+            {m2mIds.map((id, i) => {
+              const rel = m2mRelMap.get(f.field)!
+              const farEndCol = relations.find(r => r.many_collection === rel.many_collection && r.many_field === rel.junction_field && r.id !== rel.id)?.one_collection
+              return farEndCol
+                ? <RelationLabel key={i} relatedCollection={farEndCol} id={id} />
+                : <span key={i} className='font-mono text-[11px]'>{String(id)}</span>
+            })}
+          </div>
+        ) : kind === 'wysiwyg' && formatted ? (
+          <span className='line-clamp-3 text-[11px] leading-snug text-slate-600 dark:text-slate-300'>
+            {stripHtml(formatted)}
+          </span>
+        ) : (
+          <span className='break-words'>{formatted}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SummaryPanel({
+  groups,
+  groupedMap,
+  ungrouped,
+  draft,
+  hiddenFields,
+  showAll,
+  onClose,
+  relations,
+  collection,
+  allM2mRelations,
+  m2mLinks,
+  m2mUnlinks,
+  itemId,
+  isReady,
+  onNavigateToField,
+}: {
+  groups: Array<{ key: string; label: string; type: string }>
+  groupedMap: Record<string, Array<{ field: string; label?: string | null; required?: boolean; hidden?: boolean; type?: string; interface?: string | null }>>
+  ungrouped: Array<{ field: string; label?: string | null; required?: boolean; hidden?: boolean; type?: string; interface?: string | null }>
+  draft: Record<string, unknown>
+  hiddenFields: Set<string>
+  showAll: boolean
+  onClose: () => void
+  relations: CMSRelation[]
+  collection: string
+  allM2mRelations: CMSRelation[]
+  m2mLinks: Map<string, unknown[]>
+  m2mUnlinks: Map<string, Set<unknown>>
+  itemId: string | undefined
+  isReady: boolean
+  onNavigateToField?: (fieldName: string, groupKey: string | null) => void
+}) {
+  const m2oRelMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const r of relations) {
+      if (r.many_collection === collection && r.many_field && r.one_collection && !r.junction_field)
+        map.set(r.many_field, r.one_collection)
+    }
+    return map
+  }, [relations, collection])
+
+  const m2mRelMap = useMemo(() => {
+    const map = new Map<string, CMSRelation>()
+    for (const r of allM2mRelations) {
+      if (r.one_field) map.set(r.one_field, r)
+    }
+    return map
+  }, [allM2mRelations])
+
+  // Subscribe to junction data for all M2M relations so panel updates live
+  const m2mJunctionQueries = useQueries({
+    queries: allM2mRelations
+      .filter(r => r.one_field && !!itemId)
+      .map(r => ({
+        queryKey: ['m2m-items', r.many_collection, r.many_field, itemId],
+        queryFn: () => api.get(`/items/${r.many_collection}`, {
+          params: { filter: JSON.stringify({ [r.many_field]: { _eq: itemId } }), limit: 200, fields: `id,${r.junction_field}` }
+        }).then(res => (res.data.data ?? []) as Record<string, unknown>[]),
+        staleTime: 30_000,
+        enabled: !!itemId,
+      }))
+  })
+
+  const m2mJunctionMap = useMemo(() => {
+    const map = new Map<string, Record<string, unknown>[]>()
+    allM2mRelations.filter(r => r.one_field).forEach((r, i) => {
+      map.set(r.one_field!, m2mJunctionQueries[i]?.data ?? [])
+    })
+    return map
+  }, [allM2mRelations, m2mJunctionQueries])
+
+  function getM2MIds(rel: CMSRelation): unknown[] {
+    const key = rel.one_field ?? `${rel.many_collection}.${rel.junction_field}`
+    const unlinks = m2mUnlinks.get(key) ?? new Set()
+    const committed = (m2mJunctionMap.get(rel.one_field!) ?? [])
+      .filter(ji => !unlinks.has(ji.id))
+      .map(ji => ji[rel.junction_field!])
+    const staged = m2mLinks.get(key) ?? []
+    return [...committed, ...staged]
+  }
+
+  function formatVal(val: unknown, type?: string): string | null {
+    if (val === null || val === undefined || val === '') return null
+    if (typeof val === 'boolean') return val ? 'Yes' : 'No'
+    if (typeof val === 'object') {
+      const obj = val as Record<string, unknown>
+      return obj.id != null ? String(obj.id) : null
+    }
+    const s = String(val)
+    if ((type === 'date' || type === 'datetime') && s.length >= 10) {
+      try { return new Date(s).toLocaleDateString(undefined, { dateStyle: 'medium' }) } catch { return s }
+    }
+    return s
+  }
+
+  const tabGroups = groups.filter(g => g.type === 'tab')
+  const sectionGroups = groups.filter(g => g.type === 'section')
+
+  const sections: Array<{ label: string; groupKey: string | null; fields: typeof ungrouped }> = []
+  if (ungrouped.length > 0 || sectionGroups.length > 0) {
+    const gFields = [...ungrouped, ...sectionGroups.flatMap(g => groupedMap[g.key] ?? [])].filter(f => !f.hidden && !hiddenFields.has(f.field))
+    if (gFields.length > 0) sections.push({ label: 'General', groupKey: null, fields: gFields })
+  }
+  for (const g of tabGroups) {
+    const gFields = (groupedMap[g.key] ?? []).filter(f => !f.hidden && !hiddenFields.has(f.field))
+    if (gFields.length > 0) sections.push({ label: g.label, groupKey: g.key, fields: gFields })
+  }
+
+  return (
+    <div className='flex w-[260px] shrink-0 flex-col border-l border-slate-200 bg-white dark:border-border dark:bg-background'>
+      <div className='flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-border'>
+        <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>Summary</span>
+        <button type='button' onClick={onClose} className='rounded p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'>
+          <X className='h-3.5 w-3.5' />
+        </button>
+      </div>
+
+      <div className='flex-1 overflow-y-auto'>
+        {(!isReady || m2mJunctionQueries.some(q => q.isLoading)) && (
+          <div className='space-y-3 p-4'>
+            {[...Array(6)].map((_, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: skeleton
+              <div key={i} className='space-y-1.5'>
+                <Skeleton className='h-2.5 w-20 rounded' />
+                <Skeleton className='h-4 w-full rounded' />
+              </div>
+            ))}
+          </div>
+        )}
+        {(isReady && !m2mJunctionQueries.some(q => q.isLoading)) && sections.map((sec, secIdx) => {
+          type RowData = { f: typeof ungrouped[number]; kind: 'm2o' | 'm2m' | 'wysiwyg' | 'scalar'; val: unknown; m2mIds: unknown[]; formatted: string | null; isEmpty: boolean; isRequiredEmpty: boolean }
+          const rows: RowData[] = sec.fields.flatMap((f) => {
+            const val = draft[f.field]
+            const isWysiwyg = WYSIWYG_INTERFACES.has(f.interface ?? '')
+            const m2mRel = m2mRelMap.get(f.field)
+
+            let kind: RowData['kind'] = 'scalar'
+            let m2mIds: unknown[] = []
+            let formatted: string | null = null
+            let isEmpty = false
+
+            if (m2mRel) {
+              kind = 'm2m'
+              m2mIds = getM2MIds(m2mRel)
+              isEmpty = m2mIds.length === 0
+            } else if (!m2mRel && m2oRelMap.has(f.field)) {
+              kind = 'm2o'
+              isEmpty = val === null || val === undefined || val === ''
+            } else if (isWysiwyg) {
+              kind = 'wysiwyg'
+              formatted = typeof val === 'string' && val.trim() ? val : null
+              isEmpty = formatted === null
+            } else {
+              kind = 'scalar'
+              formatted = formatVal(val, f.type)
+              isEmpty = formatted === null
+            }
+
+            const isRequiredEmpty = isEmpty && !!f.required
+            if (!showAll && isEmpty && !isRequiredEmpty) return []
+            return [{ f, kind, val, m2mIds, formatted, isEmpty, isRequiredEmpty }]
+          })
+          if (rows.length === 0 && !showAll) return null
+          return (
+            <div key={sec.label}>
+              <div className={cn(
+                'sticky top-0 z-10 border-b border-slate-200 bg-slate-100 px-4 py-2 dark:border-border dark:bg-muted/60',
+                secIdx > 0 && 'border-t'
+              )}>
+                <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>{sec.label}</span>
+              </div>
+              {rows.map(({ f, kind, val, m2mIds, formatted, isEmpty, isRequiredEmpty }) => (
+                <SummaryFieldRow
+                  key={f.field}
+                  f={f} kind={kind} val={val} m2mIds={m2mIds}
+                  formatted={formatted} isEmpty={isEmpty} isRequiredEmpty={isRequiredEmpty}
+                  m2oRelMap={m2oRelMap} m2mRelMap={m2mRelMap} relations={relations}
+                  onNavigate={onNavigateToField ? () => onNavigateToField(f.field, sec.groupKey) : undefined}
+                />
+              ))}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function ItemEditPage() {
   const { collection, id } = useParams<{ collection: string; id: string }>()
   const navigate = useNavigate()
@@ -551,6 +1002,7 @@ export function ItemEditPage() {
   const [summarizing, setSummarizing] = useState(false)
   const [generatingField, setGeneratingField] = useState<string | null>(null)
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
+  const [summaryOpen, setSummaryOpen] = useState(true)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
 
   // M2M deferred staging — links/unlinks committed only on save
@@ -585,6 +1037,14 @@ export function ItemEditPage() {
       return next
     }),
   }), [m2mLinks, m2mUnlinks])
+  // O2M inline grid — batch save coordination
+  const o2mFlushMap = useRef(new Map<string, () => Promise<void>>())
+  const o2mGridCtx = useMemo(() => ({
+    register: (key: string, flush: () => Promise<void>) => { o2mFlushMap.current.set(key, flush) },
+    unregister: (key: string) => { o2mFlushMap.current.delete(key) },
+    flushAll: async () => { for (const flush of o2mFlushMap.current.values()) await flush() },
+  }), [])
+
   // Pre-save AI checks — content rule violations + possible duplicates (new items only)
   const [aiWarning, setAiWarning] = useState<{
     violations: AiViolation[]
@@ -661,6 +1121,8 @@ export function ItemEditPage() {
             repeater_schema: string | null
             is_translatable: boolean
             layout_assigned: boolean
+            sort: number | null
+            placeholder: string | null
           }>
         }>(`/field-config/${collection}`)
         .then((r) => r.data.data),
@@ -677,7 +1139,7 @@ export function ItemEditPage() {
             id: number
             key: string
             label: string
-            type: 'section' | 'tab'
+            type: 'section' | 'tab' | 'metadata'
             icon: string | null
             sort: number
             is_collapsed: boolean
@@ -692,7 +1154,7 @@ export function ItemEditPage() {
     queryKey: ['active-layout', collection],
     queryFn: () =>
       api
-        .get<{ data: { id: number; ungrouped_sort?: number | null } }>(`/collection-layouts/active`, { params: { collection } })
+        .get<{ data: { layout: { id: number; disable_comments?: boolean | number; disable_tasks?: boolean | number; tab_mode?: string; validate_before_next?: boolean | number; summary_enabled?: boolean | number; summary_show_all?: boolean | number; ai_enabled?: boolean | number }; groups?: Array<{ key: string; label: string; type: string; icon?: string | null; sort?: number }>; assignments?: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean | number; default_expanded?: boolean | number }>; ungrouped_sort?: number | null } }>(`/collection-layouts/active`, { params: { collection } })
         .then((r) => r.data.data)
         .catch(() => null),
     enabled: !!collection,
@@ -761,7 +1223,9 @@ export function ItemEditPage() {
     for (const fc of fieldConfig ?? []) {
       if (!fc.visibility_rules) continue
       try {
-        const rules = JSON.parse(fc.visibility_rules) as {
+        const rules = (typeof fc.visibility_rules === 'string'
+          ? JSON.parse(fc.visibility_rules)
+          : fc.visibility_rules) as {
           operator: 'AND' | 'OR'
           conditions: Array<{
             field: string
@@ -803,7 +1267,9 @@ export function ItemEditPage() {
     for (const fc of fieldConfig ?? []) {
       if (!fc.lock_condition) continue
       try {
-        const cond = JSON.parse(fc.lock_condition) as {
+        const cond = (typeof fc.lock_condition === 'string'
+          ? JSON.parse(fc.lock_condition)
+          : fc.lock_condition) as {
           field: string
           op: 'eq' | 'neq' | 'null' | 'nnull'
           value: unknown
@@ -850,6 +1316,24 @@ export function ItemEditPage() {
       setDraft((d) => ({ ...d, [parentField]: parentId }))
     }
   }, [id, searchParams])
+
+  const { data: exclusionData, refetch: refetchExclusion } = useQuery({
+    queryKey: ['picker-exclusion', collection, id],
+    queryFn: () => api.get(`/picker-exclusions/status/${collection}/${id}`).then(r => (r.data.data as { excluded: boolean })),
+    enabled: !!collection && !!id && id !== 'new',
+    staleTime: 60_000,
+  })
+  const isExcluded = exclusionData?.excluded ?? false
+  const toggleExclusion = useMutation({
+    mutationFn: () => isExcluded
+      ? api.delete('/picker-exclusions', { data: { collection, item_id: id } })
+      : api.post('/picker-exclusions', { collection, item_id: id }),
+    onSuccess: () => {
+      refetchExclusion()
+      toast.success(isExcluded ? 'Record re-enabled in pickers' : 'Record excluded from pickers')
+    },
+    onError: () => toast.error('Failed to update picker status'),
+  })
 
   const mutation = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
@@ -911,16 +1395,24 @@ export function ItemEditPage() {
   // O2M virtual fields have no DB column — synthesize CMSField entries so they
   // participate in the layout system (pool → group/ungrouped → render at position)
   // When one_field='id' (legacy hardcoded value), use many_collection as the effective field name
-  const o2mVirtualEntries: CMSField[] = (relations as CMSRelation[])
-    .filter(r => {
-      if (!(r.one_collection === collection && r.one_field && !r.junction_field)) return false
-      const effectiveName = r.one_field === 'id' ? r.many_collection! : r.one_field
-      return !colMeta?.fields?.find((f: CMSField) => f.field === effectiveName)
-    })
-    .map(r => {
-      const fieldName = r.one_field === 'id' ? r.many_collection! : r.one_field!
-      return { field: fieldName, type: 'o2m', label: null, hidden: false, readonly: true } as unknown as CMSField
-    })
+  const o2mVirtualEntries: CMSField[] = (() => {
+    const seen = new Set<string>()
+    return (relations as CMSRelation[])
+      .filter(r => {
+        if (!(r.one_collection === collection && r.one_field && !r.junction_field)) return false
+        const effectiveName = r.one_field === 'id' ? r.many_collection! : r.one_field
+        return !colMeta?.fields?.find((f: CMSField) => f.field === effectiveName)
+      })
+      .map(r => {
+        const fieldName = r.one_field === 'id' ? r.many_collection! : r.one_field!
+        return { field: fieldName, type: 'o2m', label: null, hidden: false, readonly: true } as unknown as CMSField
+      })
+      .filter(e => {
+        if (seen.has(e.field)) return false
+        seen.add(e.field)
+        return true
+      })
+  })()
   const allFields: CMSField[] = [...(colMeta?.fields ?? []), ...o2mVirtualEntries]
 
   const groupedFields = useMemo(() => {
@@ -942,7 +1434,10 @@ export function ItemEditPage() {
       const gk = fieldConfigMap[f.field]?.group_key
       if (gk && groupedMap[gk]) groupedMap[gk].push(f)
     }
-    return { ungrouped, groups, groupedMap }
+    const getSort = (f: CMSField) => (fieldConfigMap[f.field] as { sort?: number } | undefined)?.sort ?? 9999
+    for (const key of Object.keys(groupedMap)) groupedMap[key].sort((a, b) => getSort(a) - getSort(b))
+    const ungroupedSorted = [...ungrouped].sort((a, b) => getSort(a) - getSort(b))
+    return { ungrouped: ungroupedSorted, groups, groupedMap }
   }, [allFields, fieldGroups, fieldConfigMap])
 
   const COL_SPAN_CLASS: Record<number, string> = {
@@ -973,6 +1468,23 @@ export function ItemEditPage() {
     }
     if (o2mRel) {
       if (!id || id === 'new') return null
+      // Check for inline-grid interface
+      const fieldCfg = fieldConfigMap[field.field] as Record<string, unknown> | undefined
+      const fieldIface = fieldCfg?.interface as string | null
+      if (field.interface === 'inline-grid' || fieldIface === 'inline-grid') {
+        const opts = (() => { try { return JSON.parse(fieldCfg?.options as string ?? '{}') as Record<string, unknown> } catch { return {} } })()
+        return (
+          <div key={field.field} className='col-span-12 space-y-1.5'>
+            <Label className='text-slate-600'>{field.label ?? titleCase(field.field)}</Label>
+            <O2MInlineGrid
+              relation={o2mRel}
+              parentId={id}
+              layoutId={(opts.grid_layout_id as number | null) ?? null}
+              showTotals={!!(opts.grid_show_totals)}
+            />
+          </div>
+        )
+      }
       return (
         <div key={field.field} className='col-span-12'>
           <O2MPanel relation={o2mRel} parentId={id} onNavigate={(col) => navigate(`/collections/${col}`)} />
@@ -986,7 +1498,9 @@ export function ItemEditPage() {
           lockedFields={lockedFields} validationErrors={validationErrors}
           treeConfig={treeConfig ?? null} collection={collection!} id={id}
           colMeta={colMeta} user={user} generatingField={generatingField}
-          handleFieldChange={handleFieldChange} handleGenerateField={handleGenerateField} />
+          handleFieldChange={handleFieldChange} handleGenerateField={handleGenerateField}
+          fieldConfigMap={fieldConfigMap} m2mParentCommitted={m2mParentCommitted}
+          layoutAiEnabled={layoutAiEnabled} />
       </div>
     )
   }
@@ -1010,19 +1524,125 @@ export function ItemEditPage() {
     [groupedFields]
   )
   const hasTabs = tabGroups.length > 0
+  const layoutMeta = activeLayoutData?.layout
+  const isStepsMode = hasTabs && layoutMeta?.tab_mode === 'steps'
+  const validateBeforeNext = !!layoutMeta?.validate_before_next
+  const summaryEnabled = !!layoutMeta?.summary_enabled
+  const summaryShowAll = !!layoutMeta?.summary_show_all
+  // When a layout is active, AI defaults OFF unless explicitly enabled. No layout = AI on.
+  const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
+
+  // Positioned sentinel slots — pipeline / comments / tasks placed in the layout.
+  // When present, these render inside the section loop at their configured sort.
+  const layoutAssignments = activeLayoutData?.assignments ?? []
+  const pipelineSlot = layoutAssignments.find((a) => a.field === '__pipeline__')
+  const commentsSlot = layoutAssignments.find((a) => a.field === '__comments__')
+  const tasksSlot = layoutAssignments.find((a) => a.field === '__tasks__')
 
   // General tab only exists when there are section-type groups alongside tab groups.
   // Ungrouped fields render above the tab strip in their own inline block, not inside a tab.
   const hasGeneralContent = hasTabs && sectionGroups.length > 0
 
-  // Ordered items for section mode — groups + '__ungrouped__' sentinel at the Layout-configured position
+  const allSteps = useMemo((): StepDef[] => {
+    if (!hasTabs) return []
+    return [
+      ...(hasGeneralContent ? [{ key: '__general__', label: 'General', icon: null }] : []),
+      ...tabGroups.map(g => ({ key: g.key, label: g.label, icon: g.icon ?? null }))
+    ]
+  }, [hasTabs, hasGeneralContent, tabGroups])
+
+  const getStepFields = useCallback((stepKey: string) => {
+    if (stepKey === '__general__') {
+      return [
+        ...(groupedFields?.ungrouped ?? []),
+        ...sectionGroups.flatMap(g => groupedFields?.groupedMap[g.key] ?? [])
+      ]
+    }
+    return groupedFields?.groupedMap[stepKey] ?? []
+  }, [groupedFields, sectionGroups])
+
+  const completedStepKeys = useMemo(() => {
+    const out = new Set<string>()
+    for (const s of allSteps) {
+      const fields = getStepFields(s.key)
+      const allFilled = fields
+        .filter(f => f.required && !f.hidden && !SYSTEM_FIELDS.has(f.field) && !hiddenFields.has(f.field))
+        .every(f => {
+          const v = draft[f.field]
+          return v !== null && v !== undefined && v !== ''
+        })
+      if (allFilled) out.add(s.key)
+    }
+    return out
+  }, [allSteps, getStepFields, draft, hiddenFields])
+
+  function handleNext() {
+    if (validateBeforeNext) {
+      const fields = getStepFields(activeTab)
+      const errs: Record<string, string> = {}
+      for (const f of fields) {
+        if (f.required && !f.hidden && !SYSTEM_FIELDS.has(f.field) && !hiddenFields.has(f.field)) {
+          const v = draft[f.field]
+          if (v === null || v === undefined || v === '') errs[f.field] = 'This field is required'
+        }
+      }
+      if (Object.keys(errs).length > 0) {
+        setValidationErrors(prev => ({ ...prev, ...errs }))
+        return
+      }
+    }
+    const idx = allSteps.findIndex(s => s.key === activeTab)
+    if (idx < allSteps.length - 1) setActiveTab(allSteps[idx + 1].key)
+  }
+
+  function handlePrev() {
+    const idx = allSteps.findIndex(s => s.key === activeTab)
+    if (idx > 0) setActiveTab(allSteps[idx - 1].key)
+  }
+
+  // Ordered items for section mode — groups + '__ungrouped__' + positioned sentinel
+  // slots ('__pipeline__' / '__comments__' / '__tasks__') interleaved by sort.
   const orderedSectionItems = useMemo(() => {
+    type SentinelKey = '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__'
+    type SectionItem = NonNullable<typeof groupedFields>['groups'][number] | SentinelKey
     const groups = groupedFields?.groups ?? []
-    const savedPos = activeLayoutData?.ungrouped_sort
-    const ungroupedIdx = savedPos != null ? Math.min(savedPos, groups.length) : groups.length
-    const items: (typeof groups[number] | '__ungrouped__')[] = [...groups]
-    items.splice(ungroupedIdx, 0, '__ungrouped__')
-    return items
+    const assignments = activeLayoutData?.assignments ?? []
+    const findSlot = (field: string) => assignments.find((a) => a.field === field)
+
+    // Each entry carries a sort key used to interleave it with the groups.
+    // Groups keep their natural order (index used as their effective sort).
+    const entries: Array<{ item: SectionItem; sort: number; tie: number }> = groups.map(
+      (g) => ({ item: g, sort: g.sort, tie: 0 })
+    )
+
+    // Ungrouped — existing behaviour: ungrouped_sort position, else after all groups.
+    const ungroupedPos = activeLayoutData?.ungrouped_sort
+    entries.push({
+      item: '__ungrouped__',
+      sort: ungroupedPos != null ? ungroupedPos : groups.length,
+      tie: 1
+    })
+
+    // Sentinel slots — use assignment sort when positioned, else default position.
+    // Defaults: pipeline before all groups; tasks then comments after all groups.
+    // is_visible === 0 / false skips the slot entirely.
+    const visible = (s: { is_visible?: boolean | number } | undefined) =>
+      !(s && (s.is_visible === 0 || s.is_visible === false))
+    const pipeline = findSlot('__pipeline__')
+    if (visible(pipeline)) {
+      entries.push({ item: '__pipeline__', sort: pipeline ? pipeline.sort : -1, tie: 2 })
+    }
+    const tasks = findSlot('__tasks__')
+    if (visible(tasks)) {
+      entries.push({ item: '__tasks__', sort: tasks ? tasks.sort : 99998, tie: 3 })
+    }
+    const comments = findSlot('__comments__')
+    if (visible(comments)) {
+      entries.push({ item: '__comments__', sort: comments ? comments.sort : 99999, tie: 4 })
+    }
+
+    entries.sort((a, b) => a.sort - b.sort || a.tie - b.tie)
+    return entries.map((e) => e.item)
   }, [groupedFields, activeLayoutData])
 
   // Tab mode has no per-group interleaving — the Ungrouped block is binary:
@@ -1071,6 +1691,26 @@ export function ItemEditPage() {
     }
     return out
   }, [validationErrors, fieldConfigMap, groupedFields])
+
+  // Summary panel field-click navigation: switch to the field's tab then scroll + highlight
+  const navigateToField = useCallback((fieldName: string, groupKey: string | null) => {
+    if (groupKey) {
+      const group = groupedFields?.groups.find((g) => g.key === groupKey)
+      if (group?.type === 'tab') {
+        setActiveTab(groupKey)
+      }
+    }
+    setTimeout(() => {
+      const el = document.querySelector(`[data-field="${fieldName}"]`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.classList.add('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md')
+        setTimeout(() => el.classList.remove('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md'), 1500)
+      }
+    }, 150)
+    // setActiveTab is stable enough (writes localStorage + setState); groupedFields drives lookup
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupedFields])
 
   // O2M virtual fields have no DB column and are handled by O2MPanel — exclude from editable fields
   // M2M virtual fields are now rendered inline by InlineM2MPicker so they stay in editable fields
@@ -1126,6 +1766,43 @@ export function ItemEditPage() {
 
   const namedM2mFields = new Set(allM2mRelations.map((r) => r.one_field).filter(Boolean) as string[])
 
+  // Fetch committed junction items for M2M fields used as cascade parents so existing items pre-filter
+  const m2mCascadeParentFields = useMemo(() => {
+    const parents = new Set<string>()
+    for (const fc of fieldConfig ?? []) {
+      for (const rule of getCascadeFilters(fc.dependency_config)) parents.add(rule.parent_field)
+    }
+    return [...parents]
+  }, [fieldConfig])
+
+  const m2mParentQueries = useQueries({
+    queries: m2mCascadeParentFields.map(parentField => {
+      const rel = allM2mRelations.find(r => r.one_field === parentField)
+      return {
+        queryKey: ['m2m-cascade-parent', rel?.many_collection, rel?.many_field, id],
+        queryFn: async () => {
+          if (!rel || !id || id === 'new') return []
+          const res = await api.get(`/items/${rel.many_collection}`, {
+            params: {
+              filter: JSON.stringify({ [rel.many_field]: { _eq: id } }),
+              fields: `id,${rel.junction_field}`,
+              limit: 200,
+            },
+          })
+          return ((res.data.data ?? []) as Record<string, unknown>[]).map(item => item[rel.junction_field!])
+        },
+        enabled: !!rel && !!id && id !== 'new',
+        staleTime: 30_000,
+      }
+    })
+  })
+
+  const m2mParentCommitted: Record<string, unknown[]> = useMemo(() => {
+    const map: Record<string, unknown[]> = {}
+    m2mCascadeParentFields.forEach((f, i) => { map[f] = m2mParentQueries[i]?.data ?? [] })
+    return map
+  }, [m2mCascadeParentFields, m2mParentQueries])
+
   const editableFields = allFields.filter(
     (f) =>
       !f.hidden &&
@@ -1170,9 +1847,13 @@ export function ItemEditPage() {
     return !r.one_field || !poolFieldNames.has(r.one_field)
   })
 
-  const namedM2mRelations = allM2mRelations.filter(
-    (r) => !r.one_field || !poolFieldNames.has(r.one_field)
-  )
+  const namedM2mRelations = allM2mRelations.filter((r) => {
+    if (!r.one_field) return true
+    if (poolFieldNames.has(r.one_field)) return false
+    // When a layout is active, exclude M2M fields already rendered by the layout group
+    if (hasActiveLayout && (fieldConfigMap[r.one_field] as Record<string, unknown>)?.layout_assigned === true) return false
+    return true
+  })
   const m2mRelations: CMSRelation[] = []
 
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
@@ -1216,18 +1897,81 @@ export function ItemEditPage() {
     }
   }
 
+  const validateForm = useCallback((): boolean => {
+    const clientErrors: Record<string, string> = {}
+    for (const f of editableFields) {
+      if (f.required) {
+        const val = draft[f.field]
+        if (val === null || val === undefined || val === '') clientErrors[f.field] = 'This field is required'
+      }
+    }
+    for (const rel of [...namedM2mRelations, ...m2mRelations]) {
+      const fieldDef = rel.one_field ? allFields.find((f) => f.field === rel.one_field) : undefined
+      if (!fieldDef?.required) continue
+      const key = rel.one_field ?? `${rel.many_collection}.${rel.junction_field}`
+      const cached = queryClient.getQueryData<Record<string, unknown>[]>(
+        ['m2m-items', rel.many_collection, rel.many_field, id !== 'new' ? id : undefined]
+      ) ?? []
+      const unlinks = m2mUnlinks.get(key) ?? new Set()
+      const links = m2mLinks.get(key) ?? []
+      const total = cached.filter((ji) => !unlinks.has(ji.id)).length + links.length
+      if (total === 0) clientErrors[rel.one_field ?? key] = 'This field is required'
+    }
+    if (Object.keys(clientErrors).length > 0) {
+      setValidationErrors(clientErrors)
+      toast.error('Please fill in all required fields before transitioning')
+      return false
+    }
+    return true
+  }, [editableFields, draft, namedM2mRelations, m2mRelations, allFields, queryClient, id, m2mUnlinks, m2mLinks])
+
   const handleSave = async (opts?: { skipValidation?: boolean; skipDuplicates?: boolean }) => {
+    // Flush all O2M inline grid staged changes before saving the parent
+    await o2mGridCtx.flushAll()
+
     const patch: Record<string, unknown> = {}
     for (const f of editableFields) {
       patch[f.field] = draft[f.field] ?? null
     }
 
+    // Client-side required field validation for M2O and M2M fields
+    const clientErrors: Record<string, string> = {}
+
+    for (const f of editableFields) {
+      if (f.required) {
+        const val = draft[f.field]
+        if (val === null || val === undefined || val === '') {
+          clientErrors[f.field] = 'This field is required'
+        }
+      }
+    }
+
+    for (const rel of [...namedM2mRelations, ...m2mRelations]) {
+      const fieldDef = rel.one_field ? allFields.find((f) => f.field === rel.one_field) : undefined
+      if (!fieldDef?.required) continue
+      const key = rel.one_field ?? `${rel.many_collection}.${rel.junction_field}`
+      const cached = queryClient.getQueryData<Record<string, unknown>[]>(
+        ['m2m-items', rel.many_collection, rel.many_field, id !== 'new' ? id : undefined]
+      ) ?? []
+      const unlinks = m2mUnlinks.get(key) ?? new Set()
+      const links = m2mLinks.get(key) ?? []
+      const total = cached.filter((ji) => !unlinks.has(ji.id)).length + links.length
+      if (total === 0) clientErrors[rel.one_field ?? key] = 'This field is required'
+    }
+
+    if (Object.keys(clientErrors).length > 0) {
+      setValidationErrors(clientErrors)
+      toast.error('Please fill in all required fields')
+      return
+    }
+
+    setValidationErrors({})
     setAiWarning(null)
     setAiDuplicates(null)
 
-    const needValidate = !opts?.skipValidation && !!aiSettings?.validation_enabled
+    const needValidate = layoutAiEnabled && !opts?.skipValidation && !!aiSettings?.validation_enabled
     const needDupCheck =
-      !opts?.skipDuplicates && id === 'new' && !!aiSettings?.duplicate_detection_enabled
+      layoutAiEnabled && !opts?.skipDuplicates && id === 'new' && !!aiSettings?.duplicate_detection_enabled
 
     if (needValidate || needDupCheck) {
       setAiChecking(true)
@@ -1302,13 +2046,20 @@ export function ItemEditPage() {
       for (const fc of fieldConfig ?? []) {
         if (!fc.dependency_config) continue
         try {
-          const cfg = JSON.parse(fc.dependency_config) as {
-            depends_on: string[]
-            options_filter?: { field: string; value_from: string }
+          const cfg = (typeof fc.dependency_config === 'string'
+            ? JSON.parse(fc.dependency_config)
+            : fc.dependency_config) as {
+            depends_on?: string[]
             clear_on_change?: boolean
+            cascade_filters?: CascadeFilterRule[]
           }
           if (cfg.depends_on?.includes(fieldName) && cfg.clear_on_change) {
             cascade[fc.field] = null
+          }
+          for (const rule of cfg.cascade_filters ?? []) {
+            if (rule.parent_field === fieldName && rule.clear_on_parent_change) {
+              cascade[fc.field] = null
+            }
           }
         } catch {
           /* ignore */
@@ -1360,21 +2111,23 @@ export function ItemEditPage() {
   }
 
   return (
+    <O2MGridContext.Provider value={o2mGridCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
-    <div className='p-8'>
-      {/* Header */}
-      <div className='flex items-center gap-4 mb-8'>
+    <div className='flex flex-1 min-h-0 flex-col'>
+    {/* Sticky header bar */}
+    <div className='sticky top-0 z-20 shrink-0 border-b border-slate-200 bg-white px-8 py-4 dark:border-border dark:bg-background'>
+      <div className='flex items-center gap-4'>
         <Button variant='ghost' size='icon' onClick={() => navigate(`/collections/${collection}`)}>
           <ArrowLeft className='h-4 w-4' />
         </Button>
         <div className='flex-1'>
           <div className='flex items-center gap-2'>
-            <h1 className='text-2xl font-bold text-slate-900'>{displayName}</h1>
-            <Badge variant='secondary' className='font-mono text-xs'>
+            <h1 className='text-[18px] font-semibold text-slate-900 dark:text-slate-100'>{displayName}</h1>
+            <span className='font-mono text-[12px] bg-slate-100 text-slate-500 rounded px-2 py-0.5 dark:bg-muted dark:text-slate-400'>
               #{id}
-            </Badge>
+            </span>
+            <span className='text-[12px] text-slate-400 font-mono'>{collection}</span>
           </div>
-          <p className='text-muted-foreground text-sm font-mono mt-0.5'>{collection}</p>
           {ancestors && ancestors.length > 1 && (
             <nav className='flex items-center gap-1 text-[12px] text-slate-400 mt-1 flex-wrap'>
               {ancestors.slice(0, -1).map((ancestor, i) => (
@@ -1497,6 +2250,23 @@ export function ItemEditPage() {
             />
           )}
           {id !== 'new' && (
+            <button
+              type='button'
+              onClick={() => toggleExclusion.mutate()}
+              disabled={toggleExclusion.isPending}
+              title={isExcluded ? 'Re-enable in pickers' : 'Disable in pickers'}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-none border px-2.5 py-1.5 text-[12px] font-medium transition-colors border-r-0',
+                isExcluded
+                  ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800'
+                  : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'
+              )}
+            >
+              <EyeOff className='h-3.5 w-3.5' />
+              {isExcluded ? 'Excluded from pickers' : 'Disable in pickers'}
+            </button>
+          )}
+          {id !== 'new' && (
             <CloneDialog
               collection={collection!}
               itemId={id!}
@@ -1516,7 +2286,7 @@ export function ItemEditPage() {
               triggerClassName='rounded-none border-r-0'
             />
           )}
-          {user?.is_admin && (
+          {user?.is_admin && layoutAiEnabled && (
             <Button
               variant='outline'
               size='sm'
@@ -1531,6 +2301,22 @@ export function ItemEditPage() {
               )}
               Summarize
             </Button>
+          )}
+          {summaryEnabled && (
+            <button
+              type='button'
+              onClick={() => setSummaryOpen(o => !o)}
+              title='Toggle summary panel'
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                summaryOpen
+                  ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-cyan'
+                  : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'
+              )}
+            >
+              <PanelRight className='h-3.5 w-3.5' />
+              Summary
+            </button>
           )}
           <Button
             size='sm'
@@ -1547,7 +2333,10 @@ export function ItemEditPage() {
           </Button>
         </div>
       </div>
-
+    </div> {/* sticky header bar */}
+    <div className='flex flex-1 min-h-0'>
+    <div className='flex-1 min-w-0 overflow-y-auto'>
+    <div className='p-8'>
       {/* Edit lock banner — shown when another user is editing this item */}
       <ItemLockBanner lockHolder={lockHolder} onTakeOver={takeOver} takingOver={takingOver} />
 
@@ -1685,8 +2474,9 @@ export function ItemEditPage() {
         </div>
       ) : (
         <div className='space-y-6'>
-          {/* Pipeline state machine panel — shown only when a pipeline is bound to this collection */}
-          {id && <PipelinePanel collection={collection!} item={id} />}
+          {/* Pipeline state machine panel — shown only when a pipeline is bound to this
+              collection AND not positioned in the layout (positioned renders in the section loop) */}
+          {id && activeLayoutData !== undefined && !(pipelineSlot && pipelineSlot.is_visible !== 0 && pipelineSlot.is_visible !== false) && <PipelinePanel collection={collection!} item={id} onBeforeTransition={validateForm} />}
 
           {/* Parallel workflow branches — renders null when no branches are active */}
           {id && id !== 'new' && <WorkflowPanel collection={collection!} item={id} />}
@@ -1778,8 +2568,44 @@ export function ItemEditPage() {
                   {hasTabs ? (
                     // ── Tab mode ────────────────────────────────────────────
                     <>
-                      {/* Tab strip */}
-                      <div className='mb-5 flex items-center gap-0.5 border-b border-slate-200 pb-0 -mt-1'>
+                      {/* Slot panels above tabs — slots whose sort is less than the minimum group sort */}
+                      {(() => {
+                        const minGroupSort = Math.min(...(groupedFields?.groups ?? []).map((g) => g.sort), 9999)
+                        const aboveSlots = [
+                          { key: '__pipeline__' as const, slot: pipelineSlot, sort: pipelineSlot ? pipelineSlot.sort : -1 },
+                          { key: '__comments__' as const, slot: commentsSlot, sort: commentsSlot ? commentsSlot.sort : 99999 },
+                          { key: '__tasks__' as const, slot: tasksSlot, sort: tasksSlot ? tasksSlot.sort : 99998 },
+                        ]
+                          .filter(({ slot }) => slot !== undefined && !(slot.is_visible === 0 || slot.is_visible === false) && slot.sort < minGroupSort)
+                          .sort((a, b) => a.sort - b.sort)
+                        if (aboveSlots.length === 0) return null
+                        return aboveSlots.map(({ key, slot }) => {
+                          if (key === '__pipeline__') {
+                            if (!id || id === 'new') return null
+                            return <div key='__pipeline__' className='mb-4'><PipelinePanel collection={collection!} item={id} title={slot?.label_override || undefined} defaultExpanded={slot?.default_expanded !== 0 && slot?.default_expanded !== false} onBeforeTransition={validateForm} /></div>
+                          }
+                          if (key === '__comments__') {
+                            if (!id) return null
+                            return <div key='__comments__' className='mb-4'><CommentPanel collection={collection!} item={id} title={slot?.label_override || undefined} defaultExpanded={slot?.default_expanded !== 0 && slot?.default_expanded !== false} /></div>
+                          }
+                          if (key === '__tasks__') {
+                            if (!id || id === 'new') return null
+                            return <div key='__tasks__' className='mb-4'><TaskPanel collection={collection!} item={id} title={slot?.label_override || undefined} defaultExpanded={slot?.default_expanded !== 0 && slot?.default_expanded !== false} /></div>
+                          }
+                          return null
+                        })
+                      })()}
+                      {/* Stepper strip (steps mode) or tab strip */}
+                      {isStepsMode ? (
+                        <StepperStrip
+                          steps={allSteps}
+                          activeKey={activeTab}
+                          completedKeys={completedStepKeys}
+                          errorKeys={tabsWithErrors}
+                          onStep={setActiveTab}
+                        />
+                      ) : null}
+                      {!isStepsMode && <div className='mb-5 flex items-center gap-0.5 border-b border-slate-200 pb-0 -mt-1'>
                         {hasGeneralContent && (
                           <button
                             type='button'
@@ -1821,7 +2647,7 @@ export function ItemEditPage() {
                             {(hasGeneralContent ? 1 : 0) + tabGroups.length} tabs
                           </span>
                         </div>
-                      </div>
+                      </div>}
 
                       {/* General tab content — section groups only; ungrouped fields render above the strip */}
                       {activeTab === '__general__' && hasGeneralContent && (
@@ -1888,6 +2714,81 @@ export function ItemEditPage() {
                           </div>
                         )
                       })()}
+                      {/* Steps Prev / Next */}
+                      {isStepsMode && (
+                        <div className='mt-6 border-t border-slate-200 pt-4 dark:border-border'>
+                          <div className='flex items-center justify-between gap-2'>
+                            <button
+                              type='button'
+                              onClick={handlePrev}
+                              disabled={allSteps.findIndex(s => s.key === activeTab) === 0}
+                              className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40 dark:border-border dark:bg-background dark:text-slate-300'
+                            >
+                              <ChevronDown className='h-3.5 w-3.5 rotate-90' />
+                              Previous
+                            </button>
+                            <span className='text-[11px] text-slate-400'>
+                              Step {allSteps.findIndex(s => s.key === activeTab) + 1} of {allSteps.length}
+                            </span>
+                            <div className='flex items-center gap-2'>
+                              {allSteps.findIndex(s => s.key === activeTab) === allSteps.length - 1 && id && id !== 'new' && (
+                                <PipelineTransitionButtons collection={collection!} item={id} onBeforeTransition={validateForm} />
+                              )}
+                              {allSteps.findIndex(s => s.key === activeTab) < allSteps.length - 1 ? (
+                                <button
+                                  type='button'
+                                  onClick={handleNext}
+                                  className='inline-flex items-center gap-1.5 rounded-md bg-[#00ceff] px-3 py-1.5 text-[12px] font-medium text-[#172940] transition-colors hover:bg-[#00b8e0]'
+                                >
+                                  Next
+                                  <ChevronDown className='h-3.5 w-3.5 -rotate-90' />
+                                </button>
+                              ) : (
+                                <button
+                                  type='button'
+                                  onClick={() => handleSave()}
+                                  disabled={mutation.isPending || isReadOnly}
+                                  className='inline-flex h-9 items-center gap-1.5 rounded-md bg-[#00ceff] px-3 text-[12px] font-medium text-[#172940] transition-colors hover:bg-[#00b8e0] disabled:opacity-50'
+                                >
+                                  <Save className='h-3.5 w-3.5' />
+                                  Save
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {/* Slot panels below tabs — slots whose sort is >= minGroupSort, or slots with no assignment */}
+                      {hasTabs && (() => {
+                        const minGroupSort = Math.min(...(groupedFields?.groups ?? []).map((g) => g.sort), 9999)
+                        const visibleSlots = [
+                          { key: '__pipeline__' as const, slot: pipelineSlot, sort: pipelineSlot ? pipelineSlot.sort : 99997 },
+                          { key: '__comments__' as const, slot: commentsSlot, sort: commentsSlot ? commentsSlot.sort : 99999 },
+                          { key: '__tasks__' as const, slot: tasksSlot, sort: tasksSlot ? tasksSlot.sort : 99998 },
+                        ]
+                          .filter(({ slot, sort }) => {
+                            if (slot && (slot.is_visible === 0 || slot.is_visible === false)) return false
+                            // Only render here if not already rendered above the tab strip
+                            if (slot !== undefined && sort < minGroupSort) return false
+                            return true
+                          })
+                          .sort((a, b) => a.sort - b.sort)
+                        return visibleSlots.map(({ key, slot }) => {
+                          if (key === '__pipeline__') {
+                            if (!id || id === 'new') return null
+                            return <div key='__pipeline__' className='mt-4'><PipelinePanel collection={collection!} item={id} title={slot?.label_override || undefined} defaultExpanded={slot?.default_expanded !== 0 && slot?.default_expanded !== false} onBeforeTransition={validateForm} /></div>
+                          }
+                          if (key === '__comments__') {
+                            if (!id) return null
+                            return <div key='__comments__' className='mt-4'><CommentPanel collection={collection!} item={id} title={slot?.label_override || undefined} defaultExpanded={slot?.default_expanded !== 0 && slot?.default_expanded !== false} /></div>
+                          }
+                          if (key === '__tasks__') {
+                            if (!id || id === 'new') return null
+                            return <div key='__tasks__' className='mt-4'><TaskPanel collection={collection!} item={id} title={slot?.label_override || undefined} defaultExpanded={slot?.default_expanded !== 0 && slot?.default_expanded !== false} /></div>
+                          }
+                          return null
+                        })
+                      })()}
                     </>
                   ) : groupedFields ? (
                     // ── Section mode — groups + Ungrouped interleaved at Layout-configured position ──
@@ -1904,12 +2805,73 @@ export function ItemEditPage() {
                             </div>
                           )
                         }
+                        if (item === '__pipeline__') {
+                          if (!id || id === 'new') return null
+                          return (
+                            <div key='__pipeline__' className='mb-4'>
+                              <PipelinePanel collection={collection!} item={id} title={pipelineSlot?.label_override || undefined} defaultExpanded={pipelineSlot?.default_expanded !== 0 && pipelineSlot?.default_expanded !== false} onBeforeTransition={validateForm} />
+                            </div>
+                          )
+                        }
+                        if (item === '__comments__') {
+                          if (!id) return null
+                          return (
+                            <div key='__comments__' className='mt-4'>
+                              <CommentPanel collection={collection!} item={id} title={commentsSlot?.label_override || undefined} defaultExpanded={commentsSlot?.default_expanded !== 0 && commentsSlot?.default_expanded !== false} />
+                            </div>
+                          )
+                        }
+                        if (item === '__tasks__') {
+                          if (!id || id === 'new') return null
+                          return (
+                            <div key='__tasks__'>
+                              <TaskPanel collection={collection!} item={id} title={tasksSlot?.label_override || undefined} defaultExpanded={tasksSlot?.default_expanded !== 0 && tasksSlot?.default_expanded !== false} />
+                            </div>
+                          )
+                        }
                         const group = item
                         const groupFieldList = (groupedFields.groupedMap[group.key] ?? []).filter(
                           (f) => !f.hidden && !pathFieldNames.has(f.field) && !hiddenFields.has(f.field)
                         )
                         if (groupFieldList.length === 0) return null
                         const isCollapsed = collapsedGroups.has(group.key)
+                        // Metadata group — read-only definition list instead of editable fields.
+                        if (group.type === 'metadata') {
+                          return (
+                            <div key={group.key} className='overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-border dark:bg-muted/40'>
+                              <button type='button' onClick={() => toggleGroup(group.key)} className='flex w-full items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200 text-[13px] font-medium text-slate-700 dark:border-border dark:bg-muted/40 dark:text-slate-300'>
+                                <span className='flex items-center gap-1.5'>
+                                  {group.icon && (() => { const I = resolveCollectionIcon(group.icon!) as React.ElementType; return <I className='h-3.5 w-3.5 shrink-0 text-slate-400' /> })()}
+                                  {group.label}
+                                </span>
+                                <ChevronDown className={cn('h-4 w-4 text-slate-400 transition-transform', isCollapsed ? '' : 'rotate-180')} />
+                              </button>
+                              {!isCollapsed && (
+                                <dl className='grid grid-cols-2 gap-x-4 gap-y-2 p-4'>
+                                  {groupFieldList.map((field) => {
+                                    const val = draft[field.field]
+                                    const display =
+                                      val === null || val === undefined || val === ''
+                                        ? '—'
+                                        : typeof val === 'boolean'
+                                          ? val ? 'Yes' : 'No'
+                                          : field.type === 'date' || field.type === 'datetime'
+                                            ? (() => { try { return new Date(String(val)).toLocaleString() } catch { return String(val) } })()
+                                            : typeof val === 'object'
+                                              ? ((val as Record<string, unknown>).id != null ? String((val as Record<string, unknown>).id) : '—')
+                                              : String(val)
+                                    return (
+                                      <div key={field.field} className='min-w-0'>
+                                        <dt className='text-[11px] font-medium text-slate-400'>{field.label ?? titleCase(field.field)}</dt>
+                                        <dd className='mt-0.5 truncate text-[12px] text-slate-700 dark:text-slate-300'>{display}</dd>
+                                      </div>
+                                    )
+                                  })}
+                                </dl>
+                              )}
+                            </div>
+                          )
+                        }
                         return (
                           <div key={group.key} className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
                             <button type='button' onClick={() => toggleGroup(group.key)} className='flex w-full items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200 text-[13px] font-medium text-slate-700'>
@@ -1949,6 +2911,9 @@ export function ItemEditPage() {
                           generatingField={generatingField}
                           handleFieldChange={handleFieldChange}
                           handleGenerateField={handleGenerateField}
+                          fieldConfigMap={fieldConfigMap}
+                          m2mParentCommitted={m2mParentCommitted}
+                          layoutAiEnabled={layoutAiEnabled}
                         />
                       ))
                   )}
@@ -2003,8 +2968,17 @@ export function ItemEditPage() {
                         <span className='inline-flex items-center gap-0.5 rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 dark:bg-violet-900/30 dark:text-violet-400'>
                           {field.computed_type === 'write' ? 'write-time' : 'read-time'}
                         </span>
+                        {field.note && (
+                          <TooltipProvider delayDuration={200}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className='h-3.5 w-3.5 shrink-0 cursor-help text-slate-400 hover:text-slate-600 dark:hover:text-slate-300' />
+                              </TooltipTrigger>
+                              <TooltipContent side='top' className='max-w-[240px] text-[12px]'>{field.note}</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
                       </div>
-                      {field.note && <p className='text-xs text-muted-foreground'>{field.note}</p>}
                       <div className='rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300'>
                         {display}
                       </div>
@@ -2070,29 +3044,99 @@ export function ItemEditPage() {
             const relField = allFields.find(f => f.field === rel.one_field)
             const relOpts = (() => { try { return typeof relField?.options === 'string' ? JSON.parse(relField.options) : (relField?.options ?? {}) } catch { return {} } })()
             const isSingle = relOpts.max_values === 1
+            // Cascade filter: compute from fieldConfigMap for this relation's one_field
+            const fieldName = (rel.one_field && rel.one_field !== 'id')
+              ? rel.one_field
+              : (rel.many_collection ?? `${rel.many_collection}.${rel.junction_field}`)
+            const cascadeRules = getCascadeFilters(fieldConfigMap[fieldName]?.dependency_config)
+            let m2mCascadeFilter: Record<string, unknown> | undefined
+            let m2mCascadeParentLabel: string | null = null
+            for (const rule of cascadeRules) {
+              const parentVal = draft[rule.parent_field] ?? (() => {
+                // M2M parent: staged first, then committed (for existing items)
+                const parentRel = (relations as CMSRelation[]).find(
+                  r => r.one_field === rule.parent_field && r.junction_field
+                )
+                if (parentRel) {
+                  const key = parentRel.one_field ?? `${parentRel.many_collection}.${parentRel.junction_field}`
+                  const staged = m2mLinks.get(key) ?? []
+                  if (staged.length > 0) return staged[0]
+                }
+                const committed = m2mParentCommitted[rule.parent_field] ?? []
+                return committed.length > 0 ? committed[0] : null
+              })()
+              if (parentVal != null && parentVal !== '') {
+                if (!m2mCascadeFilter) m2mCascadeFilter = {}
+                m2mCascadeFilter[rule.filter_column] = { _eq: parentVal }
+                if (!m2mCascadeParentLabel) m2mCascadeParentLabel = titleCase(rule.parent_field)
+              }
+            }
+            const hasM2MCascade = !!m2mCascadeFilter && Object.keys(m2mCascadeFilter).length > 0
+            const m2mStagingKey = rel.one_field ?? `${rel.many_collection}.${rel.junction_field}`
+            // Far-end collection for clear_on_unavailable checks
+            const m2mFarEndRel = (relations as CMSRelation[]).find(
+              r => r.many_collection === rel.many_collection && r.many_field === rel.junction_field && r.id !== rel.id
+            )
+            const m2mFarEndCollection = m2mFarEndRel?.one_collection ?? undefined
+            const stagedIds = m2mLinks.get(m2mStagingKey) ?? []
             return (
               <div key={`${rel.many_collection}-${rel.junction_field}`} className='space-y-1.5'>
-                <Label className='text-slate-600'>{label}</Label>
+              {cascadeRules.length > 0 && (
+                <CascadeEffectController
+                  cascadeRules={cascadeRules}
+                  cascadeFilter={m2mCascadeFilter}
+                  currentValue={stagedIds[0] ?? (queryClient.getQueryData<Record<string, unknown>[]>(
+                    ['m2m-items', rel.many_collection, rel.many_field, id]
+                  ) ?? [])[0]?.[rel.junction_field!]}
+                  relatedCollection={m2mFarEndCollection}
+                  onClear={() => {
+                    // Clear staged links
+                    setM2mLinks(prev => { const next = new Map(prev); next.set(m2mStagingKey, []); return next })
+                    // Stage unlinks for committed junction rows
+                    const junctionItems = (queryClient.getQueryData<Record<string, unknown>[]>(
+                      ['m2m-items', rel.many_collection, rel.many_field, id]
+                    ) ?? [])
+                    if (junctionItems.length > 0) {
+                      setM2mUnlinks(prev => {
+                        const next = new Map(prev)
+                        const s = new Set(next.get(m2mStagingKey) ?? [])
+                        junctionItems.forEach(ji => s.add(ji.id))
+                        next.set(m2mStagingKey, s)
+                        return next
+                      })
+                    }
+                  }}
+                />
+              )}
+                <div className='flex items-center gap-2'>
+                  <Label className='text-slate-600'>{label}</Label>
+                  {hasM2MCascade && m2mCascadeParentLabel && (
+                    <span className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff]'>
+                      <SlidersHorizontal className='h-2.5 w-2.5' />
+                      Filtered by {m2mCascadeParentLabel}
+                    </span>
+                  )}
+                </div>
                 {!id || id === 'new' ? (
                   <p className='text-[12px] text-slate-400'>Save the record first to manage related items</p>
                 ) : isSingle ? (
-                  <M2MSingleSelectCombobox relation={rel} parentId={id} allRelations={relations} />
+                  <M2MSingleSelectCombobox relation={rel} parentId={id} allRelations={relations} extraFilter={hasM2MCascade ? m2mCascadeFilter : undefined} />
                 ) : (
-                  <M2MMultiSelectCombobox relation={rel} parentId={id} allRelations={relations} />
+                  <M2MMultiSelectCombobox relation={rel} parentId={id} allRelations={relations} extraFilter={hasM2MCascade ? m2mCascadeFilter : undefined} />
                 )}
               </div>
             )
           })}
 
-          {/* Comments & mentions */}
-          {id && (
+          {/* Comments & mentions — hardcoded position only when not positioned in the layout */}
+          {id && !commentsSlot && !activeLayoutData?.layout?.disable_comments && (
             <div className='mt-6'>
               <CommentPanel collection={collection!} item={id} />
             </div>
           )}
 
-          {/* Tasks attached to this record */}
-          {id && id !== 'new' && <TaskPanel collection={collection!} item={id} />}
+          {/* Tasks attached to this record — hardcoded position only when not positioned in the layout */}
+          {id && id !== 'new' && !tasksSlot && !activeLayoutData?.layout?.disable_tasks && <TaskPanel collection={collection!} item={id} />}
 
           {/* Addenda & Amendments */}
           {id && id !== 'new' && colMeta?.addendums_enabled && (
@@ -2101,7 +3145,30 @@ export function ItemEditPage() {
         </div>
       )}
     </div>
+    </div> {/* overflow-y-auto scroll container */}
+    {summaryEnabled && summaryOpen && groupedFields && (
+      <SummaryPanel
+        groups={groupedFields.groups}
+        groupedMap={groupedFields.groupedMap}
+        ungrouped={groupedFields.ungrouped}
+        draft={draft}
+        hiddenFields={hiddenFields}
+        showAll={summaryShowAll}
+        onClose={() => setSummaryOpen(false)}
+        relations={relations}
+        collection={collection!}
+        allM2mRelations={allM2mRelations}
+        m2mLinks={m2mLinks}
+        m2mUnlinks={m2mUnlinks}
+        itemId={id !== 'new' ? id : undefined}
+        isReady={initialized}
+        onNavigateToField={navigateToField}
+      />
+    )}
+    </div> {/* content row flex */}
+    </div> {/* outer flex-col */}
     </M2MStagingContext.Provider>
+    </O2MGridContext.Provider>
   )
 }
 
@@ -2121,7 +3188,10 @@ function FieldRow({
   user,
   generatingField,
   handleFieldChange,
-  handleGenerateField
+  handleGenerateField,
+  layoutAiEnabled = true,
+  fieldConfigMap,
+  m2mParentCommitted
 }: {
   field: CMSField
   draft: Record<string, unknown>
@@ -2137,15 +3207,29 @@ function FieldRow({
   generatingField: string | null
   handleFieldChange: (f: string, v: unknown) => void
   handleGenerateField: (f: string) => void
+  layoutAiEnabled?: boolean
+  fieldConfigMap?: Record<string, { dependency_config?: string | null }>
+  m2mParentCommitted?: Record<string, unknown[]>
 }) {
   if (treeConfig && field.field === treeConfig.parent_field) {
     return (
-      <div className='space-y-1.5'>
-        <Label>
-          {field.label ?? titleCase(field.field)}
-          {field.required && <span className='text-red-500 ml-0.5'>*</span>}
-        </Label>
-        {field.note && <p className='text-xs text-muted-foreground'>{field.note}</p>}
+      <div className='space-y-1.5' data-field={field.field}>
+        <div className='flex items-center gap-1'>
+          <Label>
+            {field.label ?? titleCase(field.field)}
+            {field.required && <span className='text-red-500 ml-0.5'>*</span>}
+          </Label>
+          {field.note && (
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className='h-3.5 w-3.5 shrink-0 cursor-help text-slate-400 hover:text-slate-600 dark:hover:text-slate-300' />
+                </TooltipTrigger>
+                <TooltipContent side='top' className='max-w-[240px] text-[12px]'>{field.note}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+        </div>
         <TreePicker
           collection={collection}
           value={draft[field.field] as string | number | null}
@@ -2159,6 +3243,68 @@ function FieldRow({
       </div>
     )
   }
+
+  const m2mStaging = useM2MStaging()
+  const queryClient = useQueryClient()
+
+  // Compute cascade filter state for this field
+  const cascadeRules = getCascadeFilters(fieldConfigMap?.[field.field]?.dependency_config)
+  let cascadeFilter: Record<string, unknown> | undefined
+  let unsatisfiedParentLabel: string | null = null
+  let cascadeParentLabel: string | null = null
+  for (const rule of cascadeRules) {
+    const parentVal = draft[rule.parent_field] ?? (() => {
+      const parentRel = (colMeta?.relations as CMSRelation[] | undefined)?.find(
+        r => r.one_field === rule.parent_field && r.junction_field
+      )
+      if (parentRel) {
+        const key = parentRel.one_field ?? `${parentRel.many_collection}.${parentRel.junction_field}`
+        const staged = m2mStaging?.getStagedLinks(key) ?? []
+        if (staged.length > 0) return staged[0]
+      }
+      const committed = m2mParentCommitted?.[rule.parent_field] ?? []
+      return committed.length > 0 ? committed[0] : null
+    })()
+    if (parentVal != null && parentVal !== '') {
+      if (!cascadeFilter) cascadeFilter = {}
+      cascadeFilter[rule.filter_column] = rule.filter_is_m2m
+        ? { _some: { id: { _eq: parentVal } } }
+        : { _eq: parentVal }
+      if (!cascadeParentLabel) cascadeParentLabel = titleCase(rule.parent_field)
+    } else if (!unsatisfiedParentLabel) {
+      unsatisfiedParentLabel = titleCase(rule.parent_field)
+    }
+  }
+
+  // Resolve child relation info for cascade controller
+  const m2mRelForCascade = (colMeta?.relations as CMSRelation[] | undefined)?.find(
+    r => r.one_field === field.field && r.junction_field
+  )
+  const m2oRelForCascade = m2mRelForCascade ? undefined : (colMeta?.relations as CMSRelation[] | undefined)?.find(
+    r => r.many_collection === collection && r.many_field === field.field
+  )
+  // Far-end collection for M2M (needed for clear_on_unavailable check)
+  const m2mFarEndRelForCascade = m2mRelForCascade
+    ? (colMeta?.relations as CMSRelation[] | undefined)?.find(
+        r => r.many_collection === m2mRelForCascade.many_collection &&
+             r.many_field === m2mRelForCascade.junction_field &&
+             r.id !== m2mRelForCascade.id
+      )
+    : undefined
+  // Current value: for M2O use draft; for M2M use first staged or first committed junction item
+  const m2mStagingKeyForCascade = m2mRelForCascade
+    ? (m2mRelForCascade.one_field ?? `${m2mRelForCascade.many_collection}.${m2mRelForCascade.junction_field}`)
+    : null
+  const m2mStagedForCascade = m2mStagingKeyForCascade ? (m2mStaging?.getStagedLinks(m2mStagingKeyForCascade) ?? []) : []
+  const m2mCommittedForCascade = m2mRelForCascade
+    ? (queryClient.getQueryData<Record<string, unknown>[]>(
+        ['m2m-items', m2mRelForCascade.many_collection, m2mRelForCascade.many_field, id]
+      ) ?? []).map(ji => ji[m2mRelForCascade.junction_field!])
+    : []
+  const cascadeCurrentValue = m2mRelForCascade
+    ? (m2mStagedForCascade[0] ?? m2mCommittedForCascade[0] ?? null)
+    : draft[field.field]
+  const cascadeRelatedCollection = m2mFarEndRelForCascade?.one_collection ?? m2oRelForCascade?.one_collection ?? undefined
 
   const isTextual =
     field.interface === 'input' ||
@@ -2178,13 +3324,46 @@ function FieldRow({
     draft[field.field] !== original[field.field]
 
   return (
-    <div className='space-y-1.5'>
+    <div className='space-y-1.5' data-field={field.field}>
+      {cascadeRules.length > 0 && (
+        <CascadeEffectController
+          cascadeRules={cascadeRules}
+          cascadeFilter={cascadeFilter}
+          currentValue={cascadeCurrentValue}
+          relatedCollection={cascadeRelatedCollection}
+          onClear={() => {
+            // Detect M2M child: has a relation where this field is the alias (one_field)
+            const m2mRel = (colMeta?.relations as CMSRelation[] | undefined)?.find(
+              r => r.one_field === field.field && r.junction_field
+            )
+            if (m2mRel) {
+              const stagingKey = m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
+              // Unstage staged links
+              const staged = m2mStaging?.getStagedLinks(stagingKey) ?? []
+              staged.forEach(rid => m2mStaging?.unstageLink(stagingKey, rid))
+              // Stage unlinks for committed junction rows (from query cache)
+              const junctionItems = (queryClient.getQueryData<Record<string, unknown>[]>(
+                ['m2m-items', m2mRel.many_collection, m2mRel.many_field, id]
+              ) ?? [])
+              junctionItems.forEach(ji => m2mStaging?.stageUnlink(stagingKey, ji.id))
+            } else {
+              handleFieldChange(field.field, null)
+            }
+          }}
+        />
+      )}
       <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
         <Label htmlFor={field.field}>
           {field.field === 'id' ? 'ID' : (field.label ?? titleCase(field.field))}
           {field.required && <span className='text-red-500 ml-0.5'>*</span>}
         </Label>
         {isLocked && <span className='text-[10px] text-slate-400 italic'>locked</span>}
+        {cascadeFilter && Object.keys(cascadeFilter).length > 0 && cascadeParentLabel && (
+          <span className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff] dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
+            <SlidersHorizontal className='h-2.5 w-2.5' />
+            Filtered by {cascadeParentLabel}
+          </span>
+        )}
         {inheritedFrom !== undefined &&
           (isOverridden ? (
             <span className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
@@ -2211,7 +3390,7 @@ function FieldRow({
         {isNumeric && id && id !== 'new' && (
           <FieldHistorySparkline collection={collection} item={id} field={field.field} />
         )}
-        {isTextual && user?.is_admin && (
+        {isTextual && user?.is_admin && layoutAiEnabled && (
           <button
             type='button'
             onClick={() => handleGenerateField(field.field)}
@@ -2227,8 +3406,17 @@ function FieldRow({
             AI
           </button>
         )}
+        {field.note && (
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className='h-3.5 w-3.5 shrink-0 cursor-help text-slate-400 hover:text-slate-600 dark:hover:text-slate-300' />
+              </TooltipTrigger>
+              <TooltipContent side='top' className='max-w-[240px] text-[12px]'>{field.note}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
       </div>
-      {field.note && <p className='text-xs text-muted-foreground'>{field.note}</p>}
       <FieldInput
         field={{ ...field, readonly: field.readonly || isLocked }}
         value={draft[field.field]}
@@ -2236,6 +3424,10 @@ function FieldRow({
         relations={colMeta?.relations ?? []}
         collection={collection}
         id={id}
+        cascadeFilter={cascadeFilter}
+        unsatisfiedParentLabel={unsatisfiedParentLabel}
+        cascadeParentLabel={cascadeParentLabel}
+        placeholder={(fieldConfigMap?.[field.field] as { placeholder?: string | null } | undefined)?.placeholder}
       />
       {validationErrors[field.field] && (
         <p className='mt-1 text-[11px] text-red-500'>{validationErrors[field.field]}</p>
@@ -2350,18 +3542,20 @@ function RepeaterField({
 function RichTextField({
   value,
   onChange,
-  disabled
+  disabled,
+  placeholder
 }: {
   value: string
   onChange: (v: unknown) => void
   disabled?: boolean
+  placeholder?: string | null
 }) {
   return (
     <RichTextEditor
       value={value}
       onChange={onChange}
       disabled={disabled}
-      placeholder='Start writing…'
+      placeholder={placeholder ?? 'Start writing…'}
     />
   )
 }
@@ -3253,6 +4447,148 @@ function LinkRelationPopover({
   )
 }
 
+function O2MInlineGrid({
+  relation,
+  parentId,
+  layoutId,
+  showTotals,
+}: {
+  relation: CMSRelation
+  parentId: string
+  layoutId: number | null
+  showTotals?: boolean
+}) {
+  const qc = useQueryClient()
+  const gridCtx = useO2MGridContext()
+
+  const { data: fieldConfigData = [] } = useQuery({
+    queryKey: ['field-config', relation.many_collection, layoutId],
+    queryFn: () => api.get(`/field-config/${relation.many_collection}${layoutId ? `?layout_id=${layoutId}` : ''}`).then(r => (r.data.data ?? []) as CMSField[]),
+    staleTime: 60_000,
+  })
+  const columns = fieldConfigData.filter(f => !f.hidden && f.field !== relation.many_field && f.field !== 'id')
+
+  const { data: fetchedRows = [] } = useQuery({
+    queryKey: ['o2m-grid', relation.many_collection, relation.many_field, parentId],
+    queryFn: () => api.get(`/items/${relation.many_collection}`, {
+      params: { filter: JSON.stringify({ [relation.many_field]: { _eq: parentId } }), limit: 200, fields: '*' },
+    }).then(r => (r.data.data ?? []) as Record<string, unknown>[]),
+    staleTime: 30_000,
+  })
+
+  const [stagedEdits, setStagedEdits] = useState<Map<string, Record<string, unknown>>>(new Map())
+  const [stagedNew, setStagedNew] = useState<Record<string, unknown>[]>([])
+  const [stagedDeletes, setStagedDeletes] = useState<Set<string>>(new Set())
+
+  const hasPending = stagedEdits.size > 0 || stagedNew.length > 0 || stagedDeletes.size > 0
+  const stagingKey = `${relation.many_collection}.${relation.many_field}`
+
+  useEffect(() => {
+    const flush = async () => {
+      for (const id of stagedDeletes) await api.delete(`/items/${relation.many_collection}/${id}`)
+      for (const row of stagedNew) await api.post(`/items/${relation.many_collection}`, { ...row, [relation.many_field]: parentId })
+      for (const [id, changes] of stagedEdits) {
+        if (!stagedDeletes.has(id)) await api.patch(`/items/${relation.many_collection}/${id}`, changes)
+      }
+      setStagedEdits(new Map()); setStagedNew([]); setStagedDeletes(new Set())
+      qc.invalidateQueries({ queryKey: ['o2m-grid', relation.many_collection] })
+    }
+    gridCtx?.register(stagingKey, flush)
+    return () => gridCtx?.unregister(stagingKey)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stagingKey, stagedEdits, stagedNew, stagedDeletes, parentId])
+
+  const visibleRows = fetchedRows.filter(r => !stagedDeletes.has(String(r.id)))
+  const allRows = [...visibleRows.map(r => ({ ...r, ...(stagedEdits.get(String(r.id)) ?? {}) })), ...stagedNew]
+
+  function getVal(row: Record<string, unknown>, field: string, isNew: boolean, ni: number) {
+    if (isNew) return stagedNew[ni]?.[field] ?? ''
+    return stagedEdits.get(String(row.id))?.[field] ?? row[field] ?? ''
+  }
+  function setVal(row: Record<string, unknown>, field: string, value: unknown, isNew: boolean, ni: number) {
+    if (isNew) { setStagedNew(p => p.map((r, i) => i === ni ? { ...r, [field]: value } : r)); return }
+    const id = String(row.id)
+    setStagedEdits(p => { const n = new Map(p); n.set(id, { ...(n.get(id) ?? {}), [field]: value }); return n })
+  }
+
+  function renderCell(col: CMSField, row: Record<string, unknown>, isNew: boolean, ni: number) {
+    const val = getVal(row, col.field, isNew, ni)
+    const set = (v: unknown) => setVal(row, col.field, v, isNew, ni)
+    const cls = 'w-full h-7 rounded border border-transparent bg-transparent px-1.5 text-[12px] focus:border-nvr-cyan focus:bg-white dark:focus:bg-card focus:outline-none'
+    const isNum = ['integer', 'bigInteger', 'float', 'decimal', 'numeric'].includes(col.type)
+    if (col.type === 'boolean') return <input type='checkbox' checked={!!val} onChange={e => set(e.target.checked)} className='h-4 w-4 accent-nvr-cyan' />
+    if (isNum) return <input type='number' value={val === null || val === undefined ? '' : String(val)} onChange={e => set(e.target.value === '' ? null : Number(e.target.value))} className={cls} />
+    if (col.type === 'datetime' || col.interface === 'datetime') return <input type='datetime-local' value={val ? String(val).slice(0, 16) : ''} onChange={e => set(e.target.value ? new Date(e.target.value).toISOString() : null)} className={cls} />
+    return <input type='text' value={val === null || val === undefined ? '' : String(val)} onChange={e => set(e.target.value || null)} className={cls} />
+  }
+
+  return (
+    <div className='rounded-lg border border-slate-200 dark:border-border overflow-hidden'>
+      {hasPending && (
+        <div className='flex items-center gap-1.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-400'>
+          <span className='h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0' />
+          Unsaved changes — will save with the record
+        </div>
+      )}
+      <div className='overflow-x-auto'>
+        <table className='w-full text-[12px]'>
+          <thead>
+            <tr className='border-b border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/40'>
+              {columns.map(col => (
+                <th key={col.field} className='px-2 py-2 text-left text-[11px] font-medium text-slate-500 dark:text-muted-foreground whitespace-nowrap'>
+                  {col.label ?? titleCase(col.field)}
+                </th>
+              ))}
+              <th className='w-8' />
+            </tr>
+          </thead>
+          <tbody className='divide-y divide-slate-100 dark:divide-border'>
+            {visibleRows.map(row => (
+              <tr key={String(row.id)} className='hover:bg-slate-50/50 dark:hover:bg-muted/20'>
+                {columns.map(col => <td key={col.field} className='px-2 py-0.5'>{renderCell(col, row, false, -1)}</td>)}
+                <td className='px-1'>
+                  <button type='button' onClick={() => setStagedDeletes(p => { const n = new Set(p); n.add(String(row.id)); return n })} className='rounded p-1 text-slate-300 hover:text-red-400'>
+                    <X className='h-3.5 w-3.5' />
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {stagedNew.map((row, idx) => (
+              <tr key={`new-${idx}`} className='bg-nvr-cyan/5 dark:bg-nvr-cyan/10'>
+                {columns.map(col => <td key={col.field} className='px-2 py-0.5'>{renderCell(col, row, true, idx)}</td>)}
+                <td className='px-1'>
+                  <button type='button' onClick={() => setStagedNew(p => p.filter((_, i) => i !== idx))} className='rounded p-1 text-slate-300 hover:text-red-400'>
+                    <X className='h-3.5 w-3.5' />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          {showTotals && columns.some(c => ['integer', 'bigInteger', 'float', 'decimal', 'numeric'].includes(c.type)) && (
+            <tfoot>
+              <tr className='border-t-2 border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/40'>
+                {columns.map(col => {
+                  const isNum = ['integer', 'bigInteger', 'float', 'decimal', 'numeric'].includes(col.type)
+                  if (!isNum) return <td key={col.field} className='px-2 py-1.5' />
+                  const sum = allRows.reduce((a, r) => a + (Number(r[col.field]) || 0), 0)
+                  return <td key={col.field} className='px-2 py-1.5 text-right font-medium text-slate-700 dark:text-foreground'>{sum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                })}
+                <td />
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+      <div className='border-t border-slate-100 dark:border-border px-3 py-2'>
+        <button type='button' onClick={() => setStagedNew(p => [...p, {}])} className='inline-flex items-center gap-1.5 text-[12px] font-medium text-[#00ceff] hover:text-[#00ceff]/80'>
+          <Plus className='h-3.5 w-3.5' />
+          Add row
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function O2MPanel({
   relation,
   parentId,
@@ -3385,10 +4721,12 @@ function M2MMultiSelectCombobox({
   relation,
   parentId,
   allRelations,
+  extraFilter,
 }: {
   relation: CMSRelation
   parentId: string
   allRelations: CMSRelation[]
+  extraFilter?: Record<string, unknown>
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -3437,8 +4775,16 @@ function M2MMultiSelectCombobox({
     staleTime: 30_000,
   })
 
+  const pickerFilterM2M = !isUserCol
+    ? (relatedColMeta?.picker_filter as Record<string, unknown> | null | undefined)
+    : null
+  const m2mClauses = [pickerFilterM2M, extraFilter].filter(Boolean) as Record<string, unknown>[]
+  const filterParam = m2mClauses.length > 0
+    ? JSON.stringify(m2mClauses.length === 1 ? m2mClauses[0] : { _and: m2mClauses })
+    : undefined
+
   const { data: options, isLoading: optionsLoading } = useQuery({
-    queryKey: ['m2m-options', relatedCollection, debouncedSearch],
+    queryKey: ['m2m-options', relatedCollection, debouncedSearch, filterParam],
     queryFn: async () => {
       if (!relatedCollection) return []
       if (isUserCol) {
@@ -3452,6 +4798,7 @@ function M2MMultiSelectCombobox({
           limit: 200,
           fields: templateFields.join(','),
           search: debouncedSearch || undefined,
+          filter: filterParam, picker: '1',
         },
       })
       return (res.data.data ?? []) as Record<string, unknown>[]
@@ -3559,7 +4906,11 @@ function M2MMultiSelectCombobox({
                 <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>No results</CommandEmpty>
               )}
               <CommandGroup>
-                {(options ?? []).map(opt => {
+                {[...(options ?? [])].sort((a, b) => {
+                  const la = isUserCol ? userDisplayLabel(a) : renderDisplayTemplate(displayTemplate, a)
+                  const lb = isUserCol ? userDisplayLabel(b) : renderDisplayTemplate(displayTemplate, b)
+                  return la.localeCompare(lb)
+                }).map(opt => {
                   const optId = String(opt.id)
                   const isSelected = allSelectedIds.has(optId)
                   const isPendingRemoval = !!((junctionItems ?? []).find(i => String(i[relation.junction_field!]) === optId && stagedUnlinks.has(i.id)))
@@ -3610,15 +4961,27 @@ function useM2MStaging() {
   return useContext(M2MStagingContext)
 }
 
+// ── O2M Inline Grid — batch save coordination ────────────────────────────────
+
+const O2MGridContext = createContext<{
+  register: (key: string, flush: () => Promise<void>) => void
+  unregister: (key: string) => void
+  flushAll: () => Promise<void>
+} | null>(null)
+
+function useO2MGridContext() { return useContext(O2MGridContext) }
+
 // ── M2MSingleSelectCombobox — max_values=1 ────────────────────────────────────
 function M2MSingleSelectCombobox({
   relation,
   parentId,
   allRelations,
+  extraFilter,
 }: {
   relation: CMSRelation
   parentId: string
   allRelations: CMSRelation[]
+  extraFilter?: Record<string, unknown>
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -3659,12 +5022,20 @@ function M2MSingleSelectCombobox({
     staleTime: 30_000,
   })
 
+  const pickerFilterSingle = !isSystemCol
+    ? (relatedColMeta?.picker_filter as Record<string, unknown> | null | undefined)
+    : null
+  const singleClauses = [pickerFilterSingle, extraFilter].filter(Boolean) as Record<string, unknown>[]
+  const filterParam = singleClauses.length > 0
+    ? JSON.stringify(singleClauses.length === 1 ? singleClauses[0] : { _and: singleClauses })
+    : undefined
+
   const { data: options, isLoading: optionsLoading } = useQuery({
-    queryKey: ['m2m-options', relatedCollection, debouncedSearch],
+    queryKey: ['m2m-options', relatedCollection, debouncedSearch, filterParam],
     queryFn: async () => {
       if (!relatedCollection) return []
       const res = await api.get(`/items/${relatedCollection}`, {
-        params: { limit: 200, fields: templateFields.join(','), search: debouncedSearch || undefined },
+        params: { limit: 200, fields: templateFields.join(','), search: debouncedSearch || undefined, filter: filterParam },
       })
       return (res.data.data ?? []) as Record<string, unknown>[]
     },
@@ -3745,7 +5116,9 @@ function M2MSingleSelectCombobox({
             )}
             <CommandGroup>
               <CommandItem value='__clear__' onSelect={handleClear} className='text-[13px] text-slate-400'>Clear selection</CommandItem>
-              {(options ?? []).map(opt => {
+              {[...(options ?? [])].sort((a, b) =>
+                renderDisplayTemplate(displayTemplate, a).localeCompare(renderDisplayTemplate(displayTemplate, b))
+              ).map(opt => {
                 const optId = String(opt.id)
                 const isSelected = String(currentRelatedId) === optId
                 return (

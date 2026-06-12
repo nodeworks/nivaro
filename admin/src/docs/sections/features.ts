@@ -1292,3 +1292,44 @@ export const analyticsGuide: DocSection = {
     }
   ]
 }
+
+export const externalApiSpecImportDoc: DocSection = {
+  id: 'external-api-spec-import',
+  label: 'Spec Import',
+  content: [
+    { type: 'h1', id: 'external-api-spec-import', text: 'External API — Spec Import' },
+    {
+      type: 'p',
+      text: 'The spec import feature bulk-creates predefined endpoint templates from an OpenAPI 3.x or Swagger 2.0 JSON or YAML document. Use the "Import Spec" collapsible in the Endpoints tab of any External API record, or call the API directly.'
+    },
+    { type: 'h3', text: 'Format requirements' },
+    {
+      type: 'p',
+      text: 'Both JSON and YAML are accepted. OpenAPI 3.x (root key `openapi`) and Swagger 2.0 (root key `swagger`) are both supported. Swagger 2.0 `basePath` is ignored — set `base_url` on the External API record. Endpoints are deduplicated by slug on each import.'
+    },
+    {
+      type: 'table',
+      head: ['Method', 'Path', 'Description'],
+      rows: [
+        ['POST', '/api/external-apis/:id/import-spec', 'Parse spec and bulk-create endpoint templates. Body: `{ spec: string | object }`. Returns `{ inserted, skipped, schema_id }`.'],
+        ['GET', '/api/external-apis/:id/schemas', 'List imported schema records. Returns id, title, spec_version, endpoint_count, imported_at.'],
+        ['DELETE', '/api/external-apis/:id/schemas/:sid', 'Remove a schema record (does not delete created templates).']
+      ]
+    },
+    {
+      type: 'pre',
+      code: `const spec = await fetch('https://petstore3.swagger.io/api/v3/openapi.json').then(r => r.json())
+
+await fetch('/api/external-apis/42/import-spec', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer <token>' },
+  body: JSON.stringify({ spec }),
+})
+// { "inserted": 23, "skipped": 0, "schema_id": 7 }`
+    },
+    {
+      type: 'note',
+      text: 'All spec import routes require admin access. A string body is parsed as JSON or YAML automatically. An object body is used directly.'
+    }
+  ]
+}

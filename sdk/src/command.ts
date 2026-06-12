@@ -5,7 +5,7 @@
 // them tree-shakeable and trivially testable.
 
 export interface Command<TResult> {
-  _method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  _method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   _path: string
   _params?: Record<string, unknown>
   _body?: unknown

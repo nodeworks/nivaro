@@ -3,19 +3,69 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 
+type LayoutConditions = { role_ids?: string[] } | null
+
+// Safely parse the conditions JSON text column into an object (or null).
+function parseConditions(raw: unknown): LayoutConditions {
+  if (raw == null) return null
+  if (typeof raw === 'object') return raw as LayoutConditions
+  if (typeof raw !== 'string') return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? (parsed as LayoutConditions) : null
+  } catch {
+    return null
+  }
+}
+
+// Resolve the best-matching layout for a collection given the user's role.
+// Conditional layouts (conditions.role_ids includes userRoleId) win over the
+// default (is_active=1) layout; among conditional matches the most specific
+// (most role_ids) wins, ties resolved by first match. Returns the raw DB row
+// (conditions still as a JSON string) or null when no layout exists.
+async function resolveLayout(collection: string, userRoleId: string | null | undefined) {
+  const layouts = await db('nivaro_collection_layouts')
+    .where({ collection })
+    .orderByRaw('is_active desc, sort asc')
+
+  if (layouts.length === 0) return null
+
+  if (userRoleId) {
+    let best: { row: (typeof layouts)[number]; matches: number } | null = null
+    for (const row of layouts) {
+      const cond = parseConditions(row.conditions)
+      const roleIds = cond?.role_ids
+      if (Array.isArray(roleIds) && roleIds.includes(userRoleId)) {
+        const matches = roleIds.length
+        if (!best || matches > best.matches) best = { row, matches }
+      }
+    }
+    if (best) return best.row
+  }
+
+  // Fall back to the active (default) layout, else the first by sort.
+  return layouts.find((l) => l.is_active) ?? layouts[0]
+}
+
 export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // GET /collection-layouts/active?collection=x — MUST be before /:id
   app.get('/active', { preHandler: authenticate }, async (req, reply) => {
     const { collection } = req.query as { collection?: string }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
-    const layout = await db('nivaro_collection_layouts')
-      .where({ collection }).orderByRaw('is_active desc, sort asc').first()
+    // Admins always see the default layout (no conditional override).
+    const userRoleId = req.isAdmin ? null : (req.user?.role ?? null)
+    const layout = await resolveLayout(collection, userRoleId)
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
+
+    layout.conditions = parseConditions(layout.conditions)
 
     const [groups, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
-      db('nivaro_layout_field_assignments').where({ layout_id: layout.id }).orderBy('sort', 'asc')
+      db('nivaro_layout_field_assignments')
+        .where({ layout_id: layout.id })
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded')
+        .orderBy('sort', 'asc')
     ])
 
     const ungroupedRow = assignments.find((a: { field: string; sort: number }) => a.field === '__ungrouped_pos__')
@@ -32,10 +82,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     let q = db('nivaro_collection_layouts')
       .where({ collection })
       .orderBy('sort', 'asc')
-      .select('id', 'collection', 'name', 'is_active', 'sort', 'created_at')
+      .select('id', 'collection', 'name', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'ai_enabled', 'conditions')
     if (active === 'true') q = q.where({ is_active: 1 })
 
     const rows = await q
+    for (const row of rows) row.conditions = parseConditions(row.conditions)
     return reply.send({ data: rows })
   })
 
@@ -75,15 +126,24 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as Partial<{ name: string; sort: number }>
+    const body = req.body as Partial<{ name: string; sort: number; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null }>
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
     if (body.sort !== undefined) patch.sort = body.sort
+    if (body.disable_comments !== undefined) patch.disable_comments = body.disable_comments ? 1 : 0
+    if (body.disable_tasks !== undefined) patch.disable_tasks = body.disable_tasks ? 1 : 0
+    if (body.tab_mode !== undefined) patch.tab_mode = body.tab_mode
+    if (body.validate_before_next !== undefined) patch.validate_before_next = body.validate_before_next ? 1 : 0
+    if (body.summary_enabled !== undefined) patch.summary_enabled = body.summary_enabled ? 1 : 0
+    if (body.summary_show_all !== undefined) patch.summary_show_all = body.summary_show_all ? 1 : 0
+    if (body.ai_enabled !== undefined) patch.ai_enabled = body.ai_enabled ? 1 : 0
+    if (body.conditions !== undefined) patch.conditions = body.conditions == null ? null : JSON.stringify(body.conditions)
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 
     await db('nivaro_collection_layouts').where({ id }).update(patch)
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
+    updated.conditions = parseConditions(updated.conditions)
 
     await logActivity({ action: 'update', user: req.user?.id, collection: 'nivaro_collection_layouts', item: id, req })
     return reply.send({ data: updated })
@@ -211,7 +271,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!layout) return reply.code(404).send({ error: 'Not found' })
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort')
+      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded')
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })
@@ -234,7 +294,16 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const layout = await db('nivaro_collection_layouts').where({ id }).first()
     if (!layout) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as { assignments: Array<{ field: string; group_key: string | null; sort: number }> }
+    const body = req.body as {
+      assignments: Array<{
+        field: string
+        group_key: string | null
+        sort: number
+        label_override?: string | null
+        is_visible?: boolean
+        default_expanded?: boolean
+      }>
+    }
     if (!Array.isArray(body.assignments)) return reply.code(400).send({ error: 'assignments array required' })
 
     await db.transaction(async (trx) => {
@@ -245,7 +314,10 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
             layout_id: Number(id),
             field: a.field,
             group_key: a.group_key ?? null,
-            sort: a.sort
+            sort: a.sort,
+            label_override: a.label_override ?? null,
+            is_visible: a.is_visible === false ? 0 : 1,
+            default_expanded: a.default_expanded === false ? 0 : 1
           }))
         )
       }
@@ -253,7 +325,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort')
+      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded')
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })

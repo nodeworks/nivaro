@@ -1101,21 +1101,13 @@ function EndpointsCard({ apiId }: { apiId: number }) {
               Import from OpenAPI / Swagger spec
             </span>
             <span className='ml-auto text-[11px] text-slate-400'>
-              JSON only — convert YAML at{' '}
-              <a
-                href='https://yaml.to-json.com'
-                target='_blank'
-                rel='noopener noreferrer'
-                className='text-nvr-cyan hover:underline'
-              >
-                yaml.to-json.com
-              </a>
+              JSON or YAML
             </span>
           </div>
           <Textarea
             value={specText}
             onChange={(e) => setSpecText(e.target.value)}
-            placeholder='Paste OpenAPI 3.0 or Swagger 2.0 JSON spec here…'
+            placeholder='Paste OpenAPI 3.0 or Swagger 2.0 spec here (JSON or YAML)…'
             rows={6}
             className='mb-3 font-mono text-[12px] resize-y'
           />

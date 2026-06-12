@@ -657,3 +657,120 @@ useNivaroForm('articles', { mode: 'create', layoutId: 42 })`
     }
   ]
 }
+
+export const layoutStepsMode: DocSection = {
+  id: 'layout-steps-mode',
+  label: 'Layout Steps / Wizard',
+  content: [
+    { type: 'h1', id: 'layout-steps-mode', text: 'Steps / Wizard Mode for Layouts' },
+    {
+      type: 'p',
+      text: 'A layout whose tabs are configured as steps renders as a linear stepper strip instead of a tab bar — the item editor walks the user through groups one at a time with Back / Next controls. Set `tab_mode` to `steps` (vs the default `tabs`) in Data Model → Layout → Settings.'
+    },
+    { type: 'h3', text: 'Config options' },
+    {
+      type: 'table',
+      head: ['Option', 'Effect'],
+      rows: [
+        ['tab_mode: steps', 'Tab-type groups render as an ordered stepper strip with Back / Next navigation.'],
+        ['validate_before_next', 'Blocks advancing to the next step until all required fields on the current step are filled.']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Steps mode reuses the tab groups of the layout — there is no separate step entity. With `validate_before_next` off, users can move freely between steps; validation still runs on save.'
+    }
+  ]
+}
+
+export const layoutSummaryPanel: DocSection = {
+  id: 'layout-summary-panel',
+  label: 'Layout Summary Panel',
+  content: [
+    { type: 'h1', id: 'layout-summary-panel', text: 'Summary Panel' },
+    {
+      type: 'p',
+      text: 'A layout can show a collapsible summary sidebar that lists every field and its live value as the record is edited. Toggle it on per layout with `summary_enabled` in layout settings; on the ItemEdit page the Summary button opens and closes it.'
+    },
+    { type: 'h3', text: 'Config options' },
+    {
+      type: 'table',
+      head: ['Option', 'Effect'],
+      rows: [
+        ['summary_enabled', 'Enables the summary sidebar for the layout and shows the Summary button on ItemEdit.'],
+        ['summary_show_all', 'Includes fields with empty values in the summary; off by default (only populated fields are listed).']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Clicking a field row in the summary navigates the editor to that field\'s tab or step, making the panel a fast jump-to index for long forms.'
+    }
+  ]
+}
+
+export const layoutPageSlots: DocSection = {
+  id: 'layout-page-slots',
+  label: 'Layout Page Slots',
+  content: [
+    { type: 'h1', id: 'layout-page-slots', text: 'Page Slots (Pipeline, Comments, Tasks)' },
+    {
+      type: 'p',
+      text: 'In the Layout tab, the built-in Pipeline, Comments, and Tasks panels appear as draggable "page slots" that sit in the same ordered list as field groups. Drag a slot to reposition it among the groups so the panel renders exactly where you want in the item editor.'
+    },
+    { type: 'h3', text: 'Per-slot settings' },
+    {
+      type: 'ul',
+      items: [
+        'Visibility toggle — show or hide the panel for this layout.',
+        'Custom label — rename a slot (e.g. "Comments" → "Notes").',
+        'Default state — start the panel expanded or collapsed.',
+        'Position — drag the slot anywhere in the layout order, interleaved with field groups.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Slot settings are scoped to the layout, so different layouts of the same collection can order, rename, and hide the Pipeline / Comments / Tasks panels independently.'
+    }
+  ]
+}
+
+export const layoutConditional: DocSection = {
+  id: 'layout-conditional',
+  label: 'Conditional Layouts by Role',
+  content: [
+    { type: 'h1', id: 'layout-conditional', text: 'Conditional Layouts by Role' },
+    {
+      type: 'p',
+      text: 'A layout can be restricted to specific roles so different users see different forms for the same collection. Set the role conditions in the "Visibility" section of layout settings; the server resolves the best-matching layout for the requesting user automatically.'
+    },
+    { type: 'h3', text: 'Config format' },
+    {
+      type: 'pre',
+      code: `// conditions on a collection layout:
+{
+  "role_ids": ["<role-uuid>", "<role-uuid>"]
+}
+// The layout is only eligible for users in one of these roles.`
+    },
+    {
+      type: 'note',
+      text: 'When several layouts qualify for a user, the server picks the best match — a role-scoped layout wins over the unconditional active layout. A layout with no conditions remains the default fallback for everyone else.'
+    }
+  ]
+}
+
+export const layoutAiFeatures: DocSection = {
+  id: 'layout-ai-features',
+  label: 'Per-Layout AI Features',
+  content: [
+    { type: 'h1', id: 'layout-ai-features', text: 'AI Features per Layout' },
+    {
+      type: 'p',
+      text: 'Each layout has a toggle that turns the AI helpers on or off for records edited through it. When disabled, the item editor hides the Summarize button and the per-field AI generate buttons, and skips AI validation and duplicate-detection checks entirely for that layout.'
+    },
+    {
+      type: 'note',
+      text: 'This is a presentation/UX gate at the layout level — collection-level AI validation rules (which are also enforced server-side) still apply to writes that come through other layouts or the API. Use it to keep AI affordances out of forms where they are not wanted.'
+    }
+  ]
+}

@@ -633,8 +633,29 @@ export function revokeUserToken(userId: string): Command<void> {
 
 // ─── Collections ──────────────────────────────────────────────────────────────
 
-export function readCollections(): Command<{ data: unknown[] }> {
+/**
+ * Public representation of a registered collection as returned by
+ * `GET /api/collections` and `GET /api/collections/:collection`.
+ */
+export interface CMSCollection {
+  collection: string
+  display_name: string | null
+  singleton: boolean
+  draft_publish_enabled: boolean
+  /**
+   * Collection-level filter applied when this collection is used as a
+   * relation picker target. Absent when not configured.
+   */
+  picker_filter?: Record<string, unknown> | null
+  [key: string]: unknown
+}
+
+export function readCollections(): Command<{ data: CMSCollection[] }> {
   return cmd('GET', '/collections')
+}
+
+export function readCollection(collection: string): Command<{ data: CMSCollection }> {
+  return cmd('GET', `/collections/${collection}`)
 }
 
 // ─── Revisions ────────────────────────────────────────────────────────────────
@@ -932,6 +953,106 @@ export function callExternalApi(
   }
 ): Command<{ data: ExternalApiTestResult; error?: string }> {
   return cmd('POST', `/external-apis/${apiId}/call`, undefined, options ?? {})
+}
+
+// ─── External API — Swagger/OpenAPI spec import ───────────────────────────────
+
+export interface ExternalApiSchema {
+  id: number
+  title: string | null
+  spec_version: string | null
+  endpoint_count: number
+  imported_at: ISODate
+}
+
+export interface ExternalApiSpecImportResult {
+  imported: number
+  skipped: number
+  schema_id: number
+}
+
+/**
+ * Import a Swagger / OpenAPI spec into an external API config.
+ * Pass the spec as a JSON string or a parsed object.
+ * Returns counts of endpoints imported/skipped and the new schema row id.
+ */
+export function importExternalApiSpec(
+  apiId: number,
+  spec: string | Record<string, unknown>
+): Command<{ data: ExternalApiSpecImportResult }> {
+  return cmd('POST', `/external-apis/${apiId}/import-spec`, undefined, { spec })
+}
+
+/** List imported spec schemas for an external API. */
+export function listExternalApiSchemas(apiId: number): Command<{ data: ExternalApiSchema[] }> {
+  return cmd('GET', `/external-apis/${apiId}/schemas`)
+}
+
+/** Delete an imported spec schema (and its endpoints) from an external API. */
+export function deleteExternalApiSchema(
+  apiId: number,
+  schemaId: number
+): Command<{ data: { success: boolean } }> {
+  return cmd('DELETE', `/external-apis/${apiId}/schemas/${schemaId}`)
+}
+
+// ─── Picker exclusions ────────────────────────────────────────────────────────
+
+export interface PickerExclusionStatus {
+  excluded: boolean
+}
+
+/**
+ * Check whether a specific item is excluded from relation pickers.
+ */
+export function getPickerExclusionStatus(
+  collection: string,
+  itemId: string
+): Command<{ data: PickerExclusionStatus }> {
+  return cmd('GET', `/picker-exclusions/status/${collection}/${itemId}`)
+}
+
+/**
+ * Exclude an item from appearing in relation pickers across the admin UI.
+ */
+export function excludeFromPicker(
+  collection: string,
+  itemId: string
+): Command<{ data: { excluded: true } }> {
+  return cmd('POST', '/picker-exclusions', undefined, { collection, item_id: itemId })
+}
+
+/**
+ * Remove a picker exclusion — the item will appear in relation pickers again.
+ */
+export function includeInPicker(
+  collection: string,
+  itemId: string
+): Command<{ data: { excluded: false } }> {
+  return cmd('DELETE', '/picker-exclusions', undefined, { collection, item_id: itemId })
+}
+
+/**
+ * Check exclusion status for multiple items in one call.
+ * Returns the list of ids that ARE excluded.
+ */
+export function batchPickerExclusionStatus(
+  collection: string,
+  ids: string[]
+): Command<{ data: { excluded: string[] } }> {
+  return cmd('POST', '/picker-exclusions/batch-status', undefined, { collection, ids })
+}
+
+/**
+ * Bulk exclude or include a set of items.
+ * Pass `exclude: true` to exclude, `false` to remove exclusions.
+ */
+export function bulkPickerExclusion(
+  collection: string,
+  ids: string[],
+  exclude: boolean
+): Command<{ data: { success: boolean; count: number } }> {
+  return cmd('POST', '/picker-exclusions/bulk', undefined, { collection, ids, exclude })
 }
 
 // ─── Webhooks ─────────────────────────────────────────────────────────────────
@@ -2217,6 +2338,8 @@ interface CMSCollectionResponse {
   display_name?: string | null
   singleton?: boolean | number | null
   draft_publish_enabled?: boolean | number | null
+  /** Collection-level filter applied when this collection is used as a relation picker target. */
+  picker_filter?: Record<string, unknown> | null
   fields?: CMSFieldRow[]
   relations?: CMSRelationRow[]
 }

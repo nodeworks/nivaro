@@ -54,6 +54,7 @@ import { notificationSubscriptionsRoutes } from './notification-subscriptions.js
 import { notificationsRoutes } from './notifications.js'
 import { pagesRoutes } from './pages.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
+import { pickerExclusionRoutes } from './picker-exclusions.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
 import { pipelinesRoutes } from './pipelines.js'
 import { buildScript, presenceAdminRoutes } from './presence.js'
@@ -183,6 +184,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(apiKeysRoutes, { prefix: '/api-keys' })
   await app.register(scimRoutes, { prefix: '/scim/v2' })
   await app.register(pdfTemplatesRoutes, { prefix: '/pdf-templates' })
+  await app.register(pickerExclusionRoutes, { prefix: '/picker-exclusions' })
   await app.register(erpSubmissionsRoutes, { prefix: '/erp-submissions' })
   await app.register(syncJobsRoutes, { prefix: '/sync-jobs' })
   await app.register(workflowsRoutes, { prefix: '/workflows' })

@@ -1261,6 +1261,13 @@ export async function readItems(
     }
   }
 
+  // Picker exclusions — when ?picker=1, hide excluded records from results
+  if ((req?.query as Record<string, string>)?.picker === '1') {
+    const excludeSub = db('nivaro_picker_exclusions').where({ collection }).select('item_id')
+    q.whereNotIn('id', excludeSub)
+    countQ.whereNotIn('id', excludeSub)
+  }
+
   await hooks.trigger('before', { collection, action: 'read', user, database: db, req })
 
   const [rawData, countRows] = await Promise.all([q, countQ])
