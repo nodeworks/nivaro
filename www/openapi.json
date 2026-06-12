@@ -53847,6 +53847,9 @@
       "Workflows": {
         "type": "object",
         "properties": {
+          "project_type": {
+            "type": "integer"
+          },
           "local_tracking": {
             "type": "string"
           },

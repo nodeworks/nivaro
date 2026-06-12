@@ -167,14 +167,18 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     }
 
     const assignmentMap = new Map<string, { group_key: string | null; sort: number }>()
+    let ungrouped_sort: number | null = null
     if (targetLayoutId !== null) {
       const assignments = await db('nivaro_layout_field_assignments')
         .where({ layout_id: targetLayoutId })
         .select('field', 'group_key', 'sort')
       for (const a of assignments) {
+        if (a.field === '__ungrouped_pos__') { ungrouped_sort = a.sort; continue }
         assignmentMap.set(a.field, { group_key: a.group_key, sort: a.sort })
       }
     }
+
+    const knownFields = new Set(rows.map((r) => r.field))
 
     const formatted = rows.map((row, idx) => {
       const assignment = assignmentMap.get(row.field)
@@ -182,13 +186,34 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       return {
         ...base,
         group_key: assignment ? assignment.group_key : base.group_key,
-        sort: assignment ? assignment.sort : (row.sort ?? idx)
+        sort: assignment ? assignment.sort : (row.sort ?? idx),
+        layout_assigned: assignment !== undefined
       }
     })
 
+    // Include virtual fields (O2M one_field) that are in assignments but have no nivaro_fields row
+    for (const [field, a] of assignmentMap.entries()) {
+      if (!knownFields.has(field)) {
+        formatted.push({
+          field,
+          label: null,
+          note: null,
+          hidden: false,
+          readonly: false,
+          required: false,
+          interface: 'o2m',
+          options: null,
+          group_key: a.group_key,
+          sort: a.sort,
+          layout_assigned: true,
+          is_virtual: true
+        })
+      }
+    }
+
     formatted.sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
 
-    return reply.send({ data: formatted })
+    return reply.send({ data: formatted, ungrouped_sort })
   })
 
   // PATCH /field-config/:collection/:field — update field config

@@ -357,6 +357,20 @@ function FieldInput({
     return <Textarea value={strVal} rows={3} onChange={(e) => onChange(e.target.value || null)} />
   }
 
+  // O2M interface: match relation by field name OR by many_collection (backward compat when one_field='id')
+  if (field.type === 'o2m' || iface === 'relation-list') {
+    const rel = relations.find(
+      (r) => r.one_collection === collection && !r.junction_field &&
+        (r.one_field === field.field || r.many_collection === field.field)
+    )
+    if (rel) {
+      if (!itemId || itemId === 'new') {
+        return <p className='text-[12px] text-slate-400 py-1'>Save the record first to manage related items</p>
+      }
+      return <O2MPanel relation={rel} parentId={itemId} onNavigate={() => {}} />
+    }
+  }
+
   return <Input value={strVal} onChange={(e) => onChange(e.target.value || null)} />
 }
 
@@ -646,6 +660,7 @@ export function ItemEditPage() {
             remote_options_config: string | null
             repeater_schema: string | null
             is_translatable: boolean
+            layout_assigned: boolean
           }>
         }>(`/field-config/${collection}`)
         .then((r) => r.data.data),
@@ -670,7 +685,18 @@ export function ItemEditPage() {
         }>(`/field-groups/${collection}`)
         .then((r) => r.data.data),
     enabled: !!collection,
-    staleTime: 60_000
+    staleTime: 0
+  })
+
+  const { data: activeLayoutData } = useQuery({
+    queryKey: ['active-layout', collection],
+    queryFn: () =>
+      api
+        .get<{ data: { id: number; ungrouped_sort?: number | null } }>(`/collection-layouts/active`, { params: { collection } })
+        .then((r) => r.data.data)
+        .catch(() => null),
+    enabled: !!collection,
+    staleTime: 0
   })
 
   const { data: dpConfig } = useQuery({
@@ -881,13 +907,35 @@ export function ItemEditPage() {
     onError: () => toast.error('Failed to save attribute')
   })
 
-  const allFields: CMSField[] = colMeta?.fields ?? []
   const relations: CMSRelation[] = colMeta?.relations ?? []
+  // O2M virtual fields have no DB column — synthesize CMSField entries so they
+  // participate in the layout system (pool → group/ungrouped → render at position)
+  // When one_field='id' (legacy hardcoded value), use many_collection as the effective field name
+  const o2mVirtualEntries: CMSField[] = (relations as CMSRelation[])
+    .filter(r => {
+      if (!(r.one_collection === collection && r.one_field && !r.junction_field)) return false
+      const effectiveName = r.one_field === 'id' ? r.many_collection! : r.one_field
+      return !colMeta?.fields?.find((f: CMSField) => f.field === effectiveName)
+    })
+    .map(r => {
+      const fieldName = r.one_field === 'id' ? r.many_collection! : r.one_field!
+      return { field: fieldName, type: 'o2m', label: null, hidden: false, readonly: true } as unknown as CMSField
+    })
+  const allFields: CMSField[] = [...(colMeta?.fields ?? []), ...o2mVirtualEntries]
 
   const groupedFields = useMemo(() => {
     const groups = fieldGroups ?? []
     if (groups.length === 0) return null
-    const ungrouped = allFields.filter((f) => !fieldConfigMap[f.field]?.group_key && !f.hidden)
+    // Only show fields explicitly placed in Ungrouped (layout_assigned=true, no group_key).
+    // Fields with layout_assigned=false are still in the Unassigned pool — hide them.
+    // If no active layout exists (layout_assigned undefined), fall back to old behaviour.
+    const ungrouped = allFields.filter((f) => {
+      const fc = fieldConfigMap[f.field]
+      if (!fc || f.hidden) return false
+      if (fc.group_key) return false
+      if ('layout_assigned' in fc) return fc.layout_assigned === true
+      return true
+    })
     const groupedMap: Record<string, CMSField[]> = {}
     for (const g of groups) groupedMap[g.key] = []
     for (const f of allFields) {
@@ -913,6 +961,36 @@ export function ItemEditPage() {
     } catch { return 'col-span-12' }
   }
 
+  // Renders a field as O2MPanel if it's a layout-placed virtual O2M, else as FieldRow
+  const renderFieldOrPanel = (field: CMSField) => {
+    let o2mRel = o2mRelationMap.get(field.field)
+    // Fallback: field has O2M interface but one_field doesn't match field name (e.g. one_field='id')
+    if (!o2mRel && (field.type === 'o2m' || field.interface === 'relation-list')) {
+      o2mRel = relations.find(
+        (r: CMSRelation) => r.one_collection === collection && !r.junction_field &&
+          (r.one_field === field.field || r.many_collection === field.field)
+      ) as CMSRelation | undefined
+    }
+    if (o2mRel) {
+      if (!id || id === 'new') return null
+      return (
+        <div key={field.field} className='col-span-12'>
+          <O2MPanel relation={o2mRel} parentId={id} onNavigate={(col) => navigate(`/collections/${col}`)} />
+        </div>
+      )
+    }
+    return (
+      <div key={field.field} className={getFieldColSpanClass(field)}>
+        <FieldRow field={field} draft={draft} inheritedMap={inheritedMap}
+          original={itemData as Record<string, unknown> | undefined}
+          lockedFields={lockedFields} validationErrors={validationErrors}
+          treeConfig={treeConfig ?? null} collection={collection!} id={id}
+          colMeta={colMeta} user={user} generatingField={generatingField}
+          handleFieldChange={handleFieldChange} handleGenerateField={handleGenerateField} />
+      </div>
+    )
+  }
+
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev)
@@ -933,11 +1011,27 @@ export function ItemEditPage() {
   )
   const hasTabs = tabGroups.length > 0
 
-  const hasGeneralContent =
-    hasTabs &&
-    ((groupedFields?.ungrouped.filter((f) => !f.hidden && !SYSTEM_FIELDS.has(f.field)).length ??
-      0) > 0 ||
-      sectionGroups.length > 0)
+  // General tab only exists when there are section-type groups alongside tab groups.
+  // Ungrouped fields render above the tab strip in their own inline block, not inside a tab.
+  const hasGeneralContent = hasTabs && sectionGroups.length > 0
+
+  // Ordered items for section mode — groups + '__ungrouped__' sentinel at the Layout-configured position
+  const orderedSectionItems = useMemo(() => {
+    const groups = groupedFields?.groups ?? []
+    const savedPos = activeLayoutData?.ungrouped_sort
+    const ungroupedIdx = savedPos != null ? Math.min(savedPos, groups.length) : groups.length
+    const items: (typeof groups[number] | '__ungrouped__')[] = [...groups]
+    items.splice(ungroupedIdx, 0, '__ungrouped__')
+    return items
+  }, [groupedFields, activeLayoutData])
+
+  // Tab mode has no per-group interleaving — the Ungrouped block is binary:
+  // above the tab strip (default) or below the tab content when the Layout tab
+  // placed the Ungrouped zone after all groups
+  const ungroupedBelowTabs = useMemo(() => {
+    const savedPos = activeLayoutData?.ungrouped_sort
+    return savedPos != null && savedPos >= (groupedFields?.groups.length ?? 0)
+  }, [groupedFields, activeLayoutData])
 
   const [activeTab, setActiveTabRaw] = useState<string>(() => {
     try {
@@ -986,12 +1080,25 @@ export function ItemEditPage() {
       .map((r) => r.one_field!)
   )
 
+  // Pool = fields not yet placed in any group or Ungrouped zone.
+  // Only applies when an active layout has at least one placement (layout_assigned=true).
+  // If no layout or nothing placed yet, show everything (backward compat).
+  const hasActiveLayout = (fieldConfig ?? []).some(fc => (fc as Record<string, unknown>).layout_assigned === true)
+  const poolFieldNames: Set<string> = hasActiveLayout
+    ? new Set(
+        (fieldConfig ?? [])
+          .filter(fc => (fc as Record<string, unknown>).layout_assigned !== true)
+          .map(fc => fc.field)
+      )
+    : new Set()
+
   const computedFields = allFields.filter(
     (f) =>
       f.computed_formula &&
       !f.hidden &&
       !SYSTEM_FIELDS.has(f.field) &&
-      !virtualFieldNames.has(f.field)
+      !virtualFieldNames.has(f.field) &&
+      !poolFieldNames.has(f.field)
   )
   const computedFieldNames = new Set(computedFields.map((f) => f.field))
 
@@ -1027,10 +1134,11 @@ export function ItemEditPage() {
       !pathFieldNames.has(f.field) &&
       !virtualFieldNames.has(f.field) &&
       !computedFieldNames.has(f.field) &&
-      !namedM2mFields.has(f.field)
+      !namedM2mFields.has(f.field) &&
+      !poolFieldNames.has(f.field)
   )
   const systemFields = allFields.filter(
-    (f) => SYSTEM_FIELDS.has(f.field) || f.readonly || pathFieldNames.has(f.field)
+    (f) => (SYSTEM_FIELDS.has(f.field) || f.readonly || pathFieldNames.has(f.field)) && !poolFieldNames.has(f.field)
   )
 
   const inheritedMap =
@@ -1040,12 +1148,31 @@ export function ItemEditPage() {
 
   const displayName = colMeta?.display_name ?? titleCase(collection ?? '')
 
-  const o2mRelations: CMSRelation[] = relations.filter(
-    (r) => r.one_collection === collection && !r.junction_field &&
-      !relations.find((c) => c.many_collection === r.many_collection && c.id !== r.id)
+  // O2M relations split into layout-placed (rendered at configured position) vs unplaced (bottom)
+  // Key by many_collection when one_field='id' (backward compat for relations created with hardcoded one_field)
+  const o2mRelationMap = new Map<string, CMSRelation>(
+    relations
+      .filter(r => r.one_collection === collection && !r.junction_field && r.one_field)
+      .map(r => [r.one_field === 'id' ? r.many_collection! : r.one_field!, r])
   )
+  const layoutPlacedO2mFields = new Set(
+    [...o2mRelationMap.keys()].filter(k => {
+      const fc = fieldConfigMap[k]
+      return fc && (fc as Record<string, unknown>).layout_assigned === true
+    })
+  )
+  // When a layout is active, O2M only renders if explicitly placed (layout_assigned=true).
+  // Unplaced O2M (pool) are hidden entirely. Without a layout, fall back to showing all at bottom.
+  const o2mRelations: CMSRelation[] = [...o2mRelationMap.values()].filter(r => {
+    const key = r.one_field ?? `${r.many_collection}.${r.many_field}`
+    if (layoutPlacedO2mFields.has(key)) return false  // rendered at layout position, not bottom
+    if (hasActiveLayout) return false                  // layout active — unplaced = hidden
+    return !r.one_field || !poolFieldNames.has(r.one_field)
+  })
 
-  const namedM2mRelations = allM2mRelations
+  const namedM2mRelations = allM2mRelations.filter(
+    (r) => !r.one_field || !poolFieldNames.has(r.one_field)
+  )
   const m2mRelations: CMSRelation[] = []
 
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
@@ -1637,6 +1764,17 @@ export function ItemEditPage() {
                     />
                   )}
 
+                  {/* Ungrouped fields above tab strip — tab mode only, unless Layout places Ungrouped last; section mode places them via orderedSectionItems */}
+                  {hasTabs && !ungroupedBelowTabs && groupedFields && groupedFields.ungrouped.filter(
+                    (f) => !f.hidden && !SYSTEM_FIELDS.has(f.field) && !pathFieldNames.has(f.field) && !hiddenFields.has(f.field)
+                  ).length > 0 && (
+                    <div className='grid grid-cols-12 gap-4 items-start'>
+                      {groupedFields.ungrouped
+                        .filter((f) => !f.hidden && !SYSTEM_FIELDS.has(f.field) && !pathFieldNames.has(f.field) && !hiddenFields.has(f.field))
+                        .map((field) => renderFieldOrPanel(field))}
+                    </div>
+                  )}
+
                   {hasTabs ? (
                     // ── Tab mode ────────────────────────────────────────────
                     <>
@@ -1685,36 +1823,9 @@ export function ItemEditPage() {
                         </div>
                       </div>
 
-                      {/* General tab content */}
+                      {/* General tab content — section groups only; ungrouped fields render above the strip */}
                       {activeTab === '__general__' && hasGeneralContent && (
                         <div className='space-y-4'>
-                          {groupedFields!.ungrouped
-                            .filter(
-                              (f) =>
-                                !f.hidden &&
-                                !SYSTEM_FIELDS.has(f.field) &&
-                                !pathFieldNames.has(f.field) &&
-                                !hiddenFields.has(f.field)
-                            )
-                            .map((field) => (
-                              <FieldRow
-                                key={field.field}
-                                field={field}
-                                draft={draft}
-                                inheritedMap={inheritedMap}
-                                original={itemData as Record<string, unknown> | undefined}
-                                lockedFields={lockedFields}
-                                validationErrors={validationErrors}
-                                treeConfig={treeConfig ?? null}
-                                collection={collection!}
-                                id={id}
-                                colMeta={colMeta}
-                                user={user}
-                                generatingField={generatingField}
-                                handleFieldChange={handleFieldChange}
-                                handleGenerateField={handleGenerateField}
-                              />
-                            ))}
                           {sectionGroups.map((group) => {
                             const gfl = (groupedFields!.groupedMap[group.key] ?? []).filter(
                               (f) => !f.hidden && !pathFieldNames.has(f.field) && !hiddenFields.has(f.field)
@@ -1736,26 +1847,7 @@ export function ItemEditPage() {
                                 </button>
                                 {!isCollapsed && (
                                   <div className='grid grid-cols-12 gap-4 p-4 items-start'>
-                                    {gfl.map((field) => (
-                                      <div key={field.field} className={getFieldColSpanClass(field)}>
-                                        <FieldRow
-                                          field={field}
-                                          draft={draft}
-                                          inheritedMap={inheritedMap}
-                                          original={itemData as Record<string, unknown> | undefined}
-                                          lockedFields={lockedFields}
-                                          validationErrors={validationErrors}
-                                          treeConfig={treeConfig ?? null}
-                                          collection={collection!}
-                                          id={id}
-                                          colMeta={colMeta}
-                                          user={user}
-                                          generatingField={generatingField}
-                                          handleFieldChange={handleFieldChange}
-                                          handleGenerateField={handleGenerateField}
-                                        />
-                                      </div>
-                                    ))}
+                                    {gfl.map((field) => renderFieldOrPanel(field))}
                                   </div>
                                 )}
                               </div>
@@ -1780,110 +1872,56 @@ export function ItemEditPage() {
                         }
                         return (
                           <div key={group.key} className='grid grid-cols-12 gap-4 items-start'>
-                            {gfl.map((field) => (
-                              <div key={field.field} className={getFieldColSpanClass(field)}>
-                                <FieldRow
-                                  field={field}
-                                  draft={draft}
-                                  inheritedMap={inheritedMap}
-                                  original={itemData as Record<string, unknown> | undefined}
-                                  lockedFields={lockedFields}
-                                  validationErrors={validationErrors}
-                                  treeConfig={treeConfig ?? null}
-                                  collection={collection!}
-                                  id={id}
-                                  colMeta={colMeta}
-                                  user={user}
-                                  generatingField={generatingField}
-                                  handleFieldChange={handleFieldChange}
-                                  handleGenerateField={handleGenerateField}
-                                />
-                              </div>
-                            ))}
+                            {gfl.map((field) => renderFieldOrPanel(field))}
                           </div>
                         )
                       })}
+                      {/* Ungrouped fields below tab content — Layout tab placed the Ungrouped zone after all groups */}
+                      {ungroupedBelowTabs && groupedFields && (() => {
+                        const uf = groupedFields.ungrouped.filter(
+                          (f) => !f.hidden && !SYSTEM_FIELDS.has(f.field) && !pathFieldNames.has(f.field) && !hiddenFields.has(f.field)
+                        )
+                        if (uf.length === 0) return null
+                        return (
+                          <div className='grid grid-cols-12 gap-4 items-start'>
+                            {uf.map((field) => renderFieldOrPanel(field))}
+                          </div>
+                        )
+                      })()}
                     </>
                   ) : groupedFields ? (
-                    // ── Section mode (no tabs) ───────────────────────────────
+                    // ── Section mode — groups + Ungrouped interleaved at Layout-configured position ──
                     <>
-                      {groupedFields.ungrouped
-                        .filter(
-                          (f) =>
-                            !f.hidden &&
-                            !SYSTEM_FIELDS.has(f.field) &&
-                            !pathFieldNames.has(f.field) &&
-                            !hiddenFields.has(f.field)
-                        )
-                        .map((field) => (
-                          <FieldRow
-                            key={field.field}
-                            field={field}
-                            draft={draft}
-                            inheritedMap={inheritedMap}
-                            original={itemData as Record<string, unknown> | undefined}
-                            lockedFields={lockedFields}
-                            validationErrors={validationErrors}
-                            treeConfig={treeConfig ?? null}
-                            collection={collection!}
-                            id={id}
-                            colMeta={colMeta}
-                            user={user}
-                            generatingField={generatingField}
-                            handleFieldChange={handleFieldChange}
-                            handleGenerateField={handleGenerateField}
-                          />
-                        ))}
-                      {groupedFields.groups.map((group) => {
+                      {orderedSectionItems.map((item) => {
+                        if (item === '__ungrouped__') {
+                          const uf = groupedFields.ungrouped.filter(
+                            (f) => !f.hidden && !SYSTEM_FIELDS.has(f.field) && !pathFieldNames.has(f.field) && !hiddenFields.has(f.field)
+                          )
+                          if (uf.length === 0) return null
+                          return (
+                            <div key='__ungrouped__' className='grid grid-cols-12 gap-4 items-start'>
+                              {uf.map((field) => renderFieldOrPanel(field))}
+                            </div>
+                          )
+                        }
+                        const group = item
                         const groupFieldList = (groupedFields.groupedMap[group.key] ?? []).filter(
-                          (f) =>
-                            !f.hidden && !pathFieldNames.has(f.field) && !hiddenFields.has(f.field)
+                          (f) => !f.hidden && !pathFieldNames.has(f.field) && !hiddenFields.has(f.field)
                         )
                         if (groupFieldList.length === 0) return null
                         const isCollapsed = collapsedGroups.has(group.key)
                         return (
-                          <div
-                            key={group.key}
-                            className='overflow-hidden rounded-lg border border-slate-200 bg-white'
-                          >
-                            <button
-                              type='button'
-                              onClick={() => toggleGroup(group.key)}
-                              className='flex w-full items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200 text-[13px] font-medium text-slate-700'
-                            >
+                          <div key={group.key} className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+                            <button type='button' onClick={() => toggleGroup(group.key)} className='flex w-full items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200 text-[13px] font-medium text-slate-700'>
                               <span className='flex items-center gap-1.5'>
                                 {group.icon && (() => { const I = resolveCollectionIcon(group.icon!) as React.ElementType; return <I className='h-3.5 w-3.5 shrink-0 text-slate-400' /> })()}
                                 {group.label}
                               </span>
-                              <ChevronDown
-                                className={cn(
-                                  'h-4 w-4 text-slate-400 transition-transform',
-                                  isCollapsed ? '' : 'rotate-180'
-                                )}
-                              />
+                              <ChevronDown className={cn('h-4 w-4 text-slate-400 transition-transform', isCollapsed ? '' : 'rotate-180')} />
                             </button>
                             {!isCollapsed && (
                               <div className='grid grid-cols-12 gap-4 p-4 items-start'>
-                                {groupFieldList.map((field) => (
-                                  <div key={field.field} className={getFieldColSpanClass(field)}>
-                                  <FieldRow
-                                    field={field}
-                                    draft={draft}
-                                    inheritedMap={inheritedMap}
-                                    original={itemData as Record<string, unknown> | undefined}
-                                    lockedFields={lockedFields}
-                                    validationErrors={validationErrors}
-                                    treeConfig={treeConfig ?? null}
-                                    collection={collection!}
-                                    id={id}
-                                    colMeta={colMeta}
-                                    user={user}
-                                    generatingField={generatingField}
-                                    handleFieldChange={handleFieldChange}
-                                    handleGenerateField={handleGenerateField}
-                                  />
-                                  </div>
-                                ))}
+                                {groupFieldList.map((field) => renderFieldOrPanel(field))}
                               </div>
                             )}
                           </div>

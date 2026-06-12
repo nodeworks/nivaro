@@ -6,6 +6,7 @@ import {
   ChevronsUpDown,
   Code2,
   Copy,
+  Layers,
   Play,
   Terminal,
   X
@@ -1423,6 +1424,465 @@ function ResponseViewer({
   )
 }
 
+// ─── @nivaro/react reference examples ────────────────────────────────────────
+
+type ReactExample = {
+  id: string
+  title: string
+  description: string
+  code: string
+}
+
+const REACT_EXAMPLES: ReactExample[] = [
+  {
+    id: 'layout-form',
+    title: 'LayoutForm — simplest usage',
+    description:
+      'Drop-in layout-aware form. Reads the active layout from the API and renders tabs, sections, and ungrouped fields automatically. Bring your own field components.',
+    code: `import { NivaroProvider, useNivaroForm, LayoutForm } from '@nivaro/react'
+import { createNivaro } from '@nivaro/sdk'
+
+const client = createNivaro(window.location.origin, { token })
+
+function ArticleEditor({ id }: { id?: string }) {
+  const form = useNivaroForm('articles', {
+    itemId: id,           // omit for a create form
+    autoLoad: true,       // fetch item data on mount
+  }, client)
+
+  return (
+    <NivaroProvider client={client}>
+      <LayoutForm
+        form={form}
+        renderField={({ field, value, onChange, visible, locked, required }) => {
+          if (!visible) return null
+          return (
+            <div key={field}>
+              <label>{field}{required && ' *'}</label>
+              <input
+                value={value ?? ''}
+                onChange={e => onChange(e.target.value)}
+                disabled={locked}
+              />
+            </div>
+          )
+        }}
+      />
+      <button
+        disabled={!form.canSubmit}
+        onClick={() => form.submit()}
+      >
+        Save
+      </button>
+    </NivaroProvider>
+  )
+}`
+  },
+  {
+    id: 'use-ordered-layout',
+    title: 'useOrderedLayout — custom layout renderer',
+    description:
+      'Full control over rendering. useOrderedLayout returns the parsed layout tree so you can build your own tab strip, collapsible sections, or grid without LayoutForm.',
+    code: `import { useNivaroForm, useOrderedLayout } from '@nivaro/react'
+
+function ArticleForm({ id }: { id?: string }) {
+  const form = useNivaroForm('articles', { itemId: id, autoLoad: true })
+  const { hasTabs, tabGroups, sectionGroups, ungroupedFields } = useOrderedLayout(form)
+
+  // Tab-based layout
+  if (hasTabs) {
+    return (
+      <div>
+        {tabGroups.map(tab => (
+          <details key={tab.key} open>
+            <summary>{tab.label}</summary>
+            {tab.fields.map(f => (
+              <FieldInput key={f.field} form={form} field={f.field} />
+            ))}
+          </details>
+        ))}
+        {ungroupedFields.map(f => (
+          <FieldInput key={f.field} form={form} field={f.field} />
+        ))}
+      </div>
+    )
+  }
+
+  // Section-based layout
+  return (
+    <div>
+      {sectionGroups.map(section => (
+        <fieldset key={section.key}>
+          <legend>{section.label}</legend>
+          {section.fields.map(f => (
+            <FieldInput key={f.field} form={form} field={f.field} />
+          ))}
+        </fieldset>
+      ))}
+      {ungroupedFields.map(f => (
+        <FieldInput key={f.field} form={form} field={f.field} />
+      ))}
+    </div>
+  )
+}`
+  },
+  {
+    id: 'use-field-state',
+    title: 'useFieldState — custom field with colSpan grid',
+    description:
+      'Access per-field state including visibility, lock, required flag, validation error, and the colSpan value from the active layout assignment. Useful for building CSS Grid layouts that respect the layout editor widths.',
+    code: `import { useNivaroForm, useFieldState } from '@nivaro/react'
+
+function TitleField({ form }: { form: ReturnType<typeof useNivaroForm> }) {
+  const { value, error, visible, locked, required, colSpan, onChange } =
+    useFieldState(form, 'title')
+
+  if (!visible) return null
+
+  return (
+    <div style={{ gridColumn: \`span \${colSpan ?? 1}\` }}>
+      <label>
+        Title{required && <span aria-hidden> *</span>}
+      </label>
+      <input
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value)}
+        disabled={locked}
+        aria-invalid={!!error}
+        aria-required={required}
+      />
+      {error && <p role='alert'>{error}</p>}
+    </div>
+  )
+}
+
+// Render a full grid respecting per-field colSpan values
+function LayoutGrid({ form, fields }: { form: any, fields: string[] }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: 16 }}>
+      {fields.map(f => (
+        <TitleField key={f} form={form} />
+      ))}
+    </div>
+  )
+}`
+  },
+  {
+    id: 'use-watch-fields',
+    title: 'useWatchFields — conditional field visibility',
+    description:
+      'Subscribe to a reactive slice of field values. Re-renders only when one of the watched fields changes. Ideal for conditional UI that depends on sibling field values.',
+    code: `import { useNivaroForm, useWatchFields } from '@nivaro/react'
+
+function ArticleForm() {
+  const form = useNivaroForm('articles', { autoLoad: false })
+
+  // Watch 'status' and 'type' — re-renders only when they change
+  const { status, type } = useWatchFields(form, ['status', 'type'])
+
+  return (
+    <div>
+      {/* Always visible */}
+      <input
+        placeholder='Title'
+        value={form.values.title ?? ''}
+        onChange={e => form.setValue('title', e.target.value)}
+      />
+
+      {/* Show publish_at only when status is 'scheduled' */}
+      {status === 'scheduled' && (
+        <input
+          type='datetime-local'
+          value={form.values.publish_at ?? ''}
+          onChange={e => form.setValue('publish_at', e.target.value)}
+        />
+      )}
+
+      {/* Show external_url only for 'link' type articles */}
+      {type === 'link' && (
+        <input
+          type='url'
+          placeholder='External URL'
+          value={form.values.external_url ?? ''}
+          onChange={e => form.setValue('external_url', e.target.value)}
+        />
+      )}
+    </div>
+  )
+}`
+  },
+  {
+    id: 'use-field-array',
+    title: 'useFieldArray — repeater field',
+    description:
+      'Manage an array of sub-records stored in a JSON repeater field. Provides append, remove, move, update, and replace helpers. Integrates with the repeater_schema field type.',
+    code: `import { useNivaroForm, useFieldArray } from '@nivaro/react'
+
+function ArticleForm() {
+  const form = useNivaroForm('articles', { autoLoad: false })
+  const { items, append, remove, move, update } = useFieldArray(form, 'links')
+
+  return (
+    <div>
+      <h3>Links ({items.length})</h3>
+      {items.map((item, index) => (
+        <div key={item._key} style={{ display: 'flex', gap: 8 }}>
+          <input
+            value={item.label ?? ''}
+            placeholder='Label'
+            onChange={e => update(index, { ...item, label: e.target.value })}
+          />
+          <input
+            value={item.url ?? ''}
+            placeholder='URL'
+            onChange={e => update(index, { ...item, url: e.target.value })}
+          />
+          <button onClick={() => move(index, index - 1)} disabled={index === 0}>
+            ↑
+          </button>
+          <button onClick={() => move(index, index + 1)} disabled={index === items.length - 1}>
+            ↓
+          </button>
+          <button onClick={() => remove(index)}>Remove</button>
+        </div>
+      ))}
+      <button onClick={() => append({ label: '', url: '' })}>Add link</button>
+    </div>
+  )
+}`
+  },
+  {
+    id: 'use-form-status-dirty',
+    title: 'useFormStatus + useFormDirty — save bar',
+    description:
+      'Combine useFormStatus (submission state) with useFormDirty (unsaved-changes tracking) to build a sticky save bar that shows how many fields have been modified.',
+    code: `import { useNivaroForm, useFormStatus, useFormDirty } from '@nivaro/react'
+
+function ArticlePage({ id }: { id: string }) {
+  const form = useNivaroForm('articles', { itemId: id, autoLoad: true })
+
+  // Track submission state
+  const { isDirty: statusDirty, isValid, isSubmitting, isLoading, canSubmit } =
+    useFormStatus(form)
+
+  // Track which fields changed vs initial server data
+  const { isDirty, dirtyFields, isFieldDirty } = useFormDirty(form)
+
+  return (
+    <div>
+      {/* Page content */}
+      <input
+        value={form.values.title ?? ''}
+        onChange={e => form.setValue('title', e.target.value)}
+        style={{ borderColor: isFieldDirty('title') ? 'orange' : undefined }}
+      />
+
+      {/* Sticky save bar — only shown when there are unsaved changes */}
+      {isDirty && (
+        <div style={{
+          position: 'fixed',
+          bottom: 0, left: 0, right: 0,
+          padding: '12px 24px',
+          background: '#1e293b',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12
+        }}>
+          <span style={{ color: '#94a3b8', fontSize: 13 }}>
+            {dirtyFields.length} unsaved {dirtyFields.length === 1 ? 'change' : 'changes'}
+          </span>
+          <button
+            onClick={() => form.reset()}
+            disabled={isSubmitting}
+            style={{ marginLeft: 'auto' }}
+          >
+            Discard
+          </button>
+          <button
+            onClick={() => form.submit()}
+            disabled={!canSubmit || isSubmitting}
+          >
+            {isSubmitting ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}`
+  },
+  {
+    id: 'use-tab-section-state',
+    title: 'useTabState + useSectionState — tab and collapse control',
+    description:
+      'Control active tab and section collapse state programmatically. Useful for validation flows (switch to tab with errors) or bulk expand/collapse actions.',
+    code: `import { useNivaroForm, useTabState, useSectionState } from '@nivaro/react'
+
+function ArticleEditor() {
+  const form = useNivaroForm('articles', { autoLoad: false })
+  const { activeTab, setActiveTab, tabs, hasTabs } = useTabState(form)
+  const { isCollapsed, toggle, collapseAll, expandAll } = useSectionState(form)
+
+  async function handleSubmit() {
+    const result = await form.submit()
+    if (!result.ok && result.firstErrorField) {
+      // Switch to the tab that contains the first invalid field
+      const errorTab = tabs.find(t => t.fields.some(f => f.field === result.firstErrorField))
+      if (errorTab) setActiveTab(errorTab.key)
+    }
+  }
+
+  return (
+    <div>
+      {hasTabs && (
+        <nav style={{ display: 'flex', gap: 8 }}>
+          {tabs.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              style={{ fontWeight: activeTab === tab.key ? 'bold' : 'normal' }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <button onClick={expandAll}>Expand all</button>
+        <button onClick={collapseAll}>Collapse all</button>
+      </div>
+
+      {/* Render sections with collapse control */}
+      {form.layout?.sectionGroups?.map(section => (
+        <div key={section.key}>
+          <button onClick={() => toggle(section.key)}>
+            {isCollapsed(section.key) ? '▶' : '▼'} {section.label}
+          </button>
+          {!isCollapsed(section.key) && (
+            <div>
+              {section.fields.map(f => (
+                <input key={f.field} placeholder={f.field} />
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+
+      <button onClick={handleSubmit}>Save</button>
+    </div>
+  )
+}`
+  }
+]
+
+// ─── @nivaro/react tab component ──────────────────────────────────────────────
+
+function ReactReferenceTab() {
+  const [selectedId, setSelectedId] = useState(REACT_EXAMPLES[0].id)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+
+  const selected = REACT_EXAMPLES.find((e) => e.id === selectedId) ?? REACT_EXAMPLES[0]
+
+  async function copyCode(id: string, code: string) {
+    await navigator.clipboard.writeText(code)
+    setCopiedId(id)
+    setTimeout(() => setCopiedId(null), 1500)
+  }
+
+  return (
+    <div className='flex flex-1 min-h-0 overflow-hidden'>
+      {/* Left: example list */}
+      <aside className='flex w-[300px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card overflow-y-auto'>
+        <div className='px-3 py-3 border-b border-slate-100 dark:border-border'>
+          <p className='text-[11px] text-slate-400 leading-snug'>
+            Static code examples for{' '}
+            <code className='font-mono'>@nivaro/react</code> hooks and components.
+          </p>
+        </div>
+        <nav className='flex-1 p-2 space-y-0.5'>
+          {REACT_EXAMPLES.map((ex) => (
+            <button
+              key={ex.id}
+              type='button'
+              onClick={() => setSelectedId(ex.id)}
+              className={cn(
+                'w-full rounded-md px-3 py-2.5 text-left transition-colors',
+                selectedId === ex.id
+                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                  : 'text-slate-600 hover:bg-slate-50 dark:text-muted-foreground dark:hover:bg-muted/40'
+              )}
+            >
+              <span className='block text-[12px] font-medium leading-snug'>{ex.title}</span>
+            </button>
+          ))}
+        </nav>
+      </aside>
+
+      {/* Right: example detail */}
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+        <div className='mx-auto max-w-3xl space-y-5'>
+          {/* Header card */}
+          <div className='rounded-xl border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
+            <div className='flex items-center gap-2'>
+              <h2 className='font-mono text-[15px] font-semibold text-slate-900 dark:text-foreground'>
+                {selected.title}
+              </h2>
+              <Badge variant='outline' className='font-mono text-[10px]'>
+                @nivaro/react
+              </Badge>
+            </div>
+            <p className='mt-1.5 text-[12.5px] text-slate-500 dark:text-muted-foreground leading-relaxed'>
+              {selected.description}
+            </p>
+          </div>
+
+          {/* Code block */}
+          <div className='overflow-hidden rounded-xl border border-slate-200 dark:border-border'>
+            <div className='flex items-center gap-2 border-b border-slate-100 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
+              <Code2 className='h-3.5 w-3.5 text-slate-400' />
+              <span className='text-[11px] font-semibold text-slate-600 dark:text-foreground'>
+                Example
+              </span>
+              <Badge variant='secondary' className='px-1.5 py-px font-mono text-[9px]'>
+                TSX
+              </Badge>
+              <Button
+                size='sm'
+                variant='outline'
+                className='ml-auto h-6 gap-1.5 text-[11px]'
+                onClick={() => void copyCode(selected.id, selected.code)}
+              >
+                {copiedId === selected.id ? (
+                  <Check className='h-3 w-3 text-emerald-500' />
+                ) : (
+                  <Copy className='h-3 w-3' />
+                )}
+                {copiedId === selected.id ? 'Copied' : 'Copy'}
+              </Button>
+            </div>
+            <pre className='overflow-x-auto bg-slate-900 p-3.5 font-mono text-[11.5px] leading-relaxed text-cyan-200 whitespace-pre'>
+              {selected.code}
+            </pre>
+          </div>
+
+          {/* Install hint */}
+          <div className='overflow-hidden rounded-xl border border-slate-200 dark:border-border'>
+            <div className='flex items-center gap-2 border-b border-slate-100 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
+              <Terminal className='h-3.5 w-3.5 text-slate-400' />
+              <span className='text-[11px] font-semibold text-slate-600 dark:text-foreground'>
+                Install
+              </span>
+            </div>
+            <pre className='overflow-x-auto bg-slate-900 p-3.5 font-mono text-[12px] leading-relaxed text-cyan-200'>
+              {`pnpm add @nivaro/react @nivaro/sdk`}
+            </pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 type RunResult = {
@@ -1433,6 +1893,7 @@ type RunResult = {
 }
 
 export function SdkPlaygroundPage() {
+  const [activeTab, setActiveTab] = useState<'sdk' | 'react'>('sdk')
   const [selectedName, setSelectedName] = useState<string>(COMMANDS[0].name)
   const [values, setValues] = useState<Record<string, string>>({})
   const [result, setResult] = useState<RunResult | null>(null)
@@ -1506,13 +1967,45 @@ export function SdkPlaygroundPage() {
           <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
             SDK Playground
           </h1>
-          <span className='text-[12px] text-slate-400'>
-            Explore @nivaro/sdk commands against this instance
+          <span className='text-[12px] text-slate-400 hidden sm:block'>
+            Explore @nivaro/sdk commands and @nivaro/react hooks
           </span>
+          <div className='ml-auto flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40'>
+            <button
+              type='button'
+              onClick={() => setActiveTab('sdk')}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors',
+                activeTab === 'sdk'
+                  ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                  : 'text-slate-500 hover:text-slate-700 dark:text-muted-foreground dark:hover:text-foreground'
+              )}
+            >
+              <Terminal className='h-3.5 w-3.5' />
+              @nivaro/sdk
+            </button>
+            <button
+              type='button'
+              onClick={() => setActiveTab('react')}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors',
+                activeTab === 'react'
+                  ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                  : 'text-slate-500 hover:text-slate-700 dark:text-muted-foreground dark:hover:text-foreground'
+              )}
+            >
+              <Layers className='h-3.5 w-3.5' />
+              @nivaro/react
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className='flex flex-1 min-h-0 overflow-hidden'>
+      {activeTab === 'react' ? (
+        <ReactReferenceTab />
+      ) : null}
+
+      <div className={cn('flex flex-1 min-h-0 overflow-hidden', activeTab !== 'sdk' && 'hidden')}>
         {/* Left: searchable command list */}
         <aside className='flex w-[300px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
           <Command className='flex-1'>

@@ -97,6 +97,8 @@ export type FormSchema = {
   draftPublishEnabled: boolean
   fields: FormFieldDescriptor[]
   groups: FormGroupDescriptor[]
+  /** index of the Ungrouped zone among groups (null = after all groups) */
+  ungroupedSort: number | null
 }
 
 export type FormErrors = Record<string, string[]>

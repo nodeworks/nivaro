@@ -219,6 +219,7 @@
           <a class="docs-nav-item" data-section="sdk-pipeline" href="#sdk-pipeline">Pipeline &amp; Owners</a>
           <a class="docs-nav-item" data-section="sdk-forms" href="#sdk-forms">Form Schema</a>
           <a class="docs-nav-item" data-section="sdk-react" href="#sdk-react">React (@nivaro/react)</a>
+          <a class="docs-nav-item" data-section="sdk-react-layout" href="#sdk-react-layout">React — Layout Hooks</a>
           <a class="docs-nav-item" data-section="sdk-notifications" href="#sdk-notifications">Notifications</a>
           <a class="docs-nav-item" data-section="sdk-files" href="#sdk-files">Files &amp; Upload</a>
           <a class="docs-nav-item" data-section="sdk-tokens" href="#sdk-tokens">Token Management</a>
@@ -3286,6 +3287,216 @@ function RequestForm() {
   )
 }</code></pre>
           <!-- /SYNC:sdk-react -->
+        </div>
+
+        <div class="doc-section" id="s-sdk-react-layout" data-toc='[{"id":"sdk-react-layout","label":"SDK — React Layout Hooks (@nivaro/react)"}]'>
+          <!-- SYNC:sdk-react-layout -->
+          <h1 class="doc-h1" id="sdk-react-layout">SDK — React Layout Hooks (@nivaro/react)</h1>
+          <p class="doc-p">These hooks work alongside <code class="doc-code">useNivaroForm</code> and require a form returned by that hook. They expose the active collection layout (tabs, sections, col_span grid, ungrouped zone position) plus field-level state, dirty tracking, and repeater management. Import all hooks from <code class="doc-code">@nivaro/react</code>.</p>
+          <div class="doc-note"><code class="doc-code">FormSchema</code> now includes <code class="doc-code">ungroupedSort: number | null</code> — the configured position of the Ungrouped zone relative to named groups. <code class="doc-code">fetchFormSchema</code> and <code class="doc-code">useFormSchema</code> fetch this automatically from the active layout endpoint; no extra call is needed.</div>
+          <h3 class="doc-h3">LayoutForm — layout-aware auto-renderer</h3>
+          <p class="doc-p"><code class="doc-code">&lt;LayoutForm&gt;</code> renders the full form using the active layout: tabs (if any), named sections with a col_span grid inside each, and an Ungrouped zone at its configured position. It is a drop-in replacement for iterating <code class="doc-code">form.schema.fields</code> manually when you want correct group/tab/grid rendering out of the box.</p>
+          <pre class="doc-pre"><code>import { useNivaroForm, LayoutForm } from '@nivaro/react'
+
+function RequestForm() {
+  const form = useNivaroForm('inventory_requests', { mode: 'create' })
+
+  return (
+    &lt;LayoutForm
+      form={form}
+      // Optional per-field override — return undefined to use the default renderer
+      renderField={(field, ctx) =&gt;
+        field.field === 'notes'
+          ? &lt;textarea value={ctx.value ?? ''} onChange={(e) =&gt; ctx.onChange(e.target.value)} /&gt;
+          : undefined
+      }
+    /&gt;
+  )
+}</code></pre>
+          <h3 class="doc-h3">useOrderedLayout — full layout descriptor</h3>
+          <p class="doc-p">Returns the ordered sequence of groups and ungrouped fields, respecting <code class="doc-code">ungroupedSort</code>. Use this as the single source of truth when building a custom layout renderer.</p>
+          <pre class="doc-pre"><code>import { useNivaroForm, useOrderedLayout } from '@nivaro/react'
+
+function CustomLayout() {
+  const form = useNivaroForm('contracts', { mode: 'create' })
+  const { items, hasTabs, tabGroups, sectionGroups, ungroupedFields } = useOrderedLayout(form)
+
+  // items is (FormGroupDescriptor | '__ungrouped__')[] in display order
+  return (
+    &lt;div&gt;
+      {items.map((item) =&gt;
+        item === '__ungrouped__'
+          ? ungroupedFields.map((f) =&gt; &lt;MyField key={f.field} field={f} form={form} /&gt;)
+          : &lt;MySection key={item.key} group={item} form={form} /&gt;
+      )}
+    &lt;/div&gt;
+  )
+}</code></pre>
+          <h3 class="doc-h3">useTabState — tab navigation</h3>
+          <p class="doc-p">Tracks which tab is active when the layout has tab-type groups. Falls back gracefully when there are no tabs (<code class="doc-code">hasTabs === false</code>).</p>
+          <pre class="doc-pre"><code>import { useNivaroForm, useTabState } from '@nivaro/react'
+
+function TabbedForm() {
+  const form = useNivaroForm('projects', { mode: 'create' })
+  const { activeTab, setActiveTab, tabs, hasTabs } = useTabState(form)
+
+  if (!hasTabs) return &lt;FlatForm form={form} /&gt;
+
+  return (
+    &lt;div&gt;
+      &lt;nav className="flex gap-2 border-b"&gt;
+        {tabs.map((tab) =&gt; (
+          &lt;button
+            key={tab.key}
+            className={activeTab === tab.key ? 'border-b-2 border-cyan-500' : ''}
+            onClick={() =&gt; setActiveTab(tab.key)}
+          &gt;
+            {tab.label}
+          &lt;/button&gt;
+        ))}
+      &lt;/nav&gt;
+      {/* render fields for activeTab only */}
+    &lt;/div&gt;
+  )
+}</code></pre>
+          <h3 class="doc-h3">useSectionState — collapse / expand sections</h3>
+          <p class="doc-p">Manages collapsed state for section-type groups. Pass <code class="doc-code">defaultCollapsed: true</code> to start all sections closed.</p>
+          <pre class="doc-pre"><code>import { useNivaroForm, useOrderedLayout, useSectionState } from '@nivaro/react'
+
+function CollapsibleForm() {
+  const form = useNivaroForm('orders', { mode: 'create' })
+  const { sectionGroups } = useOrderedLayout(form)
+  const { isCollapsed, toggle, collapseAll, expandAll } = useSectionState(form)
+
+  return (
+    &lt;div&gt;
+      &lt;div className="flex gap-2 text-sm mb-4"&gt;
+        &lt;button onClick={collapseAll}&gt;Collapse all&lt;/button&gt;
+        &lt;button onClick={expandAll}&gt;Expand all&lt;/button&gt;
+      &lt;/div&gt;
+      {sectionGroups.map((section) =&gt; (
+        &lt;div key={section.key} className="border rounded mb-3"&gt;
+          &lt;button className="w-full p-3 text-left font-medium" onClick={() =&gt; toggle(section.key)}&gt;
+            {section.label} {isCollapsed(section.key) ? '▸' : '▾'}
+          &lt;/button&gt;
+          {!isCollapsed(section.key) &amp;&amp; &lt;div className="p-3"&gt;{/* fields */}&lt;/div&gt;}
+        &lt;/div&gt;
+      ))}
+    &lt;/div&gt;
+  )
+}</code></pre>
+          <h3 class="doc-h3">useFieldState — per-field descriptor</h3>
+          <p class="doc-p">Returns all computed state for a single field: value, error, visibility, lock, required, col_span, and a stable <code class="doc-code">onChange</code> callback. Useful when building custom field wrappers that need a clean per-field API.</p>
+          <pre class="doc-pre"><code>import { useNivaroForm, useFieldState } from '@nivaro/react'
+
+function MyField({ form, fieldName }: { form: NivaroForm; fieldName: string }) {
+  const { value, error, visible, locked, required, colSpan, descriptor, onChange } =
+    useFieldState(form, fieldName)
+
+  if (!visible) return null
+
+  return (
+    &lt;div style={{ gridColumn: `span ${colSpan}` }}&gt;
+      &lt;label&gt;{descriptor.label}{required &amp;&amp; ' *'}&lt;/label&gt;
+      &lt;input value={value ?? ''} disabled={locked} onChange={(e) =&gt; onChange(e.target.value)} /&gt;
+      {error &amp;&amp; &lt;span className="text-red-600 text-xs"&gt;{error}&lt;/span&gt;}
+    &lt;/div&gt;
+  )
+}</code></pre>
+          <h3 class="doc-h3">useWatchFields — reactive value slice</h3>
+          <p class="doc-p">Subscribes to a subset of field values and re-renders only when those values change. Use for derived UI that depends on a few fields without watching the entire form.</p>
+          <pre class="doc-pre"><code>import { useNivaroForm, useWatchFields } from '@nivaro/react'
+
+function PricePreview({ form }: { form: NivaroForm }) {
+  const { quantity, unit_price, discount } = useWatchFields(form, ['quantity', 'unit_price', 'discount'])
+
+  const total = ((quantity ?? 0) as number) * ((unit_price ?? 0) as number)
+    * (1 - ((discount ?? 0) as number) / 100)
+
+  return &lt;p className="text-sm text-slate-600"&gt;Total: {total.toFixed(2)}&lt;/p&gt;
+}</code></pre>
+          <h3 class="doc-h3">useFormDirty — change tracking</h3>
+          <p class="doc-p">Tracks which fields have changed from their initial values. Pass <code class="doc-code">initialValues</code> explicitly or omit it to compare against the values present when the hook first mounted (i.e. the loaded item in edit mode).</p>
+          <pre class="doc-pre"><code>import { useNivaroForm, useFormDirty } from '@nivaro/react'
+
+function EditForm({ itemId }: { itemId: string }) {
+  const form = useNivaroForm('contracts', { mode: 'edit', itemId })
+  const { isDirty, dirtyFields, isFieldDirty } = useFormDirty(form)
+
+  return (
+    &lt;form onSubmit={form.handleSubmit}&gt;
+      {/* ... fields ... */}
+      &lt;button type="submit" disabled={!isDirty}&gt;
+        Save changes {isDirty &amp;&amp; `(${dirtyFields.length} changed)`}
+      &lt;/button&gt;
+      {isFieldDirty('title') &amp;&amp; &lt;span className="text-xs text-amber-600"&gt;Title modified&lt;/span&gt;}
+    &lt;/form&gt;
+  )
+}</code></pre>
+          <h3 class="doc-h3">useFormStatus — consolidated status flags</h3>
+          <p class="doc-p">Combines dirty, valid, submitting, and loading flags into a single object. Useful for driving save buttons and loading states without subscribing to multiple sources.</p>
+          <pre class="doc-pre"><code>import { useNivaroForm, useFormStatus } from '@nivaro/react'
+
+function SaveBar({ form }: { form: NivaroForm }) {
+  const { isDirty, isValid, isSubmitting, isLoading, canSubmit } = useFormStatus(form)
+
+  return (
+    &lt;div className="fixed bottom-0 right-0 p-4 flex gap-2"&gt;
+      {isLoading &amp;&amp; &lt;span&gt;Loading schema…&lt;/span&gt;}
+      &lt;button
+        type="button"
+        disabled={!canSubmit}
+        onClick={form.handleSubmit}
+        className="rounded bg-nvr-cyan px-4 py-2 text-white disabled:opacity-50"
+      &gt;
+        {isSubmitting ? 'Saving…' : 'Save'}
+      &lt;/button&gt;
+    &lt;/div&gt;
+  )
+}</code></pre>
+          <h3 class="doc-h3">useFieldArray — repeater field management</h3>
+          <p class="doc-p">Manages a repeater field as an ordered list of row objects. Provides append, remove, move, update, and replace operations — all wired to <code class="doc-code">form.setValue</code> so validation and dirty tracking stay in sync.</p>
+          <pre class="doc-pre"><code>import { useNivaroForm, useFieldArray } from '@nivaro/react'
+
+function LineItemsEditor({ form }: { form: NivaroForm }) {
+  const { items, append, remove, move, update } = useFieldArray(form, 'line_items')
+
+  return (
+    &lt;div className="space-y-2"&gt;
+      {items.map((row, idx) =&gt; (
+        &lt;div key={idx} className="flex gap-2 items-center"&gt;
+          &lt;input
+            value={row.description ?? ''}
+            onChange={(e) =&gt; update(idx, { ...row, description: e.target.value })}
+            placeholder="Description"
+          /&gt;
+          &lt;input
+            type="number"
+            value={row.qty ?? ''}
+            onChange={(e) =&gt; update(idx, { ...row, qty: Number(e.target.value) })}
+            className="w-20"
+          /&gt;
+          &lt;button onClick={() =&gt; remove(idx)}&gt;✕&lt;/button&gt;
+        &lt;/div&gt;
+      ))}
+      &lt;button onClick={() =&gt; append({ description: '', qty: 1 })}&gt;Add line&lt;/button&gt;
+    &lt;/div&gt;
+  )
+}</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Export</th><th>Kind</th><th>Purpose</th></tr></thead>
+            <tbody><tr><tr><td>LayoutForm</td><td>Component</td><td>Full layout-aware auto-renderer (tabs, sections, col_span grid, ungrouped zone).</td></tr>
+              <tr><td>useOrderedLayout(form)</td><td>Hook</td><td>Ordered list of groups + <code class="doc-code">__ungrouped__</code> sentinel, reflecting <code class="doc-code">ungroupedSort</code>.</td></tr>
+              <tr><td>useTabState(form)</td><td>Hook</td><td>Active tab + setter + tabs list; <code class="doc-code">hasTabs</code> false when layout has no tab groups.</td></tr>
+              <tr><td>useSectionState(form, defaultCollapsed?)</td><td>Hook</td><td>Per-section collapse state; <code class="doc-code">toggle</code>, <code class="doc-code">collapseAll</code>, <code class="doc-code">expandAll</code>.</td></tr>
+              <tr><td>useFieldState(form, field)</td><td>Hook</td><td>value, error, visible, locked, required, colSpan, descriptor, onChange for one field.</td></tr>
+              <tr><td>useWatchFields(form, fields[])</td><td>Hook</td><td>Reactive Record&lt;string, unknown&gt; slice — re-renders only when watched values change.</td></tr>
+              <tr><td>useFormDirty(form, initialValues?)</td><td>Hook</td><td>isDirty, dirtyFields[], isFieldDirty(field) — compares against initial or mounted values.</td></tr>
+              <tr><td>useFormStatus(form)</td><td>Hook</td><td>isDirty, isValid, isSubmitting, isLoading, canSubmit — one-stop status object.</td></tr>
+              <tr><td>useFieldArray(form, field)</td><td>Hook</td><td>append, remove, move, update, replace for ordered repeater rows.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">All layout hooks read the same <code class="doc-code">form</code> object returned by <code class="doc-code">useNivaroForm</code>. They do not create extra network requests — schema and layout data are fetched once by the hook and shared.</div>
+          <!-- /SYNC:sdk-react-layout -->
         </div>
 
         <!-- SDK additional sections -->
