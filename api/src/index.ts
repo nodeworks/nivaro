@@ -26,11 +26,13 @@ async function main() {
   registerCrossTriggerHooks()
   registerAiValidationHooks()
 
-  // Run pending migrations on startup. With MIGRATION_SAFE_MODE=true this is
-  // guarded by a DB advisory lock so rolling-deploy instances never race.
-  const [batch, migrations] = await runMigrationsSafely()
-  if (migrations.length > 0) {
-    console.log(`Migrations: ran batch ${batch}: ${migrations.join(', ')}`)
+  // Run pending migrations on startup (self-hosted only).
+  // In cloud mode, tenant migrations are run by the provisioning system.
+  if (!process.env.CLOUD_META_DB_URL) {
+    const [batch, migrations] = await runMigrationsSafely()
+    if (migrations.length > 0) {
+      console.log(`Migrations: ran batch ${batch}: ${migrations.join(', ')}`)
+    }
   }
 
   const app = await buildServer()

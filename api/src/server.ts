@@ -10,6 +10,7 @@ import { db } from './db/index.js'
 import { loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
 import { resolveWorkspace } from './middleware/workspace.js'
+import { tenantHook } from './middleware/tenant.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { cronPlugin } from './plugins/cron.js'
 import { graphqlPlugin } from './plugins/graphql.js'
@@ -41,15 +42,23 @@ export async function buildServer() {
     pluginTimeout: 30000
   })
 
+  // ─── Cloud multi-tenant: resolve tenant DB per request ────────────────────
+  // Only active when CLOUD_META_DB_URL is set. Self-hosted: this hook is never
+  // registered — behaviour is identical to before for self-hosted users.
+  if (process.env.CLOUD_META_DB_URL) {
+    app.addHook('onRequest', tenantHook)
+  }
+
   // ─── CORS ──────────────────────────────────────────────────────────────────
   // Open to all origins, no credentials — tracker runs on external sites.
   // Admin UI is same-origin in prod; Vite proxy makes it same-origin in dev.
   await app.register(fastifyCors, { origin: '*', credentials: false })
 
   // ─── Multipart (file uploads) ──────────────────────────────────────────────
-  const _fsMb = await db('nivaro_settings')
-    .first('file_max_size_mb')
-    .catch(() => null)
+  // In cloud mode skip the startup DB query (no default tenant) and use 50 MB.
+  const _fsMb = process.env.CLOUD_META_DB_URL
+    ? null
+    : await db('nivaro_settings').first('file_max_size_mb').catch(() => null)
   const _fileSizeMb = (_fsMb?.file_max_size_mb as number | null) ?? 50
   await app.register(fastifyMultipart, {
     limits: { fileSize: _fileSizeMb * 1024 * 1024 }
@@ -110,8 +119,9 @@ export async function buildServer() {
   // ─── Scheduled flows ──────────────────────────────────────────────────────
   await loadScheduledFlows(app)
 
-  // ─── Daily retention purge ─────────────────────────────────────────────────
-  app.addHook('onReady', async () => {
+  // ─── Daily retention purge (self-hosted only) ─────────────────────────────
+  // In cloud mode, retention runs per-tenant via the provisioning system.
+  if (!process.env.CLOUD_META_DB_URL) app.addHook('onReady', async () => {
     async function runRetentionPurge() {
       try {
         const row = await db('nivaro_settings')
