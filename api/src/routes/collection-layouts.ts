@@ -10,16 +10,18 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
     const layout = await db('nivaro_collection_layouts')
-      .where({ collection, is_active: 1 })
-      .first()
-    if (!layout) return reply.code(404).send({ error: 'No active layout' })
+      .where({ collection }).orderByRaw('is_active desc, sort asc').first()
+    if (!layout) return reply.code(404).send({ error: 'No layout found' })
 
     const [groups, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments').where({ layout_id: layout.id }).orderBy('sort', 'asc')
     ])
 
-    return reply.send({ data: { layout, groups, assignments } })
+    const ungroupedRow = assignments.find((a: { field: string; sort: number }) => a.field === '__ungrouped_pos__')
+    const ungrouped_sort: number | null = ungroupedRow ? ungroupedRow.sort : null
+
+    return reply.send({ data: { layout, groups, assignments, ungrouped_sort } })
   })
 
   // GET /collection-layouts?collection=x[&active=true]
@@ -212,6 +214,18 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .select('field', 'group_key', 'sort')
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
+  })
+
+  // PATCH /collection-layouts/:id/ungrouped-sort — update only the __ungrouped_pos__ row
+  app.patch('/:id/ungrouped-sort', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { ungrouped_sort } = req.body as { ungrouped_sort: number }
+    await db('nivaro_layout_field_assignments')
+      .where({ layout_id: Number(id), field: '__ungrouped_pos__' })
+      .delete()
+    await db('nivaro_layout_field_assignments')
+      .insert({ layout_id: Number(id), field: '__ungrouped_pos__', group_key: null, sort: ungrouped_sort })
+    return reply.send({ data: { ungrouped_sort } })
   })
 
   // PUT /collection-layouts/:id/assignments — bulk replace

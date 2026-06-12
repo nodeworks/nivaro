@@ -278,7 +278,8 @@ function buildSchema(
     singleton: toBool(meta.singleton),
     draftPublishEnabled: toBool(meta.draft_publish_enabled),
     fields,
-    groups
+    groups,
+    ungroupedSort: null  // populated by fetchSchema from the active-layout endpoint
   }
 }
 
@@ -299,22 +300,34 @@ export async function fetchSchema(
   const groupsParams: Record<string, unknown> = {}
   if (layoutId) groupsParams.layout_id = layoutId
 
-  const [collectionRes, groupsRes, assignmentsRes] = await Promise.all([
+  const [collectionRes, groupsRes, assignmentsRes, activeLayoutRes] = await Promise.all([
     client.request<{ data: CMSCollectionResponse }>(get(`/collections/${collection}`)),
     client.request<{ data: CMSGroupRow[] }>(get(`/field-groups/${collection}`, groupsParams)),
     layoutId
       ? client.request<{ data: Array<{ field: string; group_key: string | null; sort: number }> }>(
           get(`/collection-layouts/${layoutId}/assignments`)
         )
-      : Promise.resolve({ data: [] as Array<{ field: string; group_key: string | null; sort: number }> })
+      : Promise.resolve({ data: [] as Array<{ field: string; group_key: string | null; sort: number }> }),
+    !layoutId
+      ? client.request<{ data: { ungrouped_sort?: number | null } }>(
+          get(`/collection-layouts/active`, { collection })
+        ).catch(() => ({ data: { ungrouped_sort: null } }))
+      : Promise.resolve({ data: { ungrouped_sort: null } })
   ])
 
   const assignmentMap = new Map<string, { group_key: string | null; sort: number }>()
+  let ungroupedSort: number | null = null
   for (const a of assignmentsRes.data ?? []) {
+    if (a.field === '__ungrouped_pos__') { ungroupedSort = a.sort; continue }
     assignmentMap.set(a.field, { group_key: a.group_key, sort: a.sort })
   }
+  if (ungroupedSort === null) {
+    ungroupedSort = (activeLayoutRes.data as { ungrouped_sort?: number | null })?.ungrouped_sort ?? null
+  }
 
-  return buildSchema(collection, collectionRes.data, groupsRes.data ?? [], includeHidden, assignmentMap)
+  const schema = buildSchema(collection, collectionRes.data, groupsRes.data ?? [], includeHidden, assignmentMap)
+  schema.ungroupedSort = ungroupedSort
+  return schema
 }
 
 /**
