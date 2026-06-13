@@ -157,4 +157,86 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
       await db.destroy()
     }
   })
+
+  // Write storage config into a tenant's nivaro_settings row.
+  // Called by the gateway after provisioning, or manually to update storage creds.
+  // Requires the 003_storage_config migration to have run on the tenant DB first.
+  // In self-hosted mode this route is never registered (CLOUD_META_DB_URL not set).
+  app.post('/admin/configure-storage', async (req, reply) => {
+    const secret = req.headers['x-provision-secret']
+    if (!secret || secret !== process.env.PROVISION_SECRET) {
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+
+    const {
+      connectionString,
+      dbClient,
+      slug,
+      storageProvider,
+      bucket,
+      endpoint,
+      accessKeyId,
+      secretAccessKey,
+      region,
+      cdnUrl,
+      keyPrefix,
+      gatewayUrl,
+      provisionSecret,
+    } = req.body as {
+      connectionString: string
+      dbClient: 'pg' | 'mssql' | 'mysql2'
+      slug?: string
+      storageProvider?: string
+      bucket?: string
+      endpoint?: string
+      accessKeyId?: string
+      secretAccessKey?: string
+      region?: string
+      cdnUrl?: string
+      keyPrefix?: string
+      gatewayUrl?: string
+      provisionSecret?: string
+    }
+
+    if (!connectionString || !dbClient) {
+      return reply.code(400).send({ error: 'connectionString and dbClient required' })
+    }
+
+    const db = knex({
+      client: dbClient,
+      connection: connectionString,
+      pool: { min: 1, max: 3 },
+    })
+
+    try {
+      // nivaro_settings is a single-row table. Fetch the row id then update it.
+      const settings = await db('nivaro_settings').orderBy('id', 'asc').first('id')
+      if (!settings) {
+        return reply.code(500).send({ error: 'nivaro_settings row not found — has the tenant been provisioned?' })
+      }
+
+      const patch: Record<string, string | null> = {
+        storage_provider: storageProvider ?? 's3',
+        storage_s3_bucket: bucket ?? null,
+        storage_s3_endpoint: endpoint ?? null,
+        storage_s3_access_key: accessKeyId ?? null,
+        storage_s3_secret: secretAccessKey ?? null,
+        storage_s3_region: region ?? 'auto',
+        storage_cdn_url: cdnUrl ?? null,
+        storage_key_prefix: keyPrefix ?? (slug ? `${slug}/` : null),
+        gateway_url: gatewayUrl ?? null,
+        provision_secret: provisionSecret ?? null,
+      }
+
+      await db('nivaro_settings').where({ id: settings.id }).update(patch)
+
+      app.log.info({ slug }, 'Storage config written to tenant settings')
+      return { ok: true }
+    } catch (err: any) {
+      app.log.error({ err, slug }, 'configure-storage failed')
+      return reply.code(500).send({ error: err.message })
+    } finally {
+      await db.destroy()
+    }
+  })
 }

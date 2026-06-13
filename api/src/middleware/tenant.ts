@@ -21,25 +21,28 @@ function getMetaDb(): Knex {
 const RESERVED = new Set(['www', 'control', 'api', 'admin', 'status', 'mail'])
 
 // Paths that work without a tenant DB (health check, Inngest, admin provision).
-const TENANT_FREE_PATHS = ['/health', '/api/inngest', '/admin/provision', '/admin/migrate', '/admin/migration-status']
+const TENANT_FREE_PATHS = ['/health', '/api/inngest', '/admin/provision', '/admin/migrate', '/admin/migration-status', '/admin/configure-storage']
 
-/** Resolves the tenant Knex pool from the request hostname.
+/** Resolves the tenant Knex pool and slug from the request hostname.
  *  Returns null if the hostname is a system subdomain or tenant not found.
  *  Throws if the tenant exists but is not active. */
-async function resolveTenant(hostname: string): Promise<Knex | null> {
+async function resolveTenant(hostname: string): Promise<{ db: Knex; slug: string } | null> {
   // When behind Cloudflare Worker, the original host is passed via X-Forwarded-Host
   const sub = hostname.split('.')[0]
   if (!sub || RESERVED.has(sub)) return null
 
   const row = await getMetaDb()('cloud_tenants')
     .where({ subdomain: sub })
-    .first('id', 'status', 'db_client', 'db_connection_string')
+    .first('id', 'slug', 'status', 'db_client', 'db_connection_string')
     .catch(() => null)
 
   if (!row) return null
   if (row.status !== 'active') return null
 
-  return getOrCreateTenantPool(row.db_connection_string, row.db_client)
+  return {
+    db: getOrCreateTenantPool(row.db_connection_string, row.db_client),
+    slug: row.slug as string,
+  }
 }
 
 /** Fastify `onRequest` hook — only registered when CLOUD_META_DB_URL is set.
@@ -57,14 +60,14 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
   }
 
   resolveTenant(hostname)
-    .then((tenantDb) => {
-      if (!tenantDb) {
+    .then((tenant) => {
+      if (!tenant) {
         // No tenant resolved for this subdomain — reject rather than letting routes
         // run without a DB (they crash with undefined iteration errors in cloud mode).
         reply.code(404).send({ error: 'Tenant not found', subdomain: hostname.split('.')[0] })
         return
       }
-      runWithTenantDb(tenantDb, done)
+      runWithTenantDb(tenant.db, tenant.slug, done)
     })
     .catch((err: unknown) => done(err instanceof Error ? err : new Error(String(err))))
 }

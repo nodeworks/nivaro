@@ -1,9 +1,14 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import knex, { type Knex } from 'knex'
 
-// Per-request tenant DB store — populated by the tenant middleware in cloud mode.
-// Self-hosted: store is never written, getTenantDb() returns undefined, db falls back to static.
-const store = new AsyncLocalStorage<Knex>()
+// Per-request tenant store — populated by the tenant middleware in cloud mode.
+// Self-hosted: store is never written; getTenantDb() returns undefined; db falls back to static.
+export interface TenantStore {
+  db: Knex
+  slug: string
+}
+
+const store = new AsyncLocalStorage<TenantStore>()
 
 // Shared pool map — one Knex instance per connection string, never recreated.
 const pools = new Map<string, Knex>()
@@ -18,13 +23,18 @@ export function getOrCreateTenantPool(connectionString: string, client = 'pg'): 
   return pools.get(connectionString)!
 }
 
-/** Run `done` (Fastify lifecycle callback) within the ALS context for this tenant's DB.
+/** Run `done` (Fastify lifecycle callback) within the ALS context for this tenant.
  *  All async operations initiated from `done` inherit the context automatically. */
-export function runWithTenantDb(tenantDb: Knex, done: () => void): void {
-  store.run(tenantDb, done)
+export function runWithTenantDb(tenantDb: Knex, slug: string, done: () => void): void {
+  store.run({ db: tenantDb, slug }, done)
 }
 
-/** Returns the tenant DB for the current request, or undefined in self-hosted mode. */
+/** Returns the tenant Knex instance for the current request, or undefined in self-hosted mode. */
 export function getTenantDb(): Knex | undefined {
-  return store.getStore()
+  return store.getStore()?.db
+}
+
+/** Returns the tenant slug for the current request, or undefined in self-hosted mode. */
+export function getTenantSlug(): string | undefined {
+  return store.getStore()?.slug
 }

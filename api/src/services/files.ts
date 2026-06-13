@@ -4,6 +4,7 @@ import mime from 'mime-types'
 import { monotonicFactory } from 'ulid'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { getTenantSlug } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
 import { getStorage, getStorageProviderName } from './storage/index.js'
 
@@ -15,6 +16,53 @@ export type StoredFile = CMSFile & {
   storage_provider: string | null
 }
 
+// ─── Cloud usage reporting ───────────────────────────────────────────────────
+// All webhook calls are fire-and-forget. A missing GATEWAY_URL / PROVISION_SECRET
+// is treated as "not in cloud mode" — the upload/delete continues normally.
+//
+// Storage strategy (Option A): all tenants share the same S3/R2 bucket; per-tenant
+// isolation is achieved via the key prefix `{slug}/files/{id}{ext}`. The gateway
+// env vars (STORAGE_PROVIDER, STORAGE_S3_BUCKET, etc.) configure the single
+// shared bucket. The /admin/configure-storage endpoint writes per-tenant config
+// to nivaro_settings for future per-tenant override support.
+
+type FileEventType = 'created' | 'deleted' | 'bandwidth'
+
+async function reportFileEvent(
+  event: FileEventType,
+  payload: Record<string, unknown>
+): Promise<void> {
+  const gatewayUrl = process.env.GATEWAY_URL
+  const secret = process.env.PROVISION_SECRET
+  if (!gatewayUrl || !secret) return // Not in cloud mode — skip silently
+
+  const endpointMap: Record<FileEventType, string> = {
+    created: '/storage/file-created',
+    deleted: '/storage/file-deleted',
+    bandwidth: '/storage/bandwidth',
+  }
+
+  fetch(`${gatewayUrl}${endpointMap[event]}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-provision-secret': secret,
+    },
+    body: JSON.stringify(payload),
+  }).catch(() => {}) // Fire-and-forget — never fail the upload/delete
+}
+
+/** Build the storage key for a new file. In cloud mode, prefixes with the tenant
+ *  slug so each tenant's files live in their own key namespace within the shared
+ *  bucket. Falls back gracefully to a flat key in self-hosted mode. */
+function buildDiskName(id: string, ext: string): string {
+  const slug = getTenantSlug()
+  if (slug) return `${slug}/files/${id}${ext}`
+  return `${id}${ext}`
+}
+
+// ─── File operations ─────────────────────────────────────────────────────────
+
 export async function uploadFile(
   user: User,
   multipart: MultipartFile,
@@ -25,7 +73,7 @@ export async function uploadFile(
   const mimeType = multipart.mimetype || mime.lookup(originalName) || 'application/octet-stream'
   const ext =
     extname(originalName) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
-  const diskName = `${id}${ext}`
+  const diskName = buildDiskName(id, ext)
 
   const buffer = await multipart.toBuffer()
   const provider = getStorageProviderName()
@@ -46,7 +94,19 @@ export async function uploadFile(
     })
     .returning('id')) as unknown as [string]
 
-  return db<StoredFile>('nivaro_files').where({ id: fileId }).first() as Promise<StoredFile>
+  const file = (await db<StoredFile>('nivaro_files').where({ id: fileId }).first()) as StoredFile
+
+  // Report to gateway (fire-and-forget)
+  await reportFileEvent('created', {
+    slug: getTenantSlug() ?? null,
+    fileKey: file.filename_disk,
+    filename: file.filename_download,
+    mimeType: file.type,
+    sizeBytes: file.filesize,
+    folder: file.folder ?? null,
+  })
+
+  return file
 }
 
 /**
@@ -68,7 +128,7 @@ export async function createPresignedFile(
   const mimeType = opts.type || mime.lookup(opts.filename) || 'application/octet-stream'
   const ext =
     extname(opts.filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
-  const diskName = `${id}${ext}`
+  const diskName = buildDiskName(id, ext)
   const provider = getStorageProviderName()
 
   const uploadUrl = await storage.getUploadUrl(diskName, String(mimeType))
@@ -89,6 +149,17 @@ export async function createPresignedFile(
     .returning('id')) as unknown as [string]
 
   const file = (await db<StoredFile>('nivaro_files').where({ id: fileId }).first()) as StoredFile
+
+  // Report presigned upload creation (fire-and-forget; filesize unknown until client finishes)
+  await reportFileEvent('created', {
+    slug: getTenantSlug() ?? null,
+    fileKey: file.filename_disk,
+    filename: file.filename_download,
+    mimeType: file.type,
+    sizeBytes: null,
+    folder: file.folder ?? null,
+  })
+
   return { file, uploadUrl }
 }
 
@@ -156,6 +227,22 @@ export async function deleteFile(id: string): Promise<void> {
       .catch(() => null)
   }
   await deleteTransforms(id).catch(() => null)
+
+  // Report to gateway (fire-and-forget)
+  await reportFileEvent('deleted', {
+    slug: getTenantSlug() ?? null,
+    fileKey: file.filename_disk,
+  })
+}
+
+/** Report a file serve for bandwidth tracking. Called from the files route
+ *  after reading the buffer. Fire-and-forget — never throws. */
+export async function reportFileBandwidth(file: StoredFile): Promise<void> {
+  await reportFileEvent('bandwidth', {
+    slug: getTenantSlug() ?? null,
+    bytesTransferred: file.filesize ?? 0,
+    requestCount: 1,
+  })
 }
 
 /** Local-disk path of a file (only meaningful for the local provider). */
