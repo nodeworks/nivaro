@@ -284,7 +284,7 @@ export function DataTable<T = Record<string, unknown>>({
                           onClick={(e) => {
                             e.stopPropagation()
                             if (isSelected) {
-                              onSelectionChange(selectedIds?.filter((id) => id !== rowId))
+                              onSelectionChange(selectedIds?.filter((id) => id !== rowId) ?? [])
                             } else {
                               onSelectionChange([...(selectedIds ?? []), rowId])
                             }
