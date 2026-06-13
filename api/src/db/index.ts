@@ -82,17 +82,48 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
       migrations: { migrationSource, tableName: 'nivaro_migrations' }
     })
 
+// In cloud mode, background tasks (crons, timers) run outside request context
+// and getTenantDb() returns undefined. Rather than crashing with a pool error,
+// these queries silently resolve to undefined — correct behaviour since they're
+// all self-hosted-only features (logs, digests, retention) that don't apply
+// per-tenant. Request-scoped code always runs with a tenant DB from the ALS context.
+function silentQueryBuilder(): any {
+  const resolved = Promise.resolve(undefined)
+  const handler: ProxyHandler<object> = {
+    get(_, prop) {
+      if (prop === 'then') return resolved.then.bind(resolved)
+      if (prop === 'catch') return resolved.catch.bind(resolved)
+      if (prop === 'finally') return resolved.finally.bind(resolved)
+      return (..._args: unknown[]) => new Proxy({}, handler)
+    },
+    apply() { return new Proxy({}, handler) }
+  }
+  return new Proxy({}, handler)
+}
+
 // In cloud mode, db is a Proxy that returns the per-request tenant Knex instance
 // (set via AsyncLocalStorage by the tenant middleware). In self-hosted mode,
 // getTenantDb() returns undefined and the Proxy falls back to _staticDb —
 // behaviour is identical to before for self-hosted users.
 export const db = new Proxy(_staticDb as any, {
   apply(_target, _thisArg, args) {
-    const d = getTenantDb() ?? _staticDb
-    return (d as any)(...args)
+    const tenant = getTenantDb()
+    if (tenant) return (tenant as any)(...args)
+    if (cloudMode) return silentQueryBuilder()
+    return (_staticDb as any)(...args)
   },
   get(_target, prop) {
-    const d = getTenantDb() ?? _staticDb
+    const tenant = getTenantDb()
+    const d = tenant ?? (cloudMode ? null : _staticDb)
+    if (!d) {
+      if (prop === 'destroy') return () => Promise.resolve()
+      if (prop === 'raw') return () => silentQueryBuilder()
+      if (prop === 'schema') return silentQueryBuilder()
+      if (prop === 'transaction') return (fn: (trx: any) => any) => fn(new Proxy({}, {
+        get(_, p) { return (..._a: unknown[]) => silentQueryBuilder() }
+      }))
+      return (..._args: unknown[]) => silentQueryBuilder()
+    }
     const value = (d as any)[prop]
     return typeof value === 'function' ? value.bind(d) : value
   }
