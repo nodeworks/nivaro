@@ -16,15 +16,19 @@ import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
 
 async function main() {
-  registerActivityHooks()
-  registerFieldWatchHooks()
-  registerNotificationSubscriptionHooks()
-  registerSlaHooks()
-  registerPipelineAutostartHooks()
-  registerAlertHooks()
-  registerEmbeddingHooks()
-  registerCrossTriggerHooks()
-  registerAiValidationHooks()
+  // Hook registrations query the DB immediately at startup — skip in cloud mode.
+  // In cloud mode, per-tenant hooks fire per-request via the tenant middleware.
+  if (!process.env.CLOUD_META_DB_URL) {
+    registerActivityHooks()
+    registerFieldWatchHooks()
+    registerNotificationSubscriptionHooks()
+    registerSlaHooks()
+    registerPipelineAutostartHooks()
+    registerAlertHooks()
+    registerEmbeddingHooks()
+    registerCrossTriggerHooks()
+    registerAiValidationHooks()
+  }
 
   // Run pending migrations on startup (self-hosted only).
   // In cloud mode, tenant migrations are run by the provisioning system.
@@ -37,14 +41,17 @@ async function main() {
 
   const app = await buildServer()
 
-  await loadEventFlows(app)
-  setFieldWatchApp(app)
-  setSubscriptionApp(app)
-  setSlaApp(app)
-  setAlertApp(app)
-  setEmbeddingApp(app)
-  setCrossTriggerApp(app)
-  setAiValidationApp(app)
+  // These all query the static DB at startup — skip in cloud mode.
+  if (!process.env.CLOUD_META_DB_URL) {
+    await loadEventFlows(app)
+    setFieldWatchApp(app)
+    setSubscriptionApp(app)
+    setSlaApp(app)
+    setAlertApp(app)
+    setEmbeddingApp(app)
+    setCrossTriggerApp(app)
+    setAiValidationApp(app)
+  }
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' })
   app.log.info(`Nivaro API listening on port ${config.PORT}`)
