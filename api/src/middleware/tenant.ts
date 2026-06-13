@@ -47,8 +47,10 @@ async function resolveTenant(hostname: string): Promise<Knex | null> {
  *  by calling done() from within store.run(), propagating the context to all
  *  subsequent async operations in this request's lifecycle. */
 export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?: Error) => void) {
-  // Prefer X-Forwarded-Host set by Cloudflare Worker (contains original tenant subdomain)
-  const hostname = (req.headers['x-forwarded-host'] as string | undefined) ?? req.hostname
+  // X-Tenant-Host is set by the Cloudflare Worker and won't be overridden by Railway's proxy
+  const hostname = (req.headers['x-tenant-host'] as string | undefined)
+    ?? (req.headers['x-forwarded-host'] as string | undefined)
+    ?? req.hostname
   // Tenant-free paths bypass resolution entirely
   if (TENANT_FREE_PATHS.some(p => req.url === p || req.url.startsWith(p + '/'))) {
     return done()
