@@ -17,7 +17,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401 && window.location.pathname !== '/login') {
+    if (err.response?.status === 401 && window.location.pathname !== '/login' && !window.location.pathname.startsWith('/setup')) {
       const redirect = window.location.pathname + window.location.search
       window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
     }
