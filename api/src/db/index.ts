@@ -71,15 +71,16 @@ const writePort = config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
 
 // The static Knex instance — used in self-hosted mode and for migration/lock calls
 // that run outside of a request context (no ALS value set).
-export const _staticDb = knex({
-  client: config.DB_CLIENT,
-  connection: buildConnection(config.DB_HOST, writePort),
-  pool: { min: 2, max: 10 },
-  migrations: {
-    migrationSource,
-    tableName: 'nivaro_migrations'
-  }
-})
+// In cloud mode DB_HOST is empty so we must not create a real pool (it crashes).
+// The Proxy below always prefers getTenantDb() in cloud mode, so _staticDb is never queried.
+export const _staticDb = process.env.CLOUD_META_DB_URL
+  ? knex({ client: 'pg', connection: { host: 'localhost', database: 'unused' }, pool: { min: 0, max: 0 }, migrations: { migrationSource, tableName: 'nivaro_migrations' } })
+  : knex({
+      client: config.DB_CLIENT,
+      connection: buildConnection(config.DB_HOST, writePort),
+      pool: { min: 2, max: 10 },
+      migrations: { migrationSource, tableName: 'nivaro_migrations' }
+    })
 
 // In cloud mode, db is a Proxy that returns the per-request tenant Knex instance
 // (set via AsyncLocalStorage by the tenant middleware). In self-hosted mode,
