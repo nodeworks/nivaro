@@ -20,6 +20,9 @@ function getMetaDb(): Knex {
 // Subdomains that are not tenant slugs — route through without tenant resolution.
 const RESERVED = new Set(['www', 'control', 'api', 'admin', 'status', 'mail'])
 
+// Paths that work without a tenant DB (health check, Inngest, admin provision).
+const TENANT_FREE_PATHS = ['/health', '/api/inngest', '/admin/provision']
+
 /** Resolves the tenant Knex pool from the request hostname.
  *  Returns null if the hostname is a system subdomain or tenant not found.
  *  Throws if the tenant exists but is not active. */
@@ -46,9 +49,19 @@ async function resolveTenant(hostname: string): Promise<Knex | null> {
 export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?: Error) => void) {
   // Prefer X-Forwarded-Host set by Cloudflare Worker (contains original tenant subdomain)
   const hostname = (req.headers['x-forwarded-host'] as string | undefined) ?? req.hostname
+  // Tenant-free paths bypass resolution entirely
+  if (TENANT_FREE_PATHS.some(p => req.url === p || req.url.startsWith(p + '/'))) {
+    return done()
+  }
+
   resolveTenant(hostname)
     .then((tenantDb) => {
-      if (!tenantDb) return done()
+      if (!tenantDb) {
+        // No tenant resolved for this subdomain — reject rather than letting routes
+        // run without a DB (they crash with undefined iteration errors in cloud mode).
+        reply.code(404).send({ error: 'Tenant not found', subdomain: hostname.split('.')[0] })
+        return
+      }
       runWithTenantDb(tenantDb, done)
     })
     .catch((err: unknown) => done(err instanceof Error ? err : new Error(String(err))))
