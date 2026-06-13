@@ -641,7 +641,7 @@
     }
   </style>
 </head>
-<body data-gateway="https://api.nivaro.dev">
+<body data-gateway="https://nivaro-cloud-production.up.railway.app">
 
 <!-- ── Navigation (copied exactly from index.html) ── -->
 <nav class="nav nav-dark" id="nav" role="navigation" aria-label="Primary">
@@ -1234,6 +1234,44 @@
     }
     return false;
   }
+
+  // ── Live pricing from control panel ──
+  function fmt(cents) {
+    return cents === 0 ? '$0' : '$' + Math.round(cents / 100).toLocaleString();
+  }
+  function fmtLimit(n) {
+    if (n >= 1_000_000) return (n / 1_000_000) + 'M';
+    if (n >= 1_000) return (n / 1_000) + 'k';
+    return String(n);
+  }
+  function applyPlans(data) {
+    planCards.forEach(card => {
+      const key = card.dataset.plan;
+      const p = data[key];
+      if (!p) return;
+      const priceEl = card.querySelector('.plan-price');
+      const amount = fmt(p.price);
+      const priceStr = p.price === 0 ? '$0' : amount + ' / mo';
+      if (priceEl) {
+        priceEl.innerHTML = p.price === 0 ? '$0<span> / mo</span>' : amount + '<span> / mo</span>';
+      }
+      card.dataset.price = p.price === 0 ? '$0' : amount + ' / mo';
+      card.dataset.name = p.name;
+      // Update feature list items that contain record/user/workspace limits
+      const features = card.querySelectorAll('.plan-features li');
+      features.forEach(li => {
+        const t = li.textContent.trim().toLowerCase();
+        if (t.includes('record'))   li.lastChild.textContent = ' ' + fmtLimit(p.recordLimit) + ' records';
+        else if (t.includes('user'))li.lastChild.textContent = ' ' + (p.maxUsers === 0 ? 'Unlimited users' : p.maxUsers + ' users');
+        else if (t.includes('workspace')) li.lastChild.textContent = ' ' + p.workspaces + ' workspace' + (p.workspaces === 1 ? '' : 's');
+        else if (t.includes('storage')) li.lastChild.textContent = ' ' + p.storageGb + ' GB storage';
+      });
+    });
+  }
+  fetch(GATEWAY + '/control/plans/public')
+    .then(r => r.ok ? r.json() : null)
+    .then(data => { if (data) applyPlans(data); })
+    .catch(() => {}); // silent — hardcoded values remain as fallback
 
   // ── Init ──
   function init() {

@@ -350,6 +350,88 @@
     .faq-answer-inner a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
     .faq-answer-inner a:hover { color: oklch(0.68 0.165 214); }
 
+    /* ── Cloud pricing ── */
+    .cloud-section {
+      background: var(--bg-dark-2);
+      padding-block: clamp(4rem, 7vw, 6rem);
+      border-top: 1px solid var(--border-dark);
+    }
+    .cloud-header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+    .cloud-header .cloud-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: oklch(0.68 0.165 49 / 0.1);
+      border: 1px solid oklch(0.68 0.165 49 / 0.25);
+      border-radius: 100px;
+      padding: 0.3125rem 0.875rem;
+      margin-bottom: 1rem;
+    }
+    .cloud-header h2 { color: var(--ink-dark); margin-bottom: 0.75rem; }
+    .cloud-header p { color: var(--ink-muted-dark); max-width: 560px; margin-inline: auto; }
+    .cloud-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1.25rem;
+      align-items: start;
+    }
+    @media (max-width: 1024px) { .cloud-grid { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 600px)  { .cloud-grid { grid-template-columns: 1fr; max-width: 420px; margin-inline: auto; } }
+    .cloud-card {
+      background: var(--bg-dark);
+      border: 1px solid var(--border-dark);
+      border-radius: 14px;
+      padding: 1.625rem 1.5rem;
+      position: relative;
+      transition: border-color 180ms;
+    }
+    .cloud-card:hover { border-color: oklch(0.68 0.165 49 / 0.35); }
+    .cloud-card--featured {
+      border-color: oklch(0.68 0.165 49 / 0.4);
+      background: var(--bg-dark-3);
+    }
+    .cloud-card-name {
+      font-family: var(--font-display);
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--ink-dark);
+      margin-bottom: 0.25rem;
+    }
+    .cloud-card-price {
+      font-family: var(--font-display);
+      font-size: 2rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--ink-dark);
+      line-height: 1;
+      margin-bottom: 1rem;
+    }
+    .cloud-card-price span {
+      font-size: 0.9rem;
+      font-weight: 500;
+      letter-spacing: 0;
+      color: var(--ink-faint-dark);
+    }
+    .cloud-card-limits {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.875rem;
+      color: var(--ink-muted-dark);
+    }
+    .cloud-card-limits li::before { content: '— '; color: var(--ink-faint-dark); }
+    .cloud-card .btn { width: 100%; justify-content: center; font-size: 0.875rem; }
+
     /* ── Final CTA (pricing) ── */
     .pricing-cta {
       background: var(--bg-dark);
@@ -388,7 +470,7 @@
 
   </style>
 </head>
-<body>
+<body data-gateway="https://nivaro-cloud-production.up.railway.app">
 
 <!-- ── Navigation ── -->
 <nav class="nav nav-dark" id="nav" role="navigation" aria-label="Primary">
@@ -567,6 +649,25 @@
       </div>
 
     </div>
+  </div>
+</section>
+
+<!-- ── Nivaro Cloud pricing ── -->
+<section class="cloud-section reveal" aria-labelledby="cloud-pricing-heading">
+  <div class="container">
+    <div class="cloud-header">
+      <div class="cloud-tag">Managed cloud</div>
+      <h2 class="t-section" id="cloud-pricing-heading">Prefer we run it for you?</h2>
+      <p class="t-subhead">Nivaro Cloud handles provisioning, updates, backups, and scaling. Same open-source software, zero ops.</p>
+    </div>
+    <div class="cloud-grid" id="cloud-grid">
+      <!-- populated by JS from gateway -->
+      <div class="cloud-card"><div class="cloud-card-name">Free</div><div class="cloud-card-price">$0<span> / mo</span></div><ul class="cloud-card-limits"><li>10k records</li><li>3 users</li><li>1 workspace</li></ul><a href="/start?plan=free" class="btn btn-dark-outline">Get started free</a></div>
+      <div class="cloud-card cloud-card--featured"><div class="pricing-badge">Most popular</div><div class="cloud-card-name">Starter</div><div class="cloud-card-price">$49<span> / mo</span></div><ul class="cloud-card-limits"><li>100k records</li><li>10 users</li><li>1 workspace</li></ul><a href="/start?plan=starter" class="btn btn-primary">Get started</a></div>
+      <div class="cloud-card"><div class="cloud-card-name">Pro</div><div class="cloud-card-price">$149<span> / mo</span></div><ul class="cloud-card-limits"><li>1M records</li><li>25 users</li><li>3 workspaces</li></ul><a href="/start?plan=pro" class="btn btn-dark-outline">Get started</a></div>
+      <div class="cloud-card"><div class="cloud-card-name">Business</div><div class="cloud-card-price">$499<span> / mo</span></div><ul class="cloud-card-limits"><li>10M records</li><li>Unlimited users</li><li>10 workspaces</li></ul><a href="/start?plan=business" class="btn btn-dark-outline">Get started</a></div>
+    </div>
+    <p style="text-align:center;margin-top:1.5rem;font-size:0.875rem;color:var(--ink-faint-dark);">All cloud plans include automatic backups, managed updates, and Cloudflare DNS. Cancel anytime.</p>
   </div>
 </section>
 
@@ -825,7 +926,7 @@
         </button>
         <div class="faq-answer" id="faq-5" role="region">
           <div class="faq-answer-inner">
-            Not currently. Nivaro is intentionally self-hosted — the whole point is that your data stays on your infrastructure. If a managed hosting option would be useful for your team, <a href="mailto:support@nivaro.dev?subject=Nivaro%20managed%20hosting">let us know</a>; enough demand will move it up the roadmap.
+            Yes — <a href="/start">Nivaro Cloud</a> is the managed option. Same open-source software, fully hosted: provisioning, backups, DNS, and updates handled for you. Plans start free. If you'd rather run it yourself, the self-hosted route is always available and always free.
           </div>
         </div>
       </div>
@@ -907,6 +1008,33 @@
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js" integrity="sha384-Z3REaz79l2IaAZqJsSABtTbhjgOUYyV3p90XNnAPCSHg3EMTz1fouunq9WZRtj3d" crossorigin="anonymous"></script>
 <script src="app.js"></script>
 <script>
+  // Live cloud pricing
+  (function() {
+    const GATEWAY = (document.body.dataset.gateway || 'https://api.nivaro.dev').replace(/\/+$/, '');
+    const grid = document.getElementById('cloud-grid');
+    const PLANS = ['free','starter','pro','business'];
+    function fmt(cents) { return cents === 0 ? '$0' : '$' + Math.round(cents/100).toLocaleString(); }
+    function fmtN(n) { return n >= 1e6 ? (n/1e6)+'M' : n >= 1000 ? (n/1000)+'k' : String(n); }
+    fetch(GATEWAY + '/control/plans/public')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        const cards = grid.querySelectorAll('.cloud-card');
+        PLANS.forEach((key, i) => {
+          const p = data[key]; if (!p || !cards[i]) return;
+          const priceEl = cards[i].querySelector('.cloud-card-price');
+          if (priceEl) priceEl.innerHTML = fmt(p.price) + (p.price === 0 ? '<span> / mo</span>' : '<span> / mo</span>');
+          const limits = cards[i].querySelector('.cloud-card-limits');
+          if (limits) limits.innerHTML =
+            '<li>' + fmtN(p.recordLimit) + ' records</li>' +
+            '<li>' + (p.maxUsers === 0 ? 'Unlimited users' : p.maxUsers + ' users') + '</li>' +
+            '<li>' + p.workspaces + ' workspace' + (p.workspaces === 1 ? '' : 's') + '</li>' +
+            '<li>' + p.storageGb + ' GB storage</li>';
+        });
+      })
+      .catch(function(){});
+  })();
+
   // FAQ accordion
   document.querySelectorAll('.faq-question').forEach(btn => {
     btn.addEventListener('click', () => {
