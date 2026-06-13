@@ -7,6 +7,46 @@ import { migrationSource } from '../../db/index.js'
 // Self-hosted users never see this route.
 export async function adminProvisionRoutes(app: FastifyInstance) {
   // Migrate only — runs pending migrations on an existing tenant DB (no seeding)
+  // Migration status — returns applied + pending migration names without running anything
+  app.post('/admin/migration-status', async (req, reply) => {
+    const secret = req.headers['x-provision-secret']
+    if (!secret || secret !== process.env.PROVISION_SECRET) {
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+
+    const { connectionString, dbClient } = req.body as {
+      connectionString: string
+      dbClient: 'pg' | 'mssql' | 'mysql2'
+    }
+
+    if (!connectionString || !dbClient) {
+      return reply.code(400).send({ error: 'connectionString and dbClient required' })
+    }
+
+    const db = knex({
+      client: dbClient,
+      connection: connectionString,
+      pool: { min: 1, max: 3 },
+      migrations: { migrationSource, tableName: 'nivaro_migrations' }
+    })
+
+    try {
+      const [completed, pending] = await db.migrate.list()
+      const appliedNames: string[] = completed.map((m: { name?: string; file?: string } | string) =>
+        typeof m === 'string' ? m : (m.name ?? m.file ?? String(m))
+      )
+      const pendingNames: string[] = pending.map((m: { name?: string; file?: string } | string) =>
+        typeof m === 'string' ? m : (m.name ?? m.file ?? String(m))
+      )
+      return { ok: true, applied: appliedNames, pending: pendingNames, upToDate: pendingNames.length === 0 }
+    } catch (err: any) {
+      app.log.error({ err }, 'Migration status check failed')
+      return reply.code(500).send({ error: err.message })
+    } finally {
+      await db.destroy()
+    }
+  })
+
   app.post('/admin/migrate', async (req, reply) => {
     const secret = req.headers['x-provision-secret']
     if (!secret || secret !== process.env.PROVISION_SECRET) {
