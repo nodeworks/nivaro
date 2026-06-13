@@ -32,7 +32,9 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
     })
 
     try {
-      // Run all pending Nivaro CMS migrations on the new tenant DB
+      // Run pending migrations. If DB was cloned from nivaro_template, only
+      // new migrations since the template was built will run. On a fresh DB
+      // (no template), 000_base_schema creates all tables first.
       await db.migrate.latest()
 
       // Seed workspace, admin role, admin user
