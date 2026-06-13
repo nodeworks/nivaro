@@ -6,8 +6,7 @@ import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 
-const API_URL = ((import.meta as unknown as { env?: Record<string, string | undefined> }).env
-  ?.VITE_API_URL ?? 'http://localhost:3055') as string
+const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
 const HEARTBEAT_MS = 60_000
 
