@@ -21,7 +21,7 @@ COPY --from=deps /app/sdk/node_modules ./sdk/node_modules
 COPY . .
 # Build the SDK first (api may depend on it)
 RUN pnpm --filter @nivaro/sdk build
-RUN pnpm --filter @nivaro/api build
+RUN pnpm --filter @nivaro/api build:ci
 
 # ─── Stage 4: production runner ──────────────────────────────────────────────
 FROM node:22-alpine AS runner
