@@ -1,15 +1,71 @@
 import type { Knex } from 'knex'
 
-// Cross-dialect helper — creates table only if it doesn't already exist.
-// Safe for both fresh installs and upgrades from a pre-migration schema.
-async function create(knex: Knex, table: string, fn: (t: Knex.TableBuilder) => void) {
+async function create(knex: Knex, table: string, cb: (t: Knex.CreateTableBuilder) => void) {
   if (!(await knex.schema.hasTable(table))) {
-    await knex.schema.createTable(table, fn)
+    await knex.schema.createTable(table, cb)
   }
 }
 
 export async function up(knex: Knex): Promise<void> {
-  // ── Leaf tables (no FK deps) ──────────────────────────────────────────────
+
+  // ── Group 1: No FK dependencies ──────────────────────────────────────────
+
+  await create(knex, 'nivaro_workspaces', (t) => {
+    t.uuid('id').primary()
+    t.string('name', 255).notNullable()
+    t.string('slug', 100).notNullable().unique()
+    t.string('icon', 100)
+    t.string('color', 20)
+    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
+    t.text('quotas')
+  })
+
+  await create(knex, 'nivaro_workflow_templates', (t) => {
+    t.uuid('id').primary().defaultTo(knex.fn.uuid())
+    t.string('name', 255).notNullable()
+    t.text('description')
+    t.string('color', 50)
+    t.string('icon', 100)
+    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
+  })
+
+  await create(knex, 'nivaro_collection_layouts', (t) => {
+    t.increments('id').primary()
+    t.string('collection', 255).notNullable()
+    t.string('name', 255).notNullable()
+    t.boolean('is_active').notNullable().defaultTo(false)
+    t.integer('sort').notNullable().defaultTo(0)
+    t.datetime('created_at').defaultTo(knex.fn.now())
+    t.boolean('disable_comments').notNullable().defaultTo(false)
+    t.boolean('disable_tasks').notNullable().defaultTo(false)
+    t.string('tab_mode', 10).notNullable().defaultTo('tabs')
+    t.boolean('validate_before_next').notNullable().defaultTo(false)
+    t.boolean('summary_enabled').notNullable().defaultTo(false)
+    t.boolean('summary_show_all').notNullable().defaultTo(false)
+    t.boolean('ai_enabled').notNullable().defaultTo(false)
+    t.text('conditions')
+    t.boolean('allow_clone').notNullable().defaultTo(false)
+    t.boolean('allow_schedule').notNullable().defaultTo(false)
+    t.boolean('allow_disable_pickers').notNullable().defaultTo(false)
+    t.unique(['collection', 'name'])
+  })
+
+  await create(knex, 'nivaro_external_apis', (t) => {
+    t.increments('id').primary()
+    t.string('name', 255).notNullable()
+    t.string('base_url', 1000).notNullable()
+    t.text('description')
+    t.string('auth_type', 50).notNullable().defaultTo('none')
+    t.text('auth_config')
+    t.text('headers')
+    t.boolean('enabled').notNullable().defaultTo(true)
+    t.datetime('created_at').defaultTo(knex.fn.now())
+    t.datetime('updated_at').defaultTo(knex.fn.now())
+    t.string('integration_type', 100)
+    t.text('integration_config')
+  })
 
   await create(knex, 'nivaro_activity', (t) => {
     t.increments('id').primary()
@@ -21,9 +77,18 @@ export async function up(knex: Knex): Promise<void> {
     t.string('collection', 255)
     t.string('item', 255)
     t.text('comment')
-    t.index(['collection', 'item'])
-    t.index(['user'])
-    t.index(['timestamp'])
+  })
+
+  await create(knex, 'nivaro_ai_collection_settings', (t) => {
+    t.increments('id').primary()
+    t.string('collection', 100).notNullable().unique()
+    t.boolean('validation_enabled').notNullable().defaultTo(false)
+    t.string('validation_mode', 10).notNullable().defaultTo('soft')
+    t.text('validation_rules')
+    t.boolean('duplicate_detection_enabled').notNullable().defaultTo(false)
+    t.float('duplicate_threshold').notNullable().defaultTo(0.85)
+    t.datetime('created_at').defaultTo(knex.fn.now())
+    t.datetime('updated_at').defaultTo(knex.fn.now())
   })
 
   await create(knex, 'nivaro_api_logs', (t) => {
@@ -35,7 +100,6 @@ export async function up(knex: Knex): Promise<void> {
     t.string('user', 100)
     t.string('collection', 100)
     t.datetime('created_at').defaultTo(knex.fn.now())
-    t.index(['created_at'])
   })
 
   await create(knex, 'nivaro_attribute_values', (t) => {
@@ -54,16 +118,6 @@ export async function up(knex: Knex): Promise<void> {
     t.string('label', 255)
     t.text('scope')
     t.datetime('created_at').defaultTo(knex.fn.now())
-  })
-
-  await create(knex, 'nivaro_collection_layouts', (t) => {
-    t.increments('id').primary()
-    t.string('collection', 255).notNullable()
-    t.string('name', 255).notNullable()
-    t.boolean('is_active').notNullable().defaultTo(false)
-    t.integer('sort').notNullable().defaultTo(0)
-    t.datetime('created_at').defaultTo(knex.fn.now())
-    t.unique(['collection', 'name'])
   })
 
   await create(knex, 'nivaro_custom_queries', (t) => {
@@ -103,37 +157,34 @@ export async function up(knex: Knex): Promise<void> {
     t.unique(['collection', 'item', 'field'])
   })
 
-  await create(knex, 'nivaro_external_apis', (t) => {
-    t.increments('id').primary()
+  await create(knex, 'nivaro_file_folders', (t) => {
+    t.uuid('id').primary().defaultTo(knex.fn.uuid())
     t.string('name', 255).notNullable()
-    t.string('base_url', 1000).notNullable()
-    t.text('description')
-    t.string('auth_type', 50).notNullable().defaultTo('none')
-    t.text('auth_config')
-    t.text('headers')
-    t.boolean('enabled').notNullable().defaultTo(true)
-    t.datetime('created_at').defaultTo(knex.fn.now())
-    t.datetime('updated_at').defaultTo(knex.fn.now())
-    t.string('integration_type', 100)
-    t.text('integration_config')
+    t.uuid('parent')
   })
 
-  await create(knex, 'nivaro_external_api_logs', (t) => {
-    t.increments('id').primary()
-    t.integer('api_id').notNullable()
-    t.integer('endpoint_id')
-    t.string('triggered_by', 100).notNullable().defaultTo('unknown')
-    t.string('method', 10).notNullable()
-    t.string('url', 2048).notNullable()
-    t.text('request_headers')
-    t.text('request_body')
-    t.integer('response_status')
-    t.text('response_headers')
-    t.text('response_body')
-    t.integer('duration_ms')
-    t.string('error', 2000)
-    t.string('user_id', 255)
+  await create(knex, 'nivaro_flows', (t) => {
+    t.uuid('id').primary().defaultTo(knex.fn.uuid())
+    t.string('name', 255).notNullable()
+    t.text('description')
+    t.string('status', 50).notNullable().defaultTo('inactive')
+    t.string('trigger', 100).notNullable()
+    t.text('trigger_options')
+    t.string('accountability', 50).notNullable().defaultTo('all')
     t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
+  })
+
+  await create(knex, 'nivaro_migrations', (t) => {
+    t.increments('id').primary()
+    t.string('name', 255)
+    t.integer('batch')
+    t.datetime('migration_time')
+  })
+
+  await create(knex, 'nivaro_migrations_lock', (t) => {
+    t.increments('index').primary()
+    t.integer('is_locked')
   })
 
   await create(knex, 'nivaro_page_views', (t) => {
@@ -165,14 +216,27 @@ export async function up(knex: Knex): Promise<void> {
     t.string('one_deselect_action', 50).notNullable().defaultTo('nullify')
   })
 
+  await create(knex, 'nivaro_rules', (t) => {
+    t.increments('id').primary()
+    t.string('name', 255).notNullable()
+    t.string('collection', 255).notNullable()
+    t.string('trigger', 50).notNullable()
+    t.text('conditions').notNullable().defaultTo('[]')
+    t.text('actions').notNullable().defaultTo('[]')
+    t.boolean('enabled').notNullable().defaultTo(true)
+    t.integer('sort').notNullable().defaultTo(0)
+    t.datetime('created_at').defaultTo(knex.fn.now())
+    t.datetime('updated_at').defaultTo(knex.fn.now())
+  })
+
   await create(knex, 'nivaro_sequences', (t) => {
     t.string('id', 255).primary()
-    t.bigInteger('next_val').defaultTo(1).notNullable()
+    t.bigInteger('next_val').notNullable().defaultTo(1)
   })
 
   await create(knex, 'nivaro_settings', (t) => {
     t.increments('id').primary()
-    t.string('project_name', 255).notNullable().defaultTo('Nivaro')
+    t.string('project_name', 255).notNullable().defaultTo('Nivaro CMS')
     t.string('project_url', 500)
     t.string('project_color', 50).notNullable().defaultTo('#00ceff')
     t.string('default_language', 20).notNullable().defaultTo('en-US')
@@ -208,6 +272,27 @@ export async function up(knex: Knex): Promise<void> {
     t.string('sms_region', 50)
   })
 
+  await create(knex, 'nivaro_sub_rows', (t) => {
+    t.increments('id').primary()
+    t.string('parent_collection', 255).notNullable()
+    t.string('parent_id', 255).notNullable()
+    t.string('sub_row_field', 255).notNullable()
+    t.integer('sort').notNullable().defaultTo(0)
+    t.text('data').notNullable()
+    t.datetime('created_at').defaultTo(knex.fn.now())
+    t.datetime('updated_at').defaultTo(knex.fn.now())
+  })
+
+  await create(knex, 'nivaro_tree_configs', (t) => {
+    t.increments('id').primary()
+    t.string('collection', 255).notNullable().unique()
+    t.string('parent_field', 255).notNullable().defaultTo('parent_id')
+    t.string('label_field', 255).notNullable().defaultTo('name')
+    t.string('order_field', 255)
+    t.datetime('created_at').defaultTo(knex.fn.now())
+    t.boolean('maintain_path').notNullable().defaultTo(false)
+  })
+
   await create(knex, 'nivaro_webhooks', (t) => {
     t.increments('id').primary()
     t.string('name', 255).notNullable()
@@ -223,47 +308,7 @@ export async function up(knex: Knex): Promise<void> {
     t.string('signing_secret', 255)
   })
 
-  await create(knex, 'nivaro_file_folders', (t) => {
-    t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.string('name', 255).notNullable()
-    t.uuid('parent').references('id').inTable('nivaro_file_folders')
-  })
-
-  await create(knex, 'nivaro_flows', (t) => {
-    t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.string('name', 255).notNullable()
-    t.text('description')
-    t.string('status', 50).notNullable().defaultTo('inactive')
-    t.string('trigger', 100).notNullable()
-    t.text('trigger_options')
-    t.string('accountability', 50).notNullable().defaultTo('all')
-    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
-    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
-  })
-
-  await create(knex, 'nivaro_workflow_templates', (t) => {
-    t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.string('name', 255).notNullable()
-    t.text('description')
-    t.string('color', 50)
-    t.string('icon', 100)
-    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
-    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
-  })
-
-  await create(knex, 'nivaro_ai_collection_settings', (t) => {
-    t.increments('id').primary()
-    t.string('collection', 100).notNullable().unique()
-    t.boolean('validation_enabled').notNullable().defaultTo(false)
-    t.string('validation_mode', 10).notNullable().defaultTo('soft')
-    t.text('validation_rules')
-    t.boolean('duplicate_detection_enabled').notNullable().defaultTo(false)
-    t.float('duplicate_threshold').notNullable().defaultTo(0.85)
-    t.datetime('created_at').defaultTo(knex.fn.now())
-    t.datetime('updated_at').defaultTo(knex.fn.now())
-  })
-
-  // ── Depends on nivaro_workflow_templates ──────────────────────────────────
+  // ── Group 2: Depend on group 1 ────────────────────────────────────────────
 
   await create(knex, 'nivaro_workflow_states', (t) => {
     t.uuid('id').primary().defaultTo(knex.fn.uuid())
@@ -278,10 +323,16 @@ export async function up(knex: Knex): Promise<void> {
     t.text('skip_criteria')
     t.boolean('skip_if_no_owners').notNullable().defaultTo(false)
     t.string('stage_visibility', 32).notNullable().defaultTo('always')
-    t.index(['template'])
   })
 
-  // ── Depends on nivaro_collection_layouts ─────────────────────────────────
+  await create(knex, 'nivaro_workflow_bindings', (t) => {
+    t.increments('id').primary()
+    t.uuid('template').notNullable().references('id').inTable('nivaro_workflow_templates').onDelete('CASCADE')
+    t.string('collection', 255).notNullable().unique()
+    t.string('state_field', 255)
+    t.boolean('auto_start').notNullable().defaultTo(false)
+    t.string('auto_start_state', 36)
+  })
 
   await create(knex, 'nivaro_field_groups', (t) => {
     t.increments('id').primary()
@@ -293,6 +344,7 @@ export async function up(knex: Knex): Promise<void> {
     t.integer('sort').notNullable().defaultTo(0)
     t.boolean('is_collapsed').notNullable().defaultTo(false)
     t.integer('layout_id').references('id').inTable('nivaro_collection_layouts')
+    t.unique(['collection', 'key', 'layout_id'])
   })
 
   await create(knex, 'nivaro_layout_field_assignments', (t) => {
@@ -301,10 +353,25 @@ export async function up(knex: Knex): Promise<void> {
     t.string('field', 255).notNullable()
     t.string('group_key', 255)
     t.integer('sort').notNullable().defaultTo(0)
+    t.string('label_override', 255)
+    t.boolean('is_visible').notNullable().defaultTo(true)
+    t.boolean('default_expanded').notNullable().defaultTo(true)
     t.unique(['layout_id', 'field'])
   })
 
-  // ── Depends on nivaro_external_apis ──────────────────────────────────────
+  await create(knex, 'nivaro_flow_operations', (t) => {
+    t.uuid('id').primary().defaultTo(knex.fn.uuid())
+    t.uuid('flow').notNullable().references('id').inTable('nivaro_flows').onDelete('CASCADE')
+    t.string('name', 255).notNullable()
+    t.string('key', 100).notNullable()
+    t.string('type', 100).notNullable()
+    t.integer('position_x').notNullable().defaultTo(0)
+    t.integer('position_y').notNullable().defaultTo(0)
+    t.text('options')
+    t.uuid('resolve')  // self-ref, no FK constraint
+    t.uuid('reject')   // self-ref, no FK constraint
+    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+  })
 
   await create(knex, 'nivaro_external_api_endpoints', (t) => {
     t.increments('id').primary()
@@ -322,18 +389,83 @@ export async function up(knex: Knex): Promise<void> {
     t.string('slug', 100)
   })
 
-  // ── Core CMS tables ───────────────────────────────────────────────────────
-
-  await create(knex, 'nivaro_workspaces', (t) => {
-    t.uuid('id').primary()
-    t.string('name', 255).notNullable()
-    t.string('slug', 100).notNullable().unique()
-    t.string('icon', 100)
-    t.string('color', 20)
+  await create(knex, 'nivaro_external_api_logs', (t) => {
+    t.increments('id').primary()
+    t.integer('api_id').notNullable()
+    t.integer('endpoint_id')
+    t.string('triggered_by', 100).notNullable().defaultTo('unknown')
+    t.string('method', 10).notNullable()
+    t.string('url', 2048).notNullable()
+    t.text('request_headers')
+    t.text('request_body')
+    t.integer('response_status')
+    t.text('response_headers')
+    t.text('response_body')
+    t.integer('duration_ms')
+    t.string('error', 2000)
+    t.string('user_id', 255)
     t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
-    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
-    t.text('quotas')
   })
+
+  await create(knex, 'nivaro_erp_submissions', (t) => {
+    t.increments('id').primary()
+    t.string('collection', 100).notNullable()
+    t.string('item', 100).notNullable()
+    t.integer('external_api').notNullable().references('id').inTable('nivaro_external_apis')
+    t.string('external_ref', 255)
+    t.string('status', 20).notNullable().defaultTo('submitted')
+    t.integer('attempts').notNullable().defaultTo(0)
+    t.text('last_error')
+    t.text('payload')
+    t.datetime('created_at').defaultTo(knex.fn.now())
+    t.datetime('updated_at').defaultTo(knex.fn.now())
+  })
+
+  await create(knex, 'nivaro_webhook_deliveries', (t) => {
+    t.increments('id').primary()
+    t.integer('webhook').notNullable().references('id').inTable('nivaro_webhooks')
+    t.string('event', 100).notNullable()
+    t.integer('status_code')
+    t.text('request_body')
+    t.text('response_body')
+    t.integer('latency_ms')
+    t.boolean('success').notNullable().defaultTo(false)
+    t.integer('attempt').notNullable().defaultTo(1)
+    t.datetime('created_at').defaultTo(knex.fn.now())
+  })
+
+  await create(knex, 'nivaro_pipeline_owner_dimensions', (t) => {
+    t.increments('id').primary()
+    t.integer('binding').notNullable().references('id').inTable('nivaro_workflow_bindings').onDelete('CASCADE')
+    t.string('field', 255).notNullable()
+    t.string('label', 255).notNullable()
+    t.integer('sort').notNullable().defaultTo(0)
+    t.boolean('is_row_axis').notNullable().defaultTo(false)
+    t.boolean('required').notNullable().defaultTo(false)
+  })
+
+  await create(knex, 'nivaro_pipeline_owner_groups', (t) => {
+    t.uuid('id').primary().defaultTo(knex.fn.uuid())
+    t.uuid('template').notNullable().references('id').inTable('nivaro_workflow_templates').onDelete('CASCADE')
+    t.uuid('state').notNullable().references('id').inTable('nivaro_workflow_states')
+    t.string('name', 255)
+    t.text('filters')
+    t.integer('sort').notNullable().defaultTo(0)
+    t.boolean('is_default').notNullable().defaultTo(false)
+    t.integer('priority').notNullable().defaultTo(0)
+  })
+
+  await create(knex, 'nivaro_approval_chains', (t) => {
+    t.increments('id').primary()
+    t.string('name', 255).notNullable()
+    t.string('collection', 100)
+    t.uuid('workflow_template').references('id').inTable('nivaro_workflow_templates')
+    t.string('state_key', 100)
+    t.boolean('is_active').notNullable().defaultTo(true)
+    t.datetime('created_at').defaultTo(knex.fn.now())
+  })
+
+  // ── Group 3: Core entities with roles/users (interdependent) ──────────────
 
   await create(knex, 'nivaro_roles', (t) => {
     t.uuid('id').primary().defaultTo(knex.fn.uuid())
@@ -345,34 +477,6 @@ export async function up(knex: Knex): Promise<void> {
     t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
     t.uuid('workspace').references('id').inTable('nivaro_workspaces')
     t.text('ui_permissions')
-  })
-
-  await create(knex, 'nivaro_users', (t) => {
-    t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.string('first_name', 255)
-    t.string('last_name', 255)
-    t.string('email', 255).notNullable().unique()
-    t.string('external_id', 500)
-    t.uuid('role').references('id').inTable('nivaro_roles').onDelete('SET NULL')
-    t.string('status', 50).notNullable().defaultTo('active')
-    t.datetime('last_access')
-    t.string('last_page', 500)
-    t.text('preferences')
-    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
-    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
-    t.uuid('avatar')
-    t.string('static_token', 64).unique()
-    t.uuid('current_workspace').references('id').inTable('nivaro_workspaces')
-    t.uuid('manager_id').references('id').inTable('nivaro_users')
-    t.uuid('delegate_id').references('id').inTable('nivaro_users')
-    t.datetime('delegate_expires_at')
-    t.boolean('is_out_of_office').notNullable().defaultTo(false)
-    t.string('totp_secret', 255)
-    t.boolean('totp_enabled').notNullable().defaultTo(false)
-    t.string('phone', 50)
-    t.datetime('last_digest_at')
-    t.boolean('is_redacted').notNullable().defaultTo(false)
-    t.datetime('redacted_at')
   })
 
   await create(knex, 'nivaro_collections', (t) => {
@@ -403,7 +507,48 @@ export async function up(knex: Knex): Promise<void> {
     t.text('virtual_sql')
     t.boolean('item_locking_enabled').notNullable().defaultTo(true)
     t.boolean('addendums_enabled').notNullable().defaultTo(false)
+    t.text('picker_filter')
   })
+
+  // Users: self-referencing FKs (manager_id, delegate_id) added as plain uuid columns
+  await create(knex, 'nivaro_users', (t) => {
+    t.uuid('id').primary().defaultTo(knex.fn.uuid())
+    t.string('first_name', 255)
+    t.string('last_name', 255)
+    t.string('email', 255).notNullable().unique()
+    t.string('external_id', 500)
+    t.uuid('role').references('id').inTable('nivaro_roles').onDelete('SET NULL')
+    t.string('status', 50).notNullable().defaultTo('active')
+    t.datetime('last_access')
+    t.string('last_page', 500)
+    t.text('preferences')
+    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
+    t.uuid('avatar')
+    t.string('static_token', 64).unique()
+    t.uuid('current_workspace').references('id').inTable('nivaro_workspaces')
+    t.uuid('manager_id')   // self-ref — no FK constraint to avoid circular dep
+    t.uuid('delegate_id')  // self-ref
+    t.datetime('delegate_expires_at')
+    t.boolean('is_out_of_office').notNullable().defaultTo(false)
+    t.string('totp_secret', 255)
+    t.boolean('totp_enabled').notNullable().defaultTo(false)
+    t.string('phone', 50)
+    t.datetime('last_digest_at')
+    t.boolean('is_redacted').notNullable().defaultTo(false)
+    t.datetime('redacted_at')
+  })
+
+  await create(knex, 'nivaro_usage_counters', (t) => {
+    t.increments('id').primary()
+    t.uuid('workspace').notNullable()
+    t.string('metric', 50).notNullable()
+    t.string('period', 20).notNullable()
+    t.bigInteger('value').notNullable().defaultTo(0)
+    t.unique(['workspace', 'metric', 'period'])
+  })
+
+  // ── Group 4: Depend on users/roles ────────────────────────────────────────
 
   await create(knex, 'nivaro_fields', (t) => {
     t.increments('id').primary()
@@ -442,6 +587,7 @@ export async function up(knex: Knex): Promise<void> {
     t.boolean('is_encrypted').notNullable().defaultTo(false)
     t.boolean('is_inheritable').notNullable().defaultTo(false)
     t.string('label', 255)
+    t.string('placeholder', 500)
     t.unique(['collection', 'field'])
   })
 
@@ -458,16 +604,6 @@ export async function up(knex: Knex): Promise<void> {
     t.text('row_filter')
   })
 
-  await create(knex, 'nivaro_tree_configs', (t) => {
-    t.increments('id').primary()
-    t.string('collection', 255).notNullable().unique()
-    t.string('parent_field', 255).notNullable().defaultTo('parent_id')
-    t.string('label_field', 255).notNullable().defaultTo('name')
-    t.string('order_field', 255)
-    t.datetime('created_at').defaultTo(knex.fn.now())
-    t.boolean('maintain_path').notNullable().defaultTo(false)
-  })
-
   await create(knex, 'nivaro_tree_permissions', (t) => {
     t.increments('id').primary()
     t.string('collection', 100).notNullable()
@@ -476,16 +612,26 @@ export async function up(knex: Knex): Promise<void> {
     t.string('action', 20).notNullable().defaultTo('*')
     t.boolean('allow').notNullable().defaultTo(true)
     t.datetime('created_at').defaultTo(knex.fn.now())
-    t.index(['collection', 'node_id'])
   })
 
-  await create(knex, 'nivaro_workflow_bindings', (t) => {
+  await create(knex, 'nivaro_revisions', (t) => {
     t.increments('id').primary()
-    t.uuid('template').notNullable().references('id').inTable('nivaro_workflow_templates').onDelete('CASCADE')
-    t.string('collection', 255).notNullable().unique()
-    t.string('state_field', 255)
-    t.boolean('auto_start').notNullable().defaultTo(false)
-    t.string('auto_start_state', 36)
+    t.integer('activity').references('id').inTable('nivaro_activity')
+    t.string('collection', 255).notNullable()
+    t.string('item', 255).notNullable()
+    t.text('data').notNullable()
+    t.text('delta')
+    t.integer('parent')  // self-ref, no FK to avoid circular dep
+  })
+
+  await create(knex, 'nivaro_workflow_instances', (t) => {
+    t.uuid('id').primary().defaultTo(knex.fn.uuid())
+    t.uuid('template').notNullable().references('id').inTable('nivaro_workflow_templates')
+    t.string('collection', 255).notNullable()
+    t.string('item', 255).notNullable()
+    t.uuid('current_state').references('id').inTable('nivaro_workflow_states')
+    t.datetime('started_at').notNullable().defaultTo(knex.fn.now())
+    t.datetime('completed_at')
   })
 
   await create(knex, 'nivaro_workflow_transitions', (t) => {
@@ -502,203 +648,56 @@ export async function up(knex: Knex): Promise<void> {
     t.boolean('auto_trigger').notNullable().defaultTo(false)
     t.string('group_label', 255)
     t.text('condition_rules')
-    t.index(['template'])
   })
 
-  await create(knex, 'nivaro_workflow_instances', (t) => {
+  await create(knex, 'nivaro_addendums', (t) => {
     t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.uuid('template').notNullable().references('id').inTable('nivaro_workflow_templates')
-    t.string('collection', 255).notNullable()
-    t.string('item', 255).notNullable()
-    t.uuid('current_state').references('id').inTable('nivaro_workflow_states')
-    t.datetime('started_at').notNullable().defaultTo(knex.fn.now())
-    t.datetime('completed_at')
-    t.index(['collection', 'item'])
-  })
-
-  await create(knex, 'nivaro_pipeline_owner_dimensions', (t) => {
-    t.increments('id').primary()
-    t.integer('binding').notNullable().references('id').inTable('nivaro_workflow_bindings').onDelete('CASCADE')
-    t.string('field', 255).notNullable()
-    t.string('label', 255).notNullable()
-    t.integer('sort').notNullable().defaultTo(0)
-    t.boolean('is_row_axis').notNullable().defaultTo(false)
-    t.boolean('required').notNullable().defaultTo(false)
-    t.index(['binding'])
-  })
-
-  await create(knex, 'nivaro_pipeline_owner_groups', (t) => {
-    t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.uuid('template').notNullable().references('id').inTable('nivaro_workflow_templates').onDelete('CASCADE')
-    t.uuid('state').notNullable().references('id').inTable('nivaro_workflow_states')
-    t.string('name', 255)
-    t.text('filters')
-    t.integer('sort').notNullable().defaultTo(0)
-    t.boolean('is_default').notNullable().defaultTo(false)
-    t.integer('priority').notNullable().defaultTo(0)
-    t.index(['state'])
-    t.index(['template'])
-  })
-
-  // ── Tables that depend on nivaro_users ────────────────────────────────────
-
-  await create(knex, 'nivaro_revisions', (t) => {
-    t.increments('id').primary()
-    t.integer('activity').references('id').inTable('nivaro_activity')
-    t.string('collection', 255).notNullable()
-    t.string('item', 255).notNullable()
-    t.text('data').notNullable()
-    t.text('delta')
-    t.integer('parent').references('id').inTable('nivaro_revisions')
-    t.index(['collection', 'item'])
-  })
-
-  await create(knex, 'nivaro_sessions', (t) => {
-    t.string('id', 255).primary()
-    t.uuid('user_id').references('id').inTable('nivaro_users').onDelete('CASCADE')
-    t.text('data').notNullable()
-    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
-    t.datetime('expires_at').notNullable()
-  })
-
-  await create(knex, 'nivaro_notifications', (t) => {
-    t.increments('id').primary()
-    t.datetime('timestamp').notNullable().defaultTo(knex.fn.now())
-    t.string('status', 50).notNullable().defaultTo('inbox')
-    t.uuid('recipient').notNullable().references('id').inTable('nivaro_users').onDelete('CASCADE')
-    t.uuid('sender')
-    t.string('subject', 255).notNullable()
-    t.text('message')
-    t.string('collection', 255)
-    t.string('item', 255)
-    t.index(['recipient', 'status'])
-  })
-
-  await create(knex, 'nivaro_files', (t) => {
-    t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.string('storage', 100).notNullable().defaultTo('local')
-    t.string('filename_disk', 500)
-    t.string('filename_download', 255).notNullable()
-    t.string('title', 255)
-    t.string('type', 255)
-    t.uuid('folder').references('id').inTable('nivaro_file_folders').onDelete('SET NULL')
-    t.uuid('uploaded_by').references('id').inTable('nivaro_users').onDelete('SET NULL')
-    t.datetime('uploaded_on').notNullable().defaultTo(knex.fn.now())
-    t.uuid('modified_by')
-    t.datetime('modified_on')
-    t.bigInteger('filesize')
-    t.integer('width')
-    t.integer('height')
-    t.integer('duration')
+    t.string('parent_collection', 255).notNullable()
+    t.string('parent_id', 255).notNullable()
+    t.string('title', 500).notNullable()
     t.text('description')
-    t.string('location', 500)
-    t.text('tags')
-    t.text('metadata')
-    t.datetime('expires_at')
-    t.string('storage_provider', 20).notNullable().defaultTo('local')
-  })
-
-  await create(knex, 'nivaro_flow_operations', (t) => {
-    t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.uuid('flow').notNullable().references('id').inTable('nivaro_flows').onDelete('CASCADE')
-    t.string('name', 255).notNullable()
-    t.string('key', 100).notNullable()
-    t.string('type', 100).notNullable()
-    t.integer('position_x').notNullable().defaultTo(0)
-    t.integer('position_y').notNullable().defaultTo(0)
-    t.text('options')
-    t.uuid('resolve').references('id').inTable('nivaro_flow_operations')
-    t.uuid('reject').references('id').inTable('nivaro_flow_operations')
-    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
-    t.index(['flow'])
-  })
-
-  await create(knex, 'nivaro_flow_runs', (t) => {
-    t.uuid('id').primary()
-    t.uuid('flow').notNullable().references('id').inTable('nivaro_flows').onDelete('CASCADE')
-    t.string('trigger', 50).notNullable()
-    t.string('status', 50).notNullable().defaultTo('running')
-    t.datetime('started_at').notNullable().defaultTo(knex.fn.now())
-    t.datetime('completed_at')
-    t.bigInteger('duration_ms')
-    t.text('input')
-    t.text('output')
-    t.text('error_message')
-    t.uuid('user').references('id').inTable('nivaro_users')
-    t.index(['flow'])
-    t.index(['status'])
-  })
-
-  await create(knex, 'nivaro_flow_versions', (t) => {
-    t.increments('id').primary()
-    t.uuid('flow').notNullable().references('id').inTable('nivaro_flows')
-    t.integer('version').notNullable()
-    t.text('definition').notNullable()
-    t.uuid('created_by').notNullable().references('id').inTable('nivaro_users')
+    t.uuid('workflow_template_id').references('id').inTable('nivaro_workflow_templates')
+    t.string('current_state', 255)
+    t.text('fields_schema')
+    t.text('data')
+    t.float('cost_impact')
+    t.integer('timeline_impact_days')
+    t.string('status', 50).notNullable().defaultTo('draft')
+    t.uuid('created_by').references('id').inTable('nivaro_users')
     t.datetime('created_at').defaultTo(knex.fn.now())
-    t.unique(['flow', 'version'])
+    t.datetime('updated_at').defaultTo(knex.fn.now())
   })
 
-  await create(knex, 'nivaro_comments', (t) => {
-    t.uuid('id').primary()
-    t.string('collection', 255).notNullable()
-    t.string('item', 255).notNullable()
-    t.uuid('user').notNullable().references('id').inTable('nivaro_users')
-    t.text('text').notNullable()
-    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
-    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
-    t.index(['collection', 'item'])
-  })
-
-  await create(knex, 'nivaro_comment_mentions', (t) => {
+  await create(knex, 'nivaro_alert_definitions', (t) => {
     t.increments('id').primary()
-    t.uuid('comment').notNullable().references('id').inTable('nivaro_comments').onDelete('CASCADE')
-    t.uuid('user').notNullable().references('id').inTable('nivaro_users')
-    t.index(['comment'])
-    t.index(['user'])
-  })
-
-  await create(knex, 'nivaro_dashboards', (t) => {
-    t.uuid('id').primary()
     t.string('name', 255).notNullable()
-    t.uuid('user').references('id').inTable('nivaro_users')
-    t.boolean('is_shared').notNullable().defaultTo(false)
-    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
-    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
-  })
-
-  await create(knex, 'nivaro_dashboard_widgets', (t) => {
-    t.uuid('id').primary()
-    t.uuid('dashboard').notNullable().references('id').inTable('nivaro_dashboards')
-    t.string('type', 50).notNullable()
-    t.string('title', 255).notNullable()
-    t.string('collection', 255)
-    t.string('field', 255)
+    t.string('category', 100).notNullable().defaultTo('general')
+    t.string('collection', 255).notNullable()
+    t.string('field', 255).notNullable()
+    t.string('operator', 50).notNullable()
+    t.float('threshold').notNullable()
+    t.string('unit', 50).notNullable().defaultTo('count')
     t.text('filters')
-    t.integer('col').notNullable().defaultTo(0)
-    t.integer('row').notNullable().defaultTo(0)
-    t.integer('width').notNullable().defaultTo(1)
-    t.integer('height').notNullable().defaultTo(1)
-    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+    t.integer('cooldown_minutes').notNullable().defaultTo(60)
+    t.boolean('is_active').notNullable().defaultTo(true)
+    t.uuid('created_by').references('id').inTable('nivaro_users')
+    t.datetime('created_at').notNullable()
+    t.datetime('updated_at').notNullable()
+    t.string('detection_type', 20).notNullable().defaultTo('threshold')
+    t.float('sensitivity')
   })
 
-  await create(knex, 'nivaro_collection_presets', (t) => {
-    t.uuid('id').primary()
-    t.string('collection', 255).notNullable()
-    t.string('name', 255).notNullable()
-    t.uuid('user_id').references('id').inTable('nivaro_users')
-    t.text('columns').notNullable()
-    t.boolean('is_default').notNullable().defaultTo(false)
-    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
-    t.index(['collection', 'user_id'])
-  })
-
-  await create(knex, 'nivaro_approval_chains', (t) => {
+  await create(knex, 'nivaro_api_keys', (t) => {
     t.increments('id').primary()
     t.string('name', 255).notNullable()
-    t.string('collection', 100)
-    t.uuid('workflow_template').references('id').inTable('nivaro_workflow_templates')
-    t.string('state_key', 100)
+    t.string('key_hash', 255).notNullable().unique()
+    t.string('prefix', 20).notNullable()
+    t.uuid('user').notNullable().references('id').inTable('nivaro_users')
+    t.text('scopes').notNullable()
+    t.datetime('expires_at')
+    t.integer('rate_limit_per_minute')
+    t.text('ip_allowlist')
+    t.datetime('last_used_at')
     t.boolean('is_active').notNullable().defaultTo(true)
     t.datetime('created_at').defaultTo(knex.fn.now())
   })
@@ -733,90 +732,6 @@ export async function up(knex: Knex): Promise<void> {
     t.datetime('decided_at').defaultTo(knex.fn.now())
   })
 
-  await create(knex, 'nivaro_addendums', (t) => {
-    t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.string('parent_collection', 255).notNullable()
-    t.string('parent_id', 255).notNullable()
-    t.string('title', 500).notNullable()
-    t.text('description')
-    t.uuid('workflow_template_id').references('id').inTable('nivaro_workflow_templates')
-    t.string('current_state', 255)
-    t.text('fields_schema')
-    t.text('data')
-    t.float('cost_impact')
-    t.integer('timeline_impact_days')
-    t.string('status', 50).notNullable().defaultTo('draft')
-    t.uuid('created_by').references('id').inTable('nivaro_users')
-    t.datetime('created_at').defaultTo(knex.fn.now())
-    t.datetime('updated_at').defaultTo(knex.fn.now())
-  })
-
-  await create(knex, 'nivaro_addendum_approvals', (t) => {
-    t.increments('id').primary()
-    t.string('parent_collection', 255).notNullable()
-    t.string('parent_id', 255).notNullable()
-    t.uuid('addendum_id').notNullable().references('id').inTable('nivaro_addendums')
-    t.integer('order_number').notNullable()
-    t.float('net_cost_impact')
-    t.integer('net_timeline_impact_days')
-    t.datetime('approved_at')
-    t.uuid('approved_by').references('id').inTable('nivaro_users')
-    t.text('notes')
-    t.datetime('created_at').defaultTo(knex.fn.now())
-  })
-
-  await create(knex, 'nivaro_alert_definitions', (t) => {
-    t.increments('id').primary()
-    t.string('name', 255).notNullable()
-    t.string('category', 100).notNullable().defaultTo('general')
-    t.string('collection', 255).notNullable()
-    t.string('field', 255).notNullable()
-    t.string('operator', 50).notNullable()
-    t.float('threshold').notNullable()
-    t.string('unit', 50).notNullable().defaultTo('count')
-    t.text('filters')
-    t.integer('cooldown_minutes').notNullable().defaultTo(60)
-    t.boolean('is_active').notNullable().defaultTo(true)
-    t.uuid('created_by').references('id').inTable('nivaro_users')
-    t.datetime('created_at').notNullable()
-    t.datetime('updated_at').notNullable()
-    t.string('detection_type', 20).notNullable().defaultTo('threshold')
-    t.float('sensitivity')
-  })
-
-  await create(knex, 'nivaro_alert_log', (t) => {
-    t.increments('id').primary()
-    t.integer('alert_definition').notNullable().references('id').inTable('nivaro_alert_definitions')
-    t.string('collection', 255).notNullable()
-    t.string('item', 255).notNullable()
-    t.string('field_value', 500)
-    t.datetime('triggered_at').notNullable()
-  })
-
-  await create(knex, 'nivaro_alert_subscriptions', (t) => {
-    t.increments('id').primary()
-    t.integer('alert_definition').notNullable().references('id').inTable('nivaro_alert_definitions')
-    t.uuid('user').notNullable().references('id').inTable('nivaro_users')
-    t.boolean('notify_email').notNullable().defaultTo(true)
-    t.boolean('notify_inapp').notNullable().defaultTo(true)
-    t.unique(['alert_definition', 'user'])
-  })
-
-  await create(knex, 'nivaro_api_keys', (t) => {
-    t.increments('id').primary()
-    t.string('name', 255).notNullable()
-    t.string('key_hash', 255).notNullable().unique()
-    t.string('prefix', 20).notNullable()
-    t.uuid('user').notNullable().references('id').inTable('nivaro_users')
-    t.text('scopes').notNullable()
-    t.datetime('expires_at')
-    t.integer('rate_limit_per_minute')
-    t.text('ip_allowlist')
-    t.datetime('last_used_at')
-    t.boolean('is_active').notNullable().defaultTo(true)
-    t.datetime('created_at').defaultTo(knex.fn.now())
-  })
-
   await create(knex, 'nivaro_at_risk_rules', (t) => {
     t.increments('id').primary()
     t.string('collection', 100).notNullable()
@@ -843,6 +758,56 @@ export async function up(knex: Knex): Promise<void> {
     t.unique(['collection', 'key'])
   })
 
+  await create(knex, 'nivaro_collection_presets', (t) => {
+    t.uuid('id').primary()
+    t.string('collection', 255).notNullable()
+    t.string('name', 255).notNullable()
+    t.uuid('user_id').references('id').inTable('nivaro_users')
+    t.text('columns').notNullable()
+    t.boolean('is_default').notNullable().defaultTo(false)
+    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+  })
+
+  await create(knex, 'nivaro_comments', (t) => {
+    t.uuid('id').primary()
+    t.string('collection', 255).notNullable()
+    t.string('item', 255).notNullable()
+    t.uuid('user').notNullable().references('id').inTable('nivaro_users')
+    t.text('text').notNullable()
+    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
+  })
+
+  await create(knex, 'nivaro_comment_mentions', (t) => {
+    t.increments('id').primary()
+    t.uuid('comment').notNullable().references('id').inTable('nivaro_comments').onDelete('CASCADE')
+    t.uuid('user').notNullable().references('id').inTable('nivaro_users')
+  })
+
+  await create(knex, 'nivaro_dashboards', (t) => {
+    t.uuid('id').primary()
+    t.string('name', 255).notNullable()
+    t.uuid('user').references('id').inTable('nivaro_users')
+    t.boolean('is_shared').notNullable().defaultTo(false)
+    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+    t.datetime('updated_at').notNullable().defaultTo(knex.fn.now())
+  })
+
+  await create(knex, 'nivaro_dashboard_widgets', (t) => {
+    t.uuid('id').primary()
+    t.uuid('dashboard').notNullable().references('id').inTable('nivaro_dashboards')
+    t.string('type', 50).notNullable()
+    t.string('title', 255).notNullable()
+    t.string('collection', 255)
+    t.string('field', 255)
+    t.text('filters')
+    t.integer('col').notNullable().defaultTo(0)
+    t.integer('row').notNullable().defaultTo(0)
+    t.integer('width').notNullable().defaultTo(1)
+    t.integer('height').notNullable().defaultTo(1)
+    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+  })
+
   await create(knex, 'nivaro_dq_runs', (t) => {
     t.increments('id').primary()
     t.string('collection', 100).notNullable()
@@ -863,20 +828,6 @@ export async function up(knex: Knex): Promise<void> {
     t.integer('endpoint_count').defaultTo(0)
     t.datetime('imported_at').defaultTo(knex.fn.now())
     t.uuid('imported_by').references('id').inTable('nivaro_users').onDelete('SET NULL')
-  })
-
-  await create(knex, 'nivaro_erp_submissions', (t) => {
-    t.increments('id').primary()
-    t.string('collection', 100).notNullable()
-    t.string('item', 100).notNullable()
-    t.integer('external_api').notNullable().references('id').inTable('nivaro_external_apis')
-    t.string('external_ref', 255)
-    t.string('status', 20).notNullable().defaultTo('submitted')
-    t.integer('attempts').notNullable().defaultTo(0)
-    t.text('last_error')
-    t.text('payload')
-    t.datetime('created_at').defaultTo(knex.fn.now())
-    t.datetime('updated_at').defaultTo(knex.fn.now())
   })
 
   await create(knex, 'nivaro_field_rules', (t) => {
@@ -912,15 +863,52 @@ export async function up(knex: Knex): Promise<void> {
     t.unique(['watch', 'user'])
   })
 
-  await create(knex, 'nivaro_field_translations', (t) => {
+  await create(knex, 'nivaro_files', (t) => {
+    t.uuid('id').primary().defaultTo(knex.fn.uuid())
+    t.string('storage', 100).notNullable().defaultTo('local')
+    t.string('filename_disk', 500)
+    t.string('filename_download', 255).notNullable()
+    t.string('title', 255)
+    t.string('type', 255)
+    t.uuid('folder').references('id').inTable('nivaro_file_folders').onDelete('SET NULL')
+    t.uuid('uploaded_by').references('id').inTable('nivaro_users').onDelete('SET NULL')
+    t.datetime('uploaded_on').notNullable().defaultTo(knex.fn.now())
+    t.uuid('modified_by')
+    t.datetime('modified_on')
+    t.bigInteger('filesize')
+    t.integer('width')
+    t.integer('height')
+    t.integer('duration')
+    t.text('description')
+    t.string('location', 500)
+    t.text('tags')
+    t.text('metadata')
+    t.datetime('expires_at')
+    t.string('storage_provider', 20).notNullable().defaultTo('local')
+  })
+
+  await create(knex, 'nivaro_flow_runs', (t) => {
+    t.uuid('id').primary()
+    t.uuid('flow').notNullable().references('id').inTable('nivaro_flows').onDelete('CASCADE')
+    t.string('trigger', 50).notNullable()
+    t.string('status', 50).notNullable().defaultTo('running')
+    t.datetime('started_at').notNullable().defaultTo(knex.fn.now())
+    t.datetime('completed_at')
+    t.bigInteger('duration_ms')
+    t.text('input')
+    t.text('output')
+    t.text('error_message')
+    t.uuid('user').references('id').inTable('nivaro_users')
+  })
+
+  await create(knex, 'nivaro_flow_versions', (t) => {
     t.increments('id').primary()
-    t.string('collection', 255).notNullable()
-    t.string('item_id', 255).notNullable()
-    t.string('field', 255).notNullable()
-    t.string('locale', 20).notNullable()
-    t.text('value')
-    t.datetime('updated_at').defaultTo(knex.fn.now())
-    t.unique(['collection', 'item_id', 'field', 'locale'])
+    t.uuid('flow').notNullable().references('id').inTable('nivaro_flows')
+    t.integer('version').notNullable()
+    t.text('definition').notNullable()
+    t.uuid('created_by').notNullable().references('id').inTable('nivaro_users')
+    t.datetime('created_at').defaultTo(knex.fn.now())
+    t.unique(['flow', 'version'])
   })
 
   await create(knex, 'nivaro_hierarchy_configs', (t) => {
@@ -991,6 +979,18 @@ export async function up(knex: Knex): Promise<void> {
     t.string('digest_frequency', 10).notNullable().defaultTo('instant')
   })
 
+  await create(knex, 'nivaro_notifications', (t) => {
+    t.increments('id').primary()
+    t.datetime('timestamp').notNullable().defaultTo(knex.fn.now())
+    t.string('status', 50).notNullable().defaultTo('inbox')
+    t.uuid('recipient').notNullable().references('id').inTable('nivaro_users').onDelete('CASCADE')
+    t.uuid('sender')
+    t.string('subject', 255).notNullable()
+    t.text('message')
+    t.string('collection', 255)
+    t.string('item', 255)
+  })
+
   await create(knex, 'nivaro_pages', (t) => {
     t.increments('id').primary()
     t.string('name', 255).notNullable()
@@ -1024,6 +1024,15 @@ export async function up(knex: Knex): Promise<void> {
     t.datetime('created_at').defaultTo(knex.fn.now())
   })
 
+  await create(knex, 'nivaro_picker_exclusions', (t) => {
+    t.increments('id').primary()
+    t.string('collection', 255).notNullable()
+    t.string('item_id', 255).notNullable()
+    t.datetime('created_at').defaultTo(knex.fn.now())
+    t.uuid('created_by').references('id').inTable('nivaro_users').onDelete('SET NULL')
+    t.unique(['collection', 'item_id'])
+  })
+
   await create(knex, 'nivaro_pipeline_instance_owners', (t) => {
     t.increments('id').primary()
     t.uuid('instance').notNullable().references('id').inTable('nivaro_workflow_instances').onDelete('CASCADE')
@@ -1031,14 +1040,12 @@ export async function up(knex: Knex): Promise<void> {
     t.uuid('user').notNullable().references('id').inTable('nivaro_users')
     t.uuid('added_by').references('id').inTable('nivaro_users')
     t.datetime('added_at').notNullable().defaultTo(knex.fn.now())
-    t.index(['instance'])
   })
 
   await create(knex, 'nivaro_pipeline_owner_group_users', (t) => {
     t.increments('id').primary()
     t.uuid('group').notNullable().references('id').inTable('nivaro_pipeline_owner_groups').onDelete('CASCADE')
     t.uuid('user').notNullable().references('id').inTable('nivaro_users')
-    t.index(['group'])
     t.unique(['group', 'user'])
   })
 
@@ -1114,6 +1121,14 @@ export async function up(knex: Knex): Promise<void> {
     t.datetime('created_at').defaultTo(knex.fn.now())
   })
 
+  await create(knex, 'nivaro_sessions', (t) => {
+    t.string('id', 255).primary()
+    t.uuid('user_id').references('id').inTable('nivaro_users').onDelete('CASCADE')
+    t.text('data').notNullable()
+    t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
+    t.datetime('expires_at').notNullable()
+  })
+
   await create(knex, 'nivaro_sla_rules', (t) => {
     t.increments('id').primary()
     t.uuid('workflow_template').notNullable().references('id').inTable('nivaro_workflow_templates')
@@ -1128,17 +1143,6 @@ export async function up(knex: Knex): Promise<void> {
     t.boolean('is_active').notNullable().defaultTo(true)
     t.datetime('created_at').notNullable()
     t.datetime('updated_at').notNullable()
-  })
-
-  await create(knex, 'nivaro_sub_rows', (t) => {
-    t.increments('id').primary()
-    t.string('parent_collection', 255).notNullable()
-    t.string('parent_id', 255).notNullable()
-    t.string('sub_row_field', 255).notNullable()
-    t.integer('sort').notNullable().defaultTo(0)
-    t.text('data').notNullable()
-    t.datetime('created_at').defaultTo(knex.fn.now())
-    t.datetime('updated_at').defaultTo(knex.fn.now())
   })
 
   await create(knex, 'nivaro_sub_row_templates', (t) => {
@@ -1212,19 +1216,6 @@ export async function up(knex: Knex): Promise<void> {
     t.datetime('updated_at').defaultTo(knex.fn.now())
   })
 
-  await create(knex, 'nivaro_webhook_deliveries', (t) => {
-    t.increments('id').primary()
-    t.integer('webhook').notNullable().references('id').inTable('nivaro_webhooks')
-    t.string('event', 100).notNullable()
-    t.integer('status_code')
-    t.text('request_body')
-    t.text('response_body')
-    t.integer('latency_ms')
-    t.boolean('success').notNullable().defaultTo(false)
-    t.integer('attempt').notNullable().defaultTo(1)
-    t.datetime('created_at').defaultTo(knex.fn.now())
-  })
-
   await create(knex, 'nivaro_widget_feeds', (t) => {
     t.increments('id').primary()
     t.string('name', 255).notNullable()
@@ -1248,7 +1239,6 @@ export async function up(knex: Knex): Promise<void> {
     t.uuid('user').references('id').inTable('nivaro_users')
     t.text('comment')
     t.datetime('timestamp').notNullable().defaultTo(knex.fn.now())
-    t.index(['instance'])
   })
 
   await create(knex, 'nivaro_workspace_templates', (t) => {
@@ -1261,60 +1251,73 @@ export async function up(knex: Knex): Promise<void> {
     t.datetime('created_at').defaultTo(knex.fn.now())
   })
 
-  await create(knex, 'nivaro_usage_counters', (t) => {
+  await create(knex, 'nivaro_addendum_approvals', (t) => {
     t.increments('id').primary()
-    t.uuid('workspace').notNullable()
-    t.string('metric', 50).notNullable()
-    t.string('period', 20).notNullable()
-    t.bigInteger('value').notNullable().defaultTo(0)
-    t.unique(['workspace', 'metric', 'period'])
+    t.string('parent_collection', 255).notNullable()
+    t.string('parent_id', 255).notNullable()
+    t.uuid('addendum_id').notNullable().references('id').inTable('nivaro_addendums')
+    t.integer('order_number').notNullable()
+    t.float('net_cost_impact')
+    t.integer('net_timeline_impact_days')
+    t.datetime('approved_at')
+    t.uuid('approved_by').references('id').inTable('nivaro_users')
+    t.text('notes')
+    t.datetime('created_at').defaultTo(knex.fn.now())
   })
 
-  // ── Insert default settings row ───────────────────────────────────────────
-  const hasSettings = await knex('nivaro_settings').count('* as c').first()
-  if (!hasSettings || Number((hasSettings as any).c) === 0) {
-    await knex('nivaro_settings').insert({ updated_at: new Date() })
-  }
+  await create(knex, 'nivaro_alert_log', (t) => {
+    t.increments('id').primary()
+    t.integer('alert_definition').notNullable().references('id').inTable('nivaro_alert_definitions')
+    t.string('collection', 255).notNullable()
+    t.string('item', 255).notNullable()
+    t.string('field_value', 500)
+    t.datetime('triggered_at').notNullable()
+  })
+
+  await create(knex, 'nivaro_alert_subscriptions', (t) => {
+    t.increments('id').primary()
+    t.integer('alert_definition').notNullable().references('id').inTable('nivaro_alert_definitions')
+    t.uuid('user').notNullable().references('id').inTable('nivaro_users')
+    t.boolean('notify_email').notNullable().defaultTo(true)
+    t.boolean('notify_inapp').notNullable().defaultTo(true)
+    t.unique(['alert_definition', 'user'])
+  })
 }
 
 export async function down(knex: Knex): Promise<void> {
   // Drop in reverse dependency order
   const tables = [
+    'nivaro_alert_subscriptions', 'nivaro_alert_log', 'nivaro_addendum_approvals',
     'nivaro_workspace_templates', 'nivaro_workflow_history', 'nivaro_widget_feeds',
-    'nivaro_webhook_deliveries', 'nivaro_tasks', 'nivaro_sync_jobs', 'nivaro_submissions',
-    'nivaro_submission_forms', 'nivaro_sub_row_templates', 'nivaro_sub_rows',
-    'nivaro_sla_rules', 'nivaro_scheduled_changes', 'nivaro_saved_views',
-    'nivaro_retention_runs', 'nivaro_retention_policies', 'nivaro_record_templates',
-    'nivaro_pipeline_owner_group_users', 'nivaro_pipeline_instance_owners',
-    'nivaro_persisted_queries', 'nivaro_pdf_templates', 'nivaro_pages',
-    'nivaro_notification_subscriptions', 'nivaro_item_locks', 'nivaro_issues',
-    'nivaro_import_jobs', 'nivaro_hierarchy_configs', 'nivaro_field_watch_subscribers',
-    'nivaro_field_watches', 'nivaro_field_translations', 'nivaro_field_rules',
-    'nivaro_erp_submissions', 'nivaro_external_api_schemas', 'nivaro_dq_runs',
-    'nivaro_attribute_definitions', 'nivaro_at_risk_rules', 'nivaro_api_keys',
+    'nivaro_tasks', 'nivaro_sync_jobs', 'nivaro_submissions', 'nivaro_submission_forms',
+    'nivaro_sub_row_templates', 'nivaro_sla_rules', 'nivaro_sessions',
+    'nivaro_scheduled_changes', 'nivaro_saved_views', 'nivaro_retention_runs',
+    'nivaro_retention_policies', 'nivaro_record_templates', 'nivaro_pipeline_owner_group_users',
+    'nivaro_pipeline_instance_owners', 'nivaro_picker_exclusions', 'nivaro_persisted_queries',
+    'nivaro_pdf_templates', 'nivaro_pages', 'nivaro_notifications', 'nivaro_notification_subscriptions',
+    'nivaro_item_locks', 'nivaro_issues', 'nivaro_import_jobs', 'nivaro_hierarchy_configs',
+    'nivaro_flow_versions', 'nivaro_flow_runs', 'nivaro_files', 'nivaro_field_watch_subscribers',
+    'nivaro_field_watches', 'nivaro_field_rules', 'nivaro_external_api_schemas', 'nivaro_dq_runs',
+    'nivaro_dashboard_widgets', 'nivaro_dashboards', 'nivaro_comment_mentions', 'nivaro_comments',
+    'nivaro_collection_presets', 'nivaro_attribute_definitions', 'nivaro_at_risk_rules',
     'nivaro_approval_decisions', 'nivaro_approval_instances', 'nivaro_approval_chain_steps',
-    'nivaro_approval_chains', 'nivaro_addendum_approvals', 'nivaro_addendums',
-    'nivaro_alert_subscriptions', 'nivaro_alert_log', 'nivaro_alert_definitions',
-    'nivaro_collection_presets', 'nivaro_dashboard_widgets', 'nivaro_dashboards',
-    'nivaro_comment_mentions', 'nivaro_comments', 'nivaro_flow_versions',
-    'nivaro_flow_runs', 'nivaro_flow_operations', 'nivaro_files',
-    'nivaro_sessions', 'nivaro_revisions', 'nivaro_notifications',
-    'nivaro_pipeline_owner_group_users', 'nivaro_pipeline_owner_groups',
-    'nivaro_pipeline_owner_dimensions', 'nivaro_workflow_instances',
-    'nivaro_workflow_history', 'nivaro_workflow_transitions', 'nivaro_workflow_bindings',
-    'nivaro_workflow_states', 'nivaro_tree_permissions', 'nivaro_tree_configs',
-    'nivaro_policies', 'nivaro_fields', 'nivaro_collections', 'nivaro_users',
-    'nivaro_roles', 'nivaro_workspaces', 'nivaro_workflow_templates',
-    'nivaro_flows', 'nivaro_file_folders', 'nivaro_webhooks', 'nivaro_settings',
-    'nivaro_sequences', 'nivaro_relations', 'nivaro_page_views',
-    'nivaro_external_api_endpoints', 'nivaro_external_api_logs', 'nivaro_external_apis',
-    'nivaro_erp_submissions', 'nivaro_embeddings', 'nivaro_dq_rules',
-    'nivaro_custom_queries', 'nivaro_collection_layouts', 'nivaro_blackout_dates',
-    'nivaro_attribute_values', 'nivaro_api_logs', 'nivaro_activity',
-    'nivaro_ai_collection_settings', 'nivaro_layout_field_assignments',
-    'nivaro_field_groups', 'nivaro_usage_counters',
+    'nivaro_api_keys', 'nivaro_alert_definitions', 'nivaro_addendums',
+    'nivaro_workflow_transitions', 'nivaro_workflow_instances', 'nivaro_revisions',
+    'nivaro_tree_permissions', 'nivaro_policies', 'nivaro_fields', 'nivaro_usage_counters',
+    'nivaro_users', 'nivaro_collections', 'nivaro_roles', 'nivaro_approval_chains',
+    'nivaro_pipeline_owner_groups', 'nivaro_pipeline_owner_dimensions', 'nivaro_workflow_bindings',
+    'nivaro_workflow_states', 'nivaro_webhook_deliveries', 'nivaro_erp_submissions',
+    'nivaro_external_api_logs', 'nivaro_external_api_endpoints', 'nivaro_flow_operations',
+    'nivaro_layout_field_assignments', 'nivaro_field_groups', 'nivaro_approval_chains',
+    'nivaro_workflow_templates', 'nivaro_webhooks', 'nivaro_tree_configs', 'nivaro_sub_rows',
+    'nivaro_settings', 'nivaro_sequences', 'nivaro_rules', 'nivaro_relations', 'nivaro_page_views',
+    'nivaro_migrations_lock', 'nivaro_migrations', 'nivaro_flow_operations', 'nivaro_flows',
+    'nivaro_file_folders', 'nivaro_embeddings', 'nivaro_dq_rules', 'nivaro_custom_queries',
+    'nivaro_collection_layouts', 'nivaro_blackout_dates', 'nivaro_attribute_values',
+    'nivaro_api_logs', 'nivaro_ai_collection_settings', 'nivaro_activity',
+    'nivaro_external_apis', 'nivaro_workspaces',
   ]
-  for (const table of tables) {
-    await knex.schema.dropTableIfExists(table)
+  for (const t of tables) {
+    await knex.schema.dropTableIfExists(t)
   }
 }
