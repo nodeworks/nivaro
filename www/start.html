@@ -1230,36 +1230,47 @@
     setStep(3);
   }
 
-  async function mountElements(clientSecret, publishableKey) {
-    // Wait for Stripe.js to load
+  var stripeConfig = null; // { publishableKey, amount, currency, priceId }
+
+  async function waitForStripe() {
     var attempts = 0;
     while (typeof Stripe === 'undefined' && attempts < 20) {
       await new Promise(function(r){ setTimeout(r, 200); });
       attempts++;
     }
     if (typeof Stripe === 'undefined') throw new Error('Stripe.js failed to load. Check your connection and try again.');
+  }
 
-    stripeInstance = Stripe(publishableKey);
+  var STRIPE_APPEARANCE = {
+    theme: 'night',
+    variables: {
+      colorPrimary: '#00ceff',
+      colorBackground: 'oklch(0.192 0.030 244)',
+      colorText: 'oklch(0.940 0.008 238)',
+      colorDanger: '#f87171',
+      borderRadius: '10px',
+      fontFamily: 'Onest, system-ui, sans-serif',
+      spacingUnit: '4px',
+    },
+    rules: {
+      '.Input': { border: '1px solid oklch(0.265 0.028 244)', padding: '10px 12px' },
+      '.Input:focus': { border: '1px solid #00ceff', boxShadow: '0 0 0 2px oklch(0.753 0.182 214 / 0.2)' },
+      '.Label': { color: 'oklch(0.650 0.014 238)', fontSize: '12px', fontWeight: '500' },
+    },
+  };
 
-    var appearance = {
-      theme: 'night',
-      variables: {
-        colorPrimary: '#00ceff',
-        colorBackground: 'oklch(0.192 0.030 244)',
-        colorText: 'oklch(0.940 0.008 238)',
-        colorDanger: '#f87171',
-        borderRadius: '10px',
-        fontFamily: 'Onest, system-ui, sans-serif',
-        spacingUnit: '4px',
-      },
-      rules: {
-        '.Input': { border: '1px solid oklch(0.265 0.028 244)', padding: '10px 12px' },
-        '.Input:focus': { border: '1px solid #00ceff', boxShadow: '0 0 0 2px oklch(0.753 0.182 214 / 0.2)' },
-        '.Label': { color: 'oklch(0.650 0.014 238)', fontSize: '12px', fontWeight: '500' },
-      },
-    };
+  // Mount deferred Elements (mode:'subscription') — NO subscription created yet
+  async function mountElements(cfg) {
+    await waitForStripe();
+    stripeInstance = Stripe(cfg.publishableKey);
 
-    stripeElements = stripeInstance.elements({ clientSecret: clientSecret, appearance: appearance });
+    stripeElements = stripeInstance.elements({
+      mode: 'subscription',
+      amount: cfg.amount,
+      currency: cfg.currency || 'usd',
+      appearance: STRIPE_APPEARANCE,
+      paymentMethodCreation: 'manual',
+    });
 
     // Express Checkout (Apple Pay / Google Pay / Link)
     var expressEl = stripeElements.create('expressCheckout', {
@@ -1273,18 +1284,12 @@
       if (divider) divider.hidden = (e.availablePaymentMethods == null);
     });
 
-    expressEl.on('confirm', async function() {
+    expressEl.on('confirm', async function(event) {
       setPayLoading(true); hidePayError();
-      var result = await stripeInstance.confirmPayment({
-        elements: stripeElements,
-        redirect: 'if_required',
-      });
-      if (result.error) {
-        showPayError(result.error.message);
-        setPayLoading(false);
-      } else {
-        await provisionAndSuccess();
-      }
+      // Create payment method from Express Checkout
+      var pmResult = await stripeInstance.createPaymentMethod({ elements: stripeElements });
+      if (pmResult.error) { showPayError(pmResult.error.message); setPayLoading(false); return; }
+      await subscribeAndProvision(pmResult.paymentMethod.id);
     });
 
     // Payment Element (card + other methods)
@@ -1292,20 +1297,52 @@
     paymentEl.mount('#payment-element');
   }
 
-  // Pay button — confirms Payment Element
+  // Called on Pay click or Express Checkout confirm —
+  // creates customer + subscription with the confirmed payment method
+  async function subscribeAndProvision(paymentMethodId) {
+    try {
+      var res = await fetch(GATEWAY + '/control/checkout/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plan:            selectedPlan.plan,
+          slug:            currentSlug,
+          name:            companyInput.value.trim(),
+          email:           emailInput.value.trim(),
+          paymentMethodId: paymentMethodId,
+        }),
+      });
+      var data = await res.json().catch(function(){return{};});
+      if (!res.ok) throw new Error(data.error || ('Error ' + res.status));
+
+      // 3D Secure required
+      if (data.requiresAction && data.clientSecret) {
+        var actionResult = await stripeInstance.handleNextAction({ clientSecret: data.clientSecret });
+        if (actionResult.error) { showPayError(actionResult.error.message); setPayLoading(false); return; }
+      }
+
+      currentSubId      = data.subscriptionId;
+      currentCustomerId = data.customerId;
+      await provisionAndSuccess();
+    } catch (err) {
+      showPayError(err && err.message ? err.message : 'Payment failed. Please try again.');
+      setPayLoading(false);
+    }
+  }
+
+  // Pay button — creates payment method then subscribes
   payBtn.addEventListener('click', async function() {
     if (!stripeInstance || !stripeElements) return;
     setPayLoading(true); hidePayError();
-    var result = await stripeInstance.confirmPayment({
-      elements: stripeElements,
-      redirect: 'if_required',
-    });
-    if (result.error) {
-      showPayError(result.error.message);
-      setPayLoading(false);
-    } else {
-      await provisionAndSuccess();
-    }
+
+    // Validate fields first
+    var { error: submitError } = await stripeElements.submit();
+    if (submitError) { showPayError(submitError.message); setPayLoading(false); return; }
+
+    var pmResult = await stripeInstance.createPaymentMethod({ elements: stripeElements });
+    if (pmResult.error) { showPayError(pmResult.error.message); setPayLoading(false); return; }
+
+    await subscribeAndProvision(pmResult.paymentMethod.id);
   });
 
   // Back from payment → details
@@ -1340,22 +1377,17 @@
         if (data.setupUrl) { window.location.href = data.setupUrl; return; }
         throw new Error('Activation succeeded but no setup link was returned.');
       } else {
-        // Paid plan — create subscription, mount Payment Elements
-        var res2 = await fetch(GATEWAY + '/control/checkout/create-subscription', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-        });
-        if (!res2.ok) { var d2 = await res2.json().catch(function(){return{};}); throw new Error(d2.error || ('Error ' + res2.status)); }
-        var sub = await res2.json();
-
-        currentSubId      = sub.subscriptionId;
-        currentCustomerId = sub.customerId;
+        // Paid plan — fetch Stripe config then mount deferred Elements (no subscription created yet)
+        var cfgRes = await fetch(GATEWAY + '/control/checkout/config?plan=' + encodeURIComponent(payload.plan));
+        if (!cfgRes.ok) { var cfgErr = await cfgRes.json().catch(function(){return{};}); throw new Error(cfgErr.error || ('Error ' + cfgRes.status)); }
+        stripeConfig = await cfgRes.json();
 
         // Update payment panel summary
         if (paySummName)  paySummName.textContent  = selectedPlan.name;
         if (paySummPrice) paySummPrice.textContent  = selectedPlan.price;
         if (payLabel)     payLabel.textContent       = 'Pay ' + selectedPlan.price;
 
-        await mountElements(sub.clientSecret, sub.publishableKey);
+        await mountElements(stripeConfig);
 
         setLoading(false);
         showPanel('payment');
