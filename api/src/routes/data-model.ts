@@ -124,7 +124,7 @@ function rawRows<T>(result: unknown): T[] {
 
 async function tableExists(name: string): Promise<boolean> {
   const res = await db.raw(
-    `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'`,
+    `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA NOT IN ('pg_catalog', 'information_schema')`,
     [name]
   )
   const rows = rawRows<{ cnt: number }>(res)
@@ -156,6 +156,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
           (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS c WHERE c.TABLE_NAME = t.TABLE_NAME AND c.TABLE_SCHEMA = t.TABLE_SCHEMA) AS "column_count"
         FROM INFORMATION_SCHEMA.TABLES t
         WHERE t.TABLE_TYPE = 'BASE TABLE'
+          AND t.TABLE_SCHEMA NOT IN ('pg_catalog', 'information_schema')
         ORDER BY t.TABLE_NAME
       `))
 
