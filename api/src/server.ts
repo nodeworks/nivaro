@@ -83,10 +83,14 @@ export async function buildServer() {
   // ─── Inngest ──────────────────────────────────────────────────────────────
   await app.register(inngestPlugin)
 
-  // ─── Cron ─────────────────────────────────────────────────────────────────
+  // ─── Cron (self-hosted only) ───────────────────────────────────────────────
+  // In cloud mode, background crons use the static DB (no request context).
+  // Per-tenant cron scheduling is handled by the cloud provisioning system.
   await app.register(cronPlugin)
-  registerFileCleanup(app.cron)
-  registerDigestCrons(app.cron)
+  if (!process.env.CLOUD_META_DB_URL) {
+    registerFileCleanup(app.cron)
+    registerDigestCrons(app.cron)
+  }
 
   // ─── Workspace context ────────────────────────────────────────────────────
   app.addHook('preHandler', resolveWorkspace)
@@ -109,18 +113,19 @@ export async function buildServer() {
     })
   }
 
-  // ─── Extensions ───────────────────────────────────────────────────────────
-  setApp(app)
-  await loadExtensions({
-    app,
-    database: db,
-    inngest: app.inngest,
-    logger: app.log,
-    callExternalApi
-  })
-
-  // ─── Scheduled flows ──────────────────────────────────────────────────────
-  await loadScheduledFlows(app)
+  // ─── Extensions + Scheduled flows (self-hosted only) ────────────────────
+  // These query the static DB at startup — skipped in cloud mode.
+  if (!process.env.CLOUD_META_DB_URL) {
+    setApp(app)
+    await loadExtensions({
+      app,
+      database: db,
+      inngest: app.inngest,
+      logger: app.log,
+      callExternalApi
+    })
+    await loadScheduledFlows(app)
+  }
 
   // ─── Daily retention purge (self-hosted only) ─────────────────────────────
   // In cloud mode, retention runs per-tenant via the provisioning system.
