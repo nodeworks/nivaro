@@ -6,6 +6,14 @@ import { z } from 'zod'
 // Load .env from the repo root (two levels up from api/src/)
 loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../.env') })
 
+// In cloud mode the static DB connection is unused — all queries use per-request
+// tenant pools resolved from cloud_tenants. DB_* vars are therefore not required.
+const cloudMode = !!process.env.CLOUD_META_DB_URL
+const requiredStr = (fallback = '') =>
+  cloudMode ? z.string().default(fallback) : z.string().min(1)
+const requiredUrl = (fallback = 'http://localhost') =>
+  cloudMode ? z.string().url().default(fallback) : z.string().url()
+
 const schema = z.object({
   PORT: z.coerce.number().default(3055),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -13,12 +21,12 @@ const schema = z.object({
   PUBLIC_URL: z.string().default('http://localhost:3055'),
 
   DB_CLIENT: z.enum(['mssql', 'pg', 'mysql2']).default('mssql'),
-  DB_HOST: z.string().min(1),
+  DB_HOST: requiredStr(),
   // Optional — per-client default applied in db/index.ts (mssql 1433, pg 5432, mysql2 3306)
   DB_PORT: z.coerce.number().optional(),
-  DB_DATABASE: z.string().min(1),
-  DB_USER: z.string().min(1),
-  DB_PASSWORD: z.string().min(1),
+  DB_DATABASE: requiredStr(),
+  DB_USER: requiredStr(),
+  DB_PASSWORD: requiredStr(),
   DB_ENCRYPT: z
     .string()
     .transform((v) => v === 'true')
@@ -43,17 +51,17 @@ const schema = z.object({
 
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
-  SESSION_SECRET: z.string().min(32),
+  SESSION_SECRET: cloudMode ? z.string().default('cloud-mode-session-secret-placeholder-32ch') : z.string().min(32),
   SESSION_TTL: z.coerce.number().default(604800),
   COOKIE_SECURE: z
     .string()
     .transform((v) => v === 'true')
     .default('false'),
 
-  OIDC_ISSUER: z.string().url(),
-  OIDC_CLIENT_ID: z.string().min(1),
-  OIDC_CLIENT_SECRET: z.string().min(1),
-  OIDC_REDIRECT_URI: z.string().url(),
+  OIDC_ISSUER: requiredUrl(),
+  OIDC_CLIENT_ID: requiredStr(),
+  OIDC_CLIENT_SECRET: requiredStr(),
+  OIDC_REDIRECT_URI: requiredUrl(),
 
   ADMIN_URL: z.string().default('http://localhost:3056'),
 
