@@ -14,8 +14,8 @@ import {
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 
-const API_URL = ((import.meta as unknown as { env?: Record<string, string | undefined> }).env
-  ?.VITE_API_URL ?? 'http://localhost:3055') as string
+// Use same-origin so WebSocket goes through Cloudflare Worker → Railway
+const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
 export function NotificationBell({
   collapsed,
