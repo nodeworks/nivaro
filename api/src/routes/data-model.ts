@@ -106,19 +106,37 @@ function isSystemTable(name: string): boolean {
   return name.toLowerCase().startsWith('nivaro_')
 }
 
+// db.raw() returns different shapes per dialect:
+//   pg:     { rows: T[], rowCount, ... }
+//   mssql:  T[]  (rows directly)
+//   mysql2: [T[], FieldDef[]]
+function rawRows<T>(result: unknown): T[] {
+  if (!result) return []
+  if (!Array.isArray(result) && typeof result === 'object' && 'rows' in result) {
+    return ((result as { rows: T[] }).rows) ?? []
+  }
+  if (Array.isArray(result) && result.length > 0 && Array.isArray(result[0])) {
+    return result[0] as T[]
+  }
+  if (Array.isArray(result)) return result as T[]
+  return []
+}
+
 async function tableExists(name: string): Promise<boolean> {
-  const rows = await db.raw<{ cnt: number }[]>(
+  const res = await db.raw(
     `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'`,
     [name]
   )
+  const rows = rawRows<{ cnt: number }>(res)
   return Number(rows[0]?.cnt ?? 0) > 0
 }
 
 async function columnExists(table: string, column: string): Promise<boolean> {
-  const rows = await db.raw<{ cnt: number }[]>(
+  const res = await db.raw(
     `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
     [table, column]
   )
+  const rows = rawRows<{ cnt: number }>(res)
   return Number(rows[0]?.cnt ?? 0) > 0
 }
 
@@ -131,15 +149,15 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
   app.get('/', async (_req, reply) => {
     try {
-      const tables = await db.raw<TableRow[]>(`
+      const tables = rawRows<TableRow>(await db.raw(`
         SELECT
-          t.TABLE_NAME,
-          t.TABLE_SCHEMA,
-          (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS c WHERE c.TABLE_NAME = t.TABLE_NAME AND c.TABLE_SCHEMA = t.TABLE_SCHEMA) AS column_count
+          t.TABLE_NAME AS "TABLE_NAME",
+          t.TABLE_SCHEMA AS "TABLE_SCHEMA",
+          (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS c WHERE c.TABLE_NAME = t.TABLE_NAME AND c.TABLE_SCHEMA = t.TABLE_SCHEMA) AS "column_count"
         FROM INFORMATION_SCHEMA.TABLES t
         WHERE t.TABLE_TYPE = 'BASE TABLE'
         ORDER BY t.TABLE_NAME
-      `)
+      `))
 
       const collections = await db<CMSCollection>('nivaro_collections').select(
         'collection',
@@ -183,16 +201,22 @@ export async function dataModelRoutes(app: FastifyInstance) {
         return reply.code(404).send({ error: `Table "${table}" not found` })
       }
 
-      const columnRows = await db.raw<ColumnRow[]>(
-        `SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT, ORDINAL_POSITION
+      const columnRows = rawRows<ColumnRow>(await db.raw(
+        `SELECT
+           COLUMN_NAME AS "COLUMN_NAME",
+           DATA_TYPE AS "DATA_TYPE",
+           CHARACTER_MAXIMUM_LENGTH AS "CHARACTER_MAXIMUM_LENGTH",
+           IS_NULLABLE AS "IS_NULLABLE",
+           COLUMN_DEFAULT AS "COLUMN_DEFAULT",
+           ORDINAL_POSITION AS "ORDINAL_POSITION"
          FROM INFORMATION_SCHEMA.COLUMNS
          WHERE TABLE_NAME = ?
          ORDER BY ORDINAL_POSITION`,
         [table]
-      )
+      ))
 
-      const pkRows = await db.raw<PKRow[]>(
-        `SELECT kcu.COLUMN_NAME
+      const pkRows = rawRows<PKRow>(await db.raw(
+        `SELECT kcu.COLUMN_NAME AS "COLUMN_NAME"
          FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
          JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
            ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
@@ -200,13 +224,14 @@ export async function dataModelRoutes(app: FastifyInstance) {
          WHERE tc.TABLE_NAME = ?
            AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'`,
         [table]
-      )
+      ))
       const pkColumns = new Set(pkRows.map((r) => r.COLUMN_NAME))
 
       const fields = await db<CMSField>('nivaro_fields').where({ collection: table })
       const fieldMap = new Map(fields.map((f) => [f.field, f]))
 
-      const fkRows = await db.raw<FKRow[]>(
+      // sys.foreign_keys is MSSQL-only; returns empty on pg
+      const fkRows = await db.raw(
         `SELECT
           fk.name AS constraint_name,
           COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS column_name,
@@ -216,7 +241,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
         JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
         WHERE OBJECT_NAME(fkc.parent_object_id) = ?`,
         [table]
-      )
+      ).then((r) => rawRows<FKRow>(r)).catch(() => [] as FKRow[])
 
       const collectionMeta = await db<CMSCollection>('nivaro_collections')
         .where({ collection: table })
@@ -549,14 +574,14 @@ export async function dataModelRoutes(app: FastifyInstance) {
     }
 
     try {
-      const pkRows = await db.raw<{ cnt: number }[]>(
+      const pkRows = rawRows<{ cnt: number }>(await db.raw(
         `SELECT COUNT(*) AS cnt
          FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
          JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
            ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_NAME = kcu.TABLE_NAME
          WHERE tc.TABLE_NAME = ? AND kcu.COLUMN_NAME = ? AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'`,
         [table, column]
-      )
+      ))
       if (Number(pkRows[0]?.cnt ?? 0)) {
         return reply.code(400).send({ error: 'Cannot drop a primary key column' })
       }
@@ -1030,21 +1055,21 @@ export async function dataModelRoutes(app: FastifyInstance) {
       }
 
       // Preserve current nullability
-      const colMeta = await db.raw<{ IS_NULLABLE: string }[]>(
-        `SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      const colMeta = rawRows<{ IS_NULLABLE: string }>(await db.raw(
+        `SELECT IS_NULLABLE AS "IS_NULLABLE" FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
         [collection, field]
-      )
+      ))
       const nullable = colMeta[0]?.IS_NULLABLE !== 'NO'
 
       // Safety check — count values that won't survive the conversion
-      const failRows = await db.raw<{ cnt: number }[]>(
+      const failRows = rawRows<{ cnt: number }>(await db.raw(
         `SELECT COUNT(*) AS cnt FROM [${collection}] WHERE [${field}] IS NOT NULL AND TRY_CAST([${field}] AS ${sqlType}) IS NULL`
-      )
+      ))
       const failingCount = Number(failRows[0]?.cnt ?? 0)
       if (failingCount > 0 && !body.force) {
-        const samples = await db.raw<Record<string, unknown>[]>(
+        const samples = rawRows<Record<string, unknown>>(await db.raw(
           `SELECT TOP 5 [${field}] AS value FROM [${collection}] WHERE [${field}] IS NOT NULL AND TRY_CAST([${field}] AS ${sqlType}) IS NULL`
-        )
+        ))
         return reply.code(409).send({
           error: `${failingCount} row(s) cannot be converted to ${newType}`,
           failing_rows: failingCount,
