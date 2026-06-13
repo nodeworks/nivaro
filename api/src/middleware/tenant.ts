@@ -21,7 +21,7 @@ function getMetaDb(): Knex {
 const RESERVED = new Set(['www', 'control', 'api', 'admin', 'status', 'mail'])
 
 // Paths that work without a tenant DB (health check, Inngest, admin provision).
-const TENANT_FREE_PATHS = ['/health', '/api/inngest', '/admin/provision']
+const TENANT_FREE_PATHS = ['/health', '/api/inngest', '/admin/provision', '/admin/migrate']
 
 /** Resolves the tenant Knex pool from the request hostname.
  *  Returns null if the hostname is a system subdomain or tenant not found.
