@@ -503,6 +503,16 @@
     }
     .form-trust svg { color: var(--primary); flex-shrink: 0; }
 
+    /* ── Payment Elements ── */
+    .payment-divider {
+      display: flex; align-items: center; gap: 0.75rem;
+      margin-bottom: 1.25rem; color: var(--ink-faint-dark); font-size: 0.8125rem;
+    }
+    .payment-divider::before, .payment-divider::after {
+      content: ''; flex: 1; height: 1px; background: var(--border-dark);
+    }
+    #payment-element, #express-checkout-element { min-height: 40px; }
+
     /* ── Success / Cancelled states ── */
     .result-shell {
       max-width: 560px;
@@ -806,6 +816,58 @@
     </section>
 
     <!-- ───────── CANCELLED state ───────── -->
+    <!-- ───────── STEP 3: Payment ───────── -->
+    <section class="step-panel" id="panel-payment" aria-label="Payment">
+      <div class="form-shell">
+        <div class="form-card">
+
+          <div class="form-plan-summary">
+            <div class="fps-left">
+              <span class="fps-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+              </span>
+              <span>
+                <span class="fps-name" id="pay-summary-name">Starter</span>
+                <span class="fps-price" id="pay-summary-price">$49 / mo</span>
+              </span>
+            </div>
+            <button type="button" class="fps-change" id="back-to-details">Change</button>
+          </div>
+
+          <div class="form-error-banner" id="payment-error" role="alert" hidden>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><circle cx="8" cy="11" r="0.5" fill="currentColor"/></svg>
+            <span id="payment-error-text"></span>
+          </div>
+
+          <!-- Express Checkout (Apple Pay / Google Pay / Link) -->
+          <div id="express-checkout-element" style="margin-bottom:1.25rem"></div>
+
+          <div class="payment-divider" id="payment-divider" hidden>
+            <span>or pay with card</span>
+          </div>
+
+          <!-- Card / Payment Element -->
+          <div id="payment-element" style="margin-bottom:1.25rem"></div>
+
+          <div class="form-actions">
+            <button type="button" class="btn btn-back" id="back-to-details-2" aria-label="Back to details">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M10 13L5 8l5-5"/></svg>
+            </button>
+            <button type="button" class="btn btn-submit-cta" id="pay-btn">
+              <span class="btn-spinner" aria-hidden="true"></span>
+              <span class="btn-label" id="pay-label">Pay now</span>
+            </button>
+          </div>
+
+          <div class="form-trust">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>
+            <span>Secured by Stripe · Cancel anytime · No setup fees</span>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
     <section class="step-panel" id="panel-cancelled" aria-label="Payment cancelled">
       <div class="result-shell">
         <div class="result-card">
@@ -874,6 +936,7 @@
   </div>
 </footer>
 
+<script src="https://js.stripe.com/v3/" async></script>
 <script src="https://cdn.jsdelivr.net/npm/@studio-freight/lenis@1.0.42/dist/lenis.min.js" integrity="sha384-li4UtcFCH6QeUqR4JyV58/VgTprMuz9aauj+oWtew7V4Y7ZVjnvz5px9Y3UCG0Ea" crossorigin="anonymous"></script>
 <script src="app.js"></script>
 <script>
@@ -932,6 +995,7 @@
   const panels = {
     plan:      document.getElementById('panel-plan'),
     details:   document.getElementById('panel-details'),
+    payment:   document.getElementById('panel-payment'),
     success:   document.getElementById('panel-success'),
     cancelled: document.getElementById('panel-cancelled'),
   };
@@ -1118,67 +1182,189 @@
     submitBtn.classList.toggle('is-loading', on);
   }
 
-  // ── Submit → checkout ──
-  form.addEventListener('submit', async (e) => {
+  // ── Payment state ──
+  var stripeInstance = null;
+  var stripeElements = null;
+  var currentSubId = null;
+  var currentCustomerId = null;
+  var currentSlug = null;
+
+  var payBtn       = document.getElementById('pay-btn');
+  var payLabel     = document.getElementById('pay-label');
+  var payError     = document.getElementById('payment-error');
+  var payErrorText = document.getElementById('payment-error-text');
+  var paySummName  = document.getElementById('pay-summary-name');
+  var paySummPrice = document.getElementById('pay-summary-price');
+  panels.payment   = document.getElementById('panel-payment');
+
+  function setPayLoading(on) {
+    payBtn.disabled = on;
+    payBtn.classList.toggle('is-loading', on);
+  }
+  function showPayError(msg) {
+    payErrorText.textContent = msg;
+    payError.hidden = false;
+  }
+  function hidePayError() { payError.hidden = true; }
+
+  async function provisionAndSuccess() {
+    try {
+      // Only send IDs — server reads plan/slug/email from Stripe metadata
+      var res = await fetch(GATEWAY + '/control/checkout/provision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscriptionId: currentSubId, customerId: currentCustomerId }),
+      });
+      // Non-fatal if provision call fails — webhook will also provision
+      if (!res.ok) { var d = await res.json().catch(function(){return{};}); console.warn('Provision call failed:', d); }
+    } catch (e) { console.warn('Provision call error:', e); }
+    showSuccess();
+  }
+
+  function showSuccess() {
+    var baseDomain = 'nivaro.dev';
+    var url = 'https://' + currentSlug + '.' + baseDomain;
+    var urlEl = document.getElementById('success-url');
+    if (urlEl) { urlEl.href = url; urlEl.textContent = url; }
+    showPanel('success');
+    setStep(3);
+  }
+
+  async function mountElements(clientSecret, publishableKey) {
+    // Wait for Stripe.js to load
+    var attempts = 0;
+    while (typeof Stripe === 'undefined' && attempts < 20) {
+      await new Promise(function(r){ setTimeout(r, 200); });
+      attempts++;
+    }
+    if (typeof Stripe === 'undefined') throw new Error('Stripe.js failed to load. Check your connection and try again.');
+
+    stripeInstance = Stripe(publishableKey);
+
+    var appearance = {
+      theme: 'night',
+      variables: {
+        colorPrimary: '#00ceff',
+        colorBackground: 'oklch(0.192 0.030 244)',
+        colorText: 'oklch(0.940 0.008 238)',
+        colorDanger: '#f87171',
+        borderRadius: '10px',
+        fontFamily: 'Onest, system-ui, sans-serif',
+        spacingUnit: '4px',
+      },
+      rules: {
+        '.Input': { border: '1px solid oklch(0.265 0.028 244)', padding: '10px 12px' },
+        '.Input:focus': { border: '1px solid #00ceff', boxShadow: '0 0 0 2px oklch(0.753 0.182 214 / 0.2)' },
+        '.Label': { color: 'oklch(0.650 0.014 238)', fontSize: '12px', fontWeight: '500' },
+      },
+    };
+
+    stripeElements = stripeInstance.elements({ clientSecret: clientSecret, appearance: appearance });
+
+    // Express Checkout (Apple Pay / Google Pay / Link)
+    var expressEl = stripeElements.create('expressCheckout', {
+      buttonHeight: 44,
+      paymentMethodOrder: ['apple_pay', 'google_pay', 'link'],
+    });
+    expressEl.mount('#express-checkout-element');
+
+    expressEl.on('ready', function(e) {
+      var divider = document.getElementById('payment-divider');
+      if (divider) divider.hidden = (e.availablePaymentMethods == null);
+    });
+
+    expressEl.on('confirm', async function() {
+      setPayLoading(true); hidePayError();
+      var result = await stripeInstance.confirmPayment({
+        elements: stripeElements,
+        redirect: 'if_required',
+      });
+      if (result.error) {
+        showPayError(result.error.message);
+        setPayLoading(false);
+      } else {
+        await provisionAndSuccess();
+      }
+    });
+
+    // Payment Element (card + other methods)
+    var paymentEl = stripeElements.create('payment', { layout: 'accordion' });
+    paymentEl.mount('#payment-element');
+  }
+
+  // Pay button — confirms Payment Element
+  payBtn.addEventListener('click', async function() {
+    if (!stripeInstance || !stripeElements) return;
+    setPayLoading(true); hidePayError();
+    var result = await stripeInstance.confirmPayment({
+      elements: stripeElements,
+      redirect: 'if_required',
+    });
+    if (result.error) {
+      showPayError(result.error.message);
+      setPayLoading(false);
+    } else {
+      await provisionAndSuccess();
+    }
+  });
+
+  // Back from payment → details
+  document.getElementById('back-to-details').addEventListener('click', function() { showPanel('details'); setStep(2); });
+  document.getElementById('back-to-details-2').addEventListener('click', function() { showPanel('details'); setStep(2); });
+
+  // ── Submit → create subscription or provision free ──
+  form.addEventListener('submit', async function(e) {
     e.preventDefault();
     if (!selectedPlan) { showPanel('plan'); setStep(1); return; }
     if (!validate()) return;
 
-    const payload = {
+    currentSlug = slugInput.value.trim();
+    var payload = {
       plan:  selectedPlan.plan,
-      slug:  slugInput.value.trim(),
+      slug:  currentSlug,
       name:  companyInput.value.trim(),
       email: emailInput.value.trim(),
     };
 
     setLoading(true);
-    setStep(3);
 
     try {
-      const endpoint = selectedPlan.free
-        ? GATEWAY + '/control/checkout/create-free'
-        : GATEWAY + '/control/checkout/create-session';
-
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        let detail = '';
-        try {
-          const data = await res.json();
-          detail = data && (data.error || data.message) ? (data.error || data.message) : '';
-        } catch (_) { /* non-JSON error */ }
-        throw new Error(detail || ('Request failed (' + res.status + '). Please try again.'));
-      }
-
-      const data = await res.json();
-
       if (selectedPlan.free) {
-        // { slug, setupUrl }
-        const setupUrl = data.setupUrl;
-        if (setupUrl) {
-          window.location.href = setupUrl;
-          return;
-        }
-        throw new Error('Activation succeeded but no setup link was returned. Check your email for next steps.');
+        // Free plan — provision directly
+        setStep(3);
+        var res = await fetch(GATEWAY + '/control/checkout/create-free', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        if (!res.ok) { var d = await res.json().catch(function(){return{};}); throw new Error(d.error || ('Error ' + res.status)); }
+        var data = await res.json();
+        if (data.setupUrl) { window.location.href = data.setupUrl; return; }
+        throw new Error('Activation succeeded but no setup link was returned.');
       } else {
-        // { url } → Stripe Checkout
-        if (data.url) {
-          window.location.href = data.url;
-          return;
-        }
-        throw new Error('Could not start checkout. Please try again.');
+        // Paid plan — create subscription, mount Payment Elements
+        var res2 = await fetch(GATEWAY + '/control/checkout/create-subscription', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        if (!res2.ok) { var d2 = await res2.json().catch(function(){return{};}); throw new Error(d2.error || ('Error ' + res2.status)); }
+        var sub = await res2.json();
+
+        currentSubId      = sub.subscriptionId;
+        currentCustomerId = sub.customerId;
+
+        // Update payment panel summary
+        if (paySummName)  paySummName.textContent  = selectedPlan.name;
+        if (paySummPrice) paySummPrice.textContent  = selectedPlan.price;
+        if (payLabel)     payLabel.textContent       = 'Pay ' + selectedPlan.price;
+
+        await mountElements(sub.clientSecret, sub.publishableKey);
+
+        setLoading(false);
+        showPanel('payment');
+        setStep(3);
       }
     } catch (err) {
       setLoading(false);
       setStep(2);
-      const msg = (err && err.message)
-        ? err.message
-        : 'Something went wrong reaching the server. Please try again.';
-      showBanner(msg);
+      showBanner(err && err.message ? err.message : 'Something went wrong. Please try again.');
     }
   });
 
