@@ -1,6 +1,7 @@
 import { Parser } from 'expr-eval'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
+import { rawRows } from '../db/raw-rows.js'
 import { db } from '../db/index.js'
 import { hooks } from '../hooks/registry.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
@@ -79,10 +80,11 @@ const columnCache = new Map<string, Set<string>>()
 async function getActualColumns(table: string): Promise<Set<string>> {
   const cached = columnCache.get(table)
   if (cached) return cached
-  const cols = (await db('INFORMATION_SCHEMA.COLUMNS')
-    .where('TABLE_NAME', table)
-    .pluck('COLUMN_NAME')) as string[]
-  const set = new Set(cols)
+  const rows = rawRows<{ COLUMN_NAME: string }>(await db.raw(
+    `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+    [table]
+  ))
+  const set = new Set(rows.map(r => r.COLUMN_NAME))
   columnCache.set(table, set)
   return set
 }
@@ -1240,9 +1242,10 @@ export async function readItems(
   if (search) {
     const [fieldMeta, actualCols] = await Promise.all([
       getFields(collection),
-      db('INFORMATION_SCHEMA.COLUMNS')
-        .where('TABLE_NAME', collection)
-        .pluck('COLUMN_NAME') as Promise<string[]>
+      db.raw(
+        `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+        [collection]
+      ).then((res) => rawRows<{ COLUMN_NAME: string }>(res).map(r => r.COLUMN_NAME)) as Promise<string[]>
     ])
     const actualColSet = new Set(actualCols)
     const searchable = fieldMeta.filter(

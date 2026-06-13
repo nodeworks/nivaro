@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
+import { rawRows } from '../db/raw-rows.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
@@ -54,8 +55,11 @@ function parseJson<T>(v: string | null | undefined): T | null {
 const TABLE_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
 async function tableExists(name: string): Promise<boolean> {
-  const row = await db('INFORMATION_SCHEMA.TABLES').where('TABLE_NAME', name).first()
-  return !!row
+  const rows = rawRows<{ cnt: number }>(await db.raw(
+    `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_name = ? AND table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+    [name]
+  ))
+  return Number(rows[0]?.cnt ?? 0) > 0
 }
 
 // Field type → physical column builder (subset; virtual/unknown types are metadata-only)

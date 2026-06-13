@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { rawRows } from '../db/raw-rows.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -106,21 +107,6 @@ function isSystemTable(name: string): boolean {
   return name.toLowerCase().startsWith('nivaro_')
 }
 
-// db.raw() returns different shapes per dialect:
-//   pg:     { rows: T[], rowCount, ... }
-//   mssql:  T[]  (rows directly)
-//   mysql2: [T[], FieldDef[]]
-function rawRows<T>(result: unknown): T[] {
-  if (!result) return []
-  if (!Array.isArray(result) && typeof result === 'object' && 'rows' in result) {
-    return ((result as { rows: T[] }).rows) ?? []
-  }
-  if (Array.isArray(result) && result.length > 0 && Array.isArray(result[0])) {
-    return result[0] as T[]
-  }
-  if (Array.isArray(result)) return result as T[]
-  return []
-}
 
 async function tableExists(name: string): Promise<boolean> {
   const res = await db.raw(
@@ -342,11 +328,14 @@ export async function dataModelRoutes(app: FastifyInstance) {
     }
     const SKIP_TYPES = new Set(['alias', 'group-detail', 'group-raw', 'presentation-divider'])
 
-    const colRows = (await db('INFORMATION_SCHEMA.COLUMNS')
-      .where('TABLE_SCHEMA', 'dbo')
-      .select('TABLE_NAME', 'COLUMN_NAME', 'DATA_TYPE', 'CHARACTER_MAXIMUM_LENGTH')) as Array<{
+    const colRows = rawRows<{
       TABLE_NAME: string; COLUMN_NAME: string; DATA_TYPE: string; CHARACTER_MAXIMUM_LENGTH: number | null
-    }>
+    }>(await db.raw(
+      `SELECT TABLE_NAME AS "TABLE_NAME", COLUMN_NAME AS "COLUMN_NAME", DATA_TYPE AS "DATA_TYPE", CHARACTER_MAXIMUM_LENGTH AS "CHARACTER_MAXIMUM_LENGTH"
+       FROM information_schema.columns
+       WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+       ORDER BY TABLE_NAME, ORDINAL_POSITION`
+    ))
 
     const lookup = new Map<string, string>()
     for (const row of colRows) {
