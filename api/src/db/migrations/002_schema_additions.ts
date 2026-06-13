@@ -37,6 +37,19 @@ export async function up(knex: Knex): Promise<void> {
       await knex.schema.alterTable('nivaro_collection_layouts', builder as (t: Knex.AlterTableBuilder) => void)
     }
   }
+
+  // nivaro_layout_field_assignments — add columns added after initial schema dump
+  const assignmentCols: Array<[string, (t: Knex.CreateTableBuilder) => void]> = [
+    ['label_override',   (t) => t.string('label_override', 255)],
+    ['is_visible',       (t) => t.boolean('is_visible').notNullable().defaultTo(true)],
+    ['default_expanded', (t) => t.boolean('default_expanded').notNullable().defaultTo(false)],
+  ]
+
+  for (const [col, builder] of assignmentCols) {
+    if (!(await hasColumn(knex, 'nivaro_layout_field_assignments', col))) {
+      await knex.schema.alterTable('nivaro_layout_field_assignments', builder as (t: Knex.AlterTableBuilder) => void)
+    }
+  }
 }
 
 export async function down(knex: Knex): Promise<void> {
