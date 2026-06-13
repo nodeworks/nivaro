@@ -1,3 +1,4 @@
+import { rawRows } from '../db/raw-rows.js'
 import { db } from '../db/index.js'
 import type { CMSCollection, CMSField, CMSRelation } from '../types.js'
 
@@ -35,9 +36,9 @@ export async function listCollections(workspaceId?: string | null): Promise<CMSC
 
 export async function listTableCollections(): Promise<CMSCollection[]> {
   const all = await listCollections()
-  const rows = (await db.raw(
-    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'`
-  )) as Array<{ TABLE_NAME: string }>
+  const rows = rawRows<{ TABLE_NAME: string }>(await db.raw(
+    `SELECT TABLE_NAME AS "TABLE_NAME" FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')`
+  ))
   const tableNames = new Set(rows.map((r) => r.TABLE_NAME))
   return all.filter((c) => tableNames.has(c.collection))
 }
