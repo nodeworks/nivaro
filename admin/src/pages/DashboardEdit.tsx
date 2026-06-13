@@ -511,7 +511,7 @@ export function DashboardEditPage() {
   const sorted = [...widgets].sort((a, b) => a.row - b.row || a.col - b.col)
 
   function startEditName() {
-    setNameInput(data?.name)
+    setNameInput(data?.name ?? '')
     setEditingName(true)
   }
 

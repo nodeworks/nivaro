@@ -539,7 +539,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
           (q) => (q.data as Record<string, unknown>[] | undefined) ?? []
         )
         const rowFilter: RecordFilter = {
-          field: rowDim?.field,
+          field: rowDim?.field ?? '',
           op: 'eq',
           value: rowValue,
           id_value: rowDim ? getIdValue(rowDim, rowValue, rowItems, undefined) : undefined
@@ -574,7 +574,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
         (q) => (q.data as Record<string, unknown>[] | undefined) ?? []
       )
       const rowFilter: RecordFilter = {
-        field: rowDim?.field,
+        field: rowDim?.field ?? '',
         op: 'eq',
         value: rowValue,
         id_value: getIdValue(rowDim!, rowValue, rowItems, undefined)

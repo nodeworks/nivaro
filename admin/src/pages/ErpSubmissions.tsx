@@ -371,7 +371,7 @@ export function ErpSubmissionsPage() {
     queryFn: () =>
       api
         .get<{ data: ErpSubmission[] }>(
-          `/erp-submissions/${encodeURIComponent(applied?.collection)}/${encodeURIComponent(applied?.item)}`
+          `/erp-submissions/${encodeURIComponent(applied!.collection)}/${encodeURIComponent(applied!.item)}`
         )
         .then((r) => r.data.data),
     enabled: !!applied
