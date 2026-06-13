@@ -11,6 +11,7 @@ import { loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
 import { resolveWorkspace } from './middleware/workspace.js'
 import { tenantHook } from './middleware/tenant.js'
+import { adminProvisionRoutes } from './routes/admin/provision.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { cronPlugin } from './plugins/cron.js'
 import { graphqlPlugin } from './plugins/graphql.js'
@@ -47,6 +48,8 @@ export async function buildServer() {
   // registered — behaviour is identical to before for self-hosted users.
   if (process.env.CLOUD_META_DB_URL) {
     app.addHook('onRequest', tenantHook)
+    // Internal provisioning endpoint — not tenant-scoped, no tenant hook needed
+    await app.register(adminProvisionRoutes)
   }
 
   // ─── CORS ──────────────────────────────────────────────────────────────────
