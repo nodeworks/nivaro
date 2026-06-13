@@ -88,12 +88,14 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
       return reply.code(401).send({ error: 'Unauthorized' })
     }
 
-    const { connectionString, dbClient, slug, name, adminEmail } = req.body as {
+    const { connectionString, dbClient, slug, name, adminEmail, firstName, lastName } = req.body as {
       connectionString: string
       dbClient: 'pg' | 'mssql' | 'mysql2'
       slug: string
       name: string
       adminEmail: string
+      firstName?: string
+      lastName?: string
     }
 
     if (!connectionString || !dbClient || !slug || !adminEmail) {
@@ -138,8 +140,8 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
       await db('nivaro_users').insert({
         id: userId,
         email: adminEmail,
-        first_name: 'Admin',
-        last_name: '',
+        first_name: firstName || 'Admin',
+        last_name: lastName || '',
         role: roleId,
         status: 'active',
         static_token: staticToken,
