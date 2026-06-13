@@ -21,7 +21,7 @@ export async function up(knex: Knex): Promise<void> {
   const layoutCols: Array<[string, (t: Knex.CreateTableBuilder) => void]> = [
     ['disable_comments',      (t) => t.boolean('disable_comments').notNullable().defaultTo(false)],
     ['disable_tasks',         (t) => t.boolean('disable_tasks').notNullable().defaultTo(false)],
-    ['tab_mode',              (t) => t.boolean('tab_mode').notNullable().defaultTo(false)],
+    ['tab_mode',              (t) => t.string('tab_mode', 10).notNullable().defaultTo('tabs')],
     ['validate_before_next',  (t) => t.boolean('validate_before_next').notNullable().defaultTo(false)],
     ['summary_enabled',       (t) => t.boolean('summary_enabled').notNullable().defaultTo(false)],
     ['summary_show_all',      (t) => t.boolean('summary_show_all').notNullable().defaultTo(false)],
