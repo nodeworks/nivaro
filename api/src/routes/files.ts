@@ -10,6 +10,7 @@ import {
   getFile,
   listFiles,
   readFileBuffer,
+  reportFileBandwidth,
   updateFileMeta,
   uploadFile
 } from '../services/files.js'
@@ -158,6 +159,8 @@ export async function filesRoutes(app: FastifyInstance) {
     } catch {
       return reply.code(404).send({ error: 'Stored object not found' })
     }
+    // Report bandwidth usage to gateway (fire-and-forget)
+    reportFileBandwidth(file).catch(() => {})
     reply
       .header('Content-Type', contentType)
       .header('Content-Disposition', `inline; filename="${file.filename_download}"`)
