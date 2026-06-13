@@ -1,0 +1,10 @@
+api/
+api/node_modules/
+api/dist/
+sdk/src/
+react/
+examples/
+scripts/
+tests/
+*.test.ts
+*.spec.ts
