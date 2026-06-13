@@ -2,7 +2,7 @@
 FROM node:22-alpine AS base
 RUN corepack enable pnpm
 
-# ─── Stage 2: install all dependencies ───────────────────────────────────────────────
+# ─── Stage 2: install all deps ───────────────────────────────────────────────
 FROM base AS deps
 WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
