@@ -661,11 +661,7 @@
       <p class="t-subhead">Nivaro Cloud handles provisioning, updates, backups, and scaling. Same open-source software, zero ops.</p>
     </div>
     <div class="cloud-grid" id="cloud-grid">
-      <!-- populated by JS from gateway -->
-      <div class="cloud-card"><div class="cloud-card-name">Free</div><div class="cloud-card-price">$0<span> / mo</span></div><ul class="cloud-card-limits"><li>10k records</li><li>3 users</li><li>1 workspace</li></ul><a href="/start?plan=free" class="btn btn-dark-outline">Get started free</a></div>
-      <div class="cloud-card cloud-card--featured"><div class="pricing-badge">Most popular</div><div class="cloud-card-name">Starter</div><div class="cloud-card-price">$49<span> / mo</span></div><ul class="cloud-card-limits"><li>100k records</li><li>10 users</li><li>1 workspace</li></ul><a href="/start?plan=starter" class="btn btn-primary">Get started</a></div>
-      <div class="cloud-card"><div class="cloud-card-name">Pro</div><div class="cloud-card-price">$149<span> / mo</span></div><ul class="cloud-card-limits"><li>1M records</li><li>25 users</li><li>3 workspaces</li></ul><a href="/start?plan=pro" class="btn btn-dark-outline">Get started</a></div>
-      <div class="cloud-card"><div class="cloud-card-name">Business</div><div class="cloud-card-price">$499<span> / mo</span></div><ul class="cloud-card-limits"><li>10M records</li><li>Unlimited users</li><li>10 workspaces</li></ul><a href="/start?plan=business" class="btn btn-dark-outline">Get started</a></div>
+      <!-- populated by JS -->
     </div>
     <p style="text-align:center;margin-top:1.5rem;font-size:0.875rem;color:var(--ink-faint-dark);">All cloud plans include automatic backups, managed updates, and Cloudflare DNS. Cancel anytime.</p>
   </div>
@@ -1011,27 +1007,36 @@
   // Live cloud pricing
   (function() {
     const GATEWAY = (document.body.dataset.gateway || 'https://api.nivaro.dev').replace(/\/+$/, '');
-    const grid = document.getElementById('cloud-grid');
-    const PLANS = ['free','starter','pro','business'];
-    function fmt(cents) { return cents === 0 ? '$0' : '$' + Math.round(cents/100).toLocaleString(); }
+    var grid = document.getElementById('cloud-grid');
+    function fmtC(cents) { return cents === 0 ? '$0' : '$' + Math.round(cents/100).toLocaleString(); }
     function fmtN(n) { return n >= 1e6 ? (n/1e6)+'M' : n >= 1000 ? (n/1000)+'k' : String(n); }
-    fetch(GATEWAY + '/control/plans/public')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (!data) return;
-        const cards = grid.querySelectorAll('.cloud-card');
-        PLANS.forEach((key, i) => {
-          const p = data[key]; if (!p || !cards[i]) return;
-          const priceEl = cards[i].querySelector('.cloud-card-price');
-          if (priceEl) priceEl.innerHTML = fmt(p.price) + (p.price === 0 ? '<span> / mo</span>' : '<span> / mo</span>');
-          const limits = cards[i].querySelector('.cloud-card-limits');
-          if (limits) limits.innerHTML =
+    function renderCloud(data) {
+      var entries = Object.entries(data);
+      var featuredKey = (entries.find(function(e){ return e[1].price > 0; }) || entries[0])[0];
+      grid.innerHTML = entries.map(function(e) {
+        var key = e[0], p = e[1];
+        var isFree = p.price === 0, isFeat = key === featuredKey;
+        var priceHtml = fmtC(p.price) + '<span> / mo</span>';
+        return '<div class="cloud-card' + (isFeat ? ' cloud-card--featured' : '') + '">' +
+          (isFeat ? '<div class="pricing-badge">Most popular</div>' : '') +
+          '<div class="cloud-card-name">' + p.name + '</div>' +
+          '<div class="cloud-card-price">' + priceHtml + '</div>' +
+          '<ul class="cloud-card-limits">' +
             '<li>' + fmtN(p.recordLimit) + ' records</li>' +
             '<li>' + (p.maxUsers === 0 ? 'Unlimited users' : p.maxUsers + ' users') + '</li>' +
             '<li>' + p.workspaces + ' workspace' + (p.workspaces === 1 ? '' : 's') + '</li>' +
-            '<li>' + p.storageGb + ' GB storage</li>';
-        });
-      })
+            '<li>' + p.storageGb + ' GB storage</li>' +
+          '</ul>' +
+          '<a href="/start?plan=' + key + '" class="btn ' + (isFree ? 'btn-dark-outline' : (isFeat ? 'btn-primary' : 'btn-dark-outline')) + '">' +
+            (isFree ? 'Get started free' : 'Get started') +
+          '</a></div>';
+      }).join('');
+    }
+    var DEFAULT = {free:{name:'Free',price:0,recordLimit:10000,maxUsers:3,storageGb:1,workspaces:1},starter:{name:'Starter',price:4900,recordLimit:100000,maxUsers:10,storageGb:10,workspaces:1},pro:{name:'Pro',price:14900,recordLimit:1000000,maxUsers:25,storageGb:50,workspaces:3},business:{name:'Business',price:49900,recordLimit:10000000,maxUsers:0,storageGb:200,workspaces:10}};
+    renderCloud(DEFAULT);
+    fetch(GATEWAY + '/control/plans/public')
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) { if (data && Object.keys(data).length) renderCloud(data); })
       .catch(function(){});
   })();
 

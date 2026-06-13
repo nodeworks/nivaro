@@ -695,77 +695,8 @@
 
     <!-- ───────── STEP 1: Choose your plan ───────── -->
     <section class="step-panel is-shown" id="panel-plan" aria-label="Choose your plan">
-      <div class="plan-grid" role="radiogroup" aria-label="Plans">
-
-        <!-- Free -->
-        <button type="button" class="plan-card" role="radio" aria-checked="false"
-                data-plan="free" data-name="Free" data-price="$0" data-free="true">
-          <div class="plan-name">Free</div>
-          <div class="plan-price">$0<span> / mo</span></div>
-          <ul class="plan-features">
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 10k records</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 3 users</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 1 workspace</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> Shared database</li>
-          </ul>
-          <span class="plan-select">
-            <span class="label-default">Get started free</span>
-            <span class="label-selected"><svg class="check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polyline points="3 8 7 12 13 4"/></svg>Selected</span>
-          </span>
-        </button>
-
-        <!-- Starter (featured / most popular) -->
-        <button type="button" class="plan-card is-featured" role="radio" aria-checked="false"
-                data-plan="starter" data-name="Starter" data-price="$49 / mo">
-          <span class="plan-badge">Most popular</span>
-          <div class="plan-name">Starter</div>
-          <div class="plan-price">$49<span> / mo</span></div>
-          <ul class="plan-features">
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 100k records</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 10 users</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 1 workspace</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> Shared database</li>
-          </ul>
-          <span class="plan-select">
-            <span class="label-default">Select Starter</span>
-            <span class="label-selected"><svg class="check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polyline points="3 8 7 12 13 4"/></svg>Selected</span>
-          </span>
-        </button>
-
-        <!-- Pro -->
-        <button type="button" class="plan-card" role="radio" aria-checked="false"
-                data-plan="pro" data-name="Pro" data-price="$149 / mo">
-          <div class="plan-name">Pro</div>
-          <div class="plan-price">$149<span> / mo</span></div>
-          <ul class="plan-features">
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 1M records</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 25 users</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 3 workspaces</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> Serverless database</li>
-          </ul>
-          <span class="plan-select">
-            <span class="label-default">Select Pro</span>
-            <span class="label-selected"><svg class="check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polyline points="3 8 7 12 13 4"/></svg>Selected</span>
-          </span>
-        </button>
-
-        <!-- Business -->
-        <button type="button" class="plan-card" role="radio" aria-checked="false"
-                data-plan="business" data-name="Business" data-price="$499 / mo">
-          <div class="plan-name">Business</div>
-          <div class="plan-price">$499<span> / mo</span></div>
-          <ul class="plan-features">
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 10M records</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> Unlimited users</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 10 workspaces</li>
-            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> Dedicated database</li>
-          </ul>
-          <span class="plan-select">
-            <span class="label-default">Select Business</span>
-            <span class="label-selected"><svg class="check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polyline points="3 8 7 12 13 4"/></svg>Selected</span>
-          </span>
-        </button>
-
+      <div class="plan-grid" id="plan-grid" role="radiogroup" aria-label="Plans">
+        <!-- populated by JS from gateway -->
       </div>
       <p class="plan-foot">Every plan includes the full Nivaro feature set. Upgrade, downgrade, or cancel anytime.</p>
     </section>
@@ -955,6 +886,46 @@
   const GATEWAY = (document.body.dataset.gateway || 'https://api.nivaro.dev').replace(/\/+$/, '');
   const BASE_DOMAIN = 'nivaro.dev';
 
+  // ── Plan card rendering ──
+  const CHECK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg>';
+  const CHECK_SEL = '<svg class="check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polyline points="3 8 7 12 13 4"/></svg>';
+  function fmtPrice(cents) { return cents === 0 ? '$0' : '$' + Math.round(cents / 100).toLocaleString(); }
+  function fmtLim(n) { return n >= 1e6 ? (n/1e6)+'M' : n >= 1000 ? (n/1000)+'k' : String(n); }
+  function renderPlanCards(plans) {
+    const grid = document.getElementById('plan-grid');
+    const entries = Object.entries(plans);
+    // Pick the first paid plan as "featured"
+    const featuredKey = entries.find(([,p]) => p.price > 0)?.[0];
+    grid.innerHTML = entries.map(([key, p]) => {
+      const isFree = p.price === 0;
+      const isFeatured = key === featuredKey;
+      const priceStr = isFree ? '$0' : fmtPrice(p.price) + ' / mo';
+      const priceHtml = isFree ? '$0<span> / mo</span>' : fmtPrice(p.price) + '<span> / mo</span>';
+      return `<button type="button" class="plan-card${isFeatured ? ' is-featured' : ''}" role="radio" aria-checked="false"
+        data-plan="${key}" data-name="${p.name}" data-price="${priceStr}"${isFree ? ' data-free="true"' : ''}>
+        ${isFeatured ? '<span class="plan-badge">Most popular</span>' : ''}
+        <div class="plan-name">${p.name}</div>
+        <div class="plan-price">${priceHtml}</div>
+        <ul class="plan-features">
+          <li>${CHECK_SVG} ${fmtLim(p.recordLimit)} records</li>
+          <li>${CHECK_SVG} ${p.maxUsers === 0 ? 'Unlimited users' : p.maxUsers + ' users'}</li>
+          <li>${CHECK_SVG} ${p.workspaces} workspace${p.workspaces === 1 ? '' : 's'}</li>
+          <li>${CHECK_SVG} ${p.storageGb} GB storage</li>
+        </ul>
+        <span class="plan-select">
+          <span class="label-default">${isFree ? 'Get started free' : 'Select ' + p.name}</span>
+          <span class="label-selected">${CHECK_SEL}Selected</span>
+        </span>
+      </button>`;
+    }).join('');
+    // Re-bind click handlers
+    Array.from(grid.querySelectorAll('.plan-card')).forEach(card => {
+      card.addEventListener('click', () => selectPlan(card, true));
+      card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectPlan(card, true); } });
+    });
+    return grid.querySelectorAll('.plan-card');
+  }
+
   // ── Element refs ──
   const head        = document.getElementById('start-head');
   const stepper     = document.getElementById('stepper');
@@ -964,7 +935,7 @@
     success:   document.getElementById('panel-success'),
     cancelled: document.getElementById('panel-cancelled'),
   };
-  const planCards   = Array.from(document.querySelectorAll('.plan-card'));
+  let planCards = [];
   const summaryName = document.getElementById('summary-name');
   const summaryPrice= document.getElementById('summary-price');
   const form        = document.getElementById('details-form');
@@ -1235,58 +1206,28 @@
     return false;
   }
 
-  // ── Live pricing from control panel ──
-  function fmt(cents) {
-    return cents === 0 ? '$0' : '$' + Math.round(cents / 100).toLocaleString();
-  }
-  function fmtLimit(n) {
-    if (n >= 1_000_000) return (n / 1_000_000) + 'M';
-    if (n >= 1_000) return (n / 1_000) + 'k';
-    return String(n);
-  }
-  function applyPlans(data) {
-    planCards.forEach(card => {
-      const key = card.dataset.plan;
-      const p = data[key];
-      if (!p) return;
-      const priceEl = card.querySelector('.plan-price');
-      const amount = fmt(p.price);
-      const priceStr = p.price === 0 ? '$0' : amount + ' / mo';
-      if (priceEl) {
-        priceEl.innerHTML = p.price === 0 ? '$0<span> / mo</span>' : amount + '<span> / mo</span>';
-      }
-      card.dataset.price = p.price === 0 ? '$0' : amount + ' / mo';
-      card.dataset.name = p.name;
-      // Update feature list items that contain record/user/workspace limits
-      const features = card.querySelectorAll('.plan-features li');
-      features.forEach(li => {
-        const t = li.textContent.trim().toLowerCase();
-        if (t.includes('record'))   li.lastChild.textContent = ' ' + fmtLimit(p.recordLimit) + ' records';
-        else if (t.includes('user'))li.lastChild.textContent = ' ' + (p.maxUsers === 0 ? 'Unlimited users' : p.maxUsers + ' users');
-        else if (t.includes('workspace')) li.lastChild.textContent = ' ' + p.workspaces + ' workspace' + (p.workspaces === 1 ? '' : 's');
-        else if (t.includes('storage')) li.lastChild.textContent = ' ' + p.storageGb + ' GB storage';
-      });
-    });
-  }
-  fetch(GATEWAY + '/control/plans/public')
-    .then(r => r.ok ? r.json() : null)
-    .then(data => { if (data) applyPlans(data); })
-    .catch(() => {}); // silent — hardcoded values remain as fallback
+  // ── Init with live plans ──
+  const DEFAULT_PLANS = {
+    free:     { name: 'Free',     price: 0,     recordLimit: 10000,   maxUsers: 3,  storageGb: 1,  workspaces: 1 },
+    starter:  { name: 'Starter',  price: 4900,  recordLimit: 100000,  maxUsers: 10, storageGb: 10, workspaces: 1 },
+    pro:      { name: 'Pro',      price: 14900, recordLimit: 1000000, maxUsers: 25, storageGb: 50, workspaces: 3 },
+    business: { name: 'Business', price: 49900, recordLimit: 10000000,maxUsers: 0,  storageGb: 200,workspaces: 10 },
+  };
 
-  // ── Init ──
-  function init() {
+  function initWithPlans(data) {
+    planCards = Array.from(renderPlanCards(data));
     if (readResultState()) return;
-
-    // Default selection: Starter (most popular), without auto-advancing
-    const starter = planCards.find(c => c.dataset.plan === 'starter');
-    if (starter) selectPlan(starter, false);
-
+    var featured = planCards.find(function(c) { return c.classList.contains('is-featured'); }) || planCards[0];
+    if (featured) selectPlan(featured, false);
     updateSlugPreview();
     showPanel('plan');
     setStep(1);
   }
 
-  init();
+  fetch(GATEWAY + '/control/plans/public')
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) { initWithPlans(data && Object.keys(data).length ? data : DEFAULT_PLANS); })
+    .catch(function() { initWithPlans(DEFAULT_PLANS); });
 })();
 </script>
 </body>
