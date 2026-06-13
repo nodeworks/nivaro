@@ -1,3 +1,4 @@
+import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { verify as verifyTotp } from 'otplib'
 import { buildLoginUrl, generateCodeVerifier, generateState, handleCallback } from '../auth/oidc.js'
@@ -8,6 +9,33 @@ import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
 import type { User } from '../types.js'
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16).toString('hex')
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, 64, (err, hash) => {
+      if (err) reject(err)
+      else resolve(`${salt}:${hash.toString('hex')}`)
+    })
+  })
+}
+
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [salt, hashHex] = stored.split(':')
+  if (!salt || !hashHex) return false
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, 64, (err, derived) => {
+      if (err) reject(err)
+      else {
+        try {
+          resolve(timingSafeEqual(Buffer.from(hashHex, 'hex'), derived))
+        } catch {
+          resolve(false)
+        }
+      }
+    })
+  })
+}
 
 declare module '@fastify/session' {
   interface FastifySessionObject {
@@ -183,6 +211,57 @@ export async function authRoutes(app: FastifyInstance) {
     if (!samlEnabled()) return reply.code(404).send({ error: 'SAML is not configured' })
     const xml = getSaml().generateServiceProviderMetadata(null, null)
     return reply.type('application/xml').send(xml)
+  })
+
+  // ─── Email/password auth (cloud tenants) ────────────────────────────────────
+
+  // First-time setup: exchange static_token for a password
+  app.post('/setup', async (req, reply) => {
+    const { token, password } = req.body as { token?: string; password?: string }
+    if (!token || !password || password.length < 8) {
+      return reply.code(400).send({ error: 'token and password (min 8 chars) required' })
+    }
+
+    const user = await db('nivaro_users')
+      .where({ static_token: token, status: 'active' })
+      .first() as (User & { password_hash?: string | null }) | undefined
+
+    if (!user) return reply.code(401).send({ error: 'Invalid or expired setup token' })
+    if (user.password_hash) return reply.code(409).send({ error: 'Password already set. Use /api/auth/login.' })
+
+    const hash = await hashPassword(password)
+    await db('nivaro_users').where({ id: user.id }).update({
+      password_hash: hash,
+      static_token: null,
+      updated_at: new Date(),
+    })
+
+    req.session.userId = user.id
+    await logActivity({ action: 'login', user: user.id, req })
+    return reply.send({ ok: true })
+  })
+
+  // Email + password login (subsequent logins after setup)
+  app.post('/login/password', async (req, reply) => {
+    const { email, password } = req.body as { email?: string; password?: string }
+    if (!email || !password) return reply.code(400).send({ error: 'email and password required' })
+
+    const user = await db('nivaro_users')
+      .where({ email: email.toLowerCase().trim(), status: 'active' })
+      .first() as (User & { password_hash?: string | null }) | undefined
+
+    if (!user?.password_hash) {
+      // Constant-time rejection to avoid user enumeration
+      await new Promise((r) => setTimeout(r, 200))
+      return reply.code(401).send({ error: 'Invalid email or password' })
+    }
+
+    const valid = await verifyPassword(password, user.password_hash)
+    if (!valid) return reply.code(401).send({ error: 'Invalid email or password' })
+
+    req.session.userId = user.id
+    await logActivity({ action: 'login', user: user.id, req })
+    return reply.send({ ok: true })
   })
 
   // ─── Session / user ─────────────────────────────────────────────────────────

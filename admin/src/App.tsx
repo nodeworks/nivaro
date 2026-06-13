@@ -35,6 +35,7 @@ const ItemEditPage = lazy(() =>
   import('@/pages/ItemEdit').then((m) => ({ default: m.ItemEditPage }))
 )
 const LoginPage = lazy(() => import('@/pages/Login').then((m) => ({ default: m.LoginPage })))
+const SetupPage = lazy(() => import('@/pages/Setup').then((m) => ({ default: m.SetupPage })))
 const RolesPage = lazy(() => import('@/pages/Roles').then((m) => ({ default: m.RolesPage })))
 const SettingsPage = lazy(() =>
   import('@/pages/Settings').then((m) => ({ default: m.SettingsPage }))
@@ -274,6 +275,14 @@ export default function App() {
                       <LoginPage />
                     </Suspense>
                   </PublicRoute>
+                }
+              />
+              <Route
+                path='/setup'
+                element={
+                  <Suspense fallback={<AppShell />}>
+                    <SetupPage />
+                  </Suspense>
                 }
               />
               <Route

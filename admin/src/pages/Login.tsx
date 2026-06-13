@@ -2,6 +2,92 @@ import { Monitor, Moon, ShieldCheck, Sun } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTheme } from '@/lib/theme'
 
+function PasswordLoginForm() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/auth/login/password', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password }),
+      })
+      if (res.ok) {
+        const redirect = sessionStorage.getItem('nivaro_post_login_redirect')
+        sessionStorage.removeItem('nivaro_post_login_redirect')
+        window.location.href = redirect || '/'
+        return
+      }
+      const body = (await res.json().catch(() => null)) as { error?: string } | null
+      setError(body?.error ?? 'Invalid email or password.')
+    } catch {
+      setError('Could not sign in. Check your connection and try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className='space-y-4'>
+      {error && (
+        <div className='rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700'>
+          {error}
+        </div>
+      )}
+      <div>
+        <label
+          htmlFor='login-email'
+          className='mb-1.5 block text-[13px] font-medium text-slate-700'
+        >
+          Email
+        </label>
+        <input
+          id='login-email'
+          type='email'
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          autoFocus
+          autoComplete='email'
+          placeholder='you@example.com'
+          className='w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-[14px] text-slate-900 outline-none transition-colors focus:border-[#1e96d2]'
+        />
+      </div>
+      <div>
+        <label
+          htmlFor='login-password'
+          className='mb-1.5 block text-[13px] font-medium text-slate-700'
+        >
+          Password
+        </label>
+        <input
+          id='login-password'
+          type='password'
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete='current-password'
+          placeholder='••••••••'
+          className='w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-[14px] text-slate-900 outline-none transition-colors focus:border-[#1e96d2]'
+        />
+      </div>
+      <button
+        type='submit'
+        disabled={!email || !password || submitting}
+        className='flex w-full items-center justify-center rounded-xl px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985] disabled:opacity-50 disabled:shadow-none'
+        style={{ background: '#1e96d2' }}
+      >
+        {submitting ? 'Signing in…' : 'Sign in'}
+      </button>
+    </form>
+  )
+}
+
 const THEME_CYCLE = ['light', 'system', 'dark'] as const
 const THEME_ICONS = { light: Sun, system: Monitor, dark: Moon } as const
 
@@ -99,6 +185,7 @@ export function LoginPage() {
   const error = params.get('error')
   const redirectTo = params.get('redirect')
   const totpStep = params.get('totp') === '1'
+  const [tab, setTab] = useState<'microsoft' | 'password'>('microsoft')
 
   useEffect(() => {
     if (redirectTo) sessionStorage.setItem('nivaro_post_login_redirect', redirectTo)
@@ -262,40 +349,64 @@ export function LoginPage() {
             <TotpForm />
           ) : (
             <>
-              <div className='mb-8 text-center'>
+              <div className='mb-6 text-center'>
                 <h2 className='text-[24px] font-bold tracking-tight text-slate-900'>
                   Sign in to your account
                 </h2>
-                <p className='mt-1.5 text-[14px] text-slate-500'>
-                  Use your Microsoft credentials to continue.
-                </p>
               </div>
 
-              {error && (
+              {/* Tab switcher */}
+              <div className='mb-6 flex rounded-xl border border-slate-200 bg-slate-100 p-1'>
+                <button
+                  type='button'
+                  onClick={() => setTab('microsoft')}
+                  className='flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors'
+                  style={
+                    tab === 'microsoft'
+                      ? { background: 'white', color: '#0f172a', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }
+                      : { color: '#64748b' }
+                  }
+                >
+                  Microsoft
+                </button>
+                <button
+                  type='button'
+                  onClick={() => setTab('password')}
+                  className='flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors'
+                  style={
+                    tab === 'password'
+                      ? { background: 'white', color: '#0f172a', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }
+                      : { color: '#64748b' }
+                  }
+                >
+                  Email / Password
+                </button>
+              </div>
+
+              {error && tab === 'microsoft' && (
                 <div className='mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700'>
                   Authentication failed. Please try again or contact IT support.
                 </div>
               )}
 
-              <a
-                href='/api/auth/login'
-                className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
-                style={{ background: '#0078d4' }}
-              >
-                <MicrosoftIcon />
-                Continue with Microsoft
-              </a>
-
-              <div className='mt-6 flex items-center gap-3'>
-                <div className='h-px flex-1 bg-slate-200' />
-                <span className='text-[11px] font-medium text-slate-400'>SSO only</span>
-                <div className='h-px flex-1 bg-slate-200' />
-              </div>
-
-              <p className='mt-6 text-center text-[12px] leading-relaxed text-slate-400'>
-                Access is restricted to authorized users. If you need access, contact your
-                administrator.
-              </p>
+              {tab === 'microsoft' ? (
+                <>
+                  <a
+                    href='/api/auth/login'
+                    className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
+                    style={{ background: '#0078d4' }}
+                  >
+                    <MicrosoftIcon />
+                    Continue with Microsoft
+                  </a>
+                  <p className='mt-6 text-center text-[12px] leading-relaxed text-slate-400'>
+                    Access is restricted to authorized users. If you need access, contact your
+                    administrator.
+                  </p>
+                </>
+              ) : (
+                <PasswordLoginForm />
+              )}
             </>
           )}
         </div>
