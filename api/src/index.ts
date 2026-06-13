@@ -1,5 +1,5 @@
 import { config } from './config.js'
-import { closeDb, runMigrationsSafely } from './db/index.js'
+import { closeDb, runMigrationsSafely, migrationSource } from './db/index.js'
 import { registerActivityHooks } from './hooks/activity.js'
 import { registerAiValidationHooks, setApp as setAiValidationApp } from './hooks/ai-validation.js'
 import { registerAlertHooks, setApp as setAlertApp } from './hooks/alerts.js'
@@ -36,6 +36,32 @@ async function main() {
     const [batch, migrations] = await runMigrationsSafely()
     if (migrations.length > 0) {
       console.log(`Migrations: ran batch ${batch}: ${migrations.join(', ')}`)
+    }
+  }
+
+  // Cloud mode: keep the template DB up to date on every deploy.
+  // This means adding a migration file + deploying is enough to update the template.
+  // Existing tenants still need pnpm migrate-all from nivaro-cloud.
+  if (process.env.CLOUD_META_DB_URL) {
+    const { default: knex } = await import('knex')
+    const metaUrl = process.env.CLOUD_META_DB_URL
+    const templateUrl = metaUrl.replace(/\/[^/?]+(\?|$)/, '/nivaro_template$1')
+    const templateDb = knex({
+      client: 'pg',
+      connection: templateUrl,
+      pool: { min: 1, max: 2 },
+      migrations: { migrationSource, tableName: 'nivaro_migrations' }
+    })
+    try {
+      const [batch, migrations] = await templateDb.migrate.latest()
+      if (migrations.length > 0) {
+        console.log(`Template DB: batch ${batch} — ${migrations.join(', ')}`)
+      }
+    } catch (err: any) {
+      // Non-fatal: log and continue. Template may not exist yet.
+      console.warn(`Template DB migration skipped: ${err.message}`)
+    } finally {
+      await templateDb.destroy()
     }
   }
 
