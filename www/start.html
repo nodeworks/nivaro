@@ -644,6 +644,12 @@
       margin-top: 0.5rem;
     }
 
+    .slug-status { font-size: 0.75rem; font-weight: 500; margin-top: 0.375rem; display: block; }
+    .slug-status.checking { color: var(--ink-muted-dark); }
+    .slug-status.available { color: #10b981; }
+    .slug-status.taken { color: #f87171; }
+    .slug-status.invalid { color: #f87171; }
+
     @media (prefers-reduced-motion: reduce) {
       .start-tag-dot, .result-icon.success, .result-status .live-dot,
       .btn-spinner { animation: none; }
@@ -742,6 +748,19 @@
               <div class="field-error" id="company-error">Please enter your company name.</div>
             </div>
 
+            <div class="field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+              <div class="field">
+                <label class="field-label" for="first-name">First name <span class="req">*</span></label>
+                <input class="field-input" type="text" id="first-name" name="first-name" placeholder="Jane" autocomplete="given-name" required>
+                <div class="field-error" id="first-name-error">Please enter your first name.</div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="last-name">Last name <span class="req">*</span></label>
+                <input class="field-input" type="text" id="last-name" name="last-name" placeholder="Smith" autocomplete="family-name" required>
+                <div class="field-error" id="last-name-error">Please enter your last name.</div>
+              </div>
+            </div>
+
             <div class="field">
               <label class="field-label" for="email">Admin email <span class="req">*</span></label>
               <input class="field-input" type="email" id="email" name="email"
@@ -757,6 +776,7 @@
                        maxlength="50" aria-describedby="slug-hint">
                 <span class="slug-suffix">.nivaro.dev</span>
               </div>
+              <span class="slug-status" id="slug-status" aria-live="polite"></span>
               <div class="field-error" id="slug-error">Use 3–50 lowercase letters, numbers, and hyphens.</div>
               <p class="field-hint" id="slug-hint">
                 Your instance will live at <code id="slug-preview">acme.nivaro.dev</code> — lowercase letters, numbers, and hyphens only.
@@ -1004,6 +1024,8 @@
   const summaryPrice= document.getElementById('summary-price');
   const form        = document.getElementById('details-form');
   const companyInput= document.getElementById('company');
+  const firstNameInput = document.getElementById('first-name');
+  const lastNameInput  = document.getElementById('last-name');
   const emailInput  = document.getElementById('email');
   const slugInput   = document.getElementById('slug');
   const slugWrap    = document.getElementById('slug-wrap');
@@ -1017,6 +1039,29 @@
   // ── State ──
   let selectedPlan = null;   // { plan, name, price, free }
   let slugEdited = false;    // has the user manually edited the slug?
+
+  // ── Slug availability ──
+  var slugStatusEl = document.getElementById('slug-status');
+  var slugAvailable = false;
+  var slugCheckTimer = null;
+
+  function setSlugStatus(type, msg) {
+    slugStatusEl.textContent = msg;
+    slugStatusEl.className = 'slug-status' + (type ? ' ' + type : '');
+    slugAvailable = (type === 'available');
+  }
+
+  function checkSlugAvailability(slug) {
+    if (!slug || slug.length < 3) { setSlugStatus('invalid', ''); slugAvailable = false; return; }
+    setSlugStatus('checking', 'Checking availability…');
+    fetch(GATEWAY + '/control/checkout/check-slug?slug=' + encodeURIComponent(slug))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.available) setSlugStatus('available', '✓ Available');
+        else setSlugStatus('taken', '✗ ' + (data.message || 'Already taken'));
+      })
+      .catch(function() { setSlugStatus('', ''); slugAvailable = true; }); // fail open
+  }
 
   // ── Slug helpers ──
   function slugify(value) {
@@ -1118,6 +1163,15 @@
     if (!slugEdited) {
       slugInput.value = slugify(companyInput.value);
       updateSlugPreview();
+      // Debounced availability check for auto-generated slug
+      clearTimeout(slugCheckTimer);
+      slugAvailable = false;
+      var val = slugInput.value.trim();
+      if (val) {
+        slugCheckTimer = setTimeout(function() { checkSlugAvailability(val); }, 600);
+      } else {
+        setSlugStatus('', '');
+      }
     }
     clearFieldError(companyInput, 'company-error');
   });
@@ -1130,6 +1184,12 @@
     updateSlugPreview();
     slugWrap.classList.remove('is-invalid');
     document.getElementById('slug-error').classList.remove('is-shown');
+    // Debounced availability check
+    clearTimeout(slugCheckTimer);
+    slugAvailable = false;
+    var val = slugInput.value.trim();
+    if (!val) { setSlugStatus('', ''); return; }
+    slugCheckTimer = setTimeout(function() { checkSlugAvailability(val); }, 400);
   });
   // If the user blanks the slug, resume auto-generation from company
   slugInput.addEventListener('blur', () => {
@@ -1137,9 +1197,12 @@
       slugEdited = false;
       slugInput.value = slugify(companyInput.value);
       updateSlugPreview();
+      setSlugStatus('', '');
     }
   });
 
+  firstNameInput.addEventListener('input', () => clearFieldError(firstNameInput, 'first-name-error'));
+  lastNameInput.addEventListener('input', () => clearFieldError(lastNameInput, 'last-name-error'));
   emailInput.addEventListener('input', () => clearFieldError(emailInput, 'email-error'));
 
   function clearFieldError(input, errorId) {
@@ -1165,6 +1228,12 @@
     if (companyInput.value.trim().length < 1) {
       showFieldError(companyInput, 'company-error'); ok = false;
     }
+    if (firstNameInput.value.trim().length < 1) {
+      showFieldError(firstNameInput, 'first-name-error'); ok = false;
+    }
+    if (lastNameInput.value.trim().length < 1) {
+      showFieldError(lastNameInput, 'last-name-error'); ok = false;
+    }
     const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput.value.trim());
     if (!emailOk) {
       showFieldError(emailInput, 'email-error'); ok = false;
@@ -1172,6 +1241,13 @@
     const slug = slugInput.value.trim();
     if (!isValidSlug(slug)) {
       slugWrap.classList.add('is-invalid');
+      document.getElementById('slug-error').classList.add('is-shown'); ok = false;
+    } else if (slugStatusEl.classList.contains('checking')) {
+      showBanner('Checking address availability — please wait a moment.');
+      ok = false;
+    } else if (!slugAvailable) {
+      slugWrap.classList.add('is-invalid');
+      document.getElementById('slug-error').textContent = 'This address is not available.';
       document.getElementById('slug-error').classList.add('is-shown'); ok = false;
     }
     return ok;
@@ -1308,6 +1384,8 @@
           plan:            selectedPlan.plan,
           slug:            currentSlug,
           name:            companyInput.value.trim(),
+          firstName:       firstNameInput.value.trim(),
+          lastName:        lastNameInput.value.trim(),
           email:           emailInput.value.trim(),
           paymentMethodId: paymentMethodId,
         }),
@@ -1357,10 +1435,12 @@
 
     currentSlug = slugInput.value.trim();
     var payload = {
-      plan:  selectedPlan.plan,
-      slug:  currentSlug,
-      name:  companyInput.value.trim(),
-      email: emailInput.value.trim(),
+      plan:      selectedPlan.plan,
+      slug:      currentSlug,
+      name:      companyInput.value.trim(),
+      firstName: firstNameInput.value.trim(),
+      lastName:  lastNameInput.value.trim(),
+      email:     emailInput.value.trim(),
     };
 
     setLoading(true);
