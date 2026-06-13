@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Get started — Nivaro Cloud</title>
+  <meta name="description" content="Pick a plan, name your workspace, and get a fully provisioned Nivaro instance in under a minute. Hosted, managed, and ready to go.">
+  <meta property="og:title" content="Get started — Nivaro Cloud">
+  <meta property="og:description" content="Spin up a managed Nivaro CMS in seconds. Choose a plan and launch.">
+  <meta property="og:type" content="website">
+  <meta name="robots" content="noindex">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Onest:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+
+  <style>
+    /* ============================================================
+       START — Signup / purchase flow
+       Reuses the marketing dark theme + cyan signal language.
+    ============================================================ */
+
+    body { background: var(--bg-dark); }
+
+    .sr-only {
+      position: absolute; width: 1px; height: 1px;
+      padding: 0; margin: -1px; overflow: hidden;
+      clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+
+    /* ── Page shell ── */
+    .start-page {
+      position: relative;
+      min-height: 100svh;
+      padding-block-start: calc(var(--nav-h) + clamp(2.5rem, 6vw, 4.5rem));
+      padding-block-end: clamp(4rem, 8vw, 7rem);
+      overflow: hidden;
+    }
+    .start-page::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 70% 50% at 50% 0%, oklch(0.753 0.182 214 / 0.13) 0%, transparent 65%),
+        radial-gradient(ellipse 50% 40% at 85% 90%, oklch(0.68 0.165 49 / 0.06) 0%, transparent 60%);
+      pointer-events: none;
+    }
+    .start-page::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(oklch(0.753 0.182 214 / 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, oklch(0.753 0.182 214 / 0.035) 1px, transparent 1px);
+      background-size: 60px 60px;
+      mask-image: radial-gradient(ellipse 90% 70% at 50% 30%, #000 0%, transparent 75%);
+      -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 30%, #000 0%, transparent 75%);
+      pointer-events: none;
+    }
+    .start-inner { position: relative; z-index: 1; }
+
+    /* ── Header ── */
+    .start-head {
+      text-align: center;
+      max-width: 640px;
+      margin-inline: auto;
+      margin-bottom: clamp(2.5rem, 5vw, 3.5rem);
+    }
+    .start-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--primary);
+      background: oklch(0.753 0.182 214 / 0.1);
+      border: 1px solid oklch(0.753 0.182 214 / 0.25);
+      border-radius: 100px;
+      padding: 0.3125rem 0.875rem;
+      margin-bottom: 1.5rem;
+    }
+    .start-tag-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--primary);
+      animation: pulse-dot 2.4s ease-in-out infinite;
+    }
+    .start-head h1 {
+      font-family: var(--font-display);
+      font-size: clamp(2.25rem, 5vw, 3.5rem);
+      font-weight: 800;
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+      color: var(--ink-dark);
+      text-wrap: balance;
+      margin-bottom: 1rem;
+    }
+    .start-head h1 em { font-style: normal; color: var(--primary); }
+    .start-head p {
+      font-size: clamp(1rem, 2vw, 1.1875rem);
+      line-height: 1.6;
+      color: var(--ink-muted-dark);
+      max-width: 52ch;
+      margin-inline: auto;
+      text-wrap: pretty;
+    }
+
+    /* ── Stepper ── */
+    .stepper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-bottom: clamp(2.5rem, 5vw, 3.5rem);
+      flex-wrap: wrap;
+    }
+    .step-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--ink-faint-dark);
+      padding: 0.375rem 0.75rem 0.375rem 0.5rem;
+      border-radius: 100px;
+      border: 1px solid var(--border-dark);
+      background: oklch(1 0 0 / 0.02);
+      transition: color 200ms, border-color 200ms, background 200ms;
+    }
+    .step-pill-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      background: oklch(1 0 0 / 0.06);
+      color: var(--ink-muted-dark);
+      transition: background 200ms, color 200ms;
+    }
+    .step-pill.is-active {
+      color: var(--ink-dark);
+      border-color: oklch(0.753 0.182 214 / 0.4);
+      background: oklch(0.753 0.182 214 / 0.08);
+    }
+    .step-pill.is-active .step-pill-num { background: var(--primary); color: var(--bg-dark); }
+    .step-pill.is-done { color: var(--ink-muted-dark); border-color: oklch(0.753 0.182 214 / 0.25); }
+    .step-pill.is-done .step-pill-num { background: oklch(0.753 0.182 214 / 0.18); color: var(--primary); }
+    .step-connector {
+      width: clamp(16px, 4vw, 40px);
+      height: 1px;
+      background: var(--border-dark);
+    }
+
+    /* ── Step panels (fade/slide transitions) ── */
+    .step-panel { display: none; }
+    .step-panel.is-shown {
+      display: block;
+      animation: step-enter 0.5s var(--ease-out-expo) both;
+    }
+    @keyframes step-enter {
+      from { opacity: 0; transform: translateY(18px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    /* ── Plan grid ── */
+    .plan-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1.125rem;
+      align-items: stretch;
+    }
+    @media (max-width: 1080px) { .plan-grid { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 560px)  { .plan-grid { grid-template-columns: 1fr; max-width: 420px; margin-inline: auto; } }
+
+    .plan-card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      text-align: left;
+      background: var(--bg-dark-2);
+      border: 1px solid var(--border-dark);
+      border-radius: 16px;
+      padding: 1.75rem 1.5rem;
+      cursor: pointer;
+      transition: border-color 200ms var(--ease-out-quart),
+                  box-shadow 200ms var(--ease-out-quart),
+                  transform 200ms var(--ease-out-quart),
+                  background 200ms;
+    }
+    .plan-card:hover {
+      border-color: oklch(0.753 0.182 214 / 0.4);
+      transform: translateY(-3px);
+    }
+    .plan-card:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 3px;
+    }
+    .plan-card.is-selected {
+      border-color: oklch(0.753 0.182 214 / 0.65);
+      background: var(--bg-dark-3);
+      box-shadow:
+        0 0 0 1px oklch(0.753 0.182 214 / 0.4),
+        0 0 0 5px oklch(0.753 0.182 214 / 0.1),
+        0 20px 48px oklch(0 0 0 / 0.35);
+    }
+    .plan-card.is-featured { border-color: oklch(0.753 0.182 214 / 0.3); }
+
+    .plan-badge {
+      position: absolute;
+      top: -0.6875rem;
+      left: 1.5rem;
+      font-size: 0.625rem;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--bg-dark);
+      background: var(--accent);
+      border-radius: 100px;
+      padding: 0.25rem 0.625rem;
+    }
+    .plan-name {
+      font-family: var(--font-display);
+      font-size: 1.0625rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--ink-dark);
+      margin-bottom: 0.625rem;
+    }
+    .plan-price {
+      font-family: var(--font-display);
+      font-size: 2.25rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--ink-dark);
+      line-height: 1;
+      margin-bottom: 1.25rem;
+    }
+    .plan-price span {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--ink-faint-dark);
+      letter-spacing: 0;
+    }
+    .plan-features {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5625rem;
+      margin-bottom: 1.5rem;
+      flex: 1;
+    }
+    .plan-features li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      font-size: 0.8125rem;
+      line-height: 1.4;
+      color: var(--ink-muted-dark);
+    }
+    .plan-features li svg {
+      flex-shrink: 0;
+      width: 14px; height: 14px;
+      margin-top: 0.15rem;
+      color: var(--primary);
+    }
+    .plan-select {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      width: 100%;
+      font-size: 0.875rem;
+      font-weight: 600;
+      padding: 0.5625rem 1rem;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--ink-muted-dark);
+      border: 1px solid var(--border-dark);
+      transition: background 160ms, color 160ms, border-color 160ms;
+      pointer-events: none;
+    }
+    .plan-card:hover .plan-select {
+      color: var(--ink-dark);
+      border-color: oklch(0.753 0.182 214 / 0.35);
+    }
+    .plan-card.is-selected .plan-select {
+      background: var(--primary);
+      color: var(--bg-dark);
+      border-color: var(--primary);
+    }
+    .plan-select .check { display: none; }
+    .plan-card.is-selected .plan-select .check { display: inline-flex; }
+    .plan-card.is-selected .plan-select .label-default { display: none; }
+    .plan-card.is-selected .plan-select .label-selected { display: inline; }
+    .plan-select .label-selected { display: none; }
+
+    .plan-foot {
+      text-align: center;
+      margin-top: 1.75rem;
+      font-size: 0.8125rem;
+      color: var(--ink-faint-dark);
+    }
+
+    /* ── Details form ── */
+    .form-shell {
+      max-width: 560px;
+      margin-inline: auto;
+    }
+    .form-card {
+      background: var(--bg-dark-2);
+      border: 1px solid var(--border-dark);
+      border-radius: 16px;
+      padding: clamp(1.75rem, 4vw, 2.5rem);
+    }
+    .form-plan-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.875rem 1.125rem;
+      background: oklch(0.753 0.182 214 / 0.07);
+      border: 1px solid oklch(0.753 0.182 214 / 0.25);
+      border-radius: 10px;
+      margin-bottom: 1.75rem;
+    }
+    .form-plan-summary .fps-left { display: flex; align-items: center; gap: 0.625rem; min-width: 0; }
+    .fps-icon {
+      width: 30px; height: 30px;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: oklch(0.753 0.182 214 / 0.15);
+      border-radius: 8px;
+      color: var(--primary);
+    }
+    .fps-icon svg { width: 15px; height: 15px; }
+    .fps-name { font-weight: 600; font-size: 0.9375rem; color: var(--ink-dark); }
+    .fps-price { font-size: 0.75rem; color: var(--ink-muted-dark); }
+    .fps-change {
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--primary);
+      white-space: nowrap;
+      transition: color 120ms;
+    }
+    .fps-change:hover { color: oklch(0.82 0.15 214); text-decoration: underline; text-underline-offset: 3px; }
+
+    .field { margin-bottom: 1.25rem; }
+    .field-label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--ink-dark);
+      margin-bottom: 0.5rem;
+    }
+    .field-label .req { color: var(--accent); }
+    .field-input {
+      width: 100%;
+      font-family: var(--font-body);
+      font-size: 0.9375rem;
+      color: var(--ink-dark);
+      background: var(--bg-dark);
+      border: 1px solid var(--border-dark);
+      border-radius: 9px;
+      padding: 0.6875rem 0.875rem;
+      transition: border-color 150ms, box-shadow 150ms;
+    }
+    .field-input::placeholder { color: var(--ink-faint-dark); }
+    .field-input:focus {
+      outline: none;
+      border-color: oklch(0.753 0.182 214 / 0.6);
+      box-shadow: 0 0 0 3px oklch(0.753 0.182 214 / 0.14);
+    }
+    .field-input.is-invalid {
+      border-color: oklch(0.62 0.19 25 / 0.7);
+      box-shadow: 0 0 0 3px oklch(0.62 0.19 25 / 0.12);
+    }
+
+    /* Slug field with inline suffix */
+    .slug-wrap {
+      display: flex;
+      align-items: stretch;
+      background: var(--bg-dark);
+      border: 1px solid var(--border-dark);
+      border-radius: 9px;
+      overflow: hidden;
+      transition: border-color 150ms, box-shadow 150ms;
+    }
+    .slug-wrap:focus-within {
+      border-color: oklch(0.753 0.182 214 / 0.6);
+      box-shadow: 0 0 0 3px oklch(0.753 0.182 214 / 0.14);
+    }
+    .slug-wrap.is-invalid {
+      border-color: oklch(0.62 0.19 25 / 0.7);
+      box-shadow: 0 0 0 3px oklch(0.62 0.19 25 / 0.12);
+    }
+    .slug-input {
+      flex: 1;
+      min-width: 0;
+      font-family: var(--font-mono);
+      font-size: 0.9375rem;
+      color: var(--ink-dark);
+      background: transparent;
+      border: none;
+      padding: 0.6875rem 0.5rem 0.6875rem 0.875rem;
+    }
+    .slug-input:focus { outline: none; }
+    .slug-suffix {
+      display: flex;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      color: var(--ink-faint-dark);
+      background: oklch(1 0 0 / 0.03);
+      border-left: 1px solid var(--border-dark);
+      padding-inline: 0.875rem;
+      white-space: nowrap;
+    }
+    .field-hint {
+      margin-top: 0.5rem;
+      font-size: 0.75rem;
+      line-height: 1.5;
+      color: var(--ink-faint-dark);
+    }
+    .field-hint code {
+      font-family: var(--font-mono);
+      color: var(--primary);
+      font-size: 0.75rem;
+    }
+    .field-error {
+      margin-top: 0.5rem;
+      font-size: 0.75rem;
+      color: oklch(0.72 0.16 25);
+      display: none;
+    }
+    .field-error.is-shown { display: block; }
+
+    .form-error-banner {
+      display: none;
+      align-items: flex-start;
+      gap: 0.625rem;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1.25rem;
+      background: oklch(0.62 0.19 25 / 0.1);
+      border: 1px solid oklch(0.62 0.19 25 / 0.35);
+      border-radius: 9px;
+      font-size: 0.8125rem;
+      color: oklch(0.82 0.13 25);
+      line-height: 1.5;
+    }
+    .form-error-banner.is-shown { display: flex; }
+    .form-error-banner svg { flex-shrink: 0; width: 16px; height: 16px; margin-top: 0.1rem; }
+
+    .form-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 1.75rem;
+    }
+    .form-actions .btn { flex: 1; justify-content: center; }
+    .btn-back {
+      flex: 0 0 auto !important;
+      background: transparent;
+      color: var(--ink-muted-dark);
+      border: 1px solid var(--border-dark);
+      padding-inline: 1.125rem;
+    }
+    .btn-back:hover { background: var(--bg-dark-3); color: var(--ink-dark); }
+    .btn-submit-cta {
+      background: var(--primary);
+      color: var(--bg-dark);
+      font-weight: 600;
+      font-size: 1rem;
+      padding-block: 0.75rem;
+    }
+    .btn-submit-cta:hover:not(:disabled) { background: oklch(0.68 0.165 214); }
+    .btn-submit-cta:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* Button spinner */
+    .btn-spinner {
+      width: 16px; height: 16px;
+      border: 2px solid oklch(0.148 0.028 244 / 0.35);
+      border-top-color: var(--bg-dark);
+      border-radius: 50%;
+      animation: btn-spin 0.7s linear infinite;
+      display: none;
+    }
+    .is-loading .btn-spinner { display: inline-block; }
+    .is-loading .btn-label { display: none; }
+    @keyframes btn-spin { to { transform: rotate(360deg); } }
+
+    .form-trust {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-top: 1.5rem;
+      font-size: 0.75rem;
+      color: var(--ink-faint-dark);
+    }
+    .form-trust svg { color: var(--primary); flex-shrink: 0; }
+
+    /* ── Success / Cancelled states ── */
+    .result-shell {
+      max-width: 560px;
+      margin-inline: auto;
+      text-align: center;
+    }
+    .result-card {
+      background: var(--bg-dark-2);
+      border: 1px solid var(--border-dark);
+      border-radius: 20px;
+      padding: clamp(2.25rem, 5vw, 3.25rem) clamp(1.75rem, 4vw, 2.75rem);
+      position: relative;
+      overflow: hidden;
+    }
+    .result-card.success {
+      border-color: oklch(0.62 0.18 145 / 0.35);
+    }
+    .result-card.success::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 70% 50% at 50% 0%, oklch(0.62 0.18 145 / 0.12) 0%, transparent 65%);
+      pointer-events: none;
+    }
+    .result-card > * { position: relative; z-index: 1; }
+
+    .result-icon {
+      width: 64px; height: 64px;
+      margin: 0 auto 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+    }
+    .result-icon.success {
+      background: oklch(0.62 0.18 145 / 0.15);
+      color: oklch(0.72 0.17 145);
+      animation: pop-in 0.5s var(--ease-out-expo) both;
+    }
+    .result-icon.success svg { width: 30px; height: 30px; }
+    .result-icon.cancelled {
+      background: oklch(0.72 0.15 70 / 0.14);
+      color: oklch(0.78 0.14 70);
+    }
+    .result-icon.cancelled svg { width: 28px; height: 28px; }
+    @keyframes pop-in {
+      0%   { opacity: 0; transform: scale(0.5); }
+      60%  { transform: scale(1.08); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+
+    .result-card h2 {
+      font-family: var(--font-display);
+      font-size: clamp(1.625rem, 3.5vw, 2.125rem);
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      color: var(--ink-dark);
+      line-height: 1.1;
+      margin-bottom: 0.875rem;
+      text-wrap: balance;
+    }
+    .result-card p {
+      font-size: 1rem;
+      line-height: 1.6;
+      color: var(--ink-muted-dark);
+      max-width: 42ch;
+      margin-inline: auto;
+    }
+
+    .result-url-box {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.625rem;
+      margin: 1.75rem auto;
+      padding: 0.875rem 1.25rem;
+      background: var(--bg-dark);
+      border: 1px solid var(--border-dark);
+      border-radius: 10px;
+      width: fit-content;
+      max-width: 100%;
+    }
+    .result-url-box svg { color: var(--primary); flex-shrink: 0; }
+    .result-url-box a {
+      font-family: var(--font-mono);
+      font-size: 0.9375rem;
+      font-weight: 500;
+      color: var(--primary);
+      word-break: break-all;
+    }
+    .result-url-box a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+    .result-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--ink-muted-dark);
+      background: oklch(1 0 0 / 0.03);
+      border: 1px solid var(--border-dark);
+      border-radius: 100px;
+      padding: 0.4375rem 0.875rem;
+      margin-bottom: 1.75rem;
+    }
+    .result-status .live-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: oklch(0.72 0.17 145);
+      box-shadow: 0 0 0 0 oklch(0.72 0.17 145 / 0.6);
+      animation: live-pulse 1.8s ease-out infinite;
+    }
+    @keyframes live-pulse {
+      0%   { box-shadow: 0 0 0 0 oklch(0.72 0.17 145 / 0.5); }
+      70%  { box-shadow: 0 0 0 8px oklch(0.72 0.17 145 / 0); }
+      100% { box-shadow: 0 0 0 0 oklch(0.72 0.17 145 / 0); }
+    }
+
+    .result-note {
+      font-size: 0.8125rem !important;
+      color: var(--ink-faint-dark) !important;
+      margin-top: 1.75rem !important;
+    }
+    .result-actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 0.5rem;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .start-tag-dot, .result-icon.success, .result-status .live-dot,
+      .btn-spinner { animation: none; }
+      .step-panel.is-shown { animation: none; }
+    }
+  </style>
+</head>
+<body data-gateway="https://api.nivaro.dev">
+
+<!-- ── Navigation (copied exactly from index.html) ── -->
+<nav class="nav nav-dark" id="nav" role="navigation" aria-label="Primary">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo" aria-label="Nivaro home">
+      <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#172940"/><polyline points="7,26 7,6 23,26 23,6" fill="none" stroke="#00ceff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="miter"/></svg>
+      nivaro
+    </a>
+    <ul class="nav-links" role="list">
+      <li><a href="/#features">Features</a></li>
+      <li><a href="/#sdk">SDK</a></li>
+      <li><a href="/#architecture">Architecture</a></li>
+      <li><a href="/#enterprise">Enterprise</a></li>
+      <li><a href="/pricing">Pricing</a></li>
+    </ul>
+    <div class="nav-cta">
+      <a href="/docs" class="btn btn-outline-dark">Documentation</a>
+      <a href="https://github.com/nodeworks/nivaro" class="btn btn-primary">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Start flow ── -->
+<main class="start-page">
+  <div class="container start-inner">
+
+    <!-- Header (hidden in result states) -->
+    <header class="start-head" id="start-head">
+      <span class="start-tag">
+        <span class="start-tag-dot" aria-hidden="true"></span>
+        Nivaro Cloud — managed &amp; hosted
+      </span>
+      <h1>Launch your CMS in <em>under a minute</em></h1>
+      <p>Pick a plan, name your workspace, and we'll provision a fully managed Nivaro instance on its own database — ready before your coffee is.</p>
+    </header>
+
+    <!-- Stepper (hidden in result states) -->
+    <nav class="stepper" id="stepper" aria-label="Signup progress">
+      <span class="step-pill is-active" data-step-pill="1">
+        <span class="step-pill-num">1</span> Choose plan
+      </span>
+      <span class="step-connector" aria-hidden="true"></span>
+      <span class="step-pill" data-step-pill="2">
+        <span class="step-pill-num">2</span> Your details
+      </span>
+      <span class="step-connector" aria-hidden="true"></span>
+      <span class="step-pill" data-step-pill="3">
+        <span class="step-pill-num">3</span> Checkout
+      </span>
+    </nav>
+
+    <!-- ───────── STEP 1: Choose your plan ───────── -->
+    <section class="step-panel is-shown" id="panel-plan" aria-label="Choose your plan">
+      <div class="plan-grid" role="radiogroup" aria-label="Plans">
+
+        <!-- Free -->
+        <button type="button" class="plan-card" role="radio" aria-checked="false"
+                data-plan="free" data-name="Free" data-price="$0" data-free="true">
+          <div class="plan-name">Free</div>
+          <div class="plan-price">$0<span> / mo</span></div>
+          <ul class="plan-features">
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 10k records</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 3 users</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 1 workspace</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> Shared database</li>
+          </ul>
+          <span class="plan-select">
+            <span class="label-default">Get started free</span>
+            <span class="label-selected"><svg class="check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polyline points="3 8 7 12 13 4"/></svg>Selected</span>
+          </span>
+        </button>
+
+        <!-- Starter (featured / most popular) -->
+        <button type="button" class="plan-card is-featured" role="radio" aria-checked="false"
+                data-plan="starter" data-name="Starter" data-price="$49 / mo">
+          <span class="plan-badge">Most popular</span>
+          <div class="plan-name">Starter</div>
+          <div class="plan-price">$49<span> / mo</span></div>
+          <ul class="plan-features">
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 100k records</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 10 users</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 1 workspace</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> Shared database</li>
+          </ul>
+          <span class="plan-select">
+            <span class="label-default">Select Starter</span>
+            <span class="label-selected"><svg class="check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polyline points="3 8 7 12 13 4"/></svg>Selected</span>
+          </span>
+        </button>
+
+        <!-- Pro -->
+        <button type="button" class="plan-card" role="radio" aria-checked="false"
+                data-plan="pro" data-name="Pro" data-price="$149 / mo">
+          <div class="plan-name">Pro</div>
+          <div class="plan-price">$149<span> / mo</span></div>
+          <ul class="plan-features">
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 1M records</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 25 users</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 3 workspaces</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> Serverless database</li>
+          </ul>
+          <span class="plan-select">
+            <span class="label-default">Select Pro</span>
+            <span class="label-selected"><svg class="check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polyline points="3 8 7 12 13 4"/></svg>Selected</span>
+          </span>
+        </button>
+
+        <!-- Business -->
+        <button type="button" class="plan-card" role="radio" aria-checked="false"
+                data-plan="business" data-name="Business" data-price="$499 / mo">
+          <div class="plan-name">Business</div>
+          <div class="plan-price">$499<span> / mo</span></div>
+          <ul class="plan-features">
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 10M records</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> Unlimited users</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> 10 workspaces</li>
+            <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 8 7 12 13 4"/></svg> Dedicated database</li>
+          </ul>
+          <span class="plan-select">
+            <span class="label-default">Select Business</span>
+            <span class="label-selected"><svg class="check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polyline points="3 8 7 12 13 4"/></svg>Selected</span>
+          </span>
+        </button>
+
+      </div>
+      <p class="plan-foot">Every plan includes the full Nivaro feature set. Upgrade, downgrade, or cancel anytime.</p>
+    </section>
+
+    <!-- ───────── STEP 2: Your details ───────── -->
+    <section class="step-panel" id="panel-details" aria-label="Your details">
+      <div class="form-shell">
+        <div class="form-card">
+
+          <div class="form-plan-summary">
+            <div class="fps-left">
+              <span class="fps-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
+              </span>
+              <span>
+                <span class="fps-name" id="summary-name">Starter</span>
+                <span class="fps-price" id="summary-price">$49 / mo</span>
+              </span>
+            </div>
+            <button type="button" class="fps-change" id="change-plan">Change</button>
+          </div>
+
+          <div class="form-error-banner" id="form-error" role="alert">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><circle cx="8" cy="11" r="0.5" fill="currentColor"/></svg>
+            <span id="form-error-text"></span>
+          </div>
+
+          <form id="details-form" novalidate>
+            <div class="field">
+              <label class="field-label" for="company">Company / organization name <span class="req">*</span></label>
+              <input class="field-input" type="text" id="company" name="company"
+                     placeholder="Acme Inc." autocomplete="organization" required>
+              <div class="field-error" id="company-error">Please enter your company name.</div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="email">Admin email <span class="req">*</span></label>
+              <input class="field-input" type="email" id="email" name="email"
+                     placeholder="you@acme.com" autocomplete="email" required>
+              <div class="field-error" id="email-error">Please enter a valid email address.</div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="slug">Workspace address <span class="req">*</span></label>
+              <div class="slug-wrap" id="slug-wrap">
+                <input class="slug-input" type="text" id="slug" name="slug"
+                       placeholder="acme" autocomplete="off" spellcheck="false"
+                       maxlength="50" aria-describedby="slug-hint">
+                <span class="slug-suffix">.nivaro.dev</span>
+              </div>
+              <div class="field-error" id="slug-error">Use 3–50 lowercase letters, numbers, and hyphens.</div>
+              <p class="field-hint" id="slug-hint">
+                Your instance will live at <code id="slug-preview">acme.nivaro.dev</code> — lowercase letters, numbers, and hyphens only.
+              </p>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" class="btn btn-back" id="back-to-plans" aria-label="Back to plans">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M10 13L5 8l5-5"/></svg>
+              </button>
+              <button type="submit" class="btn btn-submit-cta" id="submit-btn">
+                <span class="btn-spinner" aria-hidden="true"></span>
+                <span class="btn-label" id="submit-label">Continue to checkout</span>
+              </button>
+            </div>
+          </form>
+
+          <div class="form-trust">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>
+            <span id="trust-note">Secure checkout via Stripe · Cancel anytime</span>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── SUCCESS state ───────── -->
+    <section class="step-panel" id="panel-success" aria-label="Provisioning your instance">
+      <div class="result-shell">
+        <div class="result-card success">
+          <div class="result-icon success" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <h2>Your Nivaro instance is being provisioned</h2>
+          <p>We're spinning up a dedicated database, running migrations, and seeding your workspace. Hang tight.</p>
+
+          <div class="result-url-box">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c1.8 2 1.8 11 0 13M8 1.5c-1.8 2-1.8 11 0 13"/></svg>
+            <a id="success-url" href="#" target="_blank" rel="noopener">your-slug.nivaro.dev</a>
+          </div>
+
+          <div class="result-status">
+            <span class="live-dot" aria-hidden="true"></span>
+            Usually ready in 30–60 seconds
+          </div>
+
+          <p class="result-note">
+            We've sent a confirmation to your email with a setup link to choose your admin password. Once provisioning completes, your instance will be live at the address above.
+          </p>
+
+          <div class="result-actions" style="margin-top:1.75rem">
+            <a id="success-cta" class="btn btn-primary" href="#" target="_blank" rel="noopener" style="padding:0.6875rem 1.5rem">Open my instance</a>
+            <a class="btn btn-outline-dark" href="/docs" style="padding:0.6875rem 1.5rem">Read the docs</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── CANCELLED state ───────── -->
+    <section class="step-panel" id="panel-cancelled" aria-label="Payment cancelled">
+      <div class="result-shell">
+        <div class="result-card">
+          <div class="result-icon cancelled" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><circle cx="12" cy="16" r="0.6" fill="currentColor"/></svg>
+          </div>
+          <h2>Payment cancelled</h2>
+          <p>No charge was made. Your workspace hasn't been created yet — you can pick up right where you left off whenever you're ready.</p>
+          <div class="result-actions" style="margin-top:2rem">
+            <a class="btn btn-primary" href="/start" style="padding:0.6875rem 1.5rem">Try again</a>
+            <a class="btn btn-outline-dark" href="/pricing" style="padding:0.6875rem 1.5rem">Back to pricing</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<!-- ── Footer (copied exactly from index.html) ── -->
+<footer class="footer" aria-label="Site footer">
+  <div class="container">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <div class="footer-brand-logo">
+          <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#172940"/><polyline points="7,26 7,6 23,26 23,6" fill="none" stroke="#00ceff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="miter"/></svg>
+          nivaro
+        </div>
+        <p class="footer-brand-desc">
+          Headless CMS for teams that own their MSSQL database.
+        </p>
+      </div>
+      <nav class="footer-col" aria-label="Product links">
+        <span class="footer-col-title">Product</span>
+        <a href="/#features">Features</a>
+        <a href="/#sdk">SDK</a>
+        <a href="/#architecture">Architecture</a>
+        <a href="/#enterprise">Enterprise</a>
+        <a href="/pricing">Pricing</a>
+        <a href="/docs#roadmap">Roadmap</a>
+      </nav>
+      <nav class="footer-col" aria-label="Developer links">
+        <span class="footer-col-title">Developers</span>
+        <a href="/docs">Documentation</a>
+        <a href="/docs#sdk">SDK Reference</a>
+        <a href="/docs#graphql">GraphQL API</a>
+        <a href="/docs#extensions">Extensions</a>
+        <a href="https://github.com/nodeworks/nivaro">Source</a>
+      </nav>
+      <nav class="footer-col" aria-label="Other links">
+        <span class="footer-col-title">More</span>
+        <a href="/docs#deployment">Self-hosting</a>
+        <a href="/docs#migrations">Migrations</a>
+        <a href="/docs#auth">Auth</a>
+        <a href="/docs#workflows">Workflows</a>
+        <a href="/docs#changelog">Changelog</a>
+      </nav>
+    </div>
+    <div class="footer-bottom">
+      <p class="footer-copy">© 2026 Nodeworks. Nivaro is open source.</p>
+      <div class="footer-legal">
+        <a href="/license">License</a>
+        <a href="/privacy">Privacy</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@studio-freight/lenis@1.0.42/dist/lenis.min.js" integrity="sha384-li4UtcFCH6QeUqR4JyV58/VgTprMuz9aauj+oWtew7V4Y7ZVjnvz5px9Y3UCG0Ea" crossorigin="anonymous"></script>
+<script src="app.js"></script>
+<script>
+/* ============================================================
+   NIVARO CLOUD — Signup / purchase flow
+============================================================ */
+;(() => {
+  'use strict';
+
+  const GATEWAY = (document.body.dataset.gateway || 'https://api.nivaro.dev').replace(/\/+$/, '');
+  const BASE_DOMAIN = 'nivaro.dev';
+
+  // ── Element refs ──
+  const head        = document.getElementById('start-head');
+  const stepper     = document.getElementById('stepper');
+  const panels = {
+    plan:      document.getElementById('panel-plan'),
+    details:   document.getElementById('panel-details'),
+    success:   document.getElementById('panel-success'),
+    cancelled: document.getElementById('panel-cancelled'),
+  };
+  const planCards   = Array.from(document.querySelectorAll('.plan-card'));
+  const summaryName = document.getElementById('summary-name');
+  const summaryPrice= document.getElementById('summary-price');
+  const form        = document.getElementById('details-form');
+  const companyInput= document.getElementById('company');
+  const emailInput  = document.getElementById('email');
+  const slugInput   = document.getElementById('slug');
+  const slugWrap    = document.getElementById('slug-wrap');
+  const slugPreview = document.getElementById('slug-preview');
+  const submitBtn   = document.getElementById('submit-btn');
+  const submitLabel = document.getElementById('submit-label');
+  const trustNote   = document.getElementById('trust-note');
+  const formError   = document.getElementById('form-error');
+  const formErrorText = document.getElementById('form-error-text');
+
+  // ── State ──
+  let selectedPlan = null;   // { plan, name, price, free }
+  let slugEdited = false;    // has the user manually edited the slug?
+
+  // ── Slug helpers ──
+  function slugify(value) {
+    return value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 50);
+  }
+  function isValidSlug(value) {
+    return /^[a-z0-9](?:[a-z0-9-]{1,48}[a-z0-9])$/.test(value) && value.length >= 3 && value.length <= 50;
+  }
+  function updateSlugPreview() {
+    const s = slugInput.value || 'your-slug';
+    slugPreview.textContent = s + '.' + BASE_DOMAIN;
+  }
+
+  // ── Panel switching ──
+  function showPanel(key) {
+    Object.values(panels).forEach(p => p.classList.remove('is-shown'));
+    panels[key].classList.add('is-shown');
+
+    const isResult = (key === 'success' || key === 'cancelled');
+    head.style.display = isResult ? 'none' : '';
+    stepper.style.display = isResult ? 'none' : '';
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function setStep(n) {
+    document.querySelectorAll('[data-step-pill]').forEach(pill => {
+      const idx = parseInt(pill.dataset.stepPill, 10);
+      pill.classList.toggle('is-active', idx === n);
+      pill.classList.toggle('is-done', idx < n);
+    });
+  }
+
+  // ── Plan selection ──
+  function selectPlan(card, advance) {
+    planCards.forEach(c => {
+      c.classList.remove('is-selected');
+      c.setAttribute('aria-checked', 'false');
+    });
+    card.classList.add('is-selected');
+    card.setAttribute('aria-checked', 'true');
+
+    selectedPlan = {
+      plan:  card.dataset.plan,
+      name:  card.dataset.name,
+      price: card.dataset.price,
+      free:  card.dataset.free === 'true',
+    };
+
+    // Update step 2 summary
+    summaryName.textContent = selectedPlan.name;
+    summaryPrice.textContent = selectedPlan.free ? 'Free forever' : selectedPlan.price;
+
+    // Adapt CTA + trust copy
+    if (selectedPlan.free) {
+      submitLabel.textContent = 'Activate for free';
+      trustNote.textContent = 'No credit card required · Ready in seconds';
+    } else {
+      submitLabel.textContent = 'Continue to checkout';
+      trustNote.textContent = 'Secure checkout via Stripe · Cancel anytime';
+    }
+
+    if (advance) goToDetails();
+  }
+
+  function goToDetails() {
+    showPanel('details');
+    setStep(2);
+    // Focus first empty field for convenience
+    setTimeout(() => {
+      if (!companyInput.value) companyInput.focus();
+    }, 350);
+  }
+
+  planCards.forEach(card => {
+    card.addEventListener('click', () => selectPlan(card, true));
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        selectPlan(card, true);
+      }
+    });
+  });
+
+  // ── Navigation between steps ──
+  document.getElementById('change-plan').addEventListener('click', () => {
+    showPanel('plan'); setStep(1);
+  });
+  document.getElementById('back-to-plans').addEventListener('click', () => {
+    showPanel('plan'); setStep(1);
+  });
+
+  // ── Company → slug auto-generation ──
+  companyInput.addEventListener('input', () => {
+    if (!slugEdited) {
+      slugInput.value = slugify(companyInput.value);
+      updateSlugPreview();
+    }
+    clearFieldError(companyInput, 'company-error');
+  });
+
+  slugInput.addEventListener('input', () => {
+    slugEdited = true;
+    // Live-sanitize to allowed charset (keep hyphens user is typing mid-word)
+    const cleaned = slugInput.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
+    if (cleaned !== slugInput.value) slugInput.value = cleaned;
+    updateSlugPreview();
+    slugWrap.classList.remove('is-invalid');
+    document.getElementById('slug-error').classList.remove('is-shown');
+  });
+  // If the user blanks the slug, resume auto-generation from company
+  slugInput.addEventListener('blur', () => {
+    if (slugInput.value.trim() === '') {
+      slugEdited = false;
+      slugInput.value = slugify(companyInput.value);
+      updateSlugPreview();
+    }
+  });
+
+  emailInput.addEventListener('input', () => clearFieldError(emailInput, 'email-error'));
+
+  function clearFieldError(input, errorId) {
+    input.classList.remove('is-invalid');
+    document.getElementById(errorId).classList.remove('is-shown');
+  }
+  function showFieldError(input, errorId) {
+    input.classList.add('is-invalid');
+    document.getElementById(errorId).classList.add('is-shown');
+  }
+  function hideBanner() {
+    formError.classList.remove('is-shown');
+  }
+  function showBanner(msg) {
+    formErrorText.textContent = msg;
+    formError.classList.add('is-shown');
+  }
+
+  function validate() {
+    let ok = true;
+    hideBanner();
+
+    if (companyInput.value.trim().length < 1) {
+      showFieldError(companyInput, 'company-error'); ok = false;
+    }
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput.value.trim());
+    if (!emailOk) {
+      showFieldError(emailInput, 'email-error'); ok = false;
+    }
+    const slug = slugInput.value.trim();
+    if (!isValidSlug(slug)) {
+      slugWrap.classList.add('is-invalid');
+      document.getElementById('slug-error').classList.add('is-shown'); ok = false;
+    }
+    return ok;
+  }
+
+  function setLoading(on) {
+    submitBtn.disabled = on;
+    submitBtn.classList.toggle('is-loading', on);
+  }
+
+  // ── Submit → checkout ──
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!selectedPlan) { showPanel('plan'); setStep(1); return; }
+    if (!validate()) return;
+
+    const payload = {
+      plan:  selectedPlan.plan,
+      slug:  slugInput.value.trim(),
+      name:  companyInput.value.trim(),
+      email: emailInput.value.trim(),
+    };
+
+    setLoading(true);
+    setStep(3);
+
+    try {
+      const endpoint = selectedPlan.free
+        ? GATEWAY + '/control/checkout/create-free'
+        : GATEWAY + '/control/checkout/create-session';
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        let detail = '';
+        try {
+          const data = await res.json();
+          detail = data && (data.error || data.message) ? (data.error || data.message) : '';
+        } catch (_) { /* non-JSON error */ }
+        throw new Error(detail || ('Request failed (' + res.status + '). Please try again.'));
+      }
+
+      const data = await res.json();
+
+      if (selectedPlan.free) {
+        // { slug, setupUrl }
+        const setupUrl = data.setupUrl;
+        if (setupUrl) {
+          window.location.href = setupUrl;
+          return;
+        }
+        throw new Error('Activation succeeded but no setup link was returned. Check your email for next steps.');
+      } else {
+        // { url } → Stripe Checkout
+        if (data.url) {
+          window.location.href = data.url;
+          return;
+        }
+        throw new Error('Could not start checkout. Please try again.');
+      }
+    } catch (err) {
+      setLoading(false);
+      setStep(2);
+      const msg = (err && err.message)
+        ? err.message
+        : 'Something went wrong reaching the server. Please try again.';
+      showBanner(msg);
+    }
+  });
+
+  // ── Result states from URL params ──
+  function readResultState() {
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.get('cancelled') === 'true') {
+      showPanel('cancelled');
+      return true;
+    }
+
+    if (params.get('success') === 'true') {
+      const slug = (params.get('slug') || '').replace(/[^a-z0-9-]/g, '');
+      const fullHost = slug ? (slug + '.' + BASE_DOMAIN) : ('your-workspace.' + BASE_DOMAIN);
+      const url = 'https://' + fullHost;
+      const urlEl = document.getElementById('success-url');
+      const ctaEl = document.getElementById('success-cta');
+      urlEl.textContent = fullHost;
+      urlEl.href = url;
+      ctaEl.href = url;
+      showPanel('success');
+      return true;
+    }
+    return false;
+  }
+
+  // ── Init ──
+  function init() {
+    if (readResultState()) return;
+
+    // Default selection: Starter (most popular), without auto-advancing
+    const starter = planCards.find(c => c.dataset.plan === 'starter');
+    if (starter) selectPlan(starter, false);
+
+    updateSlugPreview();
+    showPanel('plan');
+    setStep(1);
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
