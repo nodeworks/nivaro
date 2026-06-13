@@ -84,7 +84,7 @@ function ActivityItemRow({
   const colDisplay = (() => {
     const found = collections.find((c) => c.collection === entry.collection)
     if (found?.display_name) return found.display_name
-    return titleCase(entry.collection.replace(/^nivaro_/, '').replace(/_/g, ' '))
+    return entry.collection ? titleCase(entry.collection.replace(/^nivaro_/, '').replace(/_/g, ' ')) : 'System'
   })()
 
   return (
