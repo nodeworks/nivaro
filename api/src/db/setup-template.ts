@@ -20,9 +20,9 @@ const TEMPLATE_DB = 'nivaro_template'
 
 async function main() {
   // Resolve admin connection string
-  const adminUrl = process.env.DATABASE_URL
+  const adminUrl = process.env.DATABASE_URL ?? process.env.CLOUD_META_DB_URL
   if (!adminUrl) {
-    console.error('DATABASE_URL must be set (Railway Postgres public URL)')
+    console.error('DATABASE_URL or CLOUD_META_DB_URL must be set')
     process.exit(1)
   }
 
