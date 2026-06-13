@@ -10,6 +10,7 @@
     "start": "node dist/index.js",
     "migrate": "tsx src/db/migrate.ts",
     "migrate:rollback": "tsx src/db/migrate.ts rollback",
+    "setup:template": "tsx src/db/setup-template.ts",
     "fix:roles": "tsx src/db/fix-roles.ts",
     "fix:collections": "tsx src/db/fix-collections.ts",
     "test": "vitest run",
