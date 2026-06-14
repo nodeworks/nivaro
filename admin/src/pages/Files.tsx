@@ -197,13 +197,11 @@ export function FilesPage() {
   const totalPages = Math.ceil(total / limit)
 
   const upload = useMutation({
-    mutationFn: async (fileList: FileList) => {
-      for (const f of Array.from(fileList)) {
+    mutationFn: async (files: File[]) => {
+      for (const f of files) {
         const fd = new FormData()
         fd.append('file', f)
-        await api.post('/files/upload', fd, {
-          headers: { 'Content-Type': 'multipart/form-data' }
-        })
+        await api.post('/files/upload', fd, { headers: { 'Content-Type': undefined } })
       }
     },
     onSuccess: () => {
@@ -225,8 +223,9 @@ export function FilesPage() {
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) {
-      upload.mutate(e.target.files)
+      const files = Array.from(e.target.files)
       e.target.value = ''
+      upload.mutate(files)
     }
   }
 
