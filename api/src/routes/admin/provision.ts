@@ -148,6 +148,9 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
         current_workspace: workspaceId,
       })
 
+      // Update project_name in settings to the tenant's company name
+      await db('nivaro_settings').update({ project_name: name }).catch(() => {})
+
       app.log.info({ slug }, 'Tenant provisioned — migrations and seed complete')
       return { ok: true, userId, workspaceId, staticToken }
     } catch (err: any) {
