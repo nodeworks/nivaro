@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { extname, join } from 'node:path'
 import type { MultipartFile } from '@fastify/multipart'
 import mime from 'mime-types'
@@ -68,31 +69,31 @@ export async function uploadFile(
   multipart: MultipartFile,
   folderId?: string
 ): Promise<StoredFile> {
-  const id = ulid().toLowerCase()
+  const fileId = randomUUID()
+  const diskId = ulid().toLowerCase()
   const originalName = multipart.filename
   const mimeType = multipart.mimetype || mime.lookup(originalName) || 'application/octet-stream'
   const ext =
     extname(originalName) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
-  const diskName = buildDiskName(id, ext)
+  const diskName = buildDiskName(diskId, ext)
 
   const buffer = await multipart.toBuffer()
   const provider = getStorageProviderName()
   await getStorage().put(diskName, buffer, String(mimeType))
 
-  const [fileId] = (await db('nivaro_files')
-    .insert({
-      storage: provider,
-      storage_provider: provider,
-      filename_disk: diskName,
-      filename_download: originalName,
-      title: originalName.replace(/\.[^.]+$/, ''),
-      type: String(mimeType),
-      folder: folderId ?? null,
-      uploaded_by: user.id,
-      uploaded_on: new Date(),
-      filesize: buffer.length
-    })
-    .returning('id')) as unknown as [string]
+  await db('nivaro_files').insert({
+    id: fileId,
+    storage: provider,
+    storage_provider: provider,
+    filename_disk: diskName,
+    filename_download: originalName,
+    title: originalName.replace(/\.[^.]+$/, ''),
+    type: String(mimeType),
+    folder: folderId ?? null,
+    uploaded_by: user.id,
+    uploaded_on: new Date(),
+    filesize: buffer.length
+  })
 
   const file = (await db<StoredFile>('nivaro_files').where({ id: fileId }).first()) as StoredFile
 
@@ -124,29 +125,29 @@ export async function createPresignedFile(
     })
   }
 
-  const id = ulid().toLowerCase()
+  const fileId = randomUUID()
+  const diskId = ulid().toLowerCase()
   const mimeType = opts.type || mime.lookup(opts.filename) || 'application/octet-stream'
   const ext =
     extname(opts.filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
-  const diskName = buildDiskName(id, ext)
+  const diskName = buildDiskName(diskId, ext)
   const provider = getStorageProviderName()
 
   const uploadUrl = await storage.getUploadUrl(diskName, String(mimeType))
 
-  const [fileId] = (await db('nivaro_files')
-    .insert({
-      storage: provider,
-      storage_provider: provider,
-      filename_disk: diskName,
-      filename_download: opts.filename,
-      title: opts.filename.replace(/\.[^.]+$/, ''),
-      type: String(mimeType),
-      folder: opts.folder ?? null,
-      uploaded_by: user.id,
-      uploaded_on: new Date(),
-      filesize: null
-    })
-    .returning('id')) as unknown as [string]
+  await db('nivaro_files').insert({
+    id: fileId,
+    storage: provider,
+    storage_provider: provider,
+    filename_disk: diskName,
+    filename_download: opts.filename,
+    title: opts.filename.replace(/\.[^.]+$/, ''),
+    type: String(mimeType),
+    folder: opts.folder ?? null,
+    uploaded_by: user.id,
+    uploaded_on: new Date(),
+    filesize: null
+  })
 
   const file = (await db<StoredFile>('nivaro_files').where({ id: fileId }).first()) as StoredFile
 
