@@ -26,7 +26,7 @@ const TENANT_FREE_PATHS = ['/health', '/api/inngest', '/admin/provision', '/admi
 /** Resolves the tenant Knex pool and slug from the request hostname.
  *  Returns null if the hostname is a system subdomain or tenant not found.
  *  Throws if the tenant exists but is not active. */
-async function resolveTenant(hostname: string): Promise<{ db: Knex; slug: string } | null> {
+async function resolveTenant(hostname: string): Promise<{ db: Knex; slug: string; tenantId: string } | null> {
   // When behind Cloudflare Worker, the original host is passed via X-Forwarded-Host
   const sub = hostname.split('.')[0]
   if (!sub || RESERVED.has(sub)) return null
@@ -67,7 +67,7 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
         reply.code(404).send({ error: 'Tenant not found', subdomain: hostname.split('.')[0] })
         return
       }
-      runWithTenantDb(tenant.db, tenant.slug, done)
+      runWithTenantDb(tenant.db, tenant.slug, done, tenant.tenantId)
     })
     .catch((err: unknown) => done(err instanceof Error ? err : new Error(String(err))))
 }

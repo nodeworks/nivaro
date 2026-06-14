@@ -5,7 +5,7 @@ import mime from 'mime-types'
 import { monotonicFactory } from 'ulid'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
-import { getTenantSlug } from '../db/tenant-context.js'
+import { getTenantSlug, getTenantId } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
 import { getStorage, getStorageProviderName } from './storage/index.js'
 
@@ -57,8 +57,9 @@ async function reportFileEvent(
  *  slug so each tenant's files live in their own key namespace within the shared
  *  bucket. Falls back gracefully to a flat key in self-hosted mode. */
 function buildDiskName(id: string, ext: string): string {
-  const slug = getTenantSlug()
-  if (slug) return `${slug}/files/${id}${ext}`
+  // Use tenant UUID as prefix — immune to slug changes; new tenants never collide with old slugs
+  const tenantId = getTenantId()
+  if (tenantId) return `${tenantId}/files/${id}${ext}`
   return `${id}${ext}`
 }
 
