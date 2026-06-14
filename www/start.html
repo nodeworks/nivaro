@@ -1320,18 +1320,112 @@
   var STRIPE_APPEARANCE = {
     theme: 'night',
     variables: {
-      colorPrimary: '#00ceff',
-      colorBackground: 'oklch(0.192 0.030 244)',
-      colorText: 'oklch(0.940 0.008 238)',
-      colorDanger: '#f87171',
-      borderRadius: '10px',
-      fontFamily: 'Onest, system-ui, sans-serif',
-      spacingUnit: '4px',
+      // Brand palette
+      colorPrimary:        '#00ceff',
+      colorBackground:     '#192840',   // navy card bg — matches --bg-dark-2
+      colorSurface:        '#1e3352',   // slightly lighter for nested elements
+      colorText:           '#edf2f8',   // near-white readable on navy
+      colorTextSecondary:  '#7ea8cc',   // muted blue-gray for labels/hints
+      colorTextPlaceholder:'#4a7aaa',   // dim placeholder
+      colorDanger:         '#f87171',
+      colorWarning:        '#fbbf24',
+      colorSuccess:        '#34d399',
+
+      // Shape
+      borderRadius:        '10px',
+      spacingUnit:         '4px',
+      spacingGridRow:      '20px',
+
+      // Typography — matches marketing site
+      fontFamily:          "'Onest', system-ui, -apple-system, sans-serif",
+      fontSizeBase:        '15px',
+      fontWeightNormal:    '450',
+      fontWeightMedium:    '600',
+      fontWeightBold:      '700',
+      fontSmooth:          'always',
+
+      // Focus ring
+      focusBoxShadow:      '0 0 0 3px rgba(0,206,255,0.25)',
+      focusOutline:        '0',
     },
     rules: {
-      '.Input': { border: '1px solid oklch(0.265 0.028 244)', padding: '10px 12px' },
-      '.Input:focus': { border: '1px solid #00ceff', boxShadow: '0 0 0 2px oklch(0.753 0.182 214 / 0.2)' },
-      '.Label': { color: 'oklch(0.650 0.014 238)', fontSize: '12px', fontWeight: '500' },
+      // Input fields
+      '.Input': {
+        backgroundColor:  '#13223a',
+        border:           '1px solid rgba(0,206,255,0.18)',
+        borderRadius:     '8px',
+        padding:          '11px 14px',
+        color:            '#edf2f8',
+        boxShadow:        'none',
+        transition:       'border-color 150ms, box-shadow 150ms',
+      },
+      '.Input:hover': {
+        border: '1px solid rgba(0,206,255,0.35)',
+      },
+      '.Input:focus': {
+        border:     '1px solid #00ceff',
+        boxShadow:  '0 0 0 3px rgba(0,206,255,0.18)',
+      },
+      '.Input--invalid': {
+        border:    '1px solid #f87171',
+        boxShadow: '0 0 0 3px rgba(248,113,113,0.15)',
+      },
+
+      // Labels
+      '.Label': {
+        color:       '#7ea8cc',
+        fontSize:    '12px',
+        fontWeight:  '600',
+        letterSpacing: '0.03em',
+        marginBottom: '6px',
+      },
+
+      // Payment method tabs
+      '.Tab': {
+        backgroundColor: '#13223a',
+        border:          '1px solid rgba(0,206,255,0.15)',
+        borderRadius:    '8px',
+        color:           '#7ea8cc',
+        boxShadow:       'none',
+        transition:      'all 150ms',
+      },
+      '.Tab:hover': {
+        backgroundColor: '#1a2f4a',
+        border:          '1px solid rgba(0,206,255,0.3)',
+        color:           '#edf2f8',
+      },
+      '.Tab--selected': {
+        backgroundColor: '#0e2038',
+        border:          '1px solid #00ceff',
+        color:           '#00ceff',
+        boxShadow:       '0 0 0 1px #00ceff',
+      },
+      '.TabLabel': { fontWeight: '600' },
+      '.TabIcon--selected': { fill: '#00ceff' },
+
+      // Divider ("or pay with card")
+      '.Divider': {
+        color:           '#4a7aaa',
+        fontSize:        '12px',
+      },
+      '.DividerText': { color: '#4a7aaa' },
+
+      // Error text
+      '.Error': {
+        color:      '#f87171',
+        fontSize:   '12px',
+        marginTop:  '4px',
+      },
+
+      // Checkboxes and radios
+      '.CheckboxInput': {
+        borderColor:     'rgba(0,206,255,0.3)',
+        backgroundColor: '#13223a',
+      },
+      '.CheckboxInput--checked': {
+        backgroundColor: '#00ceff',
+        borderColor:     '#00ceff',
+      },
     },
   };
 
