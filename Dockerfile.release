@@ -36,7 +36,6 @@ ARG CLOUD_EXTENSIONS_REPO=""
 ARG CLOUD_EXTENSIONS_TOKEN=""
 RUN CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
     CLOUD_EXTENSIONS_TOKEN="$CLOUD_EXTENSIONS_TOKEN" \
-    CLOUD_EXTENSIONS_DEST=api/dist/cloud-extensions \
     bash api/scripts/inject-cloud-extensions.sh
 RUN pnpm --filter @nivaro/api build
 RUN pnpm --filter @nivaro/admin build
@@ -60,6 +59,8 @@ RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
 # Compiled API + SDK
 COPY --from=build /app/api/dist ./api/dist
 COPY --from=build /app/sdk/dist ./sdk/dist
+# Cloud extensions (injected from private repo during build — dir may not exist in OSS builds)
+COPY --from=build /app/api/cloud-extensions ./api/cloud-extensions
 
 # Admin SPA — Fastify serves this at /app/admin/dist (resolved from api/dist/server.js)
 COPY --from=build /app/admin/dist ./admin/dist

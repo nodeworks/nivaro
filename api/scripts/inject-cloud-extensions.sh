@@ -14,10 +14,13 @@ set -euo pipefail
 REPO="${CLOUD_EXTENSIONS_REPO:-}"
 TOKEN="${CLOUD_EXTENSIONS_TOKEN:-}"
 # Destination: api/dist/cloud-extensions/ (where loader.js resolves at runtime)
-DEST="${CLOUD_EXTENSIONS_DEST:-$(dirname "$0")/../../dist/cloud-extensions}"
+DEST="${CLOUD_EXTENSIONS_DEST:-$(dirname "$0")/../cloud-extensions}"
 
 log()  { echo "[cloud-ext] $*"; }
 warn() { echo "[cloud-ext] WARNING: $*" >&2; }
+
+# Always create dest so Dockerfile COPY succeeds even in OSS builds
+mkdir -p "$DEST"
 
 if [ -z "$REPO" ] || [ -z "$TOKEN" ]; then
   log "CLOUD_EXTENSIONS_REPO/TOKEN not set — skipping cloud extensions"
@@ -89,10 +92,11 @@ for ext_dir in "$SRC"/*/; do
 
   mkdir -p "$out_dir"
   if $ESBUILD "$src_file" \
-      --bundle=false \
+      --bundle=true \
       --format=esm \
       --platform=node \
       --target=node22 \
+      --packages=external \
       --outfile="$out_file" 2>&1; then
     log "Compiled $ext_name → $out_file"
     INJECTED=$((INJECTED + 1))
