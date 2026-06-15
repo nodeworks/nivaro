@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   type CMSNotification,
+  cloudAccount,
   getNotifications,
   getUnreadCount,
   markAllRead,
@@ -27,6 +28,14 @@ export function NotificationBell({
   const { user } = useAuth()
   const queryClient = useQueryClient()
   const socketRef = useRef<Socket | null>(null)
+
+  // Cloud mode detection — same pattern as Account.tsx
+  const { data: cloudInfo, isSuccess: isCloud } = useQuery({
+    queryKey: ['cloud-account-info'],
+    queryFn: cloudAccount.info,
+    retry: false,
+    staleTime: 5 * 60_000
+  })
 
   const { data: unread = 0 } = useQuery({
     queryKey: ['notifications', 'count'],
@@ -50,6 +59,11 @@ export function NotificationBell({
     socket.on('connect', () => {
       const token = user?.static_token
       if (token) socket.emit('auth', { token })
+
+      // In cloud mode, join the tenant room so operator broadcasts reach this socket.
+      if (isCloud && cloudInfo?.id) {
+        socket.emit('tenant:join', cloudInfo.id)
+      }
     })
 
     socket.on('notification:new', (notification: CMSNotification) => {
@@ -61,7 +75,7 @@ export function NotificationBell({
       socket.disconnect()
       socketRef.current = null
     }
-  }, [user?.static_token, queryClient])
+  }, [user?.static_token, queryClient, isCloud, cloudInfo?.id])
 
   async function handleMarkAll() {
     await markAllRead()

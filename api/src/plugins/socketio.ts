@@ -51,6 +51,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       }
     })
 
+    socket.on('tenant:join', (tenantId: string) => {
+      if (typeof tenantId === 'string' && tenantId.length > 0) {
+        socket.join(`tenant:${tenantId}`)
+        socket.emit('tenant:joined', { tenantId })
+      }
+    })
+
     socket.on('presence:join', (roomId: string) => {
       socket.join(`presence:${roomId}`)
     })
