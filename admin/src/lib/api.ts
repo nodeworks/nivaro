@@ -674,17 +674,22 @@ export async function importPipeline(file: File): Promise<{ id: string; name: st
 // ─── Cloud account helpers ────────────────────────────────────────────────────
 
 export interface CloudAccountInfo {
-  plan_name: string
-  plan_id: string
+  id: string
+  name: string
+  slug: string
+  plan: string
   status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'unpaid'
-  tenant_name: string
-  tier: 'free' | 'starter' | 'pro' | 'business'
+  email: string
+  limits: { records: number | null; users: number | null; workspaces: number | null; storage_gb: number | null }
+  subscription: { stripe_status: string; current_period_end: string | null } | null
 }
 
 export interface CloudAccountUsage {
-  records: { used: number; limit: number }
-  storage_bytes: { used: number; limit: number }
-  users: { used: number; limit: number }
+  records: { used: number; limit: number | null; pct: number | null }
+  storage_gb: { used: number; limit: number | null; pct: number | null }
+  api_calls: { used: number; limit: number | null }
+  users: { used: number; limit: number | null }
+  snapshot_date: string | null
 }
 
 export interface CloudBilling {
