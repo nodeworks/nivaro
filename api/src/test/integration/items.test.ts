@@ -61,9 +61,12 @@ async function buildItemsApp() {
   const app = Fastify({ logger: false })
   const adminUser = makeAdminUser()
 
+  // @ts-ignore — test shim; Fastify object decorators require factory in strict mode
   app.decorateRequest('user', null)
+  // @ts-ignore
   app.decorateRequest('userRole', null)
   app.decorateRequest('isAdmin', true)
+  // @ts-ignore
   app.decorateRequest('workspaceId', null)
 
   // Inject admin user for every request so permission checks pass
@@ -72,8 +75,8 @@ async function buildItemsApp() {
     ;(req as unknown as { isAdmin: boolean }).isAdmin = true
   })
 
-  const { itemRoutes } = await import('../../routes/items.js')
-  app.register(itemRoutes, { prefix: '/api' })
+  const { itemsRoutes } = await import('../../routes/items.js')
+  app.register(itemsRoutes, { prefix: '/api' })
   await app.ready()
   return app
 }

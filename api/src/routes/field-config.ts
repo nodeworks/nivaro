@@ -197,7 +197,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     // Include virtual fields (O2M one_field) that are in assignments but have no nivaro_fields row
     for (const [field, a] of assignmentMap.entries()) {
       if (!knownFields.has(field)) {
-        formatted.push({
+        ;(formatted as unknown[]).push({
           field,
           label: null,
           note: null,

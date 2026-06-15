@@ -81,12 +81,14 @@ function makeDbChain(resolvedValue: unknown) {
 
 async function buildTestApp() {
   const app = Fastify({ logger: false })
+  // @ts-ignore — test shim; Fastify object decorators require factory in strict mode
   app.decorateRequest('user', null)
+  // @ts-ignore
   app.decorateRequest('userRole', null)
   app.decorateRequest('isAdmin', true)
 
-  const { externalApiRoutes } = await import('../../routes/external-apis.js')
-  app.register(externalApiRoutes, { prefix: '/api' })
+  const { externalApisRoutes } = await import('../../routes/external-apis.js')
+  app.register(externalApisRoutes, { prefix: '/api' })
   await app.ready()
   return app
 }

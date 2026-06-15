@@ -714,6 +714,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'lock_record'
       | 'sort'
       | 'skip_if_no_owners'
+      | 'stage_visibility'
     >
     if (!body.key?.trim()) return reply.code(400).send({ error: 'key is required' })
     if (!body.label?.trim()) return reply.code(400).send({ error: 'label is required' })
@@ -903,7 +904,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const template = await db<WorkflowTemplate>('nivaro_workflow_templates').where({ id }).first()
     if (!template) return reply.code(404).send({ error: 'Template not found' })
 
-    const body = req.body as { collection: string; state_field?: string }
+    const body = req.body as { collection: string; state_field?: string; auto_start?: boolean | number; auto_start_state?: string | null }
     if (!body.collection?.trim()) return reply.code(400).send({ error: 'collection is required' })
 
     // Upsert: update if binding for this collection already exists

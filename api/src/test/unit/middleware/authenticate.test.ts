@@ -51,6 +51,7 @@ function buildApp() {
   const app = Fastify({ logger: false })
 
   // Minimal session shim expected by authenticate
+  // @ts-ignore — test shim; Fastify object decorators require factory in strict mode
   app.decorateRequest('session', null)
   app.addHook('onRequest', async (req) => {
     if (!(req as unknown as { session?: unknown }).session) {
@@ -62,7 +63,9 @@ function buildApp() {
   })
 
   // Decorate with fields authenticate writes to
+  // @ts-ignore — test shim
   app.decorateRequest('user', null)
+  // @ts-ignore
   app.decorateRequest('userRole', null)
   app.decorateRequest('isAdmin', false)
 

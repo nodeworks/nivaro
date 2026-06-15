@@ -302,6 +302,9 @@ export function AppLayout() {
   const extensionNavItems = extensionPlugins.flatMap((p) =>
     p.slots?.['nav-sidebar'] ? [p.slots['nav-sidebar'] as NavSidebarSlot] : []
   )
+  const cloudNavItems = cloudPlugins.flatMap((p) =>
+    p.slots?.['nav-sidebar'] ? [p.slots['nav-sidebar'] as NavSidebarSlot] : []
+  )
 
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === 'true')
   const [activeCategory, setActiveCategory] = useState<string>(() => {
@@ -359,7 +362,8 @@ export function AppLayout() {
     activeCategory === 'system'
       ? [
           ...(activeCat?.items ?? []),
-          ...extensionNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href }))
+          ...extensionNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href })),
+          ...cloudNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href }))
         ]
       : activeCat.items
 

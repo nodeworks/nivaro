@@ -51,20 +51,6 @@ export async function buildServer() {
     app.addHook('onRequest', tenantHook)
     // Internal provisioning endpoint — not tenant-scoped, no tenant hook needed
     await app.register(adminProvisionRoutes)
-    // Cloud-internal extensions (from api/cloud-extensions/, injected by deploy pipeline)
-    setApp(app)
-    await loadCloudExtensions({
-      app,
-      database: db,
-      inngest: app.inngest,
-      logger: app.log,
-      callExternalApi,
-      cloud: {
-        getTenantId,
-        getTenantSlug,
-        metaDb: getMetaDb()
-      }
-    })
   }
 
   // ─── CORS ──────────────────────────────────────────────────────────────────
@@ -140,6 +126,24 @@ export async function buildServer() {
       callExternalApi
     })
     await loadScheduledFlows(app)
+  }
+
+  // ─── Cloud extensions ─────────────────────────────────────────────────────
+  // Loaded AFTER cron + inngest plugins so ctx.app.cron and app.inngest are available.
+  if (process.env.CLOUD_META_DB_URL) {
+    setApp(app)
+    await loadCloudExtensions({
+      app,
+      database: db,
+      inngest: app.inngest,
+      logger: app.log,
+      callExternalApi,
+      cloud: {
+        getTenantId,
+        getTenantSlug,
+        metaDb: getMetaDb()
+      }
+    })
   }
 
   // ─── Daily retention purge (self-hosted only) ─────────────────────────────
