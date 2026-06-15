@@ -1,10 +1,11 @@
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Inngest } from 'inngest'
 import type { Knex } from 'knex'
 import type { Database } from '../db/index.js'
+import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import {
   emitTrigger,
   type OpFieldSchema,
@@ -129,6 +130,12 @@ export interface ExtensionContext {
      * Safe to call from any async context — fire-and-forget.
      */
     emit(triggerType: string, payload: Record<string, unknown>): void
+  }
+  /** Auth middleware helpers — use as Fastify `onRequest` handlers. */
+  auth: {
+    authenticate: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
+    requireAuth: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
+    requireAdmin: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
   }
   /**
    * Cloud-only context — populated when CLOUD_META_DB_URL is set.
@@ -255,6 +262,7 @@ async function loadExtension(
     const scopedCtx: ExtensionContext = {
       ...ctx,
       callExternalApi,
+      auth: { authenticate, requireAuth, requireAdmin },
       hooks: {
         before: (collection, action, fn) =>
           hooks.before(collection, action, fn, { extensionId: extId }),
@@ -483,6 +491,7 @@ export async function loadCloudExtensions(
       const scopedCtx: ExtensionContext = {
         ...ctx,
         callExternalApi,
+        auth: { authenticate, requireAuth, requireAdmin },
         hooks: {
           before: (collection, action, fn) =>
             hooks.before(collection, action, fn, { extensionId: extId }),
