@@ -21,12 +21,23 @@ RUN pnpm install --frozen-lockfile
 # ─── Stage 3: build SDK + API + Admin ────────────────────────────────────────
 FROM base AS build
 WORKDIR /app
+# git required for cloud extension injection
+RUN apk add --no-cache git
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/api/node_modules ./api/node_modules
 COPY --from=deps /app/admin/node_modules ./admin/node_modules
 COPY --from=deps /app/sdk/node_modules ./sdk/node_modules
 COPY . .
 RUN pnpm --filter @nivaro/sdk build
+# Inject cloud-only extensions before API build (fail-safe: exits 0 on any error).
+# Set CLOUD_EXTENSIONS_REPO + CLOUD_EXTENSIONS_TOKEN as Railway service env vars.
+# Both are declared as ARGs so Railway passes them in at build time.
+ARG CLOUD_EXTENSIONS_REPO=""
+ARG CLOUD_EXTENSIONS_TOKEN=""
+RUN CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
+    CLOUD_EXTENSIONS_TOKEN="$CLOUD_EXTENSIONS_TOKEN" \
+    CLOUD_EXTENSIONS_DEST=api/dist/cloud-extensions \
+    bash api/scripts/inject-cloud-extensions.sh
 RUN pnpm --filter @nivaro/api build
 RUN pnpm --filter @nivaro/admin build
 
