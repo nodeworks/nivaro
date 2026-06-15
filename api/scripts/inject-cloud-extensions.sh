@@ -104,6 +104,29 @@ for ext_dir in "$SRC"/*/; do
     warn "$ext_name: compile failed — skipping this extension"
     rm -rf "$out_dir"
     FAILED=$((FAILED + 1))
+    continue
+  fi
+
+  # Compile ui.ts → ui.js (browser IIFE) if present
+  ui_src="$ext_dir/ui.ts"
+  if [ -f "$ui_src" ]; then
+    if $ESBUILD "$ui_src" \
+        --bundle=true \
+        --format=iife \
+        --platform=browser \
+        --target=es2020 \
+        --outfile="$out_dir/ui.js" 2>&1; then
+      log "Compiled $ext_name ui → $out_dir/ui.js"
+    else
+      warn "$ext_name: ui.ts compile failed — extension will have no UI bundle"
+    fi
+  fi
+
+  # Copy manifest.json if present
+  manifest_src="$ext_dir/manifest.json"
+  if [ -f "$manifest_src" ]; then
+    cp "$manifest_src" "$out_dir/manifest.json"
+    log "Copied $ext_name manifest.json"
   fi
 done
 
