@@ -37,6 +37,16 @@ export interface ListRowActionSlot {
   onClick: (ctx: { collection: string; item: Record<string, unknown> }) => void
 }
 
+/** A React component rendered at the app root (inside Router + auth). Extensions use this for overlays, global queries, subscriptions. */
+export interface AppComponentSlot {
+  component: React.ComponentType
+}
+
+/** Called on every non-2xx axios response. Return true to signal "handled" (stops further processing). */
+export interface ResponseInterceptorSlot {
+  handler: (status: number, data: unknown, headers: Record<string, string>) => boolean | void
+}
+
 export interface PluginSlots {
   'external-api-detail': ExternalApiDetailSlot
   'item-detail-sidebar': ItemDetailSidebarSlot
@@ -44,6 +54,8 @@ export interface PluginSlots {
   'settings-tab': SettingsTabSlot
   'collection-toolbar': CollectionToolbarSlot
   'list-row-action': ListRowActionSlot
+  'app-component': AppComponentSlot
+  'response-interceptor': ResponseInterceptorSlot
 }
 
 export interface ExtensionPlugin {
@@ -87,6 +99,10 @@ declare global {
       useMemo: typeof import('react').useMemo
       useRef: typeof import('react').useRef
       registerPlugin: (plugin: ExtensionPlugin) => void
+      useQuery: typeof import('@tanstack/react-query').useQuery
+      useMutation: typeof import('@tanstack/react-query').useMutation
+      useNavigate: typeof import('react-router').useNavigate
+      toast: typeof import('sonner').toast
     }
   }
 }

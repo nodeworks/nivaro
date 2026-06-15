@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getExtensionPlugins } from '@/extensions/store'
 
 export const WORKSPACE_KEY = 'nivaro_workspace'
 
@@ -27,16 +28,13 @@ api.interceptors.response.use(
       window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
     }
 
-    if (status === 402) {
-      window.dispatchEvent(new CustomEvent('cloud:block', { detail: { type: 'payment' } }))
-    }
-
-    if (status === 403 && data.suspend_reason === 'operator') {
-      window.dispatchEvent(new CustomEvent('cloud:block', { detail: { type: 'operator' } }))
-    }
-
-    if (status === 403 && data.code === 'QUOTA_EXCEEDED') {
-      window.dispatchEvent(new CustomEvent('cloud:quota', { detail: data }))
+    // Call registered extension interceptors (e.g. cloud 402/403 handlers)
+    for (const plugin of getExtensionPlugins()) {
+      const interceptor = plugin.slots?.['response-interceptor']
+      if (interceptor) {
+        const handled = interceptor.handler(status, err.response?.data ?? {}, err.response?.headers ?? {})
+        if (handled) return Promise.reject(err)
+      }
     }
 
     return Promise.reject(err)

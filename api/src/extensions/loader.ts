@@ -523,6 +523,48 @@ export async function loadCloudExtensions(
       }
 
       await ext.register(scopedCtx)
+
+      // Load optional manifest.json for UI bundle support
+      const manifestPath = join(dirPath, 'manifest.json')
+      if (existsSync(manifestPath)) {
+        try {
+          const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as PluginManifest
+          extensionRegistry.set(extId, {
+            id: extId,
+            status: 'loaded',
+            enabled: true,
+            path: dirPath,
+            manifest
+          })
+          // Validate extId is safe before embedding it in a route path.
+          const SAFE_ID = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/
+          if (!SAFE_ID.test(extId)) {
+            ctx.logger.warn(
+              { extId },
+              'Cloud extension id contains unsafe characters — skipping UI bundle route'
+            )
+          } else if (manifest.uiBundle) {
+            const SAFE_FILENAME = /^[a-zA-Z0-9._-]+$/
+            if (!SAFE_FILENAME.test(manifest.uiBundle)) {
+              ctx.logger.warn(
+                { uiBundle: manifest.uiBundle },
+                'Cloud extension uiBundle filename is unsafe — skipping'
+              )
+            } else {
+              const bundlePath = join(dirPath, manifest.uiBundle)
+              if (existsSync(bundlePath)) {
+                ctx.app.get(`/api/extensions/${extId}/ui.js`, async (_req, reply) => {
+                  reply.type('application/javascript')
+                  return reply.send(createReadStream(bundlePath))
+                })
+              }
+            }
+          }
+        } catch (err) {
+          ctx.logger.warn({ entry, err }, 'Failed to parse cloud extension manifest.json')
+        }
+      }
+
       ctx.logger.info({ id: extId }, 'Cloud extension loaded')
     } catch (err) {
       ctx.logger.error({ err, entry }, 'Failed to load cloud extension')
