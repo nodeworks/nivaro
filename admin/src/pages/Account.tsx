@@ -384,7 +384,7 @@ export function AccountPage() {
   const topUsagePct = usage
     ? Math.max(
         usagePct(usage.records.used, usage.records.limit),
-        usagePct(usage.storage_bytes.used, usage.storage_bytes.limit),
+        usagePct(usage.storage_gb.used, usage.storage_gb.limit),
         usagePct(usage.users.used, usage.users.limit)
       )
     : null
@@ -397,8 +397,8 @@ export function AccountPage() {
           <h1 className='text-base font-semibold text-slate-900 dark:text-foreground'>
             Account &amp; Billing
           </h1>
-          {info.tenant_name && (
-            <p className='text-[12px] text-muted-foreground mt-0.5'>{info.tenant_name}</p>
+          {info.name && (
+            <p className='text-[12px] text-muted-foreground mt-0.5'>{info.name}</p>
           )}
         </div>
         <Button
@@ -430,7 +430,7 @@ export function AccountPage() {
               <CardContent className='px-4 pb-4 space-y-2'>
                 <div className='flex items-center gap-2'>
                   <span className='text-lg font-semibold text-slate-900 dark:text-foreground'>
-                    {info.plan_name}
+                    {info.plan}
                   </span>
                   <PlanStatusBadge status={info.status} />
                 </div>
@@ -547,8 +547,8 @@ export function AccountPage() {
                     <UsageBar
                       icon={HardDrive}
                       label='Storage'
-                      used={usage.storage_bytes.used}
-                      limit={usage.storage_bytes.limit}
+                      used={usage.storage_gb.used}
+                      limit={usage.storage_gb.limit}
                       formatUsed={formatBytes}
                       formatLimit={formatBytes}
                     />
