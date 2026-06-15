@@ -217,6 +217,7 @@ async function loadExtension(
     ExtensionContext,
     | 'hooks'
     | 'cron'
+    | 'auth'
     | 'flows'
     | 'bulkActions'
     | 'itemActions'
@@ -385,6 +386,7 @@ export async function loadExtensions(
     ExtensionContext,
     | 'hooks'
     | 'cron'
+    | 'auth'
     | 'flows'
     | 'bulkActions'
     | 'itemActions'
@@ -436,6 +438,7 @@ export async function loadCloudExtensions(
     ExtensionContext,
     | 'hooks'
     | 'cron'
+    | 'auth'
     | 'flows'
     | 'bulkActions'
     | 'itemActions'
@@ -620,6 +623,7 @@ export async function scanNewExtensions(
     ExtensionContext,
     | 'hooks'
     | 'cron'
+    | 'auth'
     | 'flows'
     | 'bulkActions'
     | 'itemActions'

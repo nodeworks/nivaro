@@ -23,10 +23,10 @@ import Fastify from 'fastify'
 import { db } from '../../../db/index.js'
 import { healthRoutes } from '../../../routes/health.js'
 
-function buildApp(redisPing: () => Promise<string>) {
+function buildApp(redisPing: () => Promise<'PONG'>) {
   const app = Fastify({ logger: false })
 
-  // Decorate the Fastify instance with a minimal redis shim
+  // @ts-ignore — test shim; partial Redis mock, not full ioredis instance
   app.decorate('redis', { ping: redisPing })
 
   app.register(healthRoutes)
