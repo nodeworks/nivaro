@@ -169,6 +169,7 @@ export const navCategories: NavCategory[] = [
       { icon: BookOpen, label: 'Docs', to: '/docs' },
       { icon: ScrollText, label: 'API Docs', to: '/api-docs' },
       { icon: Settings, label: 'Settings', to: '/settings' },
+      { icon: CreditCard, label: 'Account & Billing', to: '/account' },
     ]
   }
 ]
