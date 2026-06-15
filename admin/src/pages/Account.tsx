@@ -58,8 +58,8 @@ function formatLargeNumber(n: number): string {
   return n.toLocaleString()
 }
 
-function usagePct(used: number, limit: number): number {
-  if (limit === 0) return 0
+function usagePct(used: number, limit: number | null): number {
+  if (!limit) return 0
   return Math.min(100, Math.round((used / limit) * 100))
 }
 
@@ -107,7 +107,7 @@ function UsageBar({
   icon: React.ElementType
   label: string
   used: number
-  limit: number
+  limit: number | null
   formatUsed: (n: number) => string
   formatLimit: (n: number) => string
 }) {
@@ -132,7 +132,7 @@ function UsageBar({
             {formatUsed(used)}
           </span>
           <span className='text-[11px] text-muted-foreground'>/</span>
-          <span className='text-[12px] text-muted-foreground tabular-nums'>{formatLimit(limit)}</span>
+          <span className='text-[12px] text-muted-foreground tabular-nums'>{limit != null ? formatLimit(limit) : '—'}</span>
           <span className={cn(
             'text-[11px] tabular-nums font-medium w-9 text-right',
             isCritical ? 'text-red-600 dark:text-red-400' :
