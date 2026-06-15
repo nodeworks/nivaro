@@ -3,6 +3,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import type { Inngest } from 'inngest'
+import type { Knex } from 'knex'
 import type { Database } from '../db/index.js'
 import {
   emitTrigger,
@@ -129,6 +130,18 @@ export interface ExtensionContext {
      */
     emit(triggerType: string, payload: Record<string, unknown>): void
   }
+  /**
+   * Cloud-only context — populated when CLOUD_META_DB_URL is set.
+   * Undefined in self-hosted mode. Cloud extensions check `if (ctx.cloud)` before use.
+   */
+  cloud?: {
+    /** Immutable tenant UUID for the current request (used as R2 key prefix). Undefined outside request context (e.g., cron jobs). */
+    getTenantId(): string | undefined
+    /** Tenant slug for the current request. Undefined outside request context. */
+    getTenantSlug(): string | undefined
+    /** Knex client connected to the Nivaro Cloud meta database (cloud_tenants, cloud_billing, etc.). */
+    metaDb: Knex
+  }
 }
 
 export interface Extension {
@@ -156,6 +169,11 @@ export interface ExtensionEntry {
 
 const EXTENSIONS_DIR = new URL('../../extensions', import.meta.url).pathname
 const CONFIG_PATH = join(EXTENSIONS_DIR, '.config.json')
+
+// Cloud-internal extensions — loaded only when CLOUD_META_DB_URL is set.
+// This directory is not present in the OSS repo; it is injected by the cloud
+// deployment pipeline from the private nivaro-cloud repo.
+const CLOUD_EXTENSIONS_DIR = new URL('../../cloud-extensions', import.meta.url).pathname
 
 // ─── Config persistence ───────────────────────────────────────────────────────
 
@@ -395,6 +413,110 @@ export async function loadExtensions(
         enabled: false,
         path: join(EXTENSIONS_DIR, id)
       })
+    }
+  }
+}
+
+// ─── Cloud extensions ─────────────────────────────────────────────────────────
+// Loads internal cloud extensions from api/cloud-extensions/.
+// Always-enabled — no .config.json, no extensionRegistry entries (hidden from
+// the /api/extensions endpoint), no UI bundle routes (cloud-internal only).
+
+export async function loadCloudExtensions(
+  ctx: Omit<
+    ExtensionContext,
+    | 'hooks'
+    | 'cron'
+    | 'flows'
+    | 'bulkActions'
+    | 'itemActions'
+    | 'notificationChannels'
+    | 'dashboardWidgets'
+    | 'storage'
+    | 'fieldTypes'
+    | 'collectionViews'
+    | 'importParsers'
+    | 'validators'
+  >
+) {
+  let entries: string[]
+  try {
+    entries = await readdir(CLOUD_EXTENSIONS_DIR)
+  } catch {
+    ctx.logger.debug('No cloud-extensions directory, skipping')
+    return
+  }
+
+  const dirs = entries.filter((e) => !e.startsWith('.'))
+
+  for (const entry of dirs) {
+    const dirPath = join(CLOUD_EXTENSIONS_DIR, entry)
+
+    try {
+      const s = await stat(dirPath)
+      if (!s.isDirectory()) continue
+    } catch {
+      continue
+    }
+
+    let indexPath: string | null = null
+    for (const name of ['index.js', 'index.ts']) {
+      const p = join(dirPath, name)
+      if (existsSync(p)) { indexPath = p; break }
+    }
+    if (!indexPath) {
+      ctx.logger.warn({ entry }, 'Cloud extension has no index file, skipping')
+      continue
+    }
+
+    try {
+      const mod = (await import(`${indexPath}?t=${Date.now()}`)) as { default: Extension }
+      const ext = mod.default
+
+      if (!ext?.id || typeof ext.register !== 'function') {
+        ctx.logger.warn({ entry }, 'Cloud extension missing id or register(), skipping')
+        continue
+      }
+
+      const extId = ext.id
+
+      const scopedCtx: ExtensionContext = {
+        ...ctx,
+        callExternalApi,
+        hooks: {
+          before: (collection, action, fn) =>
+            hooks.before(collection, action, fn, { extensionId: extId }),
+          after: (collection, action, fn) =>
+            hooks.after(collection, action, fn, { extensionId: extId })
+        },
+        cron: {
+          schedule: (id, expression, fn) =>
+            ctx.app.cron.schedule(`cloud-ext:${extId}:${id}`, expression, fn, { extensionId: extId }),
+          unschedule: (id) => ctx.app.cron.unschedule(`cloud-ext:${extId}:${id}`)
+        },
+        bulkActions: { register: (def) => bulkActionRegistry.register(def) },
+        itemActions: { register: (def) => itemActionRegistry.register(def) },
+        notificationChannels: { register: (def) => notificationChannelRegistry.register(def) },
+        dashboardWidgets: { register: (def) => dashboardWidgetRegistry.register(def) },
+        storage: {
+          register: (name, adapter) => storageAdapterRegistry.register(name, adapter),
+          setActive: (name) => storageAdapterRegistry.setActive(name)
+        },
+        fieldTypes: { register: (def) => fieldTypeRegistry.register(def) },
+        collectionViews: { register: (def) => collectionViewRegistry.register(def) },
+        importParsers: { register: (def) => importParserRegistry.register(def) },
+        validators: { register: (def) => validatorRegistry.register(def) },
+        flows: {
+          registerOperation: (op) => registerOp(op),
+          registerTrigger: (trigger) => registerTrigger(trigger),
+          emit: (triggerType, payload) => emitTrigger(triggerType, payload, ctx.logger)
+        }
+      }
+
+      await ext.register(scopedCtx)
+      ctx.logger.info({ id: extId }, 'Cloud extension loaded')
+    } catch (err) {
+      ctx.logger.error({ err, entry }, 'Failed to load cloud extension')
     }
   }
 }

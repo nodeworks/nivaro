@@ -7,10 +7,10 @@ import fastify from 'fastify'
 import { registerSession } from './auth/session.js'
 import { config } from './config.js'
 import { db } from './db/index.js'
-import { loadExtensions, setApp } from './extensions/loader.js'
+import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
 import { resolveWorkspace } from './middleware/workspace.js'
-import { tenantHook } from './middleware/tenant.js'
+import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { adminProvisionRoutes } from './routes/admin/provision.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { cronPlugin } from './plugins/cron.js'
@@ -24,6 +24,7 @@ import { formRendererRoutes } from './routes/form-renderer.js'
 import { registerRoutes } from './routes/index.js'
 import { presencePublicRoutes } from './routes/presence.js'
 import { registerDigestCrons } from './services/digest.js'
+import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { callExternalApi } from './services/external-apis.js'
 
 export async function buildServer() {
@@ -50,6 +51,20 @@ export async function buildServer() {
     app.addHook('onRequest', tenantHook)
     // Internal provisioning endpoint — not tenant-scoped, no tenant hook needed
     await app.register(adminProvisionRoutes)
+    // Cloud-internal extensions (from api/cloud-extensions/, injected by deploy pipeline)
+    setApp(app)
+    await loadCloudExtensions({
+      app,
+      database: db,
+      inngest: app.inngest,
+      logger: app.log,
+      callExternalApi,
+      cloud: {
+        getTenantId,
+        getTenantSlug,
+        metaDb: getMetaDb()
+      }
+    })
   }
 
   // ─── CORS ──────────────────────────────────────────────────────────────────

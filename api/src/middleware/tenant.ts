@@ -6,7 +6,7 @@ import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 // Created lazily on first request. Never used in self-hosted mode.
 let _metaDb: Knex | null = null
 
-function getMetaDb(): Knex {
+export function getMetaDb(): Knex {
   if (!_metaDb) {
     _metaDb = knex({
       client: 'pg',
