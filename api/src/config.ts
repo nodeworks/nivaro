@@ -42,7 +42,7 @@ const schema = z.object({
   DB_READ_PORT: z.coerce.number().optional(),
 
   // Zero-downtime migrations — advisory lock prevents concurrent migration
-  // runs across instances in a rolling deploy.
+  // runs across instances in a rolling deployment.
   MIGRATION_SAFE_MODE: z
     .string()
     .transform((v) => v === 'true')
