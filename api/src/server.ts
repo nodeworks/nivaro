@@ -12,6 +12,7 @@ import { registerFileCleanup } from './hooks/file-cleanup.js'
 import { resolveWorkspace } from './middleware/workspace.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { adminProvisionRoutes } from './routes/admin/provision.js'
+import { cloudBillingRoutes } from './routes/cloud/billing.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { cronPlugin } from './plugins/cron.js'
 import { graphqlPlugin } from './plugins/graphql.js'
@@ -51,6 +52,8 @@ export async function buildServer() {
     app.addHook('onRequest', tenantHook)
     // Internal provisioning endpoint — not tenant-scoped, no tenant hook needed
     await app.register(adminProvisionRoutes)
+    // Tenant account & billing routes (compiled with main build, no pipeline step needed)
+    await app.register(cloudBillingRoutes, { prefix: '/api' })
     // Cloud-internal extensions (from api/cloud-extensions/, injected by deploy pipeline)
     setApp(app)
     await loadCloudExtensions({

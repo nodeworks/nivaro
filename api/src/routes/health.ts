@@ -23,6 +23,7 @@ export async function healthRoutes(app: FastifyInstance) {
       status,
       version: '0.1.0',
       environment: config.NODE_ENV,
+      cloud: !!process.env.CLOUD_META_DB_URL,
       db: {
         status: dbOk ? 'connected' : 'disconnected',
         database: config.DB_DATABASE,

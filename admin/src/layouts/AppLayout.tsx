@@ -169,7 +169,6 @@ export const navCategories: NavCategory[] = [
       { icon: BookOpen, label: 'Docs', to: '/docs' },
       { icon: ScrollText, label: 'API Docs', to: '/api-docs' },
       { icon: Settings, label: 'Settings', to: '/settings' },
-      { icon: CreditCard, label: 'Account & Billing', to: '/account' }
     ]
   }
 ]
@@ -289,6 +288,13 @@ function PanelNavItem({ icon: Icon, label, to }: NavItem) {
 export function AppLayout() {
   const { user } = useAuth()
   const { data: settings } = useSettings()
+  const { data: health } = useQuery({
+    queryKey: ['health'],
+    queryFn: () => api.get<{ cloud?: boolean }>('/health').then(r => r.data),
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false
+  })
+  const isCloud = health?.cloud === true
   const location = useLocation()
   const extensionPlugins = useExtensionPlugins()
   const extensionNavItems = extensionPlugins.flatMap((p) =>

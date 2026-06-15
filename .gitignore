@@ -15,4 +15,4 @@ CLAUDE.md
 .playwright-mcp
 .impeccable
 test-results/*
-tests/e2e/reports/*
+tests/e2e/reports/*api/cloud-extensions/
