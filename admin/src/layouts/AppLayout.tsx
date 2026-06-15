@@ -348,7 +348,7 @@ export function AppLayout() {
 
   const visibleCategories = navCategories.map((cat) => ({
     ...cat,
-    items: cat.items.filter((item) => !disabledPaths.has(item.to))
+    items: cat.items.filter((item) => !disabledPaths.has(item.to) && (isCloud || item.to !== '/account'))
   })).filter((cat) => cat.items.length > 0)
 
   const activeCat = visibleCategories.find((c) => c.id === activeCategory) ?? visibleCategories[0]
