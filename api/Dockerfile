@@ -15,12 +15,21 @@ RUN pnpm install --frozen-lockfile
 # ─── Stage 3: build ──────────────────────────────────────────────────────────
 FROM base AS build
 WORKDIR /app
+# git required for cloud extension injection
+RUN apk add --no-cache git
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/api/node_modules ./api/node_modules
 COPY --from=deps /app/sdk/node_modules ./sdk/node_modules
 COPY . .
 # Build the SDK first (api may depend on it)
 RUN pnpm --filter @nivaro/sdk build
+# Inject cloud-only extensions before API build (fail-safe: exits 0 on any error).
+# Set CLOUD_EXTENSIONS_REPO + CLOUD_EXTENSIONS_TOKEN as Railway build env vars (ARGs).
+ARG CLOUD_EXTENSIONS_REPO=""
+ARG CLOUD_EXTENSIONS_TOKEN=""
+RUN CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
+    CLOUD_EXTENSIONS_TOKEN="$CLOUD_EXTENSIONS_TOKEN" \
+    bash api/scripts/inject-cloud-extensions.sh
 RUN pnpm --filter @nivaro/api build:ci
 
 # ─── Stage 4: production runner ──────────────────────────────────────────────
@@ -44,6 +53,8 @@ RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
 # Copy compiled output
 COPY --from=build /app/api/dist ./api/dist
 COPY --from=build /app/sdk/dist ./sdk/dist
+# Cloud extensions (injected from private repo during build — dir may not exist in OSS builds)
+COPY --from=build /app/api/cloud-extensions ./api/cloud-extensions
 
 # Copy runtime assets (mail templates, etc.)
 COPY api/templates ./api/templates
