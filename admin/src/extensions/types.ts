@@ -86,6 +86,7 @@ export interface ExtensionManifest {
   version: string | null
   bundleUrl: string
   slots: string[]
+  cloud: boolean
 }
 
 // Global window type augmentation
@@ -99,6 +100,7 @@ declare global {
       useMemo: typeof import('react').useMemo
       useRef: typeof import('react').useRef
       registerPlugin: (plugin: ExtensionPlugin) => void
+      registerCloudPlugin: (plugin: ExtensionPlugin) => void
       useQuery: typeof import('@tanstack/react-query').useQuery
       useMutation: typeof import('@tanstack/react-query').useMutation
       useNavigate: typeof import('react-router').useNavigate
