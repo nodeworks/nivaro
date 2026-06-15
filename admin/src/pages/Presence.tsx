@@ -13,7 +13,7 @@ import {
   TableRow
 } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api } from '@/lib/api'
+import { api } from "@/lib/api"
 import { cn, formatRelative } from '@/lib/utils'
 
 interface PresenceSession {
@@ -91,7 +91,7 @@ export function PresencePage() {
     import('socket.io-client')
       .then(({ io }) => {
         socket = io(window.location.origin, {
-          transports: ['websocket', 'polling'],
+          transports: ["websocket", "polling"],
           path: '/socket.io'
         }) as typeof socket
 

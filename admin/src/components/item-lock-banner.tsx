@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { api } from '@/lib/api'
+import { api } from "@/lib/api"
 import { useAuth } from '@/lib/auth'
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
@@ -76,7 +76,7 @@ export function useItemLock(
     acquire()
 
     // Live-update the banner when the holder releases the lock.
-    const socket = io(API_URL, { transports: ['websocket', 'polling'], withCredentials: true })
+    const socket = io(API_URL, { transports: ["websocket", "polling"], withCredentials: true })
     socketRef.current = socket
     socket.on('connect', () => {
       const token = user?.static_token

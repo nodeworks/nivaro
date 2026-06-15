@@ -48,7 +48,6 @@ export function NotificationBell({
     queryFn: () => getNotifications()
   })
 
-  // Maintain a persistent websocket connection for real-time notifications.
   useEffect(() => {
     const socket = io(API_URL, {
       transports: ['websocket', 'polling'],

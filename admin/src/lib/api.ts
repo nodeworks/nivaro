@@ -3,6 +3,7 @@ import { getExtensionPlugins, getCloudPlugins } from '@/extensions/store'
 
 export const WORKSPACE_KEY = 'nivaro_workspace'
 
+
 export const api = axios.create({
   baseURL: '/api',
   withCredentials: true,

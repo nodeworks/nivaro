@@ -15,7 +15,7 @@ import {
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
-import { type CMSField, type Collection, api } from '@/lib/api'
+import { type CMSField, type Collection, api } from "@/lib/api"
 import { useAuth } from '@/lib/auth'
 import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import { cn, formatDateTime, formatNumber, titleCase } from '@/lib/utils'
@@ -299,7 +299,7 @@ export function DashboardPage() {
     import('socket.io-client')
       .then(({ io }) => {
         socket = io(window.location.origin, {
-          transports: ['websocket', 'polling'],
+          transports: ["websocket", "polling"],
           path: '/socket.io'
         }) as typeof socket
         socket?.on('connect', () => socket?.emit('presence:join', 'admin'))
