@@ -15,8 +15,8 @@ RUN pnpm install --frozen-lockfile
 # ─── Stage 3: build ──────────────────────────────────────────────────────────
 FROM base AS build
 WORKDIR /app
-# git required for cloud extension injection
-RUN apk add --no-cache git
+# git + bash required for cloud extension injection
+RUN apk add --no-cache git bash
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/api/node_modules ./api/node_modules
 COPY --from=deps /app/sdk/node_modules ./sdk/node_modules
@@ -24,11 +24,14 @@ COPY . .
 # Build the SDK first (api may depend on it)
 RUN pnpm --filter @nivaro/sdk build
 # Inject cloud-only extensions before API build (fail-safe: exits 0 on any error).
-# Set CLOUD_EXTENSIONS_REPO + CLOUD_EXTENSIONS_TOKEN as Railway build env vars (ARGs).
+# CLOUD_EXTENSIONS_REPO is non-sensitive (org/repo slug) — passed as ARG.
+# CLOUD_EXTENSIONS_TOKEN is passed via BuildKit secret so it never appears in
+# build logs or image layer history.
+# Railway: set both as service variables; Railway passes them as build args/secrets.
 ARG CLOUD_EXTENSIONS_REPO=""
-ARG CLOUD_EXTENSIONS_TOKEN=""
-RUN CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
-    CLOUD_EXTENSIONS_TOKEN="$CLOUD_EXTENSIONS_TOKEN" \
+RUN --mount=type=secret,id=CLOUD_EXTENSIONS_TOKEN \
+    CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
+    CLOUD_EXTENSIONS_TOKEN="$(cat /run/secrets/CLOUD_EXTENSIONS_TOKEN 2>/dev/null || true)" \
     bash api/scripts/inject-cloud-extensions.sh
 RUN pnpm --filter @nivaro/api build:ci
 
