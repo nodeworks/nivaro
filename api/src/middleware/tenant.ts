@@ -42,6 +42,7 @@ async function resolveTenant(hostname: string): Promise<{ db: Knex; slug: string
   return {
     db: getOrCreateTenantPool(row.db_connection_string, row.db_client),
     slug: row.slug as string,
+    tenantId: row.id as string,
   }
 }
 
