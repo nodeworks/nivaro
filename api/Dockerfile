@@ -2,7 +2,7 @@
 FROM node:22-alpine AS base
 RUN corepack enable pnpm
 
-# ─── Stage 2: install all deps ───────────────────────────────────────────────
+# ─── Stage 2: install all dependencies ─────────────────────────────────────── d
 FROM base AS deps
 WORKDIR /app
 # Copy workspace manifests first so pnpm can resolve the workspace
