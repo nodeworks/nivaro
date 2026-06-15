@@ -68,7 +68,7 @@ const schema = z.object({
   INNGEST_EVENT_KEY: z.string().default('local'),
   INNGEST_SIGNING_KEY: z.string().default('local'),
 
-  MAIL_FROM: z.string().default('noreply@example.com'),
+  MAIL_FROM: z.string().default('noreply@nivaro.dev'),
   SMTP_HOST: z.string().default('localhost'),
   SMTP_PORT: z.coerce.number().default(587),
   SMTP_USER: z.string().default(''),
