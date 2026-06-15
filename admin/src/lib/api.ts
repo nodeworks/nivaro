@@ -712,16 +712,13 @@ export interface CloudInvoice {
 }
 
 export interface CloudPlan {
-  id: string
+  planKey: string
   name: string
-  price_id: string
-  amount: number
-  currency: string
-  interval: 'month' | 'year'
-  tier: 'free' | 'starter' | 'pro' | 'business'
-  features: string[]
-  limits: { records: number; storage_gb: number; users: number }
-  is_current: boolean
+  price: number
+  recordLimit: number
+  maxUsers: number
+  storageGb: number
+  workspaces: number
 }
 
 export const cloudAccount = {
@@ -729,7 +726,9 @@ export const cloudAccount = {
   usage: () => api.get<CloudAccountUsage>('/cloud/account/usage').then((r) => r.data),
   billing: () => api.get<CloudBilling>('/cloud/account/billing').then((r) => r.data),
   invoices: () => api.get<CloudInvoice[]>('/cloud/account/invoices').then((r) => r.data),
-  plans: () => api.get<CloudPlan[]>('/cloud/account/plans').then((r) => r.data),
+  plans: () => api.get<Record<string, Omit<CloudPlan, 'planKey'>>>('/cloud/account/plans').then((r) =>
+    Object.entries(r.data).map(([planKey, val]) => ({ planKey, ...val })) as CloudPlan[]
+  ),
   createPortal: (return_url: string) =>
     api.post<{ url: string }>('/cloud/account/portal', { return_url }).then((r) => r.data),
   createCheckout: (price_id: string) =>
