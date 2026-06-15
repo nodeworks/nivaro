@@ -24,14 +24,12 @@ COPY . .
 # Build the SDK first (api may depend on it)
 RUN pnpm --filter @nivaro/sdk build
 # Inject cloud-only extensions before API build (fail-safe: exits 0 on any error).
-# CLOUD_EXTENSIONS_REPO is non-sensitive (org/repo slug) — passed as ARG.
-# CLOUD_EXTENSIONS_TOKEN is passed via BuildKit secret so it never appears in
-# build logs or image layer history.
-# Railway: set both as service variables; Railway passes them as build args/secrets.
+# Set CLOUD_EXTENSIONS_REPO and CLOUD_EXTENSIONS_TOKEN as Railway service variables
+# (Railway passes all service variables as build ARGs automatically).
 ARG CLOUD_EXTENSIONS_REPO=""
-RUN --mount=type=secret,id=CLOUD_EXTENSIONS_TOKEN \
-    CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
-    CLOUD_EXTENSIONS_TOKEN="$(cat /run/secrets/CLOUD_EXTENSIONS_TOKEN 2>/dev/null || true)" \
+ARG CLOUD_EXTENSIONS_TOKEN=""
+RUN CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
+    CLOUD_EXTENSIONS_TOKEN="$CLOUD_EXTENSIONS_TOKEN" \
     bash api/scripts/inject-cloud-extensions.sh
 RUN pnpm --filter @nivaro/api build:ci
 
