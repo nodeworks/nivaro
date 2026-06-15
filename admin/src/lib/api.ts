@@ -670,3 +670,63 @@ export async function importPipeline(file: File): Promise<{ id: string; name: st
   const r = await api.post<{ data: { id: string; name: string } }>('/pipelines/import', body)
   return r.data.data
 }
+
+// ─── Cloud account helpers ────────────────────────────────────────────────────
+
+export interface CloudAccountInfo {
+  plan_name: string
+  plan_id: string
+  status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'unpaid'
+  tenant_name: string
+  tier: 'free' | 'starter' | 'pro' | 'business'
+}
+
+export interface CloudAccountUsage {
+  records: { used: number; limit: number }
+  storage_bytes: { used: number; limit: number }
+  users: { used: number; limit: number }
+}
+
+export interface CloudBilling {
+  subscription_status: string
+  current_period_end: string | null
+  cancel_at_period_end: boolean
+  next_invoice_amount: number | null
+  next_invoice_date: string | null
+  currency: string
+}
+
+export interface CloudInvoice {
+  id: string
+  number: string
+  date: string
+  amount: number
+  currency: string
+  status: 'paid' | 'open' | 'void' | 'uncollectible'
+  pdf_url: string | null
+}
+
+export interface CloudPlan {
+  id: string
+  name: string
+  price_id: string
+  amount: number
+  currency: string
+  interval: 'month' | 'year'
+  tier: 'free' | 'starter' | 'pro' | 'business'
+  features: string[]
+  limits: { records: number; storage_gb: number; users: number }
+  is_current: boolean
+}
+
+export const cloudAccount = {
+  info: () => api.get<CloudAccountInfo>('/cloud/account/info').then((r) => r.data),
+  usage: () => api.get<CloudAccountUsage>('/cloud/account/usage').then((r) => r.data),
+  billing: () => api.get<CloudBilling>('/cloud/account/billing').then((r) => r.data),
+  invoices: () => api.get<CloudInvoice[]>('/cloud/account/invoices').then((r) => r.data),
+  plans: () => api.get<CloudPlan[]>('/cloud/account/plans').then((r) => r.data),
+  createPortal: (return_url: string) =>
+    api.post<{ url: string }>('/cloud/account/portal', { return_url }).then((r) => r.data),
+  createCheckout: (price_id: string) =>
+    api.post<{ url: string }>('/cloud/account/upgrade', { price_id }).then((r) => r.data)
+}

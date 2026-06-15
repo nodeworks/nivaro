@@ -196,6 +196,9 @@ const ApprovalsPage = lazy(() =>
   import('@/pages/Approvals').then((m) => ({ default: m.ApprovalsPage }))
 )
 const AtRiskPage = lazy(() => import('@/pages/AtRisk').then((m) => ({ default: m.AtRiskPage })))
+const AccountPage = lazy(() =>
+  import('@/pages/Account').then((m) => ({ default: m.AccountPage }))
+)
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -372,6 +375,7 @@ export default function App() {
                 <Route path='tasks' element={<TasksPage />} />
                 <Route path='approvals' element={<ApprovalsPage />} />
                 <Route path='at-risk' element={<AtRiskPage />} />
+                <Route path='account' element={<AccountPage />} />
                 <Route
                   path='extensions/ui/*'
                   element={
