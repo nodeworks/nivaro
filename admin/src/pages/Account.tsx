@@ -158,74 +158,57 @@ function UsageBar({
 
 function PlanCard({
   plan,
-  onSelect,
+  isCurrent,
+  onManage,
   isLoading
 }: {
   plan: CloudPlan
-  onSelect: (priceId: string) => void
+  isCurrent: boolean
+  onManage: () => void
   isLoading: boolean
 }) {
   return (
     <div className={cn(
       'relative rounded-lg border p-4 transition-colors',
-      plan.is_current
+      isCurrent
         ? 'border-[#00ceff] bg-[#00ceff]/5 dark:bg-[#00ceff]/8'
         : 'border-border bg-card hover:border-slate-300 dark:hover:border-slate-600'
     )}>
-      {plan.is_current && (
+      {isCurrent && (
         <div className='absolute -top-px left-4 right-4 h-0.5 rounded-full bg-[#00ceff]' />
       )}
-      <div className='flex items-start justify-between gap-2 mb-3'>
-        <div>
-          <div className='flex items-center gap-2'>
-            <span className='text-sm font-semibold text-slate-900 dark:text-slate-100'>
-              {plan.name}
+      <div className='flex items-center gap-2 mb-3'>
+        <span className='text-sm font-semibold text-slate-900 dark:text-slate-100'>{plan.name}</span>
+        {isCurrent && (
+          <Badge variant='outline' className='text-[10px] px-1.5 py-0 bg-[#00ceff]/10 text-[#00ceff] border-[#00ceff]/30'>
+            Current
+          </Badge>
+        )}
+      </div>
+      <div className='mt-1 flex items-baseline gap-1 mb-3'>
+        {plan.price === 0 ? (
+          <span className='text-lg font-bold text-slate-900 dark:text-slate-100'>Free</span>
+        ) : (
+          <>
+            <span className='text-lg font-bold tabular-nums text-slate-900 dark:text-slate-100'>
+              {formatCurrency(plan.price, 'usd')}
             </span>
-            {plan.is_current && (
-              <Badge variant='outline' className='text-[10px] px-1.5 py-0 bg-[#00ceff]/10 text-[#00ceff] border-[#00ceff]/30'>
-                Current
-              </Badge>
-            )}
-          </div>
-          <div className='mt-1 flex items-baseline gap-1'>
-            {plan.amount === 0 ? (
-              <span className='text-lg font-bold text-slate-900 dark:text-slate-100'>Free</span>
-            ) : (
-              <>
-                <span className='text-lg font-bold tabular-nums text-slate-900 dark:text-slate-100'>
-                  {formatCurrency(plan.amount, plan.currency)}
-                </span>
-                <span className='text-[11px] text-muted-foreground'>/{plan.interval}</span>
-              </>
-            )}
-          </div>
-        </div>
+            <span className='text-[11px] text-muted-foreground'>/mo</span>
+          </>
+        )}
       </div>
-
-      <ul className='space-y-1.5 mb-4'>
-        {plan.features.slice(0, 4).map((f) => (
-          <li key={f} className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-400'>
-            <Check className='h-3 w-3 shrink-0 text-emerald-500' />
-            {f}
-          </li>
-        ))}
-      </ul>
-
       <div className='text-[11px] text-muted-foreground space-y-0.5 mb-4'>
-        <div>{formatLargeNumber(plan.limits.records)} records</div>
-        <div>{plan.limits.storage_gb} GB storage</div>
-        <div>{plan.limits.users} users</div>
+        <div>{formatLargeNumber(plan.recordLimit)} records</div>
+        <div>{plan.storageGb} GB storage</div>
+        <div>{plan.maxUsers === 0 ? 'Unlimited' : plan.maxUsers} users</div>
       </div>
-
-      {!plan.is_current && (
-        <Button
-          variant='outline'
-          size='sm'
-          className='w-full h-7 text-[12px]'
-          onClick={() => onSelect(plan.price_id)}
-          disabled={isLoading}
-        >
-          {isLoading ? 'Redirecting...' : 'Switch to this plan'}
+      {isCurrent ? (
+        <Button variant='outline' size='sm' className='w-full h-7 text-[12px]' onClick={onManage} disabled={isLoading}>
+          {isLoading ? 'Opening...' : 'Manage billing'}
+        </Button>
+      ) : (
+        <Button variant='outline' size='sm' className='w-full h-7 text-[12px]' onClick={onManage} disabled={isLoading}>
+          {isLoading ? 'Opening...' : 'Switch plan'}
         </Button>
       )}
     </div>
@@ -583,10 +566,11 @@ export function AccountPage() {
                 <div className='grid grid-cols-2 sm:grid-cols-4 gap-3'>
                   {plans.map((plan) => (
                     <PlanCard
-                      key={plan.id}
+                      key={plan.planKey}
                       plan={plan}
-                      onSelect={(priceId) => checkoutMutation.mutate(priceId)}
-                      isLoading={checkoutMutation.isPending}
+                      isCurrent={plan.planKey === info.plan}
+                      onManage={() => portalMutation.mutate()}
+                      isLoading={portalMutation.isPending}
                     />
                   ))}
                 </div>
