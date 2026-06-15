@@ -725,7 +725,9 @@ export const cloudAccount = {
   info: () => api.get<CloudAccountInfo>('/cloud/account/info').then((r) => r.data),
   usage: () => api.get<CloudAccountUsage>('/cloud/account/usage').then((r) => r.data),
   billing: () => api.get<CloudBilling>('/cloud/account/billing').then((r) => r.data),
-  invoices: () => api.get<CloudInvoice[]>('/cloud/account/invoices').then((r) => r.data),
+  invoices: () => api.get<{ data: CloudInvoice[] } | CloudInvoice[]>('/cloud/account/invoices').then((r) =>
+    Array.isArray(r.data) ? r.data : ((r.data as { data: CloudInvoice[] }).data ?? [])
+  ),
   plans: () => api.get<Record<string, Omit<CloudPlan, 'planKey'>>>('/cloud/account/plans').then((r) =>
     Object.entries(r.data).map(([planKey, val]) => ({ planKey, ...val })) as CloudPlan[]
   ),
