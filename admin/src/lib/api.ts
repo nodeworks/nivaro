@@ -17,10 +17,28 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401 && window.location.pathname !== '/login' && !window.location.pathname.startsWith('/setup')) {
+    const status = err.response?.status
+    const data = err.response?.data ?? {}
+
+    if (status === 401 && window.location.pathname !== '/login' && !window.location.pathname.startsWith('/setup')) {
+      localStorage.removeItem('control_token')
+      localStorage.removeItem('control_email')
       const redirect = window.location.pathname + window.location.search
       window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
     }
+
+    if (status === 402) {
+      window.dispatchEvent(new CustomEvent('cloud:block', { detail: { type: 'payment' } }))
+    }
+
+    if (status === 403 && data.suspend_reason === 'operator') {
+      window.dispatchEvent(new CustomEvent('cloud:block', { detail: { type: 'operator' } }))
+    }
+
+    if (status === 403 && data.code === 'QUOTA_EXCEEDED') {
+      window.dispatchEvent(new CustomEvent('cloud:quota', { detail: data }))
+    }
+
     return Promise.reject(err)
   }
 )
