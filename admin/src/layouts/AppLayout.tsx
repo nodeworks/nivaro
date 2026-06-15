@@ -13,6 +13,7 @@ import {
   Check,
   CheckSquare,
   Clock,
+  CreditCard,
   Code2,
   Database,
   DatabaseZap,
@@ -167,7 +168,8 @@ export const navCategories: NavCategory[] = [
       { icon: LayoutGrid, label: 'Widgets', to: '/widgets' },
       { icon: BookOpen, label: 'Docs', to: '/docs' },
       { icon: ScrollText, label: 'API Docs', to: '/api-docs' },
-      { icon: Settings, label: 'Settings', to: '/settings' }
+      { icon: Settings, label: 'Settings', to: '/settings' },
+      { icon: CreditCard, label: 'Account & Billing', to: '/account' }
     ]
   }
 ]
