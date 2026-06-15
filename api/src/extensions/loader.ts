@@ -170,6 +170,7 @@ export interface ExtensionEntry {
   path: string
   error?: string
   manifest?: PluginManifest
+  cloud?: boolean
 }
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
@@ -534,7 +535,8 @@ export async function loadCloudExtensions(
             status: 'loaded',
             enabled: true,
             path: dirPath,
-            manifest
+            manifest,
+            cloud: true
           })
           // Validate extId is safe before embedding it in a route path.
           const SAFE_ID = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/

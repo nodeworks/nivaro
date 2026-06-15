@@ -60,7 +60,7 @@ import { ThemeSwitcher } from '@/components/theme-switcher'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { useExtensionPlugins } from '@/extensions/store'
+import { useExtensionPlugins, useCloudPlugins } from '@/extensions/store'
 import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
@@ -298,6 +298,7 @@ export function AppLayout() {
 
   const location = useLocation()
   const extensionPlugins = useExtensionPlugins()
+  const cloudPlugins = useCloudPlugins()
   const extensionNavItems = extensionPlugins.flatMap((p) =>
     p.slots?.['nav-sidebar'] ? [p.slots['nav-sidebar'] as NavSidebarSlot] : []
   )
@@ -371,10 +372,14 @@ export function AppLayout() {
 
   return (
     <TooltipProvider delayDuration={150}>
-      {/* Extension app-components: rendered at layout root for overlays/global effects */}
+      {/* User extension app-components */}
       {extensionPlugins.flatMap(p =>
         p.slots?.['app-component'] ? [p.slots['app-component'].component] : []
-      ).map((Comp, i) => <Comp key={i} />)}
+      ).map((Comp, i) => <Comp key={`ext-${i}`} />)}
+      {/* Cloud extension app-components — rendered separately, always present */}
+      {cloudPlugins.flatMap(p =>
+        p.slots?.['app-component'] ? [p.slots['app-component'].component] : []
+      ).map((Comp, i) => <Comp key={`cloud-${i}`} />)}
       <div className='flex h-screen overflow-hidden bg-secondary'>
         <a
           href='#main-content'

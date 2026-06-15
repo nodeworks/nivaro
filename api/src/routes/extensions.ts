@@ -151,7 +151,8 @@ export async function extensionsRoutes(app: FastifyInstance) {
         name: e.manifest?.name ?? e.id,
         version: e.manifest?.version ?? null,
         bundleUrl: `/api/extensions/${e.id}/ui.js`,
-        slots: e.manifest?.slots ?? []
+        slots: e.manifest?.slots ?? [],
+        cloud: e.cloud ?? false
       }))
     return reply.send({ data })
   })

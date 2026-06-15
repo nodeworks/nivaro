@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getExtensionPlugins } from '@/extensions/store'
+import { getExtensionPlugins, getCloudPlugins } from '@/extensions/store'
 
 export const WORKSPACE_KEY = 'nivaro_workspace'
 
@@ -28,12 +28,21 @@ api.interceptors.response.use(
       window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
     }
 
-    // Call registered extension interceptors (e.g. cloud 402/403 handlers)
+    // User extension interceptors — one returning true stops further user processing
+    // but does NOT suppress cloud interceptors below
     for (const plugin of getExtensionPlugins()) {
       const interceptor = plugin.slots?.['response-interceptor']
       if (interceptor) {
         const handled = interceptor.handler(status, err.response?.data ?? {}, err.response?.headers ?? {})
-        if (handled) return Promise.reject(err)
+        if (handled) break
+      }
+    }
+
+    // Cloud interceptors — always run, cannot be suppressed by user extensions
+    for (const plugin of getCloudPlugins()) {
+      const interceptor = plugin.slots?.['response-interceptor']
+      if (interceptor) {
+        interceptor.handler(status, err.response?.data ?? {}, err.response?.headers ?? {})
       }
     }
 
