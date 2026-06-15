@@ -62,7 +62,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useExtensionPlugins, useCloudPlugins } from '@/extensions/store'
 import type { NavSidebarSlot } from '@/extensions/types'
-import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
+import { api, WORKSPACE_KEY, type Workspace } from "@/lib/api"
 import { logout, useAuth } from '@/lib/auth'
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
@@ -287,14 +287,14 @@ function PanelNavItem({ icon: Icon, label, to }: NavItem) {
 export function AppLayout() {
   const { user } = useAuth()
   const { data: settings } = useSettings()
-  useQuery({
+  const { data: health } = useQuery({
     queryKey: ['health'],
     queryFn: () => api.get<{ cloud?: boolean }>('/health').then(r => r.data),
     staleTime: Number.POSITIVE_INFINITY,
     retry: false
   })
 
-  const projectName = settings?.project_name ?? 'Nivaro'
+const projectName = settings?.project_name ?? 'Nivaro'
 
   const location = useLocation()
   const extensionPlugins = useExtensionPlugins()
