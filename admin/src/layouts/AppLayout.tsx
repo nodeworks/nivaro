@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
   AlertOctagon,
@@ -53,7 +53,8 @@ import {
   Workflow
 } from 'lucide-react'
 import { Suspense, useEffect, useState } from 'react'
-import { Link, Navigate, Outlet, useLocation } from 'react-router'
+import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router'
+import { toast } from 'sonner'
 import { CommandPalette } from '@/components/command-palette'
 import { NotificationBell } from '@/components/notification-bell'
 import { KeyboardShortcuts } from '@/components/shortcuts-overlay'
@@ -296,6 +297,51 @@ export function AppLayout() {
     retry: false
   })
   const isCloud = health?.cloud === true
+
+  const { data: branding } = useQuery({
+    queryKey: ['cloud-branding'],
+    queryFn: () => api.get<{ project_name: string; plan: string | null }>('/cloud/branding').then(r => r.data),
+    enabled: isCloud,
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+
+  // Cloud block overlay: 'payment' | 'operator' | null
+  const [cloudBlock, setCloudBlock] = useState<'payment' | 'operator' | null>(null)
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+
+  const portalMut = useMutation({
+    mutationFn: () => api.post<{ url: string }>('/cloud/account/portal', { return_url: window.location.href }).then(r => r.data),
+    onSuccess: (data) => { window.location.href = data.url }
+  })
+
+  useEffect(() => {
+    function onBlock(e: Event) {
+      const type = (e as CustomEvent<{ type: 'payment' | 'operator' }>).detail.type
+      setCloudBlock(type)
+    }
+    function onQuota(e: Event) {
+      const detail = (e as CustomEvent<{ used?: number; limit?: number }>).detail
+      const msg = detail.used != null && detail.limit != null
+        ? `Record limit reached (${detail.used.toLocaleString()} / ${detail.limit.toLocaleString()}).`
+        : 'Record limit reached.'
+      toast.error(msg, {
+        description: 'Upgrade your plan to add more records.',
+        duration: 8000,
+        action: { label: 'Upgrade', onClick: () => navigate('/account') }
+      })
+    }
+    window.addEventListener('cloud:block', onBlock)
+    window.addEventListener('cloud:quota', onQuota)
+    return () => {
+      window.removeEventListener('cloud:block', onBlock)
+      window.removeEventListener('cloud:quota', onQuota)
+    }
+  }, [navigate])
+
+  const projectName = branding?.project_name ?? settings?.project_name ?? 'Nivaro'
+
   const location = useLocation()
   const extensionPlugins = useExtensionPlugins()
   const extensionNavItems = extensionPlugins.flatMap((p) =>
@@ -310,10 +356,9 @@ export function AppLayout() {
   })
 
   useEffect(() => {
-    if (settings?.project_name) {
-      document.title = `${settings.project_name} | Nivaro`
-    }
-  }, [settings?.project_name])
+    const name = branding?.project_name ?? settings?.project_name
+    if (name) document.title = `${name} | Nivaro`
+  }, [branding?.project_name, settings?.project_name])
 
   useEffect(() => {
     const cat = findCategoryForPath(location.pathname)
@@ -371,6 +416,43 @@ export function AppLayout() {
 
   return (
     <TooltipProvider delayDuration={150}>
+      {/* Cloud block overlays */}
+      {cloudBlock === 'payment' && (
+        <div className='fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm'>
+          <div className='w-full max-w-sm rounded-xl border border-border bg-background p-8 text-center shadow-2xl'>
+            <div className='mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/10'>
+              <svg className='h-6 w-6 text-amber-500' fill='none' viewBox='0 0 24 24' stroke='currentColor'><path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z' /></svg>
+            </div>
+            <h2 className='mb-2 text-base font-semibold'>Payment required</h2>
+            <p className='mb-6 text-[13px] text-muted-foreground'>Your account has a past-due balance. Update your payment method to restore access.</p>
+            <button
+              type='button'
+              className='inline-flex w-full items-center justify-center rounded-md bg-[#00ceff] px-4 py-2.5 text-[13px] font-semibold text-[#0a1628] hover:brightness-110 disabled:opacity-60'
+              onClick={() => portalMut.mutate()}
+              disabled={portalMut.isPending}
+            >
+              {portalMut.isPending ? 'Opening…' : 'Update payment method'}
+            </button>
+          </div>
+        </div>
+      )}
+      {cloudBlock === 'operator' && (
+        <div className='fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm'>
+          <div className='w-full max-w-sm rounded-xl border border-border bg-background p-8 text-center shadow-2xl'>
+            <div className='mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10'>
+              <svg className='h-6 w-6 text-red-500' fill='none' viewBox='0 0 24 24' stroke='currentColor'><path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636' /></svg>
+            </div>
+            <h2 className='mb-2 text-base font-semibold'>Account suspended</h2>
+            <p className='mb-6 text-[13px] text-muted-foreground'>This account has been suspended by an administrator. Please contact support to resolve this.</p>
+            <a
+              href='mailto:support@nivaro.dev'
+              className='inline-flex w-full items-center justify-center rounded-md border border-border px-4 py-2.5 text-[13px] font-medium hover:bg-muted'
+            >
+              Contact support
+            </a>
+          </div>
+        </div>
+      )}
       <div className='flex h-screen overflow-hidden bg-secondary'>
         <a
           href='#main-content'
@@ -398,7 +480,7 @@ export function AppLayout() {
                 </div>
               </TooltipTrigger>
               <TooltipContent side='right' sideOffset={8}>
-                {settings?.project_name ?? 'Nivaro'}
+                {projectName}
               </TooltipContent>
             </Tooltip>
 
@@ -524,7 +606,7 @@ export function AppLayout() {
               {/* Panel header */}
               <div className='flex h-12 shrink-0 flex-col justify-center border-b border-white/[0.07] px-4'>
                 <p className='truncate text-[11px] font-medium leading-tight text-slate-500'>
-                  {settings?.project_name ?? 'Nivaro'}
+                  {projectName}
                 </p>
                 <p className='truncate text-[13.5px] font-semibold leading-tight tracking-[-0.01em] text-white'>
                   {activeCat.label}
