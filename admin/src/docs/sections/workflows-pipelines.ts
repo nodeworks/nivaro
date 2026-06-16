@@ -4,511 +4,591 @@ export const userWorkflows: DocSection = {
   id: 'workflows-guide',
   label: 'Workflows',
   content: [
-    { type: 'h1', id: 'workflows-guide', text: 'Workflows' },
+    { type: 'h1', id: 'workflows-guide', text: 'Workflows — State Machines' },
     {
       type: 'p',
-      text: 'Workflows are state machines that can be bound to any collection. Each workflow template defines a set of states and the transitions allowed between them. When a record is started in a workflow, an instance is created that tracks its current state.'
+      text: 'Workflows are state machines that control the lifecycle of items. Define states and transitions, bind to any collection, and track instance state with history.'
     },
-    { type: 'h3', text: 'Key concepts' },
+    { type: 'h3', text: 'Core concepts' },
     {
       type: 'table',
-      head: ['Concept', 'Description'],
+      head: ['Term', 'Definition'],
       rows: [
-        [
-          'Template',
-          'The blueprint — name, description, color, icon. Reusable across collections.'
-        ],
-        [
-          'State',
-          'A node in the graph. Has a key (machine-readable), label, color. One state is marked initial; one or more can be terminal.'
-        ],
-        [
-          'Transition',
-          'An edge from one state to another. Can require specific roles. from_state = null means "from any state."'
-        ],
-        [
-          'Binding',
-          'Attaches a template to a collection. Optional state_field syncs the current state key into a column on the record.'
-        ],
-        ['Instance', 'Per-record runtime: current_state, started_at, completed_at.'],
-        ['History', 'Immutable log of every transition taken, including user and optional comment.']
+        ['Template', 'Blueprint: name, description, icon, states, transitions. Reusable across collections.'],
+        ['State', 'A node: key (machine-readable slug), label, color, is_initial, is_terminal, lock_record.'],
+        ['Transition', 'Edge between states. May require roles. from_state=null means "from any state."'],
+        ['Binding', 'Attaches template to collection. Optional state_field syncs current state key to column.'],
+        ['Instance', 'Per-record runtime: current_state, started_at, completed_at, transitioned_at.'],
+        ['History', 'Immutable log: every transition, who executed it, timestamp, optional comment.']
       ]
     },
-    { type: 'h3', text: 'WorkflowPanel' },
+    { type: 'h3', text: 'Item editor integration (WorkflowPanel)' },
     {
       type: 'p',
-      text: 'On every item edit page, a `WorkflowPanel` is rendered above the form. If no workflow is bound to that collection, the panel renders nothing. When a workflow is bound:'
+      text: 'Every item edit page shows a WorkflowPanel above the form:'
     },
     {
       type: 'ul',
       items: [
-        'If no instance exists: shows a "Start Workflow" button.',
-        "If an instance is active: shows the current state badge and available transition buttons (filtered by the user's role).",
-        'Clicking a transition button opens a confirm + comment form.',
-        'History is collapsible within the panel.'
+        'No workflow bound: panel hidden.',
+        'Bound but no instance: "Start Workflow" button.',
+        'Active instance: current state badge + available transition buttons (filtered by user role).',
+        'Click transition: confirm + optional comment form.',
+        'History collapsible within panel.'
+      ]
+    },
+    { type: 'h3', text: 'State settings' },
+    {
+      type: 'table',
+      head: ['Setting', 'Effect'],
+      rows: [
+        ['is_initial', 'This state is the starting point when workflow is started.'],
+        ['is_terminal', 'No transitions allowed out of this state (end of workflow).'],
+        ['lock_record', 'When active, prevent editing item fields (read-only mode + amber badge).'],
+        ['stage_visibility', 'always | hide_unless_active | hide — controls stage progress track display.'],
+        ['sort', 'Display order in state picker and available-transitions list.']
+      ]
+    },
+    { type: 'h3', text: 'Transition requirements' },
+    {
+      type: 'ul',
+      items: [
+        'from_state=null: transition available from ANY state (useful for "Reject" paths).',
+        'required_roles: JSON array of role UUIDs that can execute this transition; empty = all authenticated users.',
+        'condition_rules (optional): field conditions that must match to offer the transition.',
+        'group_label: optional; transitions with same label render in a dropdown menu instead of individual buttons.'
       ]
     },
     {
       type: 'note',
-      text: '`lock_record` on a state prevents editing the record\'s fields while that state is active — useful for "under review" or terminal states.'
-    },
-    {
-      type: 'h3',
-      text: 'Stage Progress Visibility'
-    },
-    {
-      type: 'p',
-      text: 'Each state has a `stage_visibility` field that controls whether it appears in the stage progress track on the item edit page.'
-    },
-    {
-      type: 'table',
-      head: ['Value', 'Behaviour'],
-      rows: [
-        ['always', 'Default. State always shown in the stage progress track.'],
-        ['hide_unless_active', 'Hidden unless the record is currently in this state or has visited it.'],
-        ['hide', 'Never shown in the stage progress track.']
-      ]
+      text: 'Workflow state sync: if binding has state_field set, the current state KEY is written to that column on every transition. Enables cross-system integration and custom queries.'
     }
   ]
 }
 
 export const pipelineOverview: DocSection = {
   id: 'pipeline-overview',
-  label: 'Overview',
+  label: 'Pipeline Engine — Overview',
   content: [
     { type: 'h1', id: 'pipeline-overview', text: 'Pipeline Engine — Overview' },
     {
       type: 'p',
-      text: 'The Pipeline Engine extends the Workflow Engine with a multi-dimensional ownership model. A pipeline template defines states and bindings, and each binding can have an Owner Matrix — a grid of user assignments keyed by dimension filter combinations.'
+      text: 'Pipelines extend workflows with a multi-dimensional Owner Matrix. Resolve different users as owners depending on record attributes (region, project type, product line, etc.).'
     },
+    { type: 'h3', text: 'Use case' },
     {
       type: 'p',
-      text: 'The primary use case is multi-dimensional approval chains: different users own different states depending on attributes of the record (e.g. division, project type, specific project).'
-    },
-    {
-      type: 'table',
-      head: ['Concept', 'Description'],
-      rows: [
-        ['Template', 'The blueprint — same as a workflow template. States + bindings.'],
-        ['State', 'Same as workflow states. Supports skip criteria for auto-advancing.'],
-        ['Binding', 'Attaches the template to a collection. Supports state_field sync and auto_start on item create.'],
-        [
-          'Dimension',
-          'A filter axis on the binding — a field path (e.g. regions.short_name), label, and flags.'
-        ],
-        [
-          'Owner Group',
-          'A set of users scoped to a state + filter combination. Has a filters JSON array and a priority integer.'
-        ],
-        ['Owner Matrix', 'The UI grid mapping dimension filter values to owner groups per state.']
-      ]
-    },
-    { type: 'h3', text: 'Admin UI' },
-    {
-      type: 'p',
-      text: 'Navigate to Pipelines in the sidebar to manage pipeline templates. Each template has:'
+      text: 'An approval chain where the approver depends on multiple attributes:'
     },
     {
       type: 'ul',
       items: [
-        'A states list with skip criteria configuration.',
-        'A bindings panel for attaching to collections.',
-        'A dimensions panel for each binding (drag-to-reorder, required flag).',
-        'An Owner Matrix grid below the binding config.'
+        'Budget requests under $10k: approved by division manager.',
+        'Budget requests $10k–$100k: approved by director (if Northeast) or CFO (if other regions).',
+        'Budget requests > $100k: CEO approval required.',
+        'Marketing project proposals: approved by VP Marketing (not CFO).',
+        'Staffing requests during hiring freeze: escalated to CEO.'
       ]
+    },
+    { type: 'h3', text: 'Architecture' },
+    {
+      type: 'table',
+      head: ['Component', 'Description'],
+      rows: [
+        ['Template', 'States + transitions (same as workflow).'],
+        ['Binding', 'Attaches template to collection. Includes auto_start config.'],
+        ['Dimensions', 'Filter axes: field paths (e.g., division.name, project.type). Exactly one is row axis.'],
+        ['Owner Groups', 'Per-state sets of users, scoped to dimension filter combinations. Prioritized.'],
+        ['Owner Matrix', 'UI grid: rows = dimension values, columns = states. Each cell = users for that combo.'],
+        ['Resolution', 'On read, match the item against groups; return most specific group\'s users (filter count DESC, priority ASC).']
+      ]
+    },
+    { type: 'h3', text: 'Example matrix' },
+    {
+      type: 'pre',
+      code: `Template: Budget Approval
+States: Draft → Manager Review → Director Approval → Finance → Approved
+
+Dimensions:
+- Division (row axis): North, South, East, West
+- Budget Range (column): <10k, 10k-100k, >100k
+
+Owner Matrix:
+              <10k          10k-100k        >100k
+North    | Manager-N   | Director-N   | CFO
+South    | Manager-S   | Director-S   | CFO
+East     | Manager-E   | Director-E   | CFO
+West     | Manager-W   | Director-W   | CEO
+
+Reading: "approve a 25k budget from the South division"
+→ Match South + 10k-100k → Director-S is the owner for Manager Review state`
+    },
+    {
+      type: 'note',
+      text: 'Unlike workflows (simple state tracking), pipelines resolve owners dynamically based on each record. Same template, different owners per item.'
     }
   ]
 }
 
 export const pipelineDimensions: DocSection = {
   id: 'pipeline-dimensions',
-  label: 'Dimensions',
+  label: 'Dimensions & Filter Axes',
   content: [
-    { type: 'h1', id: 'pipeline-dimensions', text: 'Dimensions' },
+    { type: 'h1', id: 'pipeline-dimensions', text: 'Dimensions & Filter Axes' },
     {
       type: 'p',
-      text: 'Dimensions define the filter axes for the Owner Matrix. Each dimension belongs to a binding and references a field path on the bound collection.'
+      text: 'Dimensions define the filter axes for the owner matrix. Each dimension references a field path on the collection and maps to columns/rows in the matrix UI.'
     },
+    { type: 'h3', text: 'Dimension properties' },
     {
       type: 'table',
-      head: ['Field', 'Description'],
+      head: ['Property', 'Type', 'Description'],
       rows: [
-        [
-          'field',
-          'Dotted field path, e.g. regions.short_name or project.project_type.name. Supports M2O, M2M, and O2M traversal.'
-        ],
-        ['label', 'Display name shown in the matrix filter bar.'],
-        [
-          'is_row_axis',
-          'Exactly one dimension per binding must be the row axis — it becomes the row header in the matrix grid.'
-        ],
-        ['sort', 'Display order. Drag-to-reorder in the admin UI; persisted via PATCH.'],
-        [
-          'required',
-          'If true, the user must select a value for this dimension before editing owner assignments.'
-        ]
+        ['field', 'string (dotted)', 'e.g., division.name, project.type.label, categories.category_name (M2O or M2M). Validated on save.'],
+        ['label', 'string', 'Display name in filter bar and row/column headers.'],
+        ['is_row_axis', 'boolean', 'Exactly one dimension per binding must be true. Becomes the row header.'],
+        ['sort', 'number', 'Display order. Drag-to-reorder in admin UI.'],
+        ['required', 'boolean', 'If true, user must select a value before matrix is editable (amber warning if unmet).']
       ]
     },
-    { type: 'h3', text: 'Field paths' },
-    {
-      type: 'p',
-      text: 'Dimensions support dotted field paths resolved through relation traversal. For example:'
-    },
+    { type: 'h3', text: 'Field path examples' },
     {
       type: 'ul',
       items: [
-        '`regions.short_name` — M2O: use the short_name field from the related regions record.',
-        '`project.project_type.name` — chained M2O: traverse project → project_type → name.',
-        '`divisions.short_name` — M2M parent-side: traverse through the junction table to the divisions collection.'
+        'Simple M2O: division.short_code',
+        'Chained M2O: project.program.name',
+        'M2M parent-side: categories.name',
+        'Pick via the field picker in the dimension form — handles relation traversal automatically.'
       ]
     },
+    { type: 'h3', text: 'Row axis selection' },
     {
       type: 'p',
-      text: 'Use the field picker in the dimension form to browse and select paths — it handles relation traversal automatically.'
+      text: 'Exactly one dimension is the row axis. It becomes the left-most rows in the matrix. Other dimensions are column filters (searchable comboboxes above the grid). To promote a column to row axis: edit dimension, toggle is_row_axis, save.'
     },
     {
       type: 'note',
-      text: 'Required dimensions must have a value selected before the matrix becomes editable. An amber warning banner appears listing unmet required dimensions.'
+      text: 'Required dimensions must have values selected before the matrix is editable. An amber banner lists which required dimensions are unmet. Optional dimensions can be left unselected (matrix shows base-level owners for that cell).'
     }
   ]
 }
 
 export const pipelineOwnerMatrix: DocSection = {
   id: 'pipeline-owner-matrix',
-  label: 'Owner Matrix',
+  label: 'Owner Matrix UI',
   content: [
-    { type: 'h1', id: 'pipeline-owner-matrix', text: 'Owner Matrix' },
+    { type: 'h1', id: 'pipeline-owner-matrix', text: 'Owner Matrix UI' },
     {
       type: 'p',
-      text: 'The Owner Matrix is a table where rows are values of the row-axis dimension and columns are workflow states. Each cell holds a set of users — the owners for that combination of row value and state.'
+      text: 'The Owner Matrix is an interactive table where you assign users to states. Rows are values of the row-axis dimension; columns are workflow states.'
     },
-    { type: 'h3', text: 'Filter bar' },
+    { type: 'h3', text: 'Layout' },
     {
-      type: 'p',
-      text: 'Column-filter dimensions appear as searchable comboboxes above the matrix. Selecting a value narrows which owner group is shown per cell. The search is server-side with a 300ms debounce — typing filters items from the full table, not just the initial 100.'
+      type: 'ul',
+      items: [
+        'Filter bar: searchable comboboxes for each column-filter dimension (server-side search, 300ms debounce).',
+        'Row axis selector: shows which dimension is currently the row axis.',
+        'Matrix grid: cyan avatar circles = explicit owners, gray faded = inherited, em dash = none assigned.',
+        'Add row button: add a new row value (if row axis is a relation, picker; otherwise text input).'
+      ]
     },
     { type: 'h3', text: 'Cell states' },
     {
       type: 'table',
-      head: ['State', 'Visual', 'Meaning'],
+      head: ['Visual', 'Meaning', 'Action'],
       rows: [
-        ['Empty', 'Em dash (—)', 'No owners assigned for this combination.'],
-        [
-          'Explicit',
-          'Cyan avatar circles',
-          'An owner group exists exactly for this filter context.'
-        ],
-        [
-          'Inherited',
-          'Gray faded avatars + "inherited" label',
-          'No exact match — showing owners from a less-specific (base-level) group.'
-        ],
-        [
-          'Override indicator',
-          'Amber dot on base-level cell',
-          'This cell has context-specific overrides defined for optional filter values.'
-        ]
+        ['Em dash (—)', 'No owners assigned', 'Click to create explicit group'],
+        ['Cyan avatars', 'Explicit group for this filter combo', 'Click to add/remove users'],
+        ['Gray faded avatars', 'Inherited from base/less-specific group', 'Click to create override'],
+        ['Amber dot on base cell', 'This cell has context-specific overrides', 'Shows when optional filters have explicit matches']
       ]
     },
-    { type: 'h3', text: 'Editing owners' },
+    { type: 'h3', text: 'Editing a cell' },
     {
       type: 'p',
-      text: 'Click any cell to expand it inline. For an explicit cell: add or remove users directly. For an inherited cell: click "Create override for this context" to create a new explicit group scoped to the current filter values, then add users.'
+      text: 'Click any cell to expand inline:'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Explicit cell: add/remove users directly via the user picker.',
+        'Inherited cell: two options: (1) Create override for this context (creates explicit group with current filter values), or (2) Edit base (jump to base-level group).',
+        'Priority field: tie-breaker when two groups have the same filter count (lower = higher priority).',
+        'Save/Cancel buttons at bottom.'
+      ]
     },
     { type: 'h3', text: 'Adding rows' },
     {
       type: 'p',
-      text: 'Click "+ Add Row" below the matrix. If the row-axis dimension references a related collection, a searchable picker appears. Otherwise, enter a raw value.'
+      text: 'Click "+ Add Row" below the matrix. If row axis is a relation field, a searchable picker appears. Otherwise, enter a text value. Once created, the row appears and cells can be populated.'
+    },
+    {
+      type: 'note',
+      text: 'Column filters (optional dimensions) can be left unset — the matrix shows "base-level" owners (groups with only required filter values). Set optional filters to see context-specific overrides.'
     }
   ]
 }
 
 export const pipelineSpecificity: DocSection = {
   id: 'pipeline-specificity',
-  label: 'Specificity & Priority',
+  label: 'Specificity & Resolution',
   content: [
-    { type: 'h1', id: 'pipeline-specificity', text: 'Specificity & Priority' },
+    { type: 'h1', id: 'pipeline-specificity', text: 'Specificity & Owner Resolution' },
     {
       type: 'p',
-      text: 'When multiple owner groups could apply to a given record, the system uses a specificity-first resolution to pick the most relevant one.'
+      text: 'When multiple owner groups could apply to a record, the system picks the most specific one using a deterministic algorithm.'
     },
-    { type: 'h3', text: 'Specificity' },
+    { type: 'h3', text: 'Specificity ranking' },
     {
-      type: 'p',
-      text: 'Specificity equals the number of filters on an owner group. A group scoped to `division=Northeast + project_type=Marketing + project=SpecialProject` (3 filters) beats a group scoped to `division=Northeast + project_type=Marketing` (2 filters) when all three values match the current record.'
-    },
-    { type: 'h3', text: 'Priority tie-breaker' },
-    {
-      type: 'p',
-      text: 'When two groups have the same filter count, the `priority` integer field decides. Lower number = higher priority. Default is 0. Edit priority in the expanded cell panel.'
-    },
-    {
-      type: 'table',
-      head: ['Rule', 'Value'],
-      rows: [
-        ['Most filters wins', 'filter count DESC'],
-        ['Tie-break', 'priority ASC (lower = higher priority)'],
-        ['Default priority', '0']
+      type: 'ul',
+      items: [
+        'Filter count DESC: A group scoped to 3 filters (division=Northeast + type=Marketing + project=SpecialProject) beats a 2-filter group (division=Northeast + type=Marketing) if all 3 values match.',
+        'Priority ASC: When two groups have the same filter count, the priority integer decides. Lower = higher priority. Tie-breaker only.',
+        'Manual overrides win: Instance-level owners (manual assignments added via the "Owners" section) always apply, merged with rule-resolved owners.'
       ]
+    },
+    { type: 'h3', text: 'Example resolution' },
+    {
+      type: 'pre',
+      code: `Record: { division: "Northeast", type: "Marketing", project: null, amount: 5000 }
+
+Available groups for "Manager Review" state:
+A) division=Northeast + type=Marketing + project=SpecialProject  (filter count: 3, priority: 0)
+B) division=Northeast + type=Marketing                            (filter count: 2, priority: 0)
+C) division=Northeast                                             (filter count: 1, priority: 0)
+D) (base: no filters)                                             (filter count: 0)
+
+Matching (all filters must match the record):
+- A: FAIL (project=SpecialProject but record.project=null)
+- B: PASS (both filters match)
+- C: PASS (filter matches)
+- D: PASS (no filters, always matches)
+
+Winner: B (highest filter count)
+Result: Owners from group B are assigned`
     },
     { type: 'h3', text: 'Inherited fallback' },
     {
       type: 'p',
-      text: 'If optional filter dimensions are active but no group covers them, the system falls back to the most specific matching group (typically the base-level group with only required filters). The cell shows an "inherited" indicator — the base-level owners are used but no override exists yet.'
+      text: 'If optional dimensions are active but no group exactly matches, the system falls back to the most specific matching group (typically base-level). The Owner Matrix shows an "inherited" indicator — creating an override specifies the exact filter context.'
     },
     {
       type: 'note',
-      text: 'Create an override by clicking the cell and using "Create override for this context." This creates a new group with the full current filter context, letting you assign different owners for that specific combination.'
+      text: 'Manual instance owners (POST /pipelines/instance/:col/:item/owners) are always included in the resolved set. Use them for one-off exceptions or escalations.'
     }
   ]
 }
 
 export const pipelineApi: DocSection = {
   id: 'pipeline-api',
-  label: 'Pipeline API',
+  label: 'Pipeline API Reference',
   content: [
-    { type: 'h1', id: 'pipeline-api', text: 'Pipeline API' },
+    { type: 'h1', id: 'pipeline-api', text: 'Pipeline API Reference' },
     {
       type: 'p',
-      text: 'All endpoints are under `/api/pipelines` and require admin access unless noted.'
+      text: 'All endpoints under `/api/pipelines`. Admin auth required unless noted.'
     },
     { type: 'h3', text: 'Templates' },
     {
-      type: 'table',
-      head: ['Method', 'Path', 'Description'],
-      rows: [
-        ['GET', '/api/pipelines', 'List all pipeline templates.'],
-        ['POST', '/api/pipelines', 'Create a template.'],
-        ['GET', '/api/pipelines/:id', 'Single template with states and bindings.'],
-        ['PATCH', '/api/pipelines/:id', 'Update template metadata.'],
-        ['DELETE', '/api/pipelines/:id', 'Delete template.'],
-        [
-          'GET',
-          '/api/pipelines/:id/export',
-          'Export template as JSON (states, bindings, dimensions, groups).'
-        ],
-        ['POST', '/api/pipelines/import', 'Import a previously exported template JSON.']
-      ]
+      type: 'pre',
+      code: `import { readPipelineTemplates, readPipelineTemplate, createPipelineTemplate, updatePipelineTemplate, deletePipelineTemplate } from '@nivaro/sdk'
+
+// List all pipeline templates
+const { data: templates } = await nivaro.request(readPipelineTemplates())
+
+// Single template with states and bindings
+const { data: tpl } = await nivaro.request(readPipelineTemplate(templateId))
+
+// Create a template
+const { data: created } = await nivaro.request(
+  createPipelineTemplate({
+    name: 'Budget Approval',
+    description: 'Multi-level budget sign-off',
+    color: 'cyan',
+    icon: 'document-check'
+  })
+)
+
+// Update template metadata
+await nivaro.request(updatePipelineTemplate(templateId, { name: 'Updated name' }))
+
+// Delete
+await nivaro.request(deletePipelineTemplate(templateId))`
     },
-    { type: 'h3', text: 'States' },
+    { type: 'h3', text: 'States & Transitions' },
     {
-      type: 'table',
-      head: ['Method', 'Path', 'Description'],
-      rows: [
-        ['POST', '/api/pipelines/:id/states', 'Add a state to a template.'],
-        [
-          'PATCH',
-          '/api/pipelines/states/:stateId',
-          'Update state (label, color, is_initial, is_terminal, lock_record).'
-        ],
-        ['DELETE', '/api/pipelines/states/:stateId', 'Remove a state.'],
-        ['PATCH', '/api/pipelines/states/:stateId/skip', 'Update skip criteria for auto-advancing.']
-      ]
+      type: 'pre',
+      code: `import { createPipelineState, updatePipelineState, deletePipelineState } from '@nivaro/sdk'
+
+// Create a state
+const { data: state } = await nivaro.request(
+  createPipelineState(templateId, {
+    key: 'manager_review',
+    label: 'Manager Review',
+    color: 'blue',
+    is_initial: true,
+    is_terminal: false,
+    lock_record: false,
+    stage_visibility: 'always',
+    sort: 0
+  })
+)
+
+// Update state
+await nivaro.request(updatePipelineState(stateId, { lock_record: true }))
+
+// Delete state
+await nivaro.request(deletePipelineState(stateId))`
     },
     { type: 'h3', text: 'Bindings & Dimensions' },
     {
-      type: 'table',
-      head: ['Method', 'Path', 'Description'],
-      rows: [
-        ['GET', '/api/pipelines/bindings', 'List all bindings.'],
-        ['POST', '/api/pipelines/:id/bind', 'Bind a template to a collection.'],
-        ['PATCH', '/api/pipelines/bindings/:bindingId', 'Update binding config: auto_start, auto_start_state.'],
-        ['DELETE', '/api/pipelines/bindings/:bindingId', 'Remove a binding.'],
-        ['GET', '/api/pipelines/bindings/:bindingId/dimensions', 'List dimensions for a binding.'],
-        [
-          'POST',
-          '/api/pipelines/bindings/:bindingId/dimensions',
-          'Add a dimension. Body: { field, label, is_row_axis, sort, required }.'
-        ],
-        [
-          'PATCH',
-          '/api/pipelines/dimensions/:dimId',
-          'Update dimension (field, label, is_row_axis, sort, required).'
-        ],
-        ['DELETE', '/api/pipelines/dimensions/:dimId', 'Remove a dimension.']
-      ]
-    },
-    { type: 'h3', text: 'Auto-Start' },
-    {
-      type: 'p',
-      text: 'A binding can be configured to automatically start a pipeline instance whenever a new item is created in the bound collection. Enable auto_start on the binding and optionally set auto_start_state to a specific state ID. If auto_start_state is null, the pipeline starts in the first initial state (ordered by sort). The auto-start is non-blocking — if it fails, the item creation still succeeds.'
-    },
-    {
-      type: 'table',
-      head: ['Field', 'Type', 'Description'],
-      rows: [
-        ['auto_start', 'boolean', 'When true, a pipeline instance is created automatically on item create.'],
-        ['auto_start_state', 'UUID | null', 'State to start in. Null = first initial state ordered by sort.']
-      ]
-    },
-    { type: 'h3', text: 'Owner Groups (admin)' },
-    {
-      type: 'table',
-      head: ['Method', 'Path', 'Description'],
-      rows: [
-        [
-          'GET',
-          '/api/pipelines/:id/owner-groups',
-          'All owner groups for all states in a template, keyed by state id.'
-        ],
-        ['GET', '/api/pipelines/states/:stateId/owner-groups', 'Owner groups for a single state.'],
-        [
-          'POST',
-          '/api/pipelines/states/:stateId/owner-groups',
-          'Create a group. Body: { filters, is_default, sort, priority }.'
-        ],
-        [
-          'PATCH',
-          '/api/pipelines/owner-groups/:groupId',
-          'Update group (filters, is_default, sort, priority).'
-        ],
-        ['DELETE', '/api/pipelines/owner-groups/:groupId', 'Delete a group.'],
-        [
-          'POST',
-          '/api/pipelines/owner-groups/:groupId/users',
-          'Add a user to a group. Body: { user: userId }.'
-        ],
-        ['DELETE', '/api/pipelines/owner-group-users/:id', 'Remove a user from a group.']
-      ]
-    },
-    { type: 'h3', text: 'Owner queries (authenticated)' },
-    {
-      type: 'p',
-      text: 'These endpoints resolve actual owners against live record data using the specificity model (filter count DESC, priority ASC). Requires a valid session or static token — not admin-only.'
-    },
-    {
-      type: 'table',
-      head: ['Method', 'Path', 'Description'],
-      rows: [
-        [
-          'GET',
-          '/api/pipelines/:id/matrix',
-          'Full owner matrix for a template: all states → groups → users. No record context — returns configured groups as-is.'
-        ],
-        [
-          'GET',
-          '/api/pipelines/instance/:collection/:item/owners',
-          "Resolved owners for the record's current pipeline state."
-        ],
-        [
-          'GET',
-          '/api/pipelines/instance/:collection/:item/owners/all',
-          'Resolved owners for every state in the bound pipeline, keyed by stateId. Single call for full matrix resolution.'
-        ],
-        [
-          'GET',
-          '/api/pipelines/instance/:collection/:item/owners/:stateId',
-          "Resolved owners for a specific state given the record's filter context (any state, not just the current one)."
-        ]
-      ]
-    },
-    { type: 'h3', text: 'Owner resolution' },
-    {
-      type: 'p',
-      text: 'Owner groups are matched against the record using the specificity model:'
-    },
-    {
       type: 'pre',
-      code: `// Specificity algorithm (mirrors the Owner Matrix UI):
-// 1. Evaluate each non-default group: all its filters must match the record.
-// 2. Sort matched groups by filter count DESC, then priority ASC.
-// 3. Winner: the single most specific group. Its users are the resolved owners.
-// 4. If no filter-based group matches, fall back to default groups.
-// 5. Instance-level manual owners (POST /owners) are merged in last.
+      code: `import { bindPipelineToCollection, readDimensions, createDimension, updateDimension, deleteDimension } from '@nivaro/sdk'
 
-// Filter shape — stored on each owner group:
-{
-  "filters": [
-    { "field": "regions.short_name", "op": "eq", "value": "NED", "id_value": 3 },
-    { "field": "project.project_type.name", "op": "eq", "value": "CAR", "id_value": 7 }
-  ],
-  "priority": 0   // lower number = higher priority (tie-breaker only)
-}
-// id_value: optional FK id used for M2O relation fields (more stable than display text)`
+// Bind template to a collection
+const { data: binding } = await nivaro.request(
+  bindPipelineToCollection(templateId, {
+    collection: 'budget_requests',
+    auto_start: true,
+    auto_start_state: null  // null = first initial state
+  })
+)
+
+// List dimensions for a binding
+const { data: dims } = await nivaro.request(readDimensions(bindingId))
+
+// Create dimension (row axis example)
+const { data: dim } = await nivaro.request(
+  createDimension(bindingId, {
+    field: 'division.name',
+    label: 'Division',
+    is_row_axis: true,
+    sort: 0,
+    required: true
+  })
+)
+
+// Add column filter dimension
+const { data: colDim } = await nivaro.request(
+  createDimension(bindingId, {
+    field: 'budget_range',  // select field with options: Small, Medium, Large
+    label: 'Budget Range',
+    is_row_axis: false,
+    sort: 1,
+    required: false  // optional filter
+  })
+)
+
+// Update dimension
+await nivaro.request(updateDimension(dimId, { sort: 2 }))
+
+// Delete
+await nivaro.request(deleteDimension(dimId))`
     },
-    { type: 'h3', text: 'Skip criteria' },
-    {
-      type: 'p',
-      text: 'States can be auto-skipped when a record enters them. Skip criteria are evaluated server-side during transitions.'
-    },
+    { type: 'h3', text: 'Owner Groups (Admin)' },
     {
       type: 'pre',
-      code: `// SkipCriteria shape (stored per state):
-{
-  "mode": "any",   // "any" = skip if ANY condition true; "all" = skip if ALL true
-  "conditions": [
-    { "type": "no_owners" },                              // skip if resolved owners = []
-    { "type": "field_compare", "field": "amount", "op": "lt", "value": 1000 },
-    { "type": "field_empty",    "field": "region" },
-    { "type": "field_nonempty", "field": "approved_by" }
-  ]
-}`
+      code: `import { readOwnerGroups, createOwnerGroup, updateOwnerGroup, deleteOwnerGroup, addOwnerToGroup, removeOwnerFromGroup } from '@nivaro/sdk'
+
+// List all owner groups for a template (keyed by state id)
+const { data: allGroups } = await nivaro.request(readOwnerGroups(templateId))
+
+// Create a group for a state with filters
+const { data: group } = await nivaro.request(
+  createOwnerGroup(stateId, {
+    filters: [
+      { field: 'division.name', op: 'eq', value: 'Northeast', id_value: 5 },
+      { field: 'budget_range', op: 'eq', value: 'Medium' }
+    ],
+    priority: 0,  // lower = higher priority (tie-breaker)
+    sort: 0
+  })
+)
+
+// Add user to group
+await nivaro.request(addOwnerToGroup(groupId, { user: userUUID }))
+
+// Remove user from group
+await nivaro.request(removeOwnerFromGroup(ownerAssignmentId))
+
+// Update group (filters, priority)
+await nivaro.request(updateOwnerGroup(groupId, { priority: 1 }))
+
+// Delete group
+await nivaro.request(deleteOwnerGroup(groupId))`
+    },
+    { type: 'h3', text: 'Owner Resolution (Authenticated)' },
+    {
+      type: 'pre',
+      code: `import { readInstanceOwners, readStateOwners, readAllStateOwners, addInstanceOwner, removeInstanceOwner } from '@nivaro/sdk'
+
+// Get owners for current state (applying specificity + priority)
+const { data: owners } = await nivaro.request(
+  readInstanceOwners('budget_requests', itemId)
+)
+// owners → User[] (resolved via matrix rules)
+
+// Get owners for a specific state given the record
+const { data: result } = await nivaro.request(
+  readStateOwners('budget_requests', itemId, stateId)
+)
+// result.state → { id, key, label, ... }
+// result.owners → User[] (resolved)
+
+// Get all state owners in one call (no N+1)
+const { data: allOwners } = await nivaro.request(
+  readAllStateOwners('budget_requests', itemId)
+)
+// allOwners → { [stateId]: { state, owners } }
+
+// Manual owner override (for exceptions)
+const { data: override } = await nivaro.request(
+  addInstanceOwner('budget_requests', itemId, userUUID, {
+    state_id: stateId  // optional: scope to specific state
+  })
+)
+
+// Remove manual override
+await nivaro.request(removeInstanceOwner(overrideId))`
+    },
+    {
+      type: 'note',
+      text: 'Owner resolution applies specificity + priority rules server-side, then merges manual instance owners. Always accurate against live record data.'
     }
   ]
 }
 
 export const workflowsApi: DocSection = {
   id: 'workflows-api',
-  label: 'Workflows API',
+  label: 'Workflows API Reference',
   content: [
-    { type: 'h1', id: 'workflows-api', text: 'Workflows API' },
+    { type: 'h1', id: 'workflows-api', text: 'Workflows API Reference' },
     {
       type: 'p',
-      text: 'All endpoints are under `/api/workflows` and require admin access unless noted.'
+      text: 'All endpoints under `/api/workflows`. Admin auth required unless noted.'
     },
     { type: 'h3', text: 'Templates' },
     {
-      type: 'table',
-      head: ['Method', 'Path', 'Description'],
-      rows: [
-        ['GET', '/api/workflows', 'List all workflow templates.'],
-        ['POST', '/api/workflows', 'Create a template.'],
-        ['GET', '/api/workflows/:id', 'Single template.'],
-        ['PATCH', '/api/workflows/:id', 'Update template.'],
-        ['DELETE', '/api/workflows/:id', 'Delete template.']
-      ]
+      type: 'pre',
+      code: `import {
+  readWorkflowTemplates, readWorkflowTemplate,
+  createWorkflowTemplate, updateWorkflowTemplate, deleteWorkflowTemplate
+} from '@nivaro/sdk'
+
+// List all workflow templates
+const { data: templates } = await nivaro.request(readWorkflowTemplates())
+
+// Single template
+const { data: tpl } = await nivaro.request(readWorkflowTemplate(templateId))
+
+// Create template
+const { data: created } = await nivaro.request(
+  createWorkflowTemplate({
+    name: 'Content Approval',
+    description: 'Draft → Review → Published',
+    color: 'amber',
+    icon: 'workflow'
+  })
+)
+
+// Update
+await nivaro.request(updateWorkflowTemplate(templateId, { name: 'Updated' }))
+
+// Delete
+await nivaro.request(deleteWorkflowTemplate(templateId))`
     },
-    { type: 'h3', text: 'States & Transitions' },
+    { type: 'h3', text: 'States' },
     {
-      type: 'table',
-      head: ['Method', 'Path', 'Description'],
-      rows: [
-        ['POST', '/api/workflows/:id/states', 'Add a state.'],
-        ['PATCH', '/api/workflows/states/:stateId', 'Update state.'],
-        ['DELETE', '/api/workflows/states/:stateId', 'Delete state.'],
-        [
-          'POST',
-          '/api/workflows/:id/transitions',
-          'Add a transition. Body: { from_state, to_state, label, color, required_roles }.'
-        ],
-        ['PATCH', '/api/workflows/transitions/:txId', 'Update transition.'],
-        ['DELETE', '/api/workflows/transitions/:txId', 'Delete transition.']
-      ]
+      type: 'pre',
+      code: `import { createWorkflowState, updateWorkflowState, deleteWorkflowState } from '@nivaro/sdk'
+
+// Create state
+const { data: state } = await nivaro.request(
+  createWorkflowState(templateId, {
+    key: 'draft',
+    label: 'Draft',
+    color: 'gray',
+    is_initial: true,
+    is_terminal: false,
+    lock_record: false,
+    stage_visibility: 'always',
+    sort: 0
+  })
+)
+
+// Update
+await nivaro.request(updateWorkflowState(stateId, { lock_record: true }))
+
+// Delete
+await nivaro.request(deleteWorkflowState(stateId))`
+    },
+    { type: 'h3', text: 'Transitions' },
+    {
+      type: 'pre',
+      code: `import { createTransition, updateTransition, deleteTransition } from '@nivaro/sdk'
+
+// Create transition (from_state=null means "from any state")
+const { data: tx } = await nivaro.request(
+  createTransition(templateId, {
+    from_state: 'draft',        // or null for "from any"
+    to_state: 'review',
+    label: 'Submit for Review',
+    color: 'blue',
+    required_roles: ['editor-role-uuid'],  // empty = all authenticated
+    group_label: null,           // optional: group similar transitions
+    condition_rules: [           // optional: field conditions
+      { field: 'title', op: 'nnull', value: null },
+      { field: 'body', op: 'nnull', value: null }
+    ]
+  })
+)
+
+// Update transition
+await nivaro.request(updateTransition(txId, { label: 'Submit' }))
+
+// Delete
+await nivaro.request(deleteTransition(txId))`
     },
     { type: 'h3', text: 'Bindings & Instances' },
     {
-      type: 'table',
-      head: ['Method', 'Path', 'Description'],
-      rows: [
-        ['GET', '/api/workflows/bindings', 'All bindings.'],
-        [
-          'POST',
-          '/api/workflows/:id/bind',
-          'Bind template to a collection. Body: { collection, state_field? }.'
-        ],
-        ['DELETE', '/api/workflows/bindings/:bindingId', 'Remove binding.'],
-        ['GET', '/api/workflows/instance/:collection/:item', 'Get or check instance for a record.'],
-        [
-          'POST',
-          '/api/workflows/instance/:collection/:item/start',
-          'Start a workflow instance for a record.'
-        ],
-        [
-          'POST',
-          '/api/workflows/instance/:collection/:item/transition',
-          'Advance to next state. Body: { transition_id, comment? }.'
-        ]
-      ]
+      type: 'pre',
+      code: `import {
+  bindWorkflowToCollection, readWorkflowInstance,
+  startWorkflow, transitionWorkflow
+} from '@nivaro/sdk'
+
+// Bind template to collection
+const { data: binding } = await nivaro.request(
+  bindWorkflowToCollection(templateId, {
+    collection: 'articles',
+    state_field: 'status'  // optional: write current state key to this column
+  })
+)
+
+// Get workflow instance for a record
+const { data: wf } = await nivaro.request(
+  readWorkflowInstance('articles', itemId)
+)
+// wf === null if no workflow bound
+// wf.instance → { current_state, started_at, completed_at }
+// wf.states → all states
+// wf.available_transitions → filtered by user role + condition rules
+// wf.history → all past transitions
+
+// Start workflow (creates instance in initial state)
+await nivaro.request(startWorkflow('articles', itemId))
+
+// Execute transition
+const { data: updated } = await nivaro.request(
+  transitionWorkflow('articles', itemId, transitionId, {
+    comment: 'Looks good, approved'  // optional
+  })
+)
+// Returns error 409 if condition_rules no longer match (stale client)`
+    },
+    {
+      type: 'note',
+      text: 'If binding has state_field set, the current state KEY (not label) is written to that column. Enables external integrations and custom queries on workflow status.'
     }
   ]
 }
@@ -520,35 +600,82 @@ export const pipelineBranching: DocSection = {
     { type: 'h1', id: 'pipeline-branching', text: 'Conditional Branching' },
     {
       type: 'p',
-      text: 'Transitions can carry condition rules so a record\'s field values decide which paths are offered. In the pipeline template editor, open a transition and use the "Conditions (optional)" section to add field / operator / value rows.'
+      text: 'Transitions can have field conditions. A transition is only offered when ALL its conditions match the record.'
     },
-    { type: 'h3', text: 'How it behaves' },
+    { type: 'h3', text: 'Setup' },
     {
       type: 'ul',
       items: [
-        "A transition is offered on the item page only when ALL of its conditions match the record's current values (AND semantics). No conditions = always offered, subject to required_roles.",
-        'Branching: create two transitions out of the same state with opposite conditions — e.g. "Approve" when `amount lte 10000` and "Escalate" when `amount gt 10000`. Exactly one is offered per record.',
-        'Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `null`, `nnull`. Numeric values are compared numerically; ordering ops fall back to lexicographic comparison for ISO date strings.',
-        'Server-side revalidation: on execute, the API re-fetches the record and re-evaluates the conditions. If the client\'s view was stale, the transition is rejected with HTTP 409 "Transition conditions not met".'
+        'Edit or create a transition in the template editor.',
+        'Expand "Conditions (optional)".',
+        'Add condition rows: field / operator / value.',
+        'Save — transitions are now conditional.'
       ]
     },
-    { type: 'h3', text: 'Storage and API' },
+    { type: 'h3', text: 'How it works' },
     {
       type: 'pre',
-      code: `// Stored as JSON in nivaro_workflow_transitions.condition_rules
-// (shared by workflow and pipeline templates):
+      code: `Example: Budget approval workflow with branching
+
+State: Manager Review
+  Transition A: "Approve" → Approved
+    Condition: amount <= 10000
+  Transition B: "Escalate" → Director Review
+    Condition: amount > 10000
+
+When viewing an item:
+- amount = 5000 → only "Approve" offered
+- amount = 15000 → only "Escalate" offered
+
+Server revalidation: when you execute a transition, the API re-fetches the record
+and re-checks conditions. If stale (conditions no longer match), HTTP 409 returned.`
+    },
+    { type: 'h3', text: 'Operators' },
+    {
+      type: 'table',
+      head: ['Op', 'Type', 'Example'],
+      rows: [
+        ['eq', 'Equality', 'status eq "approved"'],
+        ['neq', 'Inequality', 'region neq "EMEA"'],
+        ['gt', 'Greater than', 'amount gt 10000'],
+        ['gte', 'Greater or equal', 'age gte 18'],
+        ['lt', 'Less than', 'days_remaining lt 5'],
+        ['lte', 'Less or equal', 'cost lte 50000'],
+        ['contains', 'Substring (text)', 'email contains "@example.com"'],
+        ['null', 'Is null', 'approver null'],
+        ['nnull', 'Is not null', 'manager nnull']
+      ]
+    },
+    { type: 'h3', text: 'Storage & API' },
+    {
+      type: 'pre',
+      code: `// Stored as JSON in condition_rules:
 [
   { "field": "amount", "op": "gt", "value": 10000 },
   { "field": "region", "op": "eq", "value": "EMEA" }
 ]
 
-// Set via the transitions endpoints — POST/PATCH transition bodies accept
-// condition_rules; available-transition listings and the execute endpoint
-// both evaluate them.`
+// Set via POST/PATCH transition endpoints:
+POST /api/workflows/:id/transitions
+{
+  "from_state": "manager_review",
+  "to_state": "director_review",
+  "label": "Escalate",
+  "condition_rules": [
+    { "field": "amount", "op": "gt", "value": 10000 }
+  ]
+}
+
+// SDK:
+const { data: tx } = await nivaro.request(
+  createTransition(templateId, {
+    condition_rules: [{ field: 'amount', op: 'gt', value: 10000 }]
+  })
+)`
     },
     {
       type: 'note',
-      text: 'Null, empty, or malformed condition_rules are treated as "no conditions" — existing transitions behave exactly as before. SDK: the `WorkflowTransition` type includes `condition_rules?: Array<{ field, op, value }> | null`.'
+      text: 'Empty or malformed condition_rules = no conditions (always offered). Semantics: ALL conditions must be true (AND logic).'
     }
   ]
 }

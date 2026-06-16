@@ -53850,6 +53850,9 @@
           "project_type": {
             "type": "integer"
           },
+          "workflows_additional_contact": {
+            "type": "string"
+          },
           "local_tracking": {
             "type": "string"
           },
@@ -53959,7 +53962,8 @@
             "type": "string"
           },
           "overview_of_situation": {
-            "type": "string"
+            "type": "string",
+            "description": "this is a test"
           },
           "considerations": {
             "type": "string"
@@ -54120,13 +54124,15 @@
           }
         },
         "required": [
+          "project_type",
           "workflow_type",
           "funding_years",
           "divisions",
           "description",
           "project",
           "regions",
-          "project_sub_types"
+          "project_sub_types",
+          "vendor"
         ]
       },
       "Allocations": {

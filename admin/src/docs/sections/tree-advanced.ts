@@ -7,110 +7,192 @@ export const orgChartView: DocSection = {
     { type: 'h1', id: 'org-chart-view', text: 'Org Chart View' },
     {
       type: 'p',
-      text: 'Tree-enabled collections can be rendered as a top-down organisational chart instead of an indented list. Open the collection browser, switch to Tree view, and use the new List | Org chart toggle in the tree toolbar.'
+      text: 'Render tree-enabled collections as interactive top-down organizational charts instead of indented lists. Perfect for org structures, reporting hierarchies, and project teams.'
     },
-    { type: 'h3', text: 'Using the org chart' },
+    { type: 'h3', text: 'Enabling org chart view' },
+    { type: 'ul', items: ['Collection browser → collection with tree config.', 'Click "Tree" view button in toolbar.', 'Toggle "List | Org chart" switch (right side of toolbar).'] },
+    { type: 'h3', text: 'Features' },
+    {
+      type: 'table',
+      head: ['Feature', 'Description'],
+      rows: [
+        ['Node cards', 'Display label (from label_field) + child count.'],
+        ['Collapse nodes', 'Click arrow to hide subtree; shows hidden child count.'],
+        ['Zoom controls', 'Use −/% /+ buttons to scale; "Fit" auto-scales to viewport.'],
+        ['Click to edit', 'Click any node card to open item editor.'],
+        ['Search', 'Filter by node label (hides non-matching branches).'],
+        ['Print', 'Print to PDF (preserves hierarchy structure).']
+      ]
+    },
+    { type: 'h3', text: 'Technical details' },
+    {
+      type: 'pre',
+      code: `// Data fetched once on load
+GET /api/tree/:collection/nested
+
+// Response shape
+{
+  "data": [
+    {
+      "id": 1,
+      "name": "CEO",
+      "parent_id": null,
+      "children": [
+        {
+          "id": 2,
+          "name": "VP Engineering",
+          "parent_id": 1,
+          "children": [
+            { "id": 4, "name": "Backend Lead", "parent_id": 2, "children": [] },
+            { "id": 5, "name": "Frontend Lead", "parent_id": 2, "children": [] }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "VP Sales",
+          "parent_id": 1,
+          "children": []
+        }
+      ]
+    }
+  ]
+}`
+    },
     {
       type: 'ul',
       items: [
-        "Each record renders as a node card showing its label (the tree config's label_field) and a child count.",
-        'Click the collapse control on a node to hide its entire subtree; collapsed branches show the hidden child count.',
-        'Zoom controls (−, %, +) and a "Fit" button scale the chart to the viewport — useful for wide trees.',
-        'Click a node card to open the record in the item editor.'
+        'Layout (positions, widths) computed client-side via D3-style layout algorithm.',
+        'Collapse state is local UI only (not persisted).',
+        'SDK: `readTreeNested(collection)` fetches the same nested structure.'
       ]
-    },
-    { type: 'h3', text: 'Data source' },
-    {
-      type: 'p',
-      text: 'The chart is rendered client-side from a single call to `GET /api/tree/:collection/nested` — the same recursive children-array endpoint used by the list view. Layout (subtree widths, positions) is computed in the browser; collapse state is local UI state.'
     },
     {
       type: 'note',
-      text: 'The Org chart toggle appears only for collections that have a tree config (`nivaro_tree_configs`). SDK: fetch the same data with `readTreeNested(collection)`.'
+      text: 'Org chart toggle only appears for collections with a tree config. Best performance with trees < 2000 nodes (deeply nested trees may need server-side pagination).'
     }
   ]
 }
 
 export const treeReorder: DocSection = {
   id: 'tree-reorder',
-  label: 'Reorder Siblings',
+  label: 'Reorder & Sort Siblings',
   content: [
-    { type: 'h1', id: 'tree-reorder', text: 'Reorder Siblings' },
+    { type: 'h1', id: 'tree-reorder', text: 'Reorder & Sort Siblings' },
     {
       type: 'p',
-      text: 'When a tree config has an `order_field` configured, the tree list view shows a drag handle on every node row. Drag a node up or down within its sibling group to reorder it — the new sort values are persisted immediately and all children queries return siblings in `ORDER BY order_field`.'
+      text: 'Maintain a custom sort order for sibling nodes. Configure an integer `order_field` on your tree config and use drag-and-drop or the API to reorder siblings.'
     },
-    { type: 'h3', text: 'Enabling' },
+    { type: 'h3', text: 'Setup' },
+    { type: 'ul', items: ['Data Model → select collection → Tree / Hierarchy section.', 'Set "Order Field" to an integer column (e.g., `sort_order`).', 'Save — tree list view now shows grip handles on every node.'] },
+    { type: 'h3', text: 'Drag and drop' },
     {
       type: 'ul',
       items: [
-        'Data Model → collection → Tree / Hierarchy → set an integer `order_field` (e.g. `sort_order`) and Save.',
-        'Open the collection browser in Tree view — node rows now show a grip handle.',
-        'Drag within the same sibling group only; dropping under a different parent is a Move, not a reorder.'
+        'Grab the grip handle (≡) on a node row.',
+        'Drag up/down within the same sibling group.',
+        'Drop to update sort values immediately.',
+        'Dragging under a different parent is a MOVE operation, not reorder.'
       ]
     },
-    { type: 'h3', text: 'API' },
+    { type: 'h3', text: 'API: Reorder siblings' },
     {
       type: 'pre',
-      code: `// PATCH /api/tree/:collection/:id/reorder
-// :id identifies a node in the sibling group being reordered.
-{
-  "order": [
-    { "id": 4, "sort": 0 },
-    { "id": 9, "sort": 1 },
-    { "id": 2, "sort": 2 }
-  ]
-}
+      code: `import { reorderTreeSiblings } from '@nivaro/sdk'
 
-// 200 → { "data": { "success": true } }
-// 400 when: no order_field configured, duplicate ids, unknown ids,
-//           or the ids do not all share the same parent.`
+// Reorder siblings atomically
+const result = await nivaro.request(
+  reorderTreeSiblings('org_units', 'any-sibling-id', [
+    { id: 'node-4', sort: 0 },
+    { id: 'node-9', sort: 1 },
+    { id: 'node-2', sort: 2 }
+  ])
+)
+// All three siblings get updated with new sort values in one transaction`
+    },
+    { type: 'h3', text: 'API: Move node to new parent' },
+    {
+      type: 'pre',
+      code: `import { moveTreeNode } from '@nivaro/sdk'
+
+// Move a node (including its entire subtree)
+const result = await nivaro.request(
+  moveTreeNode('org_units', 'node-12', {
+    new_parent_id: 'node-5',  // new parent
+    new_sort: 0,  // position among new siblings
+  })
+)
+// Recursively updates parent_id and sort for node and all descendants`
+    },
+    {
+      type: 'table',
+      head: ['Method', 'Description', 'Auth'],
+      rows: [
+        ['reorderTreeSiblings(col, anchorId, order[])', 'Bulk-update sort values for siblings', 'update permission'],
+        ['moveTreeNode(col, nodeId, {new_parent_id, new_sort})', 'Move a node + subtree to new parent', 'update permission'],
+        ['rebuildTreePaths(configId)', 'Rebuild path/depth columns if out of sync', 'admin'],
+      ]
     },
     {
       type: 'note',
-      text: 'Requires update permission on the collection (admins bypass). SDK: `reorderTreeSiblings(collection, anchorId, order)`.'
+      text: 'Cycle detection: `moveTreeNode` prevents moving a node under its own descendant (would create a cycle). All descendants inherit the new parent_id and their paths are recomputed.'
     }
   ]
 }
 
 export const treePathColumn: DocSection = {
   id: 'tree-path-column',
-  label: 'Breadcrumb Path Column',
+  label: 'Materialized Path Column',
   content: [
-    { type: 'h1', id: 'tree-path-column', text: 'Breadcrumb Path Column' },
+    { type: 'h1', id: 'tree-path-column', text: 'Materialized Path Column' },
     {
       type: 'p',
-      text: 'A tree config can optionally maintain materialized `path` and `depth` columns on the collection table itself. Enable it in Data Model → collection → Tree / Hierarchy → "Maintain path column" switch (`nivaro_tree_configs.maintain_path`), then click "Rebuild paths" to backfill existing rows.'
+      text: 'Optionally maintain `path` and `depth` columns on the collection table. Path is a materialized breadcrumb (/rootId/.../selfId) that enables fast subtree queries without recursive CTEs.'
     },
-    { type: 'h3', text: 'What it adds' },
+    { type: 'h3', text: 'Enable path column' },
+    { type: 'ul', items: ['Data Model → collection → Tree / Hierarchy section.', 'Toggle "Maintain path column".', 'Click "Rebuild paths" to backfill existing rows.'] },
+    { type: 'h3', text: 'What it maintains' },
+    {
+      type: 'table',
+      head: ['Column', 'Type', 'Meaning', 'Example'],
+      rows: [
+        ['path', 'varchar', 'Breadcrumb: /root_id/.../self_id (ID-based, not label-based)', '/1/5/12'],
+        ['depth', 'int', 'Distance from root (0 = root)', '2']
+      ]
+    },
+    { type: 'h3', text: 'Benefits' },
     {
       type: 'ul',
       items: [
-        'A real `path` column on the collection: `/rootId/.../selfId` — note the segments are record IDs, not labels.',
-        'A real `depth` column (0 = root).',
-        'Both are maintained automatically: new records get a path on create, and reparenting a node recomputes the paths of its whole subtree.'
+        'Subtree queries become trivial: `WHERE path LIKE \'/12/%\'` returns all descendants of node 12.',
+        'No recursive CTE needed — single index scan.',
+        'Perfect for custom queries, external reporting, and API consumers.',
+        'Inherited field resolution uses batched path parsing instead of per-row recursion.',
+        'Path never goes stale (ID-based, changes only on move).'
       ]
     },
-    { type: 'h3', text: 'Why enable it' },
-    {
-      type: 'ul',
-      items: [
-        "Subtree queries become a plain LIKE — `WHERE path LIKE '/12/%'` returns every descendant of node 12 without a recursive CTE. Ideal for custom queries, reports, and external consumers.",
-        'Inherited field values resolve ancestors straight from `path` with one batched fetch instead of a per-row recursive CTE.'
-      ]
-    },
-    { type: 'h3', text: 'Rebuilding' },
+    { type: 'h3', text: 'Custom query example' },
     {
       type: 'pre',
-      code: `// POST /api/tree-configs/:id/rebuild-paths   (admin)
-// Ensures the path/depth columns exist, then recomputes every row.
-// Use after enabling maintain_path on existing data or after bulk imports.
+      code: `-- Find all org units under "Sales" (ID 5) with their depth
+SELECT id, name, depth, path
+FROM org_units
+WHERE path LIKE '/1/5/%'  -- sales org_unit is at /1/5
+ORDER BY depth, name
 
-// 200 → { "data": { "success": true } }`
+-- Result: all Sales children, grandchildren, etc. (fast!)`
+    },
+    { type: 'h3', text: 'Maintenance' },
+    {
+      type: 'ul',
+      items: [
+        'Paths auto-maintain on create/move/delete.',
+        'If paths get out of sync (bulk data import), rebuild: `POST /api/tree-configs/:id/rebuild-paths`.',
+        'SDK: `rebuildTreePaths(configId)`.'
+      ]
     },
     {
       type: 'note',
-      text: 'The path is ID-based, not label-based — it never goes stale when labels change. SDK: `rebuildTreePaths(configId)`; the `maintain_path` flag is included in `readTreeConfig()` results.'
+      text: 'Path uses IDs not labels — remains valid even if ancestor labels change. Depth is computed from path length on every rebuild; kept in sync automatically.'
     }
   ]
 }
@@ -122,26 +204,26 @@ export const treeInheritedFields: DocSection = {
     { type: 'h1', id: 'tree-inherited-fields', text: 'Inherited Field Values' },
     {
       type: 'p',
-      text: "Fields on a tree-configured collection can be marked inheritable: when a record's value is null or empty, reads fill it from the nearest ancestor that has a non-null value. Think org-unit settings, category defaults, or cost-centre rates that cascade down the tree until a node overrides them."
+      text: 'Mark fields as inheritable so they cascade values down the tree. If a child has no value, it inherits from the nearest non-null ancestor. Perfect for org settings, cost codes, compliance levels, and defaults that vary by branch.'
     },
-    { type: 'h3', text: 'Enabling' },
-    {
-      type: 'ul',
-      items: [
-        'Data Model → table → open a field in the field editor → switch on "Inheritable" (`nivaro_fields.is_inheritable`).',
-        'The collection must have a tree config — without one the flag has no effect.'
-      ]
-    },
+    { type: 'h3', text: 'Enable inheritance on a field' },
+    { type: 'ul', items: ['Data Model → select collection (must have tree config).', 'Open a field in the editor.', 'Toggle "Inheritable" (`nivaro_fields.is_inheritable`).'] },
     { type: 'h3', text: 'In the item editor' },
     {
-      type: 'ul',
-      items: [
-        'A field showing a value that came from an ancestor displays an "Inherited" chip.',
-        'A field with its own value where an ancestor also provides one displays an "Overridden" chip.',
-        "Clearing a field's own value reverts it to the inherited value on the next read — inheritance is resolved at read time, nothing is copied into the row."
-      ]
+      type: 'pre',
+      code: `Item view shows:
+
+┌─────────────────────┐
+│ Name: Boston Office │
+│ Currency: USD       │ ← Shows "Inherited from parent" chip
+│ Budget: 50000       │ ← Shows "Overridden (parent: 100000)" chip
+└─────────────────────┘
+
+- Inherited field: value came from an ancestor (shown in lighter color + chip)
+- Overridden field: own value differs from ancestor's value (chip shows original)
+- Clear the field to revert to inherited value (on next read)`
     },
-    { type: 'h3', text: 'API shape' },
+    { type: 'h3', text: 'API response' },
     {
       type: 'pre',
       code: `// GET /api/items/org_units/12
@@ -149,84 +231,135 @@ export const treeInheritedFields: DocSection = {
   "data": {
     "id": 12,
     "name": "Boston Office",
-    "currency": "USD",            // own value was null — filled from ancestor 1
-    "_inherited": { "currency": 1 } // sidecar: field → ancestor item id
+    "currency": "USD",           // null on write, resolved to "USD" from parent
+    "budget": 50000,             // own value
+    "compliance_level": "SOC2",  // inherited from grandparent (no parent value)
+    "_inherited": {
+      "currency": 1,               // ancestor item ID 1 provides this value
+      "compliance_level": 3        // ancestor item ID 3 provides this
+    }
   }
 }
-// Rows where every inheritable field has its own value carry no _inherited key.`
+
+// Rows with all own values (no inheritance) have no _inherited key`
     },
+    { type: 'h3', text: 'Resolution algorithm' },
     {
-      type: 'p',
-      text: 'Resolution walks the ancestor chain nearest-first and stops at the first non-null value. When the tree config maintains a path column, ancestor IDs are parsed from `path` and fetched in one batched query; otherwise a recursive CTE resolves the chain per row. Inheritance runs before computed fields, so formulas see the effective values.'
+      type: 'ul',
+      items: [
+        'If field has a non-null value on this record, use it.',
+        'Walk ancestors from immediate parent up to root.',
+        'First ancestor with non-null value: use that.',
+        'No ancestors have it: field is null (use field default if set).',
+        'Include `_inherited: { field: ancestorId }` sidecar in response.'
+      ]
+    },
+    { type: 'h3', text: 'Performance' },
+    {
+      type: 'ul',
+      items: [
+        'If path column maintained: ancestors parsed from path string + single batched fetch.',
+        'If no path column: recursive CTE per row (slower but works).',
+        'Inheritance resolves BEFORE computed fields (formulas see effective values).',
+        'List reads include _inherited per row.'
+      ]
     },
     {
       type: 'note',
-      text: 'List reads include the same `_inherited` sidecar per row. SDK consumers can read it from any item response — it is typed as an optional `Record<string, string | number>`.'
+      text: 'Inheritance is virtual — values not stored on child rows, resolved at read time. Clearing a field reverts to inherited value on next read.'
     }
   ]
 }
 
 export const treePermissionsGuide: DocSection = {
   id: 'tree-permissions',
-  label: 'Tree Permissions',
+  label: 'Subtree Access Control',
   content: [
-    { type: 'h1', id: 'tree-permissions', text: 'Tree Permissions' },
+    { type: 'h1', id: 'tree-permissions', text: 'Subtree Access Control' },
     {
       type: 'p',
-      text: 'Tree permissions scope role access to a subtree of a tree-enabled collection. A rule anchors to a node and applies to that node and all of its descendants — e.g. "the Sales role may only read records under the Sales org unit".'
+      text: 'Restrict role access to a subtree of a tree-enabled collection. A single rule anchors to a node and applies read/update/delete permissions to that node and all descendants.'
     },
-    { type: 'h3', text: 'Managing rules' },
-    {
-      type: 'p',
-      text: 'Data Model → collection → Tree / Hierarchy section → "Tree permissions" (admin only). Each rule combines:'
-    },
-    {
-      type: 'table',
-      head: ['Setting', 'Description'],
-      rows: [
-        ['Node', 'Picked from the tree — the rule covers this node and all descendants.'],
-        ['Role', 'The role the rule applies to.'],
-        ['Action', '`read`, `update`, `delete`, or `*` (all actions).'],
-        ['Allow / Deny', 'Whether the rule grants or blocks the action inside the subtree.']
-      ]
-    },
-    { type: 'h3', text: 'Resolution semantics' },
+    { type: 'h3', text: 'Use case' },
     {
       type: 'ul',
       items: [
-        "The deepest matching rule in the item's ancestor chain wins — a rule on the item itself beats anything inherited from an ancestor.",
-        "On the same node, an action-specific rule beats a '*' rule; remaining ties resolve to deny (deny overrides allow).",
-        'Restriction-only: tree permissions never grant access that `nivaro_policies` did not already allow — they can only further restrict it.',
-        'Admins bypass tree permissions entirely. Collections with no rules behave exactly as before (zero extra queries — a 60s TTL cache short-circuits the check).'
+        'Sales role can only read/edit their own org unit and children (not Finance branch).',
+        'Department managers can view team org units but not corporate parent.',
+        'Regional admins govern their region and all subsidiaries.'
+      ]
+    },
+    { type: 'h3', text: 'Create a tree permission rule' },
+    {
+      type: 'ul',
+      items: [
+        'Data Model → collection → Tree / Hierarchy → "Subtree permissions" (admin only).',
+        'Click "New rule".',
+        'Pick a node from the tree (the rule applies to it + descendants).',
+        'Choose role.',
+        'Choose action: read / update / delete / * (all).',
+        'Choose allow or deny.'
+      ]
+    },
+    { type: 'h3', text: 'API' },
+    {
+      type: 'pre',
+      code: `import { listTreePermissions, createTreePermission, deleteTreePermission } from '@nivaro/sdk'
+
+// List all rules for a collection
+const { data: rules } = await nivaro.request(
+  listTreePermissions('org_units')
+)
+// rules → [{ id, node_id, role_id, action, allow, node_label, role_name }]
+
+// Create a rule: Sales role can read Sales org unit + children
+const { data: rule } = await nivaro.request(
+  createTreePermission('org_units', {
+    node_id: '5',        // Sales org unit
+    role: 'sales-role-uuid',
+    action: 'read',      // read | update | delete | *
+    allow: true,
+  })
+)
+
+// Delete a rule
+await nivaro.request(deleteTreePermission(rule.id))`
+    },
+    { type: 'h3', text: 'Resolution semantics' },
+    {
+      type: 'table',
+      head: ['Scenario', 'Rule Wins', 'Result'],
+      rows: [
+        ['Rule on node vs ancestor', 'Node rule (deepest wins)', 'Use node rule'],
+        ['read rule vs * rule on same node', 'read rule (specific beats wildcard)', 'read rule applies'],
+        ['allow vs deny on same node+action', 'Deny (deny overrides allow)', 'Access denied'],
+        ['No matching rule', 'Falls back to nivaro_policies', 'Use base role permissions'],
+        ['Admin user', 'All rules bypassed', 'Admin sees everything']
       ]
     },
     { type: 'h3', text: 'Enforcement' },
     {
       type: 'ul',
       items: [
-        'Item read — single reads return 403 on a denied node; list reads are batch-filtered so denied rows simply disappear from results.',
-        'Item update and delete — rejected with 403 when the effective rule denies.'
+        'Single item read denied: return 403.',
+        'List read (batch): denied rows silently filtered out.',
+        'Update/delete denied: return 403.',
+        'Admins bypass all tree permissions.',
+        'Collections with no rules: zero performance penalty (60s cache).'
       ]
     },
-    { type: 'h3', text: 'API' },
+    { type: 'h3', text: 'Important' },
     {
-      type: 'table',
-      head: ['Method', 'Path', 'Auth', 'Description'],
-      rows: [
-        ['GET', '/api/tree-permissions?collection=', 'Admin', 'List rules (role name joined).'],
-        [
-          'POST',
-          '/api/tree-permissions',
-          'Admin',
-          'Create. Body: `{ collection, node_id, role, action?, allow? }` — action defaults to `*`, allow to true.'
-        ],
-        ['PATCH', '/api/tree-permissions/:id', 'Admin', 'Update node_id / role / action / allow.'],
-        ['DELETE', '/api/tree-permissions/:id', 'Admin', 'Remove a rule. → 204']
+      type: 'ul',
+      items: [
+        'Restriction-only: can only narrow access, never grant beyond base policies.',
+        'If nivaro_policies says a role cannot read "org_units", tree perms cannot override it.',
+        'Best combined with row-level security (RLS) for additional control.'
       ]
     },
     {
       type: 'note',
-      text: 'Rules live in `nivaro_tree_permissions`. SDK: `listTreePermissions(collection?)`, `createTreePermission(body)`, `updateTreePermission(id, patch)`, `deleteTreePermission(id)`.'
+      text: 'Rules stored in `nivaro_tree_permissions`. Deepest matching rule in ancestor chain always wins.'
     }
   ]
 }

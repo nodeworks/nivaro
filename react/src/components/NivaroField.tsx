@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useId } from 'react'
 import type { ComponentOverrides, FieldComponentProps, FormFieldDescriptor } from '../types'
 import { BooleanField } from './fields/BooleanField'
 import { DateField } from './fields/DateField'
@@ -44,6 +44,9 @@ type NivaroFieldProps = {
  * Selects and renders the correct field component for a single field based on
  * its normalized fieldType. Override any type via `components`; falls back to
  * `components.fallback` or a basic text input for unknown types.
+ *
+ * Uses React 18's useId() to generate a unique DOM id per field instance so
+ * two forms with the same collection mounted simultaneously don't collide.
  */
 export function NivaroField({
   field,
@@ -55,6 +58,10 @@ export function NivaroField({
   components,
   className
 }: NivaroFieldProps) {
+  const uid = useId()
+  const inputId = `${uid}-${field.field}`
+  const errorId = error && error.length > 0 ? `${uid}-err` : undefined
+
   const override = components?.[field.fieldType as keyof ComponentOverrides]
   const Renderer =
     override ??
@@ -68,19 +75,21 @@ export function NivaroField({
     onChange,
     error,
     disabled,
-    readOnly
+    readOnly,
+    inputId,
+    errorId
   }
 
   return (
     <div className={className} data-nivaro-field={field.field} data-field-type={field.fieldType}>
-      <label htmlFor={field.field}>
+      <label htmlFor={inputId}>
         {field.label}
         {field.required ? <span aria-hidden="true"> *</span> : null}
       </label>
       <Renderer {...props} />
       {field.note ? <small>{field.note}</small> : null}
       {error && error.length > 0 ? (
-        <div role="alert">
+        <div id={errorId} role="alert">
           {error.map((msg, i) => (
             <span key={i}>{msg}</span>
           ))}

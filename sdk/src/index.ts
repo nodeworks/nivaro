@@ -277,18 +277,6 @@ export interface InstanceOwner {
   email: string
 }
 
-export interface Notification {
-  id: number
-  recipient: UUID
-  sender: UUID | null
-  subject: string
-  message: string | null
-  status: 'inbox' | 'read'
-  timestamp: ISODate
-  collection: string | null
-  item: string | null
-}
-
 export interface ActivityEntry {
   id: number
   action: 'create' | 'update' | 'delete' | 'login'
@@ -612,6 +600,7 @@ export function readUsers<T = Record<string, unknown>>(query?: Query<T>): Comman
   if (query?.offset != null) params.offset = query.offset
   if (query?.filter) params.filter = JSON.stringify(query.filter)
   if (query?.sort?.length) params.sort = query.sort.join(',')
+  if (query?.search) params.search = query.search
   return cmd('GET', '/users', params)
 }
 
@@ -693,28 +682,6 @@ export function readActivity(query?: ActivityQuery): Command<ListResponse<Activi
   return cmd('GET', '/activity', params)
 }
 
-// ─── Notifications ────────────────────────────────────────────────────────────
-
-export function readNotifications(): Command<ListResponse<Notification>> {
-  return cmd('GET', '/notifications')
-}
-
-export function readNotificationCount(): Command<{ data: { unread: number } }> {
-  return cmd('GET', '/notifications/count')
-}
-
-export function markNotificationRead(id: number): Command<void> {
-  return cmd('POST', `/notifications/${id}/read`)
-}
-
-export function markAllNotificationsRead(): Command<void> {
-  return cmd('POST', '/notifications/read-all')
-}
-
-export function deleteNotification(id: number): Command<void> {
-  return cmd('DELETE', `/notifications/${id}`)
-}
-
 // ─── Workflow (state machine) ─────────────────────────────────────────────────
 
 /**
@@ -769,7 +736,7 @@ export function updateWorkflowBinding(
   bindingId: number | string,
   body: { auto_start?: boolean; auto_start_state?: string | null }
 ): Command<{ data: WorkflowBinding }> {
-  return cmd('PATCH', `/pipelines/bindings/${bindingId}`, body)
+  return cmd('PATCH', `/pipelines/bindings/${bindingId}`, undefined, body)
 }
 
 // ─── Pipeline — Owner Matrix ──────────────────────────────────────────────────
@@ -1258,14 +1225,8 @@ export function deleteAlertDefinition(id: number): Command<void> {
   return cmd('DELETE', `/alerts/definitions/${id}`)
 }
 
-/**
- * List the current user's alert subscriptions. If a definitionId is supplied,
- * the result is filtered client-side to that definition (the API returns all of
- * the caller's subscriptions).
- */
-export function listAlertSubscriptions(
-  _definitionId?: number
-): Command<{ data: AlertSubscription[] }> {
+/** List the current user's alert subscriptions. */
+export function listAlertSubscriptions(): Command<{ data: AlertSubscription[] }> {
   return cmd('GET', '/alerts/subscriptions')
 }
 
@@ -1776,6 +1737,14 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
       body: JSON.stringify({ query, variables, operationName })
     })
 
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }))
+      throw Object.assign(new Error((err as { error?: string }).error ?? res.statusText), {
+        status: res.status,
+        response: err
+      })
+    }
+
     const json = (await res.json()) as GraphQLResponse<T>
 
     if (json.errors?.length) {
@@ -2212,9 +2181,6 @@ export const asc = (field: string): string => field
 
 /** Descending sort field. `desc('created_at')` → `'-created_at'` */
 export const desc = (field: string): string => `-${field}`
-
-// Deprecated alias
-export const readItemsSearch = readItems
 
 // ─── Form SDK (schema-driven form helpers) ─────────────────────────────────────
 

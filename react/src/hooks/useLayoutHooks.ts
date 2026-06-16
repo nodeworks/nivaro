@@ -21,7 +21,9 @@ export function useFieldState(form: UseNivaroFormReturn, field: string): FieldSt
     () => form.schema?.fields.find((f) => f.field === field) ?? null,
     [form.schema, field]
   )
-  const onChange = useCallback((v: unknown) => form.setValue(field, v), [form, field])
+  // Depend on form.setValue directly so onChange stays stable when other form
+  // state (values, errors) changes but setValue does not.
+  const onChange = useCallback((v: unknown) => form.setValue(field, v), [form.setValue, field])
   return {
     value: form.values[field],
     error: form.errors[field],
@@ -30,7 +32,7 @@ export function useFieldState(form: UseNivaroFormReturn, field: string): FieldSt
     required: descriptor?.required ?? false,
     colSpan: (descriptor?.options?.col_span as number | undefined) ?? 12,
     descriptor,
-    onChange,
+    onChange
   }
 }
 
@@ -43,12 +45,15 @@ export function useWatchFields(
   form: UseNivaroFormReturn,
   fields: string[]
 ): Record<string, unknown> {
+  // Sort the field names so that ['a','b'] and ['b','a'] produce the same key,
+  // making the memo stable even when the `fields` array is recreated each render.
+  const fieldKey = [...fields].sort().join(',')
   return useMemo(() => {
     const out: Record<string, unknown> = {}
     for (const f of fields) out[f] = form.values[f]
     return out
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.values, fields.join(',')])
+    // fieldKey is a primitive derived from fields, so this is exhaustive.
+  }, [form.values, fieldKey]) // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 // ─── useFormDirty ─────────────────────────────────────────────────────────────
@@ -63,9 +68,11 @@ export type FormDirtyState = {
 
 export function useFormDirty(
   form: UseNivaroFormReturn,
-  initialValues?: Record<string, unknown>
+  initialValuesOverride?: Record<string, unknown>
 ): FormDirtyState {
-  const initial = initialValues ?? {}
+  // Use the form's own tracked initialValues by default so callers don't have
+  // to supply a snapshot manually.
+  const initial = initialValuesOverride ?? form.initialValues
   const dirtyFields = useMemo(
     () =>
       Object.keys(form.values).filter((f) => {
@@ -190,7 +197,7 @@ export function useFormStatus(form: UseNivaroFormReturn): FormStatus {
     isValid: !hasErrors,
     isSubmitting: form.isSubmitting,
     isLoading: form.isLoading,
-    canSubmit: form.isDirty && !hasErrors && !form.isSubmitting,
+    canSubmit: form.isDirty && !hasErrors && !form.isSubmitting
   }
 }
 
@@ -210,9 +217,11 @@ export function useFieldArray(form: UseNivaroFormReturn, field: string): FieldAr
   const raw = form.values[field]
   const items: unknown[] = Array.isArray(raw) ? raw : []
 
+  // Depend on form.setValue directly, not the entire form object.
+  const { setValue } = form
   const replace = useCallback(
-    (next: unknown[]) => form.setValue(field, next),
-    [form, field]
+    (next: unknown[]) => setValue(field, next),
+    [setValue, field]
   )
   const append = useCallback(
     (item: unknown = {}) => replace([...items, item]),

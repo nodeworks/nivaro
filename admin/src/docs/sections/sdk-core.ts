@@ -5,29 +5,65 @@ export const sdkSetup: DocSection = {
   label: 'Setup',
   content: [
     { type: 'h1', id: 'sdk-setup', text: 'SDK — Setup' },
-    { type: 'p', text: 'The `@nivaro/sdk` package is a typed client for the Nivaro API.' },
+    { type: 'p', text: 'The `@nivaro/sdk` package is a fully-typed TypeScript client for the Nivaro REST, GraphQL, and realtime APIs. Works in Node.js, browsers, and edge runtimes.' },
+    { type: 'h3', text: 'Installation' },
     {
       type: 'pre',
-      code: `# Install
-pnpm add @nivaro/sdk
-
-# TypeScript import
-import { createNivaro, readItems, createItem, updateItem, deleteItem } from '@nivaro/sdk'`
+      code: `pnpm add @nivaro/sdk`
     },
     { type: 'h3', text: 'Create a client' },
     {
       type: 'pre',
       code: `import { createNivaro } from '@nivaro/sdk'
 
-// Pass the base URL of the Nivaro API server
+// Minimal — use session cookie (browser) or set token later
 const nivaro = createNivaro('https://nivaro.example.com')
 
-// Optionally, seed an initial token
-const nivaro = createNivaro('https://nivaro.example.com', { token: 'your-static-token' })`
+// With static token
+const nivaro = createNivaro('https://nivaro.example.com', {
+  token: 'nvk_abc123...',  // Bearer token
+})
+
+// Full options
+const nivaro = createNivaro('https://nivaro.example.com', {
+  token: 'nvk_abc123...',
+  workspace: 'workspace-uuid',  // optional: workspace to target
+  headers: { 'X-Custom': 'value' },  // optional: extra headers
+})`
     },
+    { type: 'h3', text: 'Client methods' },
+    {
+      type: 'table',
+      head: ['Method', 'Purpose', 'Example'],
+      rows: [
+        ['request(command)', 'REST operations', 'await nivaro.request(readItems("articles"))'],
+        ['graphql(query, vars?)', 'GraphQL queries + mutations', 'await nivaro.graphql(query, variables)'],
+        ['upload(file)', 'File upload', 'await nivaro.upload(file)'],
+        ['fileUrl(fileId)', 'Get download URL', 'nivaro.fileUrl("file-uuid")'],
+        ['setToken(token)', 'Set/clear auth token', 'nivaro.setToken("nvk_...")'],
+        ['getToken()', 'Read current token', 'const t = nivaro.getToken()'],
+      ]
+    },
+    { type: 'h3', text: 'TypeScript setup' },
     {
       type: 'p',
-      text: 'The `createNivaro` function returns a `NivaroClient` — a single object with `request()`, `graphql()`, `upload()`, `fileUrl()`, `setToken()`, and `getToken()`.'
+      text: 'All SDK functions are fully typed. For collection-specific item operations, define your data shape and pass it as a generic:'
+    },
+    {
+      type: 'pre',
+      code: `import { readItems, createItem } from '@nivaro/sdk'
+
+interface Article {
+  id: string
+  name: string
+  status: 'draft' | 'published'
+  author_id: string
+}
+
+const items = await nivaro.request(
+  readItems<Article>('articles', { filter: { status: { _eq: 'published' } } })
+)
+// items.data → Article[]`
     }
   ]
 }
@@ -39,27 +75,73 @@ export const sdkAuth: DocSection = {
     { type: 'h1', id: 'sdk-auth', text: 'SDK — Authentication' },
     {
       type: 'p',
-      text: "The SDK attaches the current token as an `Authorization: Bearer` header on every request. It also sets `credentials: 'include'` so browser session cookies are forwarded automatically."
+      text: 'The SDK supports two authentication methods: static tokens (for backends/scripts) and session cookies (for browser SPAs).'
     },
-    { type: 'h3', text: 'Static token (scripts / server-side)' },
-    {
-      type: 'pre',
-      code: `// Set at creation time
-const nivaro = createNivaro('https://nivaro.example.com', { token: 'abc123...' })
-
-// Or set at runtime (e.g. after generating a token via the API)
-nivaro.setToken('abc123...')
-
-// Read the current token
-const t = nivaro.getToken()  // string | undefined
-
-// Remove the token (revert to session-cookie-only)
-nivaro.setToken(null)`
-    },
-    { type: 'h3', text: 'Session cookie (browser)' },
+    { type: 'h3', text: 'Static tokens (server-side / CLI)' },
     {
       type: 'p',
-      text: 'In a browser environment where the user has logged in via OIDC, the session cookie is sent automatically. You do not need to call `setToken()` unless you want to use a static token instead.'
+      text: 'Use a static API token for automated scripts, cron jobs, and server-to-server communication:'
+    },
+    {
+      type: 'pre',
+      code: `import { createNivaro, readItems } from '@nivaro/sdk'
+
+// Set token at creation
+const nivaro = createNivaro('https://nivaro.example.com', {
+  token: process.env.NIVARO_TOKEN,  // nvk_...
+})
+
+// Or set at runtime
+nivaro.setToken(process.env.NIVARO_TOKEN)
+
+// Check current token
+const hasToken = nivaro.getToken() !== undefined
+
+// Clear token (revert to unauth or session-cookie mode)
+nivaro.setToken(null)
+
+// Use the client
+const { data: items } = await nivaro.request(readItems('articles'))`
+    },
+    { type: 'h3', text: 'Session cookies (browser SPA)' },
+    {
+      type: 'p',
+      text: 'In a browser, after a user logs in via the OIDC flow (`/login`), the session cookie is set automatically. The SDK will send it with every request:'
+    },
+    {
+      type: 'pre',
+      code: `import { createNivaro } from '@nivaro/sdk'
+
+const nivaro = createNivaro('https://nivaro.example.com')
+// No token needed — session cookie is sent automatically
+
+// After login, you can also set a static token if desired
+nivaro.setToken(localStorage.getItem('api_token'))`
+    },
+    { type: 'h3', text: 'Token priority' },
+    { type: 'ul', items: ['If a static token is set, it takes priority (Authorization: Bearer header).', 'Otherwise, the session cookie is sent if available.', 'If neither exists, requests are made as unauthenticated (limits depend on public routes).'] },
+    { type: 'h3', text: 'Generate tokens via the API' },
+    {
+      type: 'pre',
+      code: `import { generateToken } from '@nivaro/sdk'
+
+// Generate a new token for yourself
+const { data: result } = await nivaro.request(generateToken())
+console.log(result.token)  // Show once — never retrievable again
+
+// Store in env var or secure storage
+process.env.NIVARO_TOKEN = result.token
+nivaro.setToken(result.token)
+
+// Admin: generate token for another user
+const { data: other } = await nivaro.request(generateUserToken('user-uuid'))
+
+// Revoke your own token
+await nivaro.request(revokeToken())
+nivaro.setToken(null)
+
+// Admin: revoke another user's token
+await nivaro.request(revokeUserToken('user-uuid'))`
     }
   ]
 }
@@ -71,112 +153,232 @@ export const sdkRest: DocSection = {
     { type: 'h1', id: 'sdk-rest', text: 'SDK — REST Commands' },
     {
       type: 'p',
-      text: 'All REST operations are performed via `nivaro.request(command)`. Command factories are pure functions — they return a descriptor that `request()` executes.'
+      text: 'All REST operations use `await nivaro.request(command)`. Command functions are factories that return a descriptor — no network call happens until `request()` executes it.'
     },
-    { type: 'h3', text: 'Items' },
+    { type: 'h3', text: 'Read items' },
     {
       type: 'pre',
-      code: `import { readItems, readItem, createItem, updateItem, deleteItem } from '@nivaro/sdk'
+      code: `import { readItems, readItem } from '@nivaro/sdk'
 
-// List with filter + sort
-const list = await nivaro.request(readItems('articles', {
-  filter: { status: { _eq: 'active' } },
-  sort: ['-created_at'],
-  limit: 50,
-}))
-// list.data → T[], list.total, list.limit, list.offset
+// List with filtering, sorting, and pagination
+const { data, total, limit, offset } = await nivaro.request(
+  readItems('articles', {
+    filter: {
+      status: { _eq: 'published' },
+      created_at: { _gte: '2024-01-01' },
+    },
+    sort: ['-created_at', 'title'],  // descending created_at, then ascending title
+    limit: 25,
+    offset: 0,
+  })
+)
+// data → T[]
 
 // Single item
-const item = await nivaro.request(readItem('articles', '123'))
-// item.data → T
+const { data: article } = await nivaro.request(readItem('articles', '123'))
+// data → T`
+    },
+    { type: 'h3', text: 'Create items' },
+    {
+      type: 'pre',
+      code: `import { createItem } from '@nivaro/sdk'
 
-// Create
-const created = await nivaro.request(createItem('articles', { name: 'New', status: 'draft' }))
+const { data: created } = await nivaro.request(
+  createItem('articles', {
+    title: 'New Article',
+    body: 'Lorem ipsum...',
+    status: 'draft',
+    author_id: 'user-uuid',
+  })
+)
+// data → T (with id, timestamps, and default values filled in)`
+    },
+    { type: 'h3', text: 'Update items' },
+    {
+      type: 'pre',
+      code: `import { updateItem } from '@nivaro/sdk'
 
-// Update (partial — only pass changed fields)
-const updated = await nivaro.request(updateItem('articles', '123', { status: 'active' }))
+// Partial update — only changed fields
+const { data: updated } = await nivaro.request(
+  updateItem('articles', '123', {
+    status: 'published',
+    published_at: new Date().toISOString(),
+  })
+)
+// data → T (full record with updates applied)`
+    },
+    { type: 'h3', text: 'Delete items' },
+    {
+      type: 'pre',
+      code: `import { deleteItem } from '@nivaro/sdk'
 
-// Delete
 await nivaro.request(deleteItem('articles', '123'))`
     },
+    { type: 'h3', text: 'Bulk operations' },
+    {
+      type: 'pre',
+      code: `import { bulkCreateItems, bulkUpdateItems, bulkDeleteItems } from '@nivaro/sdk'
+
+// Bulk create
+const { data: created } = await nivaro.request(
+  bulkCreateItems('articles', [
+    { title: 'Article 1', status: 'draft' },
+    { title: 'Article 2', status: 'draft' },
+  ])
+)
+
+// Bulk update
+const { data: updated } = await nivaro.request(
+  bulkUpdateItems('articles', [
+    { id: '123', status: 'published' },
+    { id: '124', status: 'published' },
+  ])
+)
+
+// Bulk delete
+await nivaro.request(bulkDeleteItems('articles', ['123', '124']))`
+    },
     { type: 'h3', text: 'Singletons' },
+    {
+      type: 'p',
+      text: 'For single-record collections (e.g., site settings), use singleton commands:'
+    },
     {
       type: 'pre',
       code: `import { readSingleton, updateSingleton } from '@nivaro/sdk'
 
-const settings = await nivaro.request(readSingleton('nivaro_settings'))
-await nivaro.request(updateSingleton('nivaro_settings', { project_name: 'My Project' }))`
+// Read the singleton record
+const { data: settings } = await nivaro.request(readSingleton('site_settings'))
+
+// Update it
+const { data: updated } = await nivaro.request(
+  updateSingleton('site_settings', { site_name: 'My App', theme: 'dark' })
+)`
     },
-    { type: 'h3', text: 'Users & revisions' },
+    { type: 'h3', text: 'Current user' },
     {
       type: 'pre',
-      code: `import { readMe, updateMe, readUsers, readRevisions } from '@nivaro/sdk'
+      code: `import { readMe, updateMe } from '@nivaro/sdk'
 
-const me = await nivaro.request(readMe())
-await nivaro.request(updateMe({ first_name: 'Rob' }))
-const revs = await nivaro.request(readRevisions('articles', '123'))`
+// Get your own profile
+const { data: me } = await nivaro.request(readMe())
+// me → { id, email, first_name, last_name, role, current_workspace, ... }
+
+// Update your profile
+const { data: updated } = await nivaro.request(
+  updateMe({ first_name: 'Jane', last_name: 'Doe' })
+)`
+    },
+    { type: 'h3', text: 'Revisions (audit trail)' },
+    {
+      type: 'pre',
+      code: `import { readRevisions, readRevision } from '@nivaro/sdk'
+
+// All changes to an item (newest first)
+const { data: revisions } = await nivaro.request(readRevisions('articles', '123'))
+// Each revision: { id, action ('create'|'update'|'delete'), data, delta, timestamp, user_id, first_name, last_name }
+
+// Single revision detail
+const { data: rev } = await nivaro.request(readRevision('rev-uuid'))
+// rev.data → full snapshot at that point in time
+// rev.delta → only the fields that changed (for updates)`
     }
   ]
 }
 
 export const sdkWorkflow: DocSection = {
   id: 'sdk-workflow',
-  label: 'Workflow Commands',
+  label: 'Workflow State Machine',
   content: [
-    { type: 'h1', id: 'sdk-workflow', text: 'SDK — Workflow Commands' },
+    { type: 'h1', id: 'sdk-workflow', text: 'SDK — Workflow State Machine' },
     {
       type: 'p',
-      text: 'Workflow commands read and drive the state machine bound to any collection. All routes live under `/api/pipelines` (pipelines and workflows share the same engine).'
+      text: 'Workflows are state machines that control the lifecycle of items. Each transition can be conditional, role-gated, and can trigger automations. Use these commands to read and drive workflow states.'
+    },
+    { type: 'h3', text: 'Read workflow state' },
+    {
+      type: 'pre',
+      code: `import { readWorkflowInstance, readWorkflowInstances } from '@nivaro/sdk'
+
+// Get full workflow context for an item
+const { data: wf } = await nivaro.request(
+  readWorkflowInstance('inventory_requests', itemId)
+)
+// wf === null → no workflow bound to this collection
+
+// If bound:
+// wf.instance → { current_state, started_at, completed_at, transitioned_at }
+// wf.states → all states with { id, key, label, color, is_initial, is_terminal, lock_record }
+// wf.available_transitions → transitions the user's role can execute from current state
+// wf.history → immutable log: [{ transitioned_at, from_state, to_state, comment, user }]
+
+// Find current state label
+const currentState = wf.states.find(s => s.id === wf.instance.current_state)
+console.log(currentState.label)  // e.g., "In Progress"
+
+// List all workflow instances for a collection (admin)
+const { data: instances } = await nivaro.request(
+  readWorkflowInstances('inventory_requests', { limit: 100 })
+)`
+    },
+    { type: 'h3', text: 'Start and transition workflows' },
+    {
+      type: 'pre',
+      code: `import { startWorkflow, transitionWorkflow } from '@nivaro/sdk'
+
+// Start a workflow on an item (moves to initial state)
+await nivaro.request(startWorkflow('inventory_requests', itemId))
+
+// Execute a transition with optional comment
+const { data: updated } = await nivaro.request(
+  transitionWorkflow('inventory_requests', itemId, transitionId, {
+    comment: 'Approved — ready to ship',
+  })
+)
+// updated → full item with updated workflow state
+
+// Check available transitions before showing UI
+const { data: wf } = await nivaro.request(
+  readWorkflowInstance('inventory_requests', itemId)
+)
+wf.available_transitions.forEach(tx => {
+  // Render a button per transition
+  console.log(tx.label, tx.id)
+})`
+    },
+    { type: 'h3', text: 'Conditional transitions' },
+    {
+      type: 'p',
+      text: 'Some transitions have conditions (field values that must match) before they can execute:'
     },
     {
       type: 'pre',
-      code: `import {
-  readWorkflowInstance, startWorkflow, transitionWorkflow, readWorkflowInstances
-} from '@nivaro/sdk'
-
-// Get current state, available transitions, and history for an item
-const wf = await nivaro.request(readWorkflowInstance('inventory_requests', itemId))
-// wf.data === null  → no workflow bound to this collection
-// wf.data.instance  → { current_state, started_at, completed_at, ... }
-// wf.data.states    → all states with id, key, label, color
-// wf.data.available_transitions → transitions the caller's role can execute
-// wf.data.history   → immutable log of every transition taken
-
-// Find the current state label
-const currentState = wf.data.states.find(s => s.id === wf.data.instance?.current_state)
-
-// Start the workflow (creates instance in the initial state)
-await nivaro.request(startWorkflow('inventory_requests', itemId))
-
-// Execute a transition
-await nivaro.request(
-  transitionWorkflow('inventory_requests', itemId, transition.id, 'Approved — looks good')
+      code: `// Before transitioning, check if conditions are met
+const { data: wf } = await nivaro.request(
+  readWorkflowInstance('orders', orderId)
 )
 
-// List all instances for a collection (summary rows, admin use)
-const all = await nivaro.request(readWorkflowInstances('inventory_requests'))`
+const transition = wf.available_transitions.find(t => t.id === selectedTxId)
+
+// Attempt transition — if conditions not met, API returns 409
+try {
+  await nivaro.request(
+    transitionWorkflow('orders', orderId, transition.id, { comment: 'Approved' })
+  )
+} catch (err) {
+  if (err.status === 409) {
+    console.error('Transition conditions no longer met:', err.message)
+  }
+}`
     },
     {
       type: 'table',
-      head: ['Function', 'Route', 'Auth'],
+      head: ['Function', 'Purpose', 'Auth'],
       rows: [
-        [
-          'readWorkflowInstance(col, item)',
-          'GET /pipelines/instance/:col/:item',
-          'Any authenticated user'
-        ],
-        [
-          'startWorkflow(col, item)',
-          'POST /pipelines/instance/:col/:item/start',
-          'Any authenticated user'
-        ],
-        [
-          'transitionWorkflow(col, item, txId, comment?)',
-          'POST /pipelines/instance/:col/:item/transition',
-          'Role-gated per transition'
-        ],
-        ['readWorkflowInstances(col)', 'GET /pipelines/instances/:col', 'Any authenticated user'],
-        ['readWorkflowBindings()', 'GET /pipelines/bindings', 'Admin']
+        ['readWorkflowInstance(collection, itemId)', 'Get current state + available transitions', 'Authenticated'],
+        ['startWorkflow(collection, itemId)', 'Initialize workflow on an item', 'Authenticated'],
+        ['transitionWorkflow(col, itemId, txId, opts?)', 'Execute a state transition', 'Role-gated per transition'],
+        ['readWorkflowInstances(collection)', 'List all workflow instances', 'Authenticated'],
       ]
     }
   ]
@@ -184,66 +386,100 @@ const all = await nivaro.request(readWorkflowInstances('inventory_requests'))`
 
 export const sdkPipeline: DocSection = {
   id: 'sdk-pipeline',
-  label: 'Pipeline & Owners',
+  label: 'Pipeline & Ownership Matrix',
   content: [
-    { type: 'h1', id: 'sdk-pipeline', text: 'SDK — Pipeline & Owners' },
+    { type: 'h1', id: 'sdk-pipeline', text: 'SDK — Pipeline & Ownership Matrix' },
     {
       type: 'p',
-      text: 'The Pipeline Owner Matrix resolves which users own each state of a workflow instance. Use these commands to read and manage ownership.'
+      text: 'The Pipeline Owner Matrix extends workflows with multi-dimensional ownership. It resolves which users own each workflow state based on dimensional rules (e.g., "If region=North and status=urgent, then assign to @jane").'
     },
-    { type: 'h3', text: 'Reading owners' },
+    { type: 'h3', text: 'Read ownership' },
     {
       type: 'pre',
       code: `import {
   readInstanceOwners, readStateOwners, readAllStateOwners
 } from '@nivaro/sdk'
 
-// Current state owners — the primary call for "who owns this right now?"
-const { data: owners } = await nivaro.request(readInstanceOwners('inventory_requests', itemId))
-// owners → ResolvedOwner[] — { id, email, first_name, last_name }
-
-// Owners for a specific (non-current) state
-const { data } = await nivaro.request(
-  readStateOwners('inventory_requests', itemId, 'state-uuid-here')
+// Get owners for the CURRENT state (primary API)
+const { data: owners } = await nivaro.request(
+  readInstanceOwners('inventory_requests', itemId)
 )
-// data.state   → { id, key, label, color, ... }
-// data.owners  → ResolvedOwner[]
+// owners → User[] — { id, email, first_name, last_name, is_inherited }
 
-// All states at once — avoids N round-trips
+// Get owners for a SPECIFIC state (non-current)
+const { data: result } = await nivaro.request(
+  readStateOwners('inventory_requests', itemId, stateId)
+)
+// result.state → { id, key, label, color }
+// result.owners → User[] (resolved via matrix rules)
+
+// Get owners for ALL states at once (no N+1)
 const { data: allOwners } = await nivaro.request(
   readAllStateOwners('inventory_requests', itemId)
 )
-// allOwners → Record<stateId, { state, owners }> | null (null if no pipeline bound)
-const reviewOwners = allOwners?.['review-state-uuid']?.owners`
+// allOwners → { [stateId]: { state, owners } } | null
+
+// Null means no pipeline bound to collection
+if (allOwners) {
+  Object.entries(allOwners).forEach(([stateId, { state, owners }]) => {
+    console.log(\`\${state.label}: \${owners.map(o => o.first_name).join(', ')}\`)
+  })
+}`
     },
-    { type: 'h3', text: 'Managing instance owners' },
+    { type: 'h3', text: 'Manual ownership overrides' },
     {
       type: 'pre',
       code: `import { addInstanceOwner, removeInstanceOwner } from '@nivaro/sdk'
 
-// Assign a user as owner (optional: scope to a specific state)
+// Assign a user as an override owner for this item
 const { data: owner } = await nivaro.request(
-  addInstanceOwner('inventory_requests', itemId, 'user-uuid', 'state-uuid')
+  addInstanceOwner('inventory_requests', itemId, 'user-uuid', {
+    state_id: stateId,  // optional: scope to a specific state
+  })
 )
 
-// Remove an owner assignment by its row ID
+// Remove an override
 await nivaro.request(removeInstanceOwner(owner.id))`
     },
-    { type: 'h3', text: 'Template data (admin)' },
+    { type: 'h3', text: 'Admin: Pipeline template configuration' },
     {
       type: 'pre',
-      code: `import { readPipelineTemplates, readOwnerGroups, readStateOwnerGroups } from '@nivaro/sdk'
+      code: `import {
+  readPipelineTemplates, readPipelineTemplate,
+  readOwnerGroups, readDimensions
+} from '@nivaro/sdk'
 
 // List all pipeline templates
 const { data: templates } = await nivaro.request(readPipelineTemplates())
 
-// Owner groups for all states, keyed by state ID
+// Get one template
+const { data: template } = await nivaro.request(readPipelineTemplate(templateId))
+// template → { id, name, states: [], binding: { collection }, ... }
+
+// Owner groups per state (configured in admin UI)
 const { data: groups } = await nivaro.request(readOwnerGroups(templateId))
-// groups['state-uuid'] → PipelineOwnerGroup[] with .filters and .users`
+// groups[stateId] → OwnerGroup[] with { filters: JSON, priority, users: [] }
+
+// Dimensions for the matrix (region, product, etc.)
+const { data: dimensions } = await nivaro.request(readDimensions(templateId))
+// dimensions → Dimension[] — { field, label, is_row_axis, sort }`
     },
+    { type: 'h3', text: 'How ownership resolution works' },
+    { type: 'ul', items: ['Owner Groups are evaluated in priority order (lower = higher priority).', 'Each group has filter rules (e.g., "region == North AND status == urgent").', 'First group where ALL filters match assigns its users.', 'If no rules match, the item has no owner.', 'Manual Instance Owner overrides always apply (bypass rules).', 'Delegation via user.delegate_id also applies (temporary out-of-office reassignments).'] },
     {
-      type: 'note',
-      text: '`readInstanceOwners` / `readStateOwners` apply the full matrix resolution — group filters evaluated against the actual record + instance owner overrides. `readOwnerGroups` returns the raw template configuration without applying any item-specific filter context.'
+      type: 'table',
+      head: ['Function', 'Purpose', 'Auth'],
+      rows: [
+        ['readInstanceOwners(col, itemId)', 'Owners for current state', 'Authenticated'],
+        ['readStateOwners(col, itemId, stateId)', 'Owners for a specific state', 'Authenticated'],
+        ['readAllStateOwners(col, itemId)', 'Owners for all states (no N+1)', 'Authenticated'],
+        ['addInstanceOwner(col, itemId, userId, opts?)', 'Add manual override', 'Authenticated'],
+        ['removeInstanceOwner(ownerId)', 'Remove override', 'Authenticated'],
+        ['readPipelineTemplates()', 'List pipeline templates', 'Admin'],
+        ['readPipelineTemplate(id)', 'Get one template', 'Admin'],
+        ['readOwnerGroups(templateId)', 'Owner groups by state', 'Admin'],
+        ['readDimensions(templateId)', 'Matrix dimensions', 'Admin'],
+      ]
     }
   ]
 }
@@ -255,76 +491,118 @@ export const sdkForms: DocSection = {
     { type: 'h1', id: 'sdk-forms', text: 'SDK — Form Schema' },
     {
       type: 'p',
-      text: '`fetchFormSchema` aggregates collection metadata, fields, groups, and relations into a single normalized `FormSchema` — one round-trip instead of separate calls to collections, fields, field-groups, and relations. The remaining helpers cover the rest of a typical form lifecycle: evaluating inline field rules as the user types, loading relation options for M2O/M2M pickers, and submitting the completed item.'
+      text: 'The Form Schema API aggregates collection metadata, fields, groups, layouts, and relations into one normalized response. Use it to power dynamic UIs, form generators, and headless form runtimes.'
     },
+    { type: 'h3', text: 'Load form schema' },
     {
       type: 'pre',
-      code: `import {
-  fetchFormSchema, evaluateFieldRules, readRelationOptions, submitFormItem
-} from '@nivaro/sdk'
+      code: `import { fetchFormSchema } from '@nivaro/sdk'
 
-// 1. Load the normalized schema for a collection
-const schema = await nivaro.request(fetchFormSchema('inventory_requests'))
+const { data: schema } = await nivaro.request(fetchFormSchema('inventory_requests'))
 // schema → {
-//   collection,    // collection metadata
-//   fields,        // FormField[] — type, interface, required, validation_rules, ...
-//   groups,        // FieldGroup[] — section/tab definitions, sorted
-//   relations,     // RelationMeta[] — m2o/o2m/m2m/m2a, related_collection + display_field
+//   collection: { id, name, icon, ... },
+//   fields: FormField[],
+//   groups: FieldGroup[],  // section/tab definitions, sorted
+//   relations: RelationMeta[],  // m2o/o2m/m2m/m2a
+//   layout: { id, name, tab_mode, ... },
+//   ungroupedSort: 5,  // position of Ungrouped zone
 // }
 
-// 2. Evaluate inline field rules against the in-progress values (no save)
-const { updates } = await nivaro.request(
-  evaluateFieldRules('inventory_requests', { category: 'hardware', priority: null })
-)
-// updates → only the fields the rules changed, e.g. { priority: 'high' }
+// Iterate fields by group
+schema.groups.forEach(group => {
+  const fieldsInGroup = schema.fields.filter(f => f.group_key === group.key)
+  console.log(group.label, fieldsInGroup.map(f => f.label))
+})`
+    },
+    { type: 'h3', text: 'Evaluate field rules in real-time' },
+    {
+      type: 'pre',
+      code: `import { evaluateFieldRules } from '@nivaro/sdk'
 
-// 3. Load options for a relation field (M2O / M2M picker)
+// As the user types, evaluate inline field rules (no save)
+const values = { category: 'hardware', vendor: null }
+const { data: result } = await nivaro.request(
+  evaluateFieldRules('inventory_requests', values)
+)
+// result.updates → { priority: 'high' }  (only changed fields)
+
+// Apply rule updates to form state
+setValues({ ...values, ...result.updates })`
+    },
+    { type: 'h3', text: 'Load relation options (picker)' },
+    {
+      type: 'pre',
+      code: `import { readRelationOptions } from '@nivaro/sdk'
+
+// Load options for an M2O or M2M field picker
 const { data: options } = await nivaro.request(
-  readRelationOptions('inventory_requests', 'assigned_to', { search: 'jane', limit: 25 })
+  readRelationOptions('inventory_requests', 'assigned_to', {
+    search: 'jane',  // filter by search term
+    limit: 25,
+  })
 )
-// options → [{ value, label }] — label rendered from the relation's display template
+// options → { value, label }[]  (label from display template)
 
-// 4. Submit the completed item (create or update)
-const created = await nivaro.request(
-  submitFormItem('inventory_requests', { mode: 'create', values })
+// Render picker
+options.forEach(opt => console.log(\`\${opt.label} (\${opt.value})\`))`
+    },
+    { type: 'h3', text: 'Submit form item' },
+    {
+      type: 'pre',
+      code: `import { submitFormItem } from '@nivaro/sdk'
+
+// Create new item
+const { data: created } = await nivaro.request(
+  submitFormItem('inventory_requests', {
+    mode: 'create',
+    values: {
+      title: 'New Request',
+      category: 'hardware',
+      priority: 'high',
+    },
+  })
 )
-const updated = await nivaro.request(
-  submitFormItem('inventory_requests', { mode: 'edit', itemId: '123', values })
+
+// Update existing
+const { data: updated } = await nivaro.request(
+  submitFormItem('inventory_requests', {
+    mode: 'edit',
+    itemId: '123',
+    values: { status: 'approved' },  // partial update
+  })
 )`
+    },
+    { type: 'h3', text: 'Form field shape' },
+    {
+      type: 'table',
+      head: ['Property', 'Type', 'Description'],
+      rows: [
+        ['key', 'string', 'Field name (used in values/updates).'],
+        ['label', 'string', 'Display name.'],
+        ['type', 'string', 'text | number | boolean | date | select | etc.'],
+        ['interface', 'string', 'UI hint: text-input | textarea | toggle | date-picker.'],
+        ['required', 'boolean', 'If true, value must be provided.'],
+        ['sort', 'number | null', 'Display order within group.'],
+        ['hidden', 'boolean', 'If true, hidden from UI but readable via API.'],
+        ['validation_rules', 'Rule[]', 'Constraints: min_length, pattern, unique, etc.'],
+        ['visibility_rules', 'Rule[]', 'Show/hide based on other field values.'],
+        ['lock_condition', 'Rule[]', 'Make read-only based on field values.'],
+        ['computed_formula', 'string | null', 'If set, field is auto-calculated (read-only).'],
+      ]
     },
     {
       type: 'table',
-      head: ['Function', 'Returns', 'Notes'],
+      head: ['Command', 'Purpose'],
       rows: [
-        [
-          'fetchFormSchema(collection)',
-          'FormSchema',
-          'Collection + fields + groups + relations, normalized into one object.'
-        ],
-        [
-          'evaluateFieldRules(collection, values)',
-          '{ updates }',
-          'Server-evaluates inline field rules; returns only changed fields. Computes without saving.'
-        ],
-        [
-          'readRelationOptions(collection, field, opts?)',
-          '{ value, label }[]',
-          'Options for an M2O/M2M field; opts accepts search and limit.'
-        ],
-        [
-          'submitFormItem(collection, { mode, itemId?, values })',
-          'T',
-          "mode: 'create' calls createItem; mode: 'edit' calls updateItem against itemId."
-        ]
+        ['fetchFormSchema(collection)', 'Load full schema + layout + relations'],
+        ['evaluateFieldRules(collection, values)', 'Server-evaluate rules against values (no save)'],
+        ['readRelationOptions(collection, field, opts?)', 'Get picker options for a relation field'],
+        ['submitFormItem(collection, { mode, itemId?, values })', 'Create or update via form'],
       ]
     },
     {
       type: 'note',
-      text: 'The Form Schema commands use the same **snake_case** field shape as the rest of the REST API (`validation_rules`, `related_collection`, `display_field`). The `@nivaro/react` package wraps these into a camelCase form runtime (`validationRules`, `fieldType`) and is documented as a separate API — do not mix the two casing conventions.'
-    },
-    {
-      type: 'note',
-      text: 'For end-user public submission forms (no SDK, embeddable via `widget.js`), see the Submission Forms docs — that is a separate, hosted feature distinct from the Form Schema SDK.'
+      text: 'Form Schema uses **snake_case** (`validation_rules`, `visibility_rules`, `computed_formula`). The `@nivaro/react` package wraps these in **camelCase** (`validationRules`) for React — do not mix the two APIs.'
     }
   ]
 }
@@ -336,21 +614,17 @@ export const sdkReact: DocSection = {
     { type: 'h1', id: 'sdk-react', text: 'SDK — React (@nivaro/react)' },
     {
       type: 'p',
-      text: '`@nivaro/react` is a React form runtime built on top of `@nivaro/sdk`. It turns a collection into a fully-wired form: schema loading, field rules, visibility/lock evaluation, relation options, validation, and submit — all behind a single `useNivaroForm` hook. Use the headless hook with your own inputs, or `<NivaroForm>` to auto-render fields from the schema.'
-    },
-    {
-      type: 'note',
-      text: 'The React runtime exposes a **camelCase** API (`fieldType`, `validationRules`) — distinct from the snake_case shape of the underlying SDK Form Schema commands. Treat them as separate APIs.'
+      text: '`@nivaro/react` is a form runtime built on `@nivaro/sdk`. One hook (`useNivaroForm`) handles schema loading, field rules, visibility/lock evaluation, relation options, validation, and submit. Pair it with your own inputs (headless) or use `<NivaroForm>` for auto-rendering fields.'
     },
     { type: 'h3', text: 'Installation' },
     {
       type: 'pre',
-      code: 'pnpm add @nivaro/react @nivaro/sdk'
+      code: `pnpm add @nivaro/react @nivaro/sdk react react-dom`
     },
     { type: 'h3', text: 'Setup' },
     {
       type: 'p',
-      text: 'Wrap your app in `<NivaroProvider>` with a configured SDK client. The provider supplies the client to every form hook below it.'
+      text: 'Wrap your app in `<NivaroProvider>` with a configured SDK client:'
     },
     {
       type: 'pre',
@@ -359,121 +633,96 @@ import { NivaroProvider } from '@nivaro/react'
 
 const nivaro = createNivaro('https://nivaro.example.com', { token: '...' })
 
-function App() {
+export function App() {
   return (
     <NivaroProvider client={nivaro}>
-      <RequestForm />
+      <Routes>
+        <Route path="/requests/new" element={<CreateRequestForm />} />
+        <Route path="/requests/:id/edit" element={<EditRequestForm />} />
+      </Routes>
     </NivaroProvider>
   )
 }`
     },
-    { type: 'h3', text: 'useNivaroForm' },
-    {
-      type: 'p',
-      text: 'The hook loads the schema, manages values and errors, and wires submit. Pass the collection and a mode (`create` or `edit`).'
-    },
-    {
-      type: 'pre',
-      code: `const form = useNivaroForm('inventory_requests', {
-  mode: 'create',                  // 'create' | 'edit'
-  itemId: '123',                   // required when mode === 'edit'
-  defaultValues: { priority: 'low' },
-  onSuccess: (item) => navigate(\`/requests/\${item.id}\`),
-  onError: (err) => toast.error(err.message),
-})`
-    },
-    {
-      type: 'table',
-      head: ['Returned', 'Description'],
-      rows: [
-        ['values', 'Current form values keyed by field name.'],
-        ['errors', 'Validation errors keyed by field name (empty when valid).'],
-        [
-          'setValue(field, value)',
-          'Update one field; re-runs field rules and visibility/lock evaluation.'
-        ],
-        [
-          'handleSubmit(e?)',
-          'Validates, then creates or updates via the SDK; fires onSuccess / onError.'
-        ],
-        ['isVisible(field)', 'Whether a field passes its visibility rules for the current values.'],
-        ['isLocked(field)', 'Whether a field is locked (read-only) for the current values.'],
-        ['schema', 'The normalized FormSchema (camelCase: fieldType, validationRules, ...).'],
-        ['fieldsByGroup', 'Fields bucketed by group key for rendering sections/tabs.'],
-        ['visibleGroups', 'Group definitions that currently have at least one visible field.']
-      ]
-    },
-    { type: 'h3', text: 'Styled example (custom inputs)' },
-    {
-      type: 'p',
-      text: 'Drive your own markup directly from the hook — full control over inputs and layout.'
-    },
+    { type: 'h3', text: 'useNivaroForm hook' },
     {
       type: 'pre',
       code: `import { useNivaroForm } from '@nivaro/react'
 
-function RequestForm() {
+function CreateRequestForm() {
   const form = useNivaroForm('inventory_requests', {
     mode: 'create',
-    onSuccess: (item) => console.log('created', item.id),
+    defaultValues: { priority: 'medium', status: 'draft' },
+    onSuccess: (item) => navigate(\`/requests/\${item.id}\`),
+    onError: (err) => toast.error(err.message),
   })
 
-  if (!form.schema) return <p>Loading…</p>
-
   return (
-    <form onSubmit={form.handleSubmit} className="space-y-4">
-      {form.schema.fields.map((field) =>
-        form.isVisible(field.field) ? (
-          <label key={field.field} className="block">
-            <span className="text-sm font-medium">{field.label}</span>
-            <input
-              className="mt-1 w-full rounded border px-3 py-2"
-              value={form.values[field.field] ?? ''}
-              disabled={form.isLocked(field.field)}
-              onChange={(e) => form.setValue(field.field, e.target.value)}
-            />
-            {form.errors[field.field] && (
-              <span className="text-xs text-red-600">{form.errors[field.field]}</span>
-            )}
-          </label>
-        ) : null
-      )}
-      <button type="submit" className="rounded bg-nvr-cyan px-4 py-2 text-white">
-        Submit
+    <form onSubmit={form.handleSubmit}>
+      <input
+        type="text"
+        value={form.values.title}
+        onChange={(e) => form.setValue('title', e.target.value)}
+      />
+      {form.errors.title && <p>{form.errors.title}</p>}
+
+      <select
+        value={form.values.priority}
+        onChange={(e) => form.setValue('priority', e.target.value)}
+        disabled={form.isLocked('priority')}
+      >
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+      </select>
+
+      <button type="submit" disabled={!form.isValid || form.isSubmitting}>
+        {form.isSubmitting ? 'Saving...' : 'Create'}
       </button>
     </form>
   )
 }`
     },
-    { type: 'h3', text: 'Unstyled example (NivaroForm auto-render)' },
+    { type: 'h3', text: 'Hook return shape' },
     {
-      type: 'p',
-      text: '`<NivaroForm form={form}>` renders every visible field from the schema automatically. Use `renderField` for a per-field override, or `components` to swap the default input element per field type.'
+      type: 'table',
+      head: ['Property', 'Type', 'Description'],
+      rows: [
+        ['values', 'Record<string, unknown>', 'Current form values.'],
+        ['errors', 'Record<string, string>', 'Validation errors (empty when valid).'],
+        ['isValid', 'boolean', 'Whether all fields pass validation.'],
+        ['isDirty', 'boolean', 'Whether any field differs from initial values.'],
+        ['isLoading', 'boolean', 'Schema loading in progress.'],
+        ['isSubmitting', 'boolean', 'Form submission in progress.'],
+        ['setValue(field, value)', 'void', 'Update one field; re-runs rules/visibility.'],
+        ['handleSubmit(e?)', 'void', 'Validate + submit; fires onSuccess/onError.'],
+        ['reset(values?)', 'void', 'Reset to initial or new values.'],
+        ['isVisible(field)', 'boolean', 'Whether field passes visibility rules.'],
+        ['isLocked(field)', 'boolean', 'Whether field is read-only.'],
+        ['schema', 'FormSchema', 'Full schema (camelCase: fieldType, validationRules).'],
+        ['fieldsByGroup', 'Record<string, Field[]>', 'Fields bucketed by group key.'],
+        ['visibleGroups', 'Group[]', 'Groups with at least one visible field.'],
+      ]
     },
+    { type: 'h3', text: 'Auto-render form' },
     {
       type: 'pre',
-      code: `import { useNivaroForm, NivaroForm } from '@nivaro/react'
+      code: `import { NivaroForm } from '@nivaro/react'
 
-function RequestForm() {
-  const form = useNivaroForm('inventory_requests', { mode: 'create' })
-
+function AutoForm() {
   return (
     <NivaroForm
-      form={form}
-      // Optional: override rendering for a single field
-      renderField={(field, ctx) =>
-        field.field === 'notes' ? (
-          <textarea value={ctx.value} onChange={(e) => ctx.setValue(e.target.value)} />
-        ) : undefined  // return undefined to fall back to the default
-      }
-      // Optional: swap the input component per field type
-      components={{
-        select: MySelect,
-        date: MyDatePicker,
-      }}
+      collection="inventory_requests"
+      mode="create"
+      onSuccess={(item) => navigate(\`/requests/\${item.id}\`)}
     />
   )
-}`
+}
+// <NivaroForm> auto-renders all fields, groups, and validation.`
+    },
+    {
+      type: 'note',
+      text: '`@nivaro/react` uses **camelCase** (`fieldType`, `validationRules`, `visibilityRules`) — different from the SDK Form Schema snake_case. This is intentional for React conventions. Do not mix the two APIs.'
     }
   ]
 }
@@ -491,259 +740,6 @@ export const sdkReactLayout: DocSection = {
       type: 'note',
       text: '`FormSchema` now includes `ungroupedSort: number | null` — the configured position of the Ungrouped zone relative to named groups. `fetchFormSchema` and `useFormSchema` fetch this automatically from the active layout endpoint; no extra call is needed.'
     },
-
-    { type: 'h3', text: 'LayoutForm — layout-aware auto-renderer' },
-    {
-      type: 'p',
-      text: '`<LayoutForm>` renders the full form using the active layout: tabs (if any), named sections with a col_span grid inside each, and an Ungrouped zone at its configured position. It is a drop-in replacement for iterating `form.schema.fields` manually when you want correct group/tab/grid rendering out of the box.'
-    },
-    {
-      type: 'pre',
-      code: `import { useNivaroForm, LayoutForm } from '@nivaro/react'
-
-function RequestForm() {
-  const form = useNivaroForm('inventory_requests', { mode: 'create' })
-
-  return (
-    <LayoutForm
-      form={form}
-      // Optional per-field override — return undefined to use the default renderer
-      renderField={(field, ctx) =>
-        field.field === 'notes'
-          ? <textarea value={ctx.value ?? ''} onChange={(e) => ctx.onChange(e.target.value)} />
-          : undefined
-      }
-    />
-  )
-}`
-    },
-
-    { type: 'h3', text: 'useOrderedLayout — full layout descriptor' },
-    {
-      type: 'p',
-      text: 'Returns the ordered sequence of groups and ungrouped fields, respecting `ungroupedSort`. Use this as the single source of truth when building a custom layout renderer.'
-    },
-    {
-      type: 'pre',
-      code: `import { useNivaroForm, useOrderedLayout } from '@nivaro/react'
-
-function CustomLayout() {
-  const form = useNivaroForm('contracts', { mode: 'create' })
-  const { items, hasTabs, tabGroups, sectionGroups, ungroupedFields } = useOrderedLayout(form)
-
-  // items is (FormGroupDescriptor | '__ungrouped__')[] in display order
-  return (
-    <div>
-      {items.map((item) =>
-        item === '__ungrouped__'
-          ? ungroupedFields.map((f) => <MyField key={f.field} field={f} form={form} />)
-          : <MySection key={item.key} group={item} form={form} />
-      )}
-    </div>
-  )
-}`
-    },
-
-    { type: 'h3', text: 'useTabState — tab navigation' },
-    {
-      type: 'p',
-      text: 'Tracks which tab is active when the layout has tab-type groups. Falls back gracefully when there are no tabs (`hasTabs === false`).'
-    },
-    {
-      type: 'pre',
-      code: `import { useNivaroForm, useTabState } from '@nivaro/react'
-
-function TabbedForm() {
-  const form = useNivaroForm('projects', { mode: 'create' })
-  const { activeTab, setActiveTab, tabs, hasTabs } = useTabState(form)
-
-  if (!hasTabs) return <FlatForm form={form} />
-
-  return (
-    <div>
-      <nav className="flex gap-2 border-b">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            className={activeTab === tab.key ? 'border-b-2 border-cyan-500' : ''}
-            onClick={() => setActiveTab(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-      {/* render fields for activeTab only */}
-    </div>
-  )
-}`
-    },
-
-    { type: 'h3', text: 'useSectionState — collapse / expand sections' },
-    {
-      type: 'p',
-      text: 'Manages collapsed state for section-type groups. Pass `defaultCollapsed: true` to start all sections closed.'
-    },
-    {
-      type: 'pre',
-      code: `import { useNivaroForm, useOrderedLayout, useSectionState } from '@nivaro/react'
-
-function CollapsibleForm() {
-  const form = useNivaroForm('orders', { mode: 'create' })
-  const { sectionGroups } = useOrderedLayout(form)
-  const { isCollapsed, toggle, collapseAll, expandAll } = useSectionState(form)
-
-  return (
-    <div>
-      <div className="flex gap-2 text-sm mb-4">
-        <button onClick={collapseAll}>Collapse all</button>
-        <button onClick={expandAll}>Expand all</button>
-      </div>
-      {sectionGroups.map((section) => (
-        <div key={section.key} className="border rounded mb-3">
-          <button className="w-full p-3 text-left font-medium" onClick={() => toggle(section.key)}>
-            {section.label} {isCollapsed(section.key) ? '▸' : '▾'}
-          </button>
-          {!isCollapsed(section.key) && <div className="p-3">{/* fields */}</div>}
-        </div>
-      ))}
-    </div>
-  )
-}`
-    },
-
-    { type: 'h3', text: 'useFieldState — per-field descriptor' },
-    {
-      type: 'p',
-      text: 'Returns all computed state for a single field: value, error, visibility, lock, required, col_span, and a stable `onChange` callback. Useful when building custom field wrappers that need a clean per-field API.'
-    },
-    {
-      type: 'pre',
-      code: `import { useNivaroForm, useFieldState } from '@nivaro/react'
-
-function MyField({ form, fieldName }: { form: NivaroForm; fieldName: string }) {
-  const { value, error, visible, locked, required, colSpan, descriptor, onChange } =
-    useFieldState(form, fieldName)
-
-  if (!visible) return null
-
-  return (
-    <div style={{ gridColumn: \`span \${colSpan}\` }}>
-      <label>{descriptor.label}{required && ' *'}</label>
-      <input value={value ?? ''} disabled={locked} onChange={(e) => onChange(e.target.value)} />
-      {error && <span className="text-red-600 text-xs">{error}</span>}
-    </div>
-  )
-}`
-    },
-
-    { type: 'h3', text: 'useWatchFields — reactive value slice' },
-    {
-      type: 'p',
-      text: 'Subscribes to a subset of field values and re-renders only when those values change. Use for derived UI that depends on a few fields without watching the entire form.'
-    },
-    {
-      type: 'pre',
-      code: `import { useNivaroForm, useWatchFields } from '@nivaro/react'
-
-function PricePreview({ form }: { form: NivaroForm }) {
-  const { quantity, unit_price, discount } = useWatchFields(form, ['quantity', 'unit_price', 'discount'])
-
-  const total = ((quantity ?? 0) as number) * ((unit_price ?? 0) as number)
-    * (1 - ((discount ?? 0) as number) / 100)
-
-  return <p className="text-sm text-slate-600">Total: {total.toFixed(2)}</p>
-}`
-    },
-
-    { type: 'h3', text: 'useFormDirty — change tracking' },
-    {
-      type: 'p',
-      text: 'Tracks which fields have changed from their initial values. Pass `initialValues` explicitly or omit it to compare against the values present when the hook first mounted (i.e. the loaded item in edit mode).'
-    },
-    {
-      type: 'pre',
-      code: `import { useNivaroForm, useFormDirty } from '@nivaro/react'
-
-function EditForm({ itemId }: { itemId: string }) {
-  const form = useNivaroForm('contracts', { mode: 'edit', itemId })
-  const { isDirty, dirtyFields, isFieldDirty } = useFormDirty(form)
-
-  return (
-    <form onSubmit={form.handleSubmit}>
-      {/* ... fields ... */}
-      <button type="submit" disabled={!isDirty}>
-        Save changes {isDirty && \`(\${dirtyFields.length} changed)\`}
-      </button>
-      {isFieldDirty('title') && <span className="text-xs text-amber-600">Title modified</span>}
-    </form>
-  )
-}`
-    },
-
-    { type: 'h3', text: 'useFormStatus — consolidated status flags' },
-    {
-      type: 'p',
-      text: 'Combines dirty, valid, submitting, and loading flags into a single object. Useful for driving save buttons and loading states without subscribing to multiple sources.'
-    },
-    {
-      type: 'pre',
-      code: `import { useNivaroForm, useFormStatus } from '@nivaro/react'
-
-function SaveBar({ form }: { form: NivaroForm }) {
-  const { isDirty, isValid, isSubmitting, isLoading, canSubmit } = useFormStatus(form)
-
-  return (
-    <div className="fixed bottom-0 right-0 p-4 flex gap-2">
-      {isLoading && <span>Loading schema…</span>}
-      <button
-        type="button"
-        disabled={!canSubmit}
-        onClick={form.handleSubmit}
-        className="rounded bg-nvr-cyan px-4 py-2 text-white disabled:opacity-50"
-      >
-        {isSubmitting ? 'Saving…' : 'Save'}
-      </button>
-    </div>
-  )
-}`
-    },
-
-    { type: 'h3', text: 'useFieldArray — repeater field management' },
-    {
-      type: 'p',
-      text: 'Manages a repeater field as an ordered list of row objects. Provides append, remove, move, update, and replace operations — all wired to `form.setValue` so validation and dirty tracking stay in sync.'
-    },
-    {
-      type: 'pre',
-      code: `import { useNivaroForm, useFieldArray } from '@nivaro/react'
-
-function LineItemsEditor({ form }: { form: NivaroForm }) {
-  const { items, append, remove, move, update } = useFieldArray(form, 'line_items')
-
-  return (
-    <div className="space-y-2">
-      {items.map((row, idx) => (
-        <div key={idx} className="flex gap-2 items-center">
-          <input
-            value={row.description ?? ''}
-            onChange={(e) => update(idx, { ...row, description: e.target.value })}
-            placeholder="Description"
-          />
-          <input
-            type="number"
-            value={row.qty ?? ''}
-            onChange={(e) => update(idx, { ...row, qty: Number(e.target.value) })}
-            className="w-20"
-          />
-          <button onClick={() => remove(idx)}>✕</button>
-        </div>
-      ))}
-      <button onClick={() => append({ description: '', qty: 1 })}>Add line</button>
-    </div>
-  )
-}`,
-    },
-
     {
       type: 'table',
       head: ['Export', 'Kind', 'Purpose'],
@@ -768,9 +764,13 @@ function LineItemsEditor({ form }: { form: NivaroForm }) {
 
 export const sdkNotifications: DocSection = {
   id: 'sdk-notifications',
-  label: 'Notifications',
+  label: 'Notifications & Inbox',
   content: [
-    { type: 'h1', id: 'sdk-notifications', text: 'SDK — Notifications' },
+    { type: 'h1', id: 'sdk-notifications', text: 'SDK — Notifications & Inbox' },
+    {
+      type: 'p',
+      text: 'Manage your notification inbox. Notifications are created by rules, workflows, comments (@mentions), and alerts — use these endpoints to read, mark as read, and delete them.'
+    },
     {
       type: 'pre',
       code: `import {
@@ -778,25 +778,56 @@ export const sdkNotifications: DocSection = {
   markNotificationRead, markAllNotificationsRead, deleteNotification
 } from '@nivaro/sdk'
 
-// List inbox notifications for the current user
-const { data: notifs } = await nivaro.request(readNotifications())
+// List your inbox notifications (paginated)
+const { data: notifs, total, offset } = await nivaro.request(
+  readNotifications({ limit: 50, offset: 0 })
+)
 // notifs → Notification[] — { id, subject, message, status, timestamp, collection, item }
 
-// Unread count — lightweight poll for badge
-const { data: { unread } } = await nivaro.request(readNotificationCount())
+// Get unread count (lightweight, for badge)
+const { data: counts } = await nivaro.request(readNotificationCount())
+// counts → { unread: 5, total: 42 }
 
 // Mark one as read
 await nivaro.request(markNotificationRead(notif.id))
 
-// Mark all read
+// Mark all as read
 await nivaro.request(markAllNotificationsRead())
 
 // Delete one
 await nivaro.request(deleteNotification(notif.id))`
     },
+    { type: 'h3', text: 'Real-time notifications via Socket.io' },
     {
-      type: 'note',
-      text: 'For real-time delivery use the Socket.io client — the server emits `notification:new` events to the room `user:<userId>` immediately when a notification is created. See the Realtime section.'
+      type: 'p',
+      text: 'For live notifications as they arrive, subscribe to the Socket.io event:'
+    },
+    {
+      type: 'pre',
+      code: `import { createRealtime } from '@nivaro/sdk'
+
+const rt = createRealtime()
+await rt.connect('https://nivaro.example.com')
+
+// Subscribe to your notifications room
+rt.subscribe(\`user:\${userId}\`, { event: 'notification:new' }, (notif) => {
+  console.log('New notification:', notif.subject)
+  // Update badge, toast, etc.
+})`
+    },
+    {
+      type: 'table',
+      head: ['Field', 'Type', 'Description'],
+      rows: [
+        ['id', 'string', 'UUID.'],
+        ['subject', 'string', 'Notification title.'],
+        ['message', 'string', 'Full message body.'],
+        ['status', 'string', '"inbox" | "read"'],
+        ['timestamp', 'string', 'ISO 8601 when created.'],
+        ['collection', 'string | null', 'Related collection (if from an item event).'],
+        ['item', 'string | null', 'Related item ID.'],
+        ['sender', 'string | null', 'User who triggered it (if applicable).']
+      ]
     }
   ]
 }
@@ -806,44 +837,73 @@ export const sdkActivity: DocSection = {
   label: 'Activity & Revisions',
   content: [
     { type: 'h1', id: 'sdk-activity', text: 'SDK — Activity & Revisions' },
+    {
+      type: 'p',
+      text: 'The activity log records all changes and actions in your CMS. Revisions give you full audit trail and rollback capability.'
+    },
     { type: 'h3', text: 'Activity log' },
     {
       type: 'pre',
       code: `import { readActivity } from '@nivaro/sdk'
 
-// All activity, newest first
-const { data: entries } = await nivaro.request(readActivity({ limit: 50 }))
+// All activity, newest first (system-wide audit log)
+const { data: entries, total } = await nivaro.request(
+  readActivity({ limit: 50, offset: 0 })
+)
+// entries → Activity[] — { id, action, collection, item, user_id, timestamp, ... }
 
-// Filter by collection / action / user
-const { data: creates } = await nivaro.request(readActivity({
-  collection: 'inventory_requests',
-  action: 'create',
-  limit: 25,
-}))`
+// Filter by collection, action, or user
+const { data: creates } = await nivaro.request(
+  readActivity({
+    collection: 'inventory_requests',
+    action: 'create',  // 'create' | 'update' | 'delete' | 'schema-*'
+    user_id: 'user-uuid',  // optional
+    limit: 25,
+  })
+)`
     },
-    { type: 'h3', text: 'Revisions' },
+    { type: 'h3', text: 'Revisions (item-level history)' },
     {
       type: 'pre',
       code: `import { readRevisions, readRevision } from '@nivaro/sdk'
 
 // All revisions for a specific item (newest first)
-const { data: revs } = await nivaro.request(readRevisions('inventory_requests', itemId))
-// Each revision: { action, data (full snapshot), delta (changed fields only), timestamp, user }
+const { data: revisions } = await nivaro.request(
+  readRevisions('inventory_requests', itemId, { limit: 50 })
+)
+// revisions → Revision[] — each revision includes action, full snapshot, and delta
 
-// Single revision with full snapshot + delta
-const { data: rev } = await nivaro.request(readRevision(revisionId))`
+revisions.forEach(rev => {
+  console.log(
+    \`\${rev.action.toUpperCase()} by \${rev.first_name} at \${rev.timestamp}\`
+  )
+  if (rev.delta) {
+    console.log('Changed:', Object.keys(rev.delta))
+  }
+})
+
+// Single revision detail with full snapshot and delta
+const { data: rev } = await nivaro.request(readRevision(revisionId))
+console.log('Full snapshot:', rev.data)
+console.log('Changed fields:', rev.delta)`
     },
+    { type: 'h3', text: 'Revision shape' },
     {
       type: 'table',
-      head: ['Field', 'Description'],
+      head: ['Field', 'Type', 'Description'],
       rows: [
-        ['action', '"create" | "update" | "delete"'],
-        ['data', 'Full snapshot of the record at that point in time.'],
-        ['delta', 'For updates: only the changed fields. Null for create/delete.'],
-        ['timestamp', 'ISO 8601 datetime.'],
-        ['first_name / last_name / user_email', 'Joined from nivaro_users for display.']
+        ['id', 'string', 'Revision UUID.'],
+        ['action', 'string', '"create" | "update" | "delete"'],
+        ['collection', 'string', 'Collection name.'],
+        ['item_id', 'string', 'Item ID (null for create).'],
+        ['data', 'Record', 'Full snapshot of the record at that revision.'],
+        ['delta', 'Record | null', 'Only changed fields (for updates). Null for create/delete.'],
+        ['timestamp', 'string', 'ISO 8601 datetime.'],
+        ['user_id', 'string', 'User who made the change.'],
+        ['first_name / last_name / user_email', 'string', 'Display info from nivaro_users.']
       ]
-    }
+    },
+    { type: 'note', text: 'Revisions are immutable — they form a complete audit trail. You can compare any two revisions to see exactly what changed. For rollback, use the delta as a PATCH to the current item.' }
   ]
 }
 
@@ -854,77 +914,164 @@ export const sdkGraphql: DocSection = {
     { type: 'h1', id: 'sdk-graphql', text: 'SDK — GraphQL Transport' },
     {
       type: 'p',
-      text: 'Use `nivaro.graphql()` to send typed GraphQL queries. The method throws on GraphQL errors — no need to check `response.errors` manually.'
+      text: 'Use `nivaro.graphql()` to send typed GraphQL queries and mutations. The method throws on errors — no need to check `response.errors` manually. Uses the same auth (token/cookie) as REST.'
     },
+    { type: 'h3', text: 'Queries' },
     {
       type: 'pre',
-      code: `interface ProjectsResult {
+      code: `import { createNivaro } from '@nivaro/sdk'
+
+const nivaro = createNivaro('https://nivaro.example.com', { token: '...' })
+
+interface ArticlesResult {
   articles: {
-    data: Array<{ id: string; name: string; status: string }>
+    data: Array<{ id: string; name: string; status: string; author_id: string }>
     total: number
   }
 }
 
-const result = await nivaro.graphql<ProjectsResult>(\`
+const result = await nivaro.graphql<ArticlesResult>(\`
   query {
     articles(filter: { status: { _eq: "active" } }, limit: 10) {
-      data { id name status }
+      data { id name status author_id }
       total
     }
   }
 \`)
-const projects = result.articles.data`
+
+result.articles.data.forEach(article => {
+  console.log(\`\${article.name} by author \${article.author_id}\`)
+})`
     },
-    { type: 'h3', text: 'With variables' },
+    { type: 'h3', text: 'Queries with variables' },
     {
       type: 'pre',
-      code: `const result = await nivaro.graphql<ProjectsResult>(
-  \`query GetProjects($filter: JSON, $limit: Int) {
+      code: `interface ArticlesResult {
+  articles: { data: Article[]; total: number }
+}
+
+const result = await nivaro.graphql<ArticlesResult>(
+  \`query GetArticles($filter: JSON, $limit: Int) {
     articles(filter: $filter, limit: $limit) {
-      data { id name }
+      data { id name status }
       total
     }
   }\`,
-  { filter: { status: { _eq: 'active' } }, limit: 25 },
-  'GetProjects',  // optional operationName
+  {
+    filter: { status: { _eq: 'active' }, created_at: { _gte: '2024-01-01' } },
+    limit: 25,
+  },
+  'GetArticles'  // optional operationName (for debugging)
 )`
+    },
+    { type: 'h3', text: 'Mutations' },
+    {
+      type: 'pre',
+      code: `interface CreateArticleResult {
+  createArticle: { id: string; name: string; status: string }
+}
+
+const result = await nivaro.graphql<CreateArticleResult>(\`
+  mutation CreateArticle($name: String!, $status: String) {
+    createArticle(data: { name: $name, status: $status }) {
+      id name status
+    }
+  }
+\`,
+  { name: 'New Article', status: 'draft' }
+)
+
+console.log('Created:', result.createArticle.id)`
+    },
+    { type: 'h3', text: 'Subscriptions' },
+    {
+      type: 'pre',
+      code: `// GraphQL subscriptions require a separate WebSocket transport
+// Use the Socket.io realtime client instead — it's simpler and handles reconnection
+
+import { createRealtime } from '@nivaro/sdk'
+
+const rt = createRealtime()
+await rt.connect('https://nivaro.example.com')
+
+rt.subscribe('articles', { event: 'update' }, (article) => {
+  console.log('Article updated:', article)
+})`
+    },
+    {
+      type: 'table',
+      head: ['Method', 'Purpose'],
+      rows: [
+        ['nivaro.graphql(query, variables?, operationName?)', 'Send a GraphQL query or mutation'],
+        ['nivaro.setToken(token)', 'Set auth token (shared with REST)'],
+      ]
     },
     {
       type: 'note',
-      text: '`nivaro.graphql()` uses the same token / session cookie as `nivaro.request()`. Call `nivaro.setToken()` once and both transports are authenticated.'
+      text: 'The GraphQL schema is auto-generated from your collections, fields, and relations at startup. View the full schema at `/graphql` in the admin UI.'
     }
   ]
 }
 
 export const sdkTokens: DocSection = {
   id: 'sdk-tokens',
-  label: 'Token Management',
+  label: 'API Keys & Token Management',
   content: [
-    { type: 'h1', id: 'sdk-tokens', text: 'SDK — Token Management' },
+    { type: 'h1', id: 'sdk-tokens', text: 'SDK — API Keys & Token Management' },
     {
       type: 'p',
-      text: 'Generate and revoke static tokens via the SDK without leaving TypeScript.'
+      text: 'Generate, revoke, and manage static API tokens programmatically. Tokens are prefixed with `nvk_` and can have custom scopes, expiry dates, and IP allowlists.'
     },
+    { type: 'h3', text: 'Generate token for yourself' },
     {
       type: 'pre',
-      code: `import { generateToken, revokeToken, generateUserToken, revokeUserToken } from '@nivaro/sdk'
+      code: `import { generateToken, revokeToken } from '@nivaro/sdk'
 
-// Generate a token for the currently-authenticated user
-const { data } = await nivaro.request(generateToken())
-nivaro.setToken(data.token)   // immediately use the new token
-console.log(data.token)    // store it — not retrievable again
+// Generate a new token
+const { data: result } = await nivaro.request(generateToken())
+// result.token → "nvk_abc123..." (shown only once!)
 
-// Revoke your own token
-await nivaro.request(revokeToken())
-nivaro.setToken(null)
+// Use it immediately or store in secure location
+console.log('Save this token:', result.token)
+nivaro.setToken(result.token)
 
-// Admin: generate/revoke for another user
-const { data: adminData } = await nivaro.request(generateUserToken('user-uuid-here'))
-await nivaro.request(revokeUserToken('user-uuid-here'))`
+// Later: revoke it
+await nivaro.request(revokeToken())`
+    },
+    { type: 'h3', text: 'Admin: Generate token for another user' },
+    {
+      type: 'pre',
+      code: `import { generateUserToken, revokeUserToken } from '@nivaro/sdk'
+
+// Generate token for a user (admin only)
+const { data } = await nivaro.request(generateUserToken('user-uuid'))
+console.log('Token for user:', data.token)
+
+// Revoke it
+await nivaro.request(revokeUserToken('user-uuid'))`
+    },
+    { type: 'h3', text: 'Token configuration (API keys admin page)' },
+    {
+      type: 'p',
+      text: 'When creating a token in the admin UI, you can configure:'
+    },
+    {
+      type: 'table',
+      head: ['Setting', 'Description', 'Example'],
+      rows: [
+        ['Scopes', 'What the token can do (read, write, admin)', '["read:all", "write:articles"]'],
+        ['Expires at', 'Expiry datetime (optional)', '2025-12-31T23:59:59Z'],
+        ['IP allowlist', 'Restrict to specific IPs (optional)', '["203.0.113.0", "203.0.113.1"]'],
+        ['Rate limit', 'Requests per minute (optional)', '100'],
+      ]
     },
     {
       type: 'warn',
-      text: 'The token is only returned in the response body once. After `generateToken()` resolves, the value is not retrievable from the API. Save it to a secure store immediately.'
+      text: 'Token values are only returned in the API response once. After you leave the page or close the dialog, the value cannot be retrieved. Copy it to a password manager or secure store immediately.'
+    },
+    {
+      type: 'note',
+      text: 'All tokens are stored as sha256 hashes in the database — the plaintext is never persisted. Use `setToken()` to set the SDK token at runtime.'
     }
   ]
 }
@@ -935,80 +1082,156 @@ export const sdkFiles: DocSection = {
   content: [
     { type: 'h1', id: 'sdk-files', text: 'SDK — Files & Upload' },
     {
+      type: 'p',
+      text: 'Upload files to the Nivaro file manager and get URLs for serving them. Files are stored locally by default; configure S3 or other providers in settings.'
+    },
+    { type: 'h3', text: 'Upload a file' },
+    {
       type: 'pre',
-      code: `// Upload a File object (e.g. from <input type="file">)
+      code: `import { createNivaro } from '@nivaro/sdk'
+
+const nivaro = createNivaro('https://nivaro.example.com', { token: '...' })
+
+// From a file input
 const fileInput = document.querySelector<HTMLInputElement>('#file-input')!
-const result = await nivaro.upload(fileInput.files![0], {
-  title: 'Q2 Report',
-  folder: 'folder-uuid-here',   // optional
+const file = fileInput.files![0]
+
+const result = await nivaro.upload(file, {
+  title: 'Q2 Report',  // optional: display name
+  folder: 'folder-uuid-here',  // optional: folder ID
 })
-// result: FileUploadResult — id, filename_disk, type, filesize, width, height, etc.
 
-// Generate a URL to serve a file
-const url = nivaro.fileUrl(result.id)   // https://nivaro.example.com/api/files/<id>
+// result → FileUploadResult
+console.log('Uploaded:', result.id, result.filesize, 'bytes')`
+    },
+    { type: 'h3', text: 'Get file URL' },
+    {
+      type: 'pre',
+      code: `// Generate a download URL
+const url = nivaro.fileUrl(fileId)
+// url → https://nivaro.example.com/api/files/<id>/content
 
-// To serve the actual file content:
-//   GET /api/files/:id/content  (sets correct Content-Type header)
-`
+// Display in an img tag
+<img src={url} alt="Report" />
+
+// Or link for download
+<a href={url} download>Download Report</a>`
     },
     { type: 'h3', text: 'FileUploadResult shape' },
     {
       type: 'table',
       head: ['Field', 'Type', 'Description'],
       rows: [
-        ['id', 'string', 'UUID primary key.'],
-        ['filename_disk', 'string', 'Name on disk (hashed for uniqueness).'],
-        ['filename_download', 'string', 'Original filename from the upload.'],
-        ['title', 'string | null', 'Optional display title.'],
-        ['type', 'string', 'MIME type, e.g. image/png.'],
-        ['filesize', 'number', 'Bytes.'],
-        ['width / height', 'number | null', 'Pixel dimensions (images only).'],
-        ['folder', 'string | null', 'Folder UUID, or null for root.'],
-        ['uploaded_on', 'string', 'ISO 8601 datetime.']
+        ['id', 'string', 'UUID primary key (use for fileUrl).'],
+        ['filename_disk', 'string', 'Hashed filename on disk (for deduplication).'],
+        ['filename_download', 'string', 'Original filename from upload.'],
+        ['title', 'string | null', 'Custom display title.'],
+        ['type', 'string', 'MIME type, e.g. "image/png", "application/pdf".'],
+        ['filesize', 'number', 'File size in bytes.'],
+        ['width', 'number | null', 'Image width in pixels (images only).'],
+        ['height', 'number | null', 'Image height in pixels (images only).'],
+        ['folder', 'string | null', 'Folder ID, or null if in root.'],
+        ['uploaded_on', 'string', 'ISO 8601 upload timestamp.']
       ]
+    },
+    { type: 'h3', text: 'Usage in forms' },
+    {
+      type: 'pre',
+      code: `// Upload and store file ID in a field
+async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  const file = e.target.files?.[0]
+  if (!file) return
+
+  const uploaded = await nivaro.upload(file)
+  form.setValue('attachment_id', uploaded.id)  // store the ID
+}
+
+// On render, show the file
+const fileId = form.values.attachment_id
+if (fileId) {
+  const url = nivaro.fileUrl(fileId)
+  return <a href={url}>{fileId}</a>
+}`
     }
   ]
 }
 
 export const sdkRealtime: DocSection = {
   id: 'sdk-realtime',
-  label: 'Realtime',
+  label: 'Realtime (Socket.io)',
   content: [
-    { type: 'h1', id: 'sdk-realtime', text: 'SDK — Realtime' },
+    { type: 'h1', id: 'sdk-realtime', text: 'SDK — Realtime (Socket.io)' },
     {
       type: 'p',
-      text: 'The SDK includes a Socket.io client wrapper for subscribing to live updates. Import `createRealtime` from `@nivaro/sdk`.'
+      text: 'Subscribe to live events (item updates, notifications, presence) via Socket.io. The SDK wraps Socket.io with a simple subscribe/unsubscribe API.'
     },
+    { type: 'h3', text: 'Basic setup' },
     {
       type: 'pre',
-      code: `import { createNivaro, createRealtime } from '@nivaro/sdk'
+      code: `import { createRealtime } from '@nivaro/sdk'
 
-const nivaro = createNivaro('https://nivaro.example.com', { token: '...' })
-
-// Create a realtime connection
+// Create and connect
 const rt = createRealtime()
-rt.connect('https://nivaro.example.com')
-
-// Subscribe to a room (e.g. 'articles:123')
+await rt.connect('https://nivaro.example.com', { token: 'nvk_...' })`
+    },
+    { type: 'h3', text: 'Subscribe to events' },
+    {
+      type: 'pre',
+      code: `// Subscribe to all updates on a collection
 const unsubscribe = rt.subscribe(
   'articles',
   { event: 'update' },
-  (data) => {
-    console.log('project updated', data)
-  },
+  (article) => {
+    console.log('Article updated:', article)
+    // article → full updated item snapshot
+  }
 )
 
-// Disconnect when done
-rt.disconnect()
-unsubscribe()`
+// Subscribe to updates on a specific item
+rt.subscribe(
+  'articles:123',
+  { event: 'update' },
+  (article) => console.log('This article changed')
+)
+
+// Subscribe to your notifications
+rt.subscribe(
+  \`user:\${userId}\`,
+  { event: 'notification:new' },
+  (notif) => console.log('New notification:', notif.subject)
+)
+
+// Subscribe to presence changes on an item
+rt.subscribe(
+  'articles:123',
+  { event: 'presence' },
+  (users) => console.log(\`\${users.length} users viewing\`)
+)`
     },
+    { type: 'h3', text: 'Event types' },
     {
-      type: 'p',
-      text: 'The Nivaro Socket.io server uses the Redis pub/sub adapter — events emitted on one replica are received by clients connected to any replica.'
+      type: 'table',
+      head: ['Event', 'Fires On', 'Data'],
+      rows: [
+        ['create', 'New item added', 'Full item snapshot'],
+        ['update', 'Item field changed', 'Full item snapshot (with updated values)'],
+        ['delete', 'Item deleted', 'Item ID and deletion timestamp'],
+        ['notification:new', 'Notification created', 'Notification object'],
+        ['presence', 'User joins/leaves/edits', 'Array of currently viewing users'],
+      ]
+    },
+    { type: 'h3', text: 'Unsubscribe and disconnect' },
+    {
+      type: 'pre',
+      code: `// Unsubscribe from a room
+unsubscribe()
+
+// Disconnect from server (closes all subscriptions)
+rt.disconnect()`
     },
     {
       type: 'note',
-      text: 'You do not need to run a separate Socket.io server. The Socket.io server runs inside the Fastify process. Connect directly to the Nivaro API URL.'
+      text: 'Socket.io is multiplexed over the same URL as the API (e.g., https://nivaro.example.com). No separate server configuration needed. The Redis pub/sub adapter means events propagate across all server replicas.'
     }
   ]
 }

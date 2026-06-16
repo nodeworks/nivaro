@@ -78,7 +78,7 @@ export function submitItemForReview(
 // ─── Scheduled changes ────────────────────────────────────────────────────────
 
 export interface ScheduledChange {
-  id: number
+  id: UUID
   collection: string
   item_id: string
   change_type: 'field_update' | 'workflow_transition'
@@ -122,14 +122,14 @@ export function createScheduledChange(body: {
 }
 
 /** Cancel a pending scheduled change (own or admin). */
-export function cancelScheduledChange(id: number): Command<void> {
+export function cancelScheduledChange(id: UUID): Command<void> {
   return cmd('DELETE', `/scheduled-changes/${id}`)
 }
 
 /** Execute a pending scheduled change immediately (admin). */
 export function executeScheduledChange(
-  id: number
-): Command<{ data: { id: string; status: 'executed'; executed_at: ISODate } }> {
+  id: UUID
+): Command<{ data: { id: UUID; status: 'executed'; executed_at: ISODate } }> {
   return cmd('POST', `/scheduled-changes/${id}/execute`)
 }
 
@@ -547,7 +547,7 @@ export function applySubRowTemplate(id: number): Command<{ items: Record<string,
 export type AddendumStatus = 'draft' | 'review' | 'approved' | 'rejected'
 
 export interface Addendum {
-  id: number
+  id: UUID
   parent_collection: string
   parent_id: string
   title: string
@@ -567,7 +567,7 @@ export interface Addendum {
 
 export interface ChangeOrder {
   id: number
-  addendum_id: number
+  addendum_id: UUID
   parent_collection: string
   parent_id: string
   approved_by: UUID
@@ -587,7 +587,7 @@ export function listAddendums(
   return cmd('GET', `/addendums/${collection}/${itemId}`)
 }
 
-export function readAddendum(id: number): Command<{ data: Addendum }> {
+export function readAddendum(id: UUID): Command<{ data: Addendum }> {
   return cmd('GET', `/addendums/${id}`)
 }
 
@@ -606,7 +606,7 @@ export function createAddendum(body: {
 }
 
 export function updateAddendum(
-  id: number,
+  id: UUID,
   body: Partial<{
     title: string
     description: string | null
@@ -620,21 +620,21 @@ export function updateAddendum(
 }
 
 /** Delete an addendum (admin only). */
-export function deleteAddendum(id: number): Command<void> {
+export function deleteAddendum(id: UUID): Command<void> {
   return cmd('DELETE', `/addendums/${id}`)
 }
 
 /** draft → review */
-export function submitAddendum(id: number): Command<{ data: { id: string; status: 'review' } }> {
+export function submitAddendum(id: UUID): Command<{ data: { id: UUID; status: 'review' } }> {
   return cmd('POST', `/addendums/${id}/submit`)
 }
 
 /** review → approved; creates a change-order entry. */
-export function approveAddendum(id: number): Command<{ data: { id: string; status: 'approved' } }> {
+export function approveAddendum(id: UUID): Command<{ data: { id: UUID; status: 'approved' } }> {
   return cmd('POST', `/addendums/${id}/approve`)
 }
 
-export function rejectAddendum(id: number): Command<{ data: { id: string; status: 'rejected' } }> {
+export function rejectAddendum(id: UUID): Command<{ data: { id: UUID; status: 'rejected' } }> {
   return cmd('POST', `/addendums/${id}/reject`)
 }
 

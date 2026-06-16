@@ -25,6 +25,7 @@ import {
   TableRow
 } from '@/components/ui/table'
 import {
+  api,
   cloudAccount,
   type CloudAccountInfo,
   type CloudAccountUsage,
@@ -271,16 +272,27 @@ function SelfHostedView() {
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function AccountPage() {
+  // Gate on health.cloud so we never call cloud endpoints in self-hosted mode.
+  // The health query is already cached by AppLayout (staleTime: Infinity).
+  const { data: health, isLoading: healthLoading } = useQuery({
+    queryKey: ['health'],
+    queryFn: () => api.get<{ cloud?: boolean }>('/health').then(r => r.data),
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false
+  })
+  const healthCloud = health?.cloud === true
+
   const infoQuery = useQuery({
     queryKey: ['cloud-account-info'],
     queryFn: cloudAccount.info,
+    enabled: healthCloud,
     retry: false,
     staleTime: 60_000
   })
 
-  const isCloud = infoQuery.isSuccess
-  const isNotCloud = infoQuery.isError && (infoQuery.error as { response?: { status?: number } })?.response?.status === 404
-  const isLoading = infoQuery.isLoading
+  const isCloud = healthCloud && infoQuery.isSuccess
+  const isNotCloud = !healthCloud && !healthLoading
+  const isLoading = healthLoading || (healthCloud && infoQuery.isLoading)
 
   const usageQuery = useQuery({
     queryKey: ['cloud-account-usage'],

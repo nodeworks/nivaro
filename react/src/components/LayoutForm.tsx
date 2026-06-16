@@ -151,10 +151,7 @@ export function LayoutForm({
   }
 
   function renderTabMode() {
-    const ungroupedAbove = schema!.ungroupedSort == null || schema!.ungroupedSort < schema!.groups.length
-      ? schema!.ungroupedSort === null || (schema!.ungroupedSort ?? schema!.groups.length) < (tabGroups.findIndex((g) => g.key === currentTab) + 1)
-      : false
-    // Simple rule: ungrouped_sort < groups.length = above strip, otherwise below content
+    // ungrouped_sort < groups.length = above strip, otherwise below content
     const belowStrip = schema!.ungroupedSort != null && schema!.ungroupedSort >= schema!.groups.length
 
     return (

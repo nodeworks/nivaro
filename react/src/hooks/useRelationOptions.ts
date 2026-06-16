@@ -1,14 +1,11 @@
-import type { Command, NivaroClient } from '@nivaro/sdk'
+import type { NivaroClient } from '@nivaro/sdk'
 import { useEffect, useRef, useState } from 'react'
+import { get } from '../lib/commands'
 
 export type RelationOption = {
   id: string | number
   label: string
   raw: Record<string, unknown>
-}
-
-function get<T>(path: string, params?: Record<string, unknown>): Command<T> {
-  return { _method: 'GET', _path: path, _params: params } as Command<T>
 }
 
 /**
@@ -58,6 +55,9 @@ function pickId(row: Record<string, unknown>): string | number {
  * Fetch selectable options for a relation field's related collection.
  * Re-fetches when `search` changes. Pass `enabled: false` to skip fetching
  * (e.g. while the related collection name is still unknown).
+ *
+ * When `enabled` transitions to false, previously-loaded options are retained
+ * so cascading pickers don't flash blank while a parent field is being cleared.
  */
 export function useRelationOptions(
   client: NivaroClient | null,
@@ -77,7 +77,8 @@ export function useRelationOptions(
 
   useEffect(() => {
     if (!client || !relatedCollection || !enabled) {
-      setOpts([])
+      // Do NOT clear opts when disabled — retains previously-loaded list so
+      // cascade pickers don't flash blank when a parent value is being cleared.
       setLoading(false)
       return
     }

@@ -24,20 +24,35 @@ function extractChoices(options: Record<string, unknown> | null): Choice[] {
     .filter((c): c is Choice => c !== null)
 }
 
-export function SelectField({ field, value, onChange, disabled, readOnly }: FieldComponentProps) {
+export function SelectField({
+  field,
+  value,
+  onChange,
+  error,
+  disabled,
+  readOnly,
+  inputId,
+  errorId
+}: FieldComponentProps) {
+  const id = inputId ?? field.field
   const choices = extractChoices(field.options)
-  const isMultiple = field.interface === 'select-multiple-dropdown'
+  // Use the normalized fieldType, not the raw interface string, to detect
+  // multi-select — fieldType is already resolved by normalizeFieldType.
+  const isMultiple = field.fieldType === 'checkbox-group'
 
   if (isMultiple) {
     const selected = Array.isArray(value) ? value.map(String) : []
     return (
       <select
-        id={field.field}
+        id={id}
         name={field.field}
         multiple
         required={field.required}
         disabled={disabled || readOnly}
         value={selected}
+        aria-required={field.required}
+        aria-invalid={error != null && error.length > 0}
+        aria-describedby={errorId}
         onChange={(e) => {
           const next = Array.from(e.target.selectedOptions).map((o) => o.value)
           onChange(next)
@@ -54,11 +69,14 @@ export function SelectField({ field, value, onChange, disabled, readOnly }: Fiel
 
   return (
     <select
-      id={field.field}
+      id={id}
       name={field.field}
       required={field.required}
       disabled={disabled || readOnly}
       value={value == null ? '' : String(value)}
+      aria-required={field.required}
+      aria-invalid={error != null && error.length > 0}
+      aria-describedby={errorId}
       onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
     >
       <option value="">—</option>

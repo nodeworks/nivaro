@@ -117,8 +117,17 @@ function nodeToHtml(node: ContentNode, pad = '          '): string {
   }
 }
 
-function sectionToHtml(section: { content: ContentNode[] }): string {
-  return section.content.map((n) => nodeToHtml(n)).join('\n')
+function sectionToHtml(section: { content: ContentNode[] }, sectionId?: string): string {
+  return section.content
+    .map((n) => {
+      try {
+        return nodeToHtml(n)
+      } catch (err) {
+        console.error(`Error rendering node in section ${sectionId}:`, n)
+        throw err
+      }
+    })
+    .join('\n')
 }
 
 // ─── data-toc builder ─────────────────────────────────────────────────────────
@@ -180,7 +189,9 @@ function syncWwwDocs(htmlPath: string): {
     if (si === -1 || ei === -1) continue
 
     html =
-      html.slice(0, si + start.length) + `\n${sectionToHtml(section)}\n          ` + html.slice(ei)
+      html.slice(0, si + start.length) +
+      `\n${sectionToHtml(section, docId)}\n          ` +
+      html.slice(ei)
 
     // Regenerate data-toc from content nodes so "On this page" sidebar stays accurate
     const toc = buildToc(section)

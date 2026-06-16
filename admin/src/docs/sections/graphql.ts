@@ -330,14 +330,24 @@ export const graphqlMutations: DocSection = {
   label: 'Mutations',
   content: [
     { type: 'h1', id: 'graphql-mutations', text: 'Mutations' },
+    {
+      type: 'p',
+      text: 'Every collection has three mutation fields: create, update, and delete. They follow the same naming pattern as query fields.'
+    },
     { type: 'h3', text: 'Create' },
     {
       type: 'pre',
       code: `mutation {
-  create_articles(data: { name: "New Project", status: "draft" }) {
+  create_articles(data: {
+    name: "New Article"
+    status: "draft"
+    body: "Content here..."
+    author_id: "user-42"
+  }) {
     id
     name
     status
+    created_at
   }
 }`
     },
@@ -345,9 +355,14 @@ export const graphqlMutations: DocSection = {
     {
       type: 'pre',
       code: `mutation {
-  update_articles_item(id: "123", data: { status: "active" }) {
+  update_articles_item(id: "123", data: {
+    status: "published"
+    body: "Updated content..."
+  }) {
     id
+    name
     status
+    updated_at
   }
 }`
     },
@@ -357,11 +372,26 @@ export const graphqlMutations: DocSection = {
       code: `mutation {
   delete_articles_item(id: "123") {
     id
+    name
   }
 }`
     },
+    { type: 'h3', text: 'Mutation response' },
     {
       type: 'p',
+      text: 'Mutations return the full record as it was after the operation. Request any fields you need — the operation executes regardless. Validation errors return `400` with details.'
+    },
+    {
+      type: 'table',
+      head: ['Mutation', 'Arguments', 'Auth'],
+      rows: [
+        ['create_collectionName', 'data: JSON (all fields optional)', 'User with create permission'],
+        ['update_collectionName_item', 'id: ID!, data: JSON (partial)', 'User with update permission'],
+        ['delete_collectionName_item', 'id: ID!', 'User with delete permission']
+      ]
+    },
+    {
+      type: 'note',
       text: 'The `data` argument accepts the `JSON` scalar — pass a plain object with the fields you want to set. Unknown fields are ignored; field-level permission checks apply.'
     }
   ]
@@ -421,12 +451,12 @@ ws://your-host/api/graphql-ws
     { type: 'h3', text: 'Example — using graphql-ws client' },
     {
       type: 'pre',
-      code: `import { createClient } from 'graphql-ws';
+      code: `import { createClient } from 'graphql-ws'
 
 const client = createClient({
   url: 'ws://nivaro.example.com/api/graphql-ws',
   connectionParams: { authorization: 'Bearer your-token' },
-});
+})
 
 const unsub = client.subscribe(
   {
@@ -442,10 +472,16 @@ const unsub = client.subscribe(
     error: console.error,
     complete: () => console.log('done'),
   },
-);
+)
 
 // Later:
-unsub();`
+unsub()`
+    },
+    {
+      type: 'h3', text: 'Authentication' },
+    {
+      type: 'p',
+      text: 'Pass a static token via `connectionParams.authorization`. The server validates it before allowing subscriptions. Session cookies are not supported on WebSocket — use static tokens.'
     },
     {
       type: 'note',
@@ -484,7 +520,23 @@ const res = await fetch('https://nivaro.example.com/api/graphql', {
   },
   body: JSON.stringify({ query: '{ articles { data { id name } total } }' }),
 })
-const { data, errors } = await res.json()`
+const { data, errors } = await res.json()
+
+// With axios
+import axios from 'axios'
+
+const client = axios.create({
+  baseURL: 'https://nivaro.example.com',
+  headers: { Authorization: 'Bearer 3a7f2b9c...' },
+})
+
+const { data } = await client.post('/api/graphql', {
+  query: '{ articles { data { id name } total } }',
+})`
+    },
+    {
+      type: 'note',
+      text: 'Permissions are evaluated per field — you can request any fields in a query, but only permitted ones are resolved. Missing fields in the response indicate permission denial.'
     }
   ]
 }
@@ -504,6 +556,17 @@ export const graphqlRebuild: DocSection = {
 Authorization: Bearer <admin-token>
 
 → 200 { "ok": true, "types": 42 }`
+    },
+    {
+      type: 'h3', text: 'When to rebuild' },
+    {
+      type: 'ul',
+      items: [
+        'After registering a new collection via `POST /api/collections`',
+        'After adding a new field via `POST /api/collections/:name/fields`',
+        'After registering a new relation that affects type generation',
+        'After hiding/unhiding a collection or field that affects schema visibility'
+      ]
     },
     {
       type: 'note',

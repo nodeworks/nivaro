@@ -7,23 +7,101 @@ export const collabTasks: DocSection = {
     { type: 'h1', id: 'tasks', text: 'Task Assignments' },
     {
       type: 'p',
-      text: 'Lightweight tasks can be attached to any record: assign a user, set a due date, and track completion. Tasks live in `nivaro_tasks` and render in a TaskPanel on the item edit page. Assignees get an in-app notification.'
+      text: 'Attach lightweight tasks to any record to coordinate work. Assign a user, set a due date, add a description, and track completion. Tasks live in `nivaro_tasks` and render in a dedicated TaskPanel on the item edit page. Assignees receive in-app notifications and tasks appear in their "My Tasks" dashboard.'
+    },
+    {
+      type: 'h3',
+      id: 'tasks-creating',
+      text: 'Creating and Managing Tasks'
     },
     {
       type: 'pre',
-      code: `GET    /api/tasks?collection=orders&item=42   # tasks on a record
-GET    /api/tasks?assignee=me                  # my open tasks
-POST   /api/tasks
-{ "collection": "orders", "item": "42", "title": "Confirm pricing", "assignee": "<user>", "due_at": "2026-06-15" }
-PATCH  /api/tasks/:id        # { "status": "done" } | reassign | edit
-DELETE /api/tasks/:id`
+      code: `POST /api/tasks
+{
+  "collection": "orders",
+  "item": "order-42",
+  "title": "Confirm pricing with customer",
+  "description": "Call to verify final unit cost",
+  "assignee": "user-123",
+  "due_at": "2026-06-20T17:00:00Z",
+  "priority": "high"
+}
+
+// Response
+{
+  "id": "task-999",
+  "collection": "orders",
+  "item": "order-42",
+  "title": "Confirm pricing with customer",
+  "assignee": {
+    "id": "user-123",
+    "name": "Sarah Chen",
+    "email": "sarah@example.com"
+  },
+  "due_at": "2026-06-20T17:00:00Z",
+  "status": "open",
+  "created_at": "2026-06-15T10:30:00Z",
+  "created_by": "user-456"
+}`
+    },
+    {
+      type: 'h3',
+      id: 'tasks-api',
+      text: 'API Reference'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/tasks?collection=orders&item=order-42
+  # All tasks on a specific record
+
+GET /api/tasks?assignee=me
+  # My open tasks (current user)
+
+GET /api/tasks?assignee=me&status=open
+  # My open tasks (filter by status)
+
+GET /api/tasks/my-tasks
+  # Current user's dashboard with counts by status
+
+PATCH /api/tasks/task-999
+  { "status": "done" }  # Mark complete (records completed_by + completed_at)
+  { "assignee": "user-456" }  # Reassign
+  { "due_at": "2026-06-25T17:00:00Z" }  # Update due date
+  { "title": "...", "description": "..." }  # Edit
+
+DELETE /api/tasks/task-999  # Delete (permission: creator, assignee, or admin)`
+    },
+    {
+      type: 'h3',
+      id: 'tasks-ui',
+      text: 'UI Components'
     },
     {
       type: 'ul',
       items: [
-        'The TaskPanel shows open and completed tasks with assignee avatars and due-date badges (overdue in red).',
-        'Completing a task records who completed it and when.'
+        'TaskPanel on item edit: shows all tasks for the record, create/edit inline',
+        'Overdue badge: red "OVERDUE" pill when due_at < now',
+        'Assignee avatar: user picture with name tooltip',
+        'Quick filters: "Open", "My Tasks", "Overdue" pills above the task list',
+        'My Tasks dashboard: tasks.tsx page with search, filters (assignee, collection, priority, status), and bulk actions'
       ]
+    },
+    {
+      type: 'h3',
+      id: 'tasks-status-workflow',
+      text: 'Status Workflow'
+    },
+    {
+      type: 'ul',
+      items: [
+        'open: default state; task is active and assigned',
+        'done: assignee marks complete; system records who completed it and when',
+        'deleted: soft-delete via DELETE endpoint; only creator/assignee/admin can delete'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Tasks are collection-scoped — a task cannot be shared across records. Each task is tied to exactly one collection + item pair.'
     }
   ]
 }
@@ -35,34 +113,176 @@ export const collabApprovals: DocSection = {
     { type: 'h1', id: 'approval-chains', text: 'Approval Chains' },
     {
       type: 'p',
-      text: 'Approval chains add formal sequential sign-off to records: define a chain of steps (each with an approver user or role), start an instance on a record, and each step must approve before the next is activated. A rejection stops the chain. This is an optional feature — nothing changes for collections without chains.'
+      text: 'Define formal multi-step approval workflows for records. Approval chains enforce sequential sign-off: each step in the chain must approve before the next activates. A rejection immediately stops the chain and notifies the initiator. Approvers can add comments, and the full decision log is immutable.'
     },
-    { type: 'h3', text: 'Model' },
     {
-      type: 'table',
-      head: ['Table', 'Purpose'],
-      rows: [
-        ['nivaro_approval_chains', 'Chain definition: name, collection'],
-        ['nivaro_approval_steps', 'Ordered steps: approver (user or role), label'],
-        ['nivaro_approval_instances', 'Per-record runtime: current step, status'],
-        ['nivaro_approval_decisions', 'Immutable approve/reject log with comments']
-      ]
+      type: 'h3',
+      id: 'approvals-setup',
+      text: 'Setting Up Approval Chains'
     },
-    { type: 'h3', text: 'API' },
+    {
+      type: 'p',
+      text: 'Define a chain in Approvals → Create Chain. Specify the name, target collection, and ordered list of approvers (can be specific users or roles). Each step can have a custom label and optional due-date deadline.'
+    },
     {
       type: 'pre',
-      code: `POST /api/approvals/chains                 # define a chain (admin)
-POST /api/approvals/start                  # { chain, collection, item } → instance
-POST /api/approvals/:instanceId/decide     # { decision: "approve" | "reject", comment }
-GET  /api/approvals?collection=...&item=...`
+      code: `POST /api/approvals/chains
+{
+  "name": "Purchase Order Sign-Off",
+  "collection": "purchase_orders",
+  "steps": [
+    {
+      "order": 1,
+      "label": "Department Manager",
+      "approver_type": "role",
+      "approver_id": "role-dept-manager",
+      "due_days": 3
+    },
+    {
+      "order": 2,
+      "label": "Finance Director",
+      "approver_type": "user",
+      "approver_id": "user-finance-cfo",
+      "due_days": 5
+    },
+    {
+      "order": 3,
+      "label": "CEO Approval",
+      "approver_type": "user",
+      "approver_id": "user-ceo",
+      "due_days": 7
+    }
+  ]
+}
+
+// Response
+{
+  "id": "chain-123",
+  "name": "Purchase Order Sign-Off",
+  "collection": "purchase_orders",
+  "created_by": "user-456"
+}`
+    },
+    {
+      type: 'h3',
+      id: 'approvals-instances',
+      text: 'Starting and Managing Instances'
+    },
+    {
+      type: 'p',
+      text: 'Start an approval instance on a record to begin the chain. The first step activates immediately and its approver is notified.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/approvals/instances
+{
+  "chain_id": "chain-123",
+  "collection": "purchase_orders",
+  "item_id": "po-789"
+}
+
+// Response
+{
+  "id": "instance-456",
+  "chain_id": "chain-123",
+  "item_id": "po-789",
+  "current_step": 1,
+  "status": "in_progress",
+  "created_at": "2026-06-15T10:30:00Z",
+  "initiated_by": "user-initiator"
+}`
+    },
+    {
+      type: 'h3',
+      id: 'approvals-decisions',
+      text: 'Approving or Rejecting'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/approvals/instances/instance-456/decide
+{
+  "decision": "approve",
+  "comment": "Looks good, confirmed budget exists"
+}
+
+// Or reject
+{
+  "decision": "reject",
+  "comment": "Need updated vendor quotes before approval"
+}
+
+// Response
+{
+  "id": "decision-789",
+  "instance_id": "instance-456",
+  "step": 1,
+  "decision": "approve",
+  "decided_by": "user-manager",
+  "decided_at": "2026-06-15T14:20:00Z",
+  "comment": "Looks good, confirmed budget exists"
+}`
+    },
+    {
+      type: 'h3',
+      id: 'approvals-status-flow',
+      text: 'Status Flow'
     },
     {
       type: 'ul',
       items: [
-        'The ApprovalPanel on item edit shows each step with its status (pending/approved/rejected) and lets the current approver decide inline.',
-        'Steps are strictly sequential; a rejection marks the instance rejected and notifies the requester.',
-        'Approvers are notified in-app when their step becomes active.'
+        'in_progress: chain is active, waiting on current step approver',
+        'approved: all steps approved; chain complete',
+        'rejected: a step rejected the request; chain halted, cannot proceed',
+        'expired: due-date deadline passed on a step; manually approve/reject required'
       ]
+    },
+    {
+      type: 'h3',
+      id: 'approvals-api',
+      text: 'API Reference'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/approvals/chains
+  Create chain (admin)
+
+GET /api/approvals/chains?collection=X
+  List chains for collection
+
+PATCH /api/approvals/chains/:id
+  Update chain (admin)
+
+DELETE /api/approvals/chains/:id
+  Delete chain (admin)
+
+POST /api/approvals/instances
+  Start new instance on a record
+
+GET /api/approvals/instances?item=X&collection=Y
+  Get instance for a record
+
+POST /api/approvals/instances/:id/decide
+  Approve or reject current step
+
+GET /api/approvals/decisions?instance=X
+  Get all decisions (audit log)`
+    },
+    {
+      type: 'h3',
+      id: 'approvals-ui',
+      text: 'UI Components'
+    },
+    {
+      type: 'ul',
+      items: [
+        'ApprovalPanel on item edit: shows all steps (pending/approved/rejected), current step highlighted, decide button for approver',
+        'Approvals page: master list of all chains and active instances per collection',
+        'Decision badges: checkmark (approved), X (rejected), clock (pending), alert (expired)'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Rejections are terminal — once a step rejects, the entire instance cannot proceed. Create a new instance to restart.'
     }
   ]
 }
@@ -74,50 +294,153 @@ export const collabItemLocking: DocSection = {
     { type: 'h1', id: 'item-locking', text: 'Item Locking & Presence' },
     {
       type: 'p',
-      text: 'Opening an item for editing takes a soft lock (`nivaro_item_locks`) with a 5-minute TTL kept alive by a heartbeat. A second user opening the same item sees an amber "being edited by …" banner and the form switches to read-only mode until the lock is released or expires. Presence viewers show who else currently has the record open.'
+      text: 'Prevent simultaneous editing conflicts with soft item locks. When a user opens a record for editing, a 5-minute TTL lock is acquired. Other users attempting to edit see an amber banner and the form switches to read-only. Locks auto-release after 5 minutes without activity, preventing stale locks from crashed tabs.'
     },
     {
-      type: 'pre',
-      code: `GET    /api/item-locks/:col/:item/lock     # current lock state (null when free/disabled)
-POST   /api/item-locks/:col/:item/lock     # acquire or refresh — 409 with holder name if taken
-POST   /api/item-locks/:col/:item/heartbeat # extend TTL (called every ~2.5 min by the editor)
-DELETE /api/item-locks/:col/:item/lock     # release; admin ?force=1 breaks any lock
-
-GET    /api/presence/:collection/:item    # current viewers of a record`
+      type: 'h3',
+      id: 'item-locking-how-it-works',
+      text: 'How Locking Works'
     },
     {
       type: 'ul',
       items: [
-        'Locks auto-expire 5 minutes after the last heartbeat — a crashed tab never locks a record forever.',
-        'Admins can take over a lock from the amber banner; the previous holder receives a notification.',
-        'A race condition (two users acquiring simultaneously) is handled via UNIQUE(collection, item) — the DB constraint ensures only one wins; the loser gets a 409.',
-        'When disabled is returned in the response, the client suppresses all lock UI silently.'
+        'User opens item editor → client POSTs to acquire lock',
+        'Lock created in `nivaro_item_locks` with 5-minute TTL',
+        'Client heartbeat endpoint called every 2.5 minutes to refresh TTL',
+        'On close/navigate away, lock is deleted via DELETE',
+        'If lock already held, acquiring user gets 409 Conflict with holder info',
+        'After 5 minutes of no heartbeat, lock auto-expires'
       ]
     },
-    { type: 'h3', text: 'Per-collection on/off toggle' },
     {
-      type: 'p',
-      text: 'Locking can be disabled per collection in Data Model → (table) → Settings → Item locking. When toggled off, all active locks on that collection are immediately released and a `item-lock-disabled` Socket.io event is broadcast. The `item_locking_enabled` column on `nivaro_collections` defaults to 1 — all collections start locked-enabled.'
+      type: 'h3',
+      id: 'item-locking-api',
+      text: 'API Reference'
     },
     {
       type: 'pre',
-      code: `GET   /api/item-locks/config/:collection   # { item_locking_enabled: boolean }
-PATCH /api/item-locks/config/:collection   # { item_locking_enabled: true|false } — admin only`
+      code: `GET /api/item-locks/:collection/:item/lock
+  # Get current lock state
+
+{
+  "data": null,  // Item is free (can acquire)
+  "disabled": false
+}
+
+// OR (if locked)
+
+{
+  "data": {
+    "user_id": "user-123",
+    "locked_by_name": "Sarah Chen",
+    "locked_at": "2026-06-15T10:00:00Z",
+    "expires_at": "2026-06-15T10:05:00Z",
+    "is_mine": false
+  },
+  "disabled": false
+}`
     },
     {
-      type: 'table',
-      head: ['Response field', 'Meaning'],
-      rows: [
-        ['data: null', 'Item is free (no active lock)'],
-        [
-          'data: { user, locked_by_name, expires_at, is_mine }',
-          'Item is locked; is_mine=true means the current user holds it'
-        ],
-        [
-          'locking_disabled: true',
-          'Collection has locking turned off — client should suppress all lock UI'
-        ]
+      type: 'pre',
+      code: `POST /api/item-locks/:collection/:item/lock
+  # Acquire lock (or refresh if already held)
+
+// Success (200)
+{
+  "data": {
+    "user_id": "current-user",
+    "is_mine": true,
+    "expires_at": "2026-06-15T10:05:00Z"
+  }
+}
+
+// Conflict (409) — already locked by someone else
+{
+  "error": "Item is locked",
+  "data": {
+    "locked_by_name": "Sarah Chen",
+    "expires_at": "2026-06-15T10:05:00Z"
+  }
+}`
+    },
+    {
+      type: 'pre',
+      code: `POST /api/item-locks/:collection/:item/heartbeat
+  # Extend TTL by 5 minutes (called every 2.5 min while editing)
+
+DELETE /api/item-locks/:collection/:item/lock
+  # Release lock (called on close/navigate away)
+  # Admin can use ?force=true to break any lock`
+    },
+    {
+      type: 'h3',
+      id: 'item-locking-configuration',
+      text: 'Per-Collection Configuration'
+    },
+    {
+      type: 'p',
+      text: 'Locking can be enabled/disabled per collection in Data Model → (collection) → Settings → "Item locking". Default is ON.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/item-locks/config/:collection
+  # { item_locking_enabled: boolean }
+
+PATCH /api/item-locks/config/:collection
+  # { item_locking_enabled: false } — admin only
+  # Disabling immediately releases all active locks`
+    },
+    {
+      type: 'h3',
+      id: 'item-locking-ui-behavior',
+      text: 'UI Behavior'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Amber banner: "Being edited by Sarah Chen (expires in 4 min 30 sec)"',
+        'Form switches to read-only when locked by someone else',
+        'Admin sees "Take over" button in banner to force-acquire lock',
+        'Heartbeat interval: 2.5 minutes; TTL: 5 minutes (prevents stale locks)',
+        'If disabled returns true, all lock UI is suppressed silently'
       ]
+    },
+    {
+      type: 'h3',
+      id: 'item-locking-presence',
+      text: 'Presence (Who\'s Viewing)'
+    },
+    {
+      type: 'p',
+      text: 'The presence feature tracks all users currently viewing a record (not just editing). It is powered by Socket.io room subscriptions and appears as a list of avatars in the item header.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/presence/:collection/:item
+  # Returns list of users currently viewing
+
+{
+  "viewers": [
+    {
+      "user_id": "user-123",
+      "name": "Sarah Chen",
+      "avatar_url": "...",
+      "viewing_since": "2026-06-15T10:15:00Z",
+      "is_editing": true  // has active lock
+    },
+    {
+      "user_id": "user-456",
+      "name": "John Smith",
+      "avatar_url": "...",
+      "viewing_since": "2026-06-15T10:20:00Z",
+      "is_editing": false  // read-only view
+    }
+  ]
+}`
+    },
+    {
+      type: 'note',
+      text: 'Presence uses Socket.io — updates are real-time. Presence data is NOT persisted; it reflects active connections only.'
     }
   ]
 }

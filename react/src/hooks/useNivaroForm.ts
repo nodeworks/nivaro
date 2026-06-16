@@ -1,7 +1,8 @@
-import type { Command, NivaroClient } from '@nivaro/sdk'
+import type { NivaroClient } from '@nivaro/sdk'
 import type React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOptionalNivaroClient } from '../context'
+import { patch, post } from '../lib/commands'
 import type {
   FormErrors,
   FormFieldDescriptor,
@@ -13,17 +14,7 @@ import type {
   UseNivaroFormReturn
 } from '../types'
 import { useFormSchema } from './useFormSchema'
-
-// Minimal command builders (avoid importing the SDK's internal `cmd`).
-function get<T>(path: string, params?: Record<string, unknown>): Command<T> {
-  return { _method: 'GET', _path: path, _params: params } as Command<T>
-}
-function post<T>(path: string, body?: unknown): Command<T> {
-  return { _method: 'POST', _path: path, _body: body } as Command<T>
-}
-function patch<T>(path: string, body?: unknown): Command<T> {
-  return { _method: 'PATCH', _path: path, _body: body } as Command<T>
-}
+import { get } from '../lib/commands'
 
 // ─── Client-side condition evaluation ────────────────────────────────────────
 
@@ -115,8 +106,31 @@ function isEmpty(value: unknown): boolean {
   )
 }
 
-// ─── Hook ──────────────────────────────────────────────────────────────────
+// ─── Shallow equality for isDirty ─────────────────────────────────────────────
+// Faster than JSON.stringify and immune to key-order differences from server responses.
 
+function shallowEqual(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>
+): boolean {
+  const aKeys = Object.keys(a)
+  const bKeys = Object.keys(b)
+  if (aKeys.length !== bKeys.length) return false
+  for (const key of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key) || a[key] !== b[key]) return false
+  }
+  return true
+}
+
+// ─── Hook ────────────────────────────────────────────────────────────────────
+
+/**
+ * Primary form hook for Nivaro CMS.
+ *
+ * IMPORTANT: Pass a stable `client` reference (defined outside the component
+ * or wrapped in useMemo). A new object on every render triggers schema
+ * re-fetches and item reloads on every render cycle.
+ */
 export function useNivaroForm(
   collection: string,
   options: UseNivaroFormOptions,
@@ -138,7 +152,8 @@ export function useNivaroForm(
     onError,
     validate,
     includeHidden = false,
-    layoutId
+    layoutId,
+    fieldRulesDebounce = 300
   } = options
 
   const {
@@ -154,6 +169,20 @@ export function useNivaroForm(
   const [itemLoading, setItemLoading] = useState(mode === 'edit')
   const seededRef = useRef(false)
   const ruleDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  // Reset the seed flag whenever the item or collection changes so a fresh
+  // load is triggered by the seed effect below.
+  useEffect(() => {
+    seededRef.current = false
+  }, [mode, itemId, collection])
 
   // Seed initial values once schema is loaded (and item loaded for edit mode).
   useEffect(() => {
@@ -190,15 +219,19 @@ export function useNivaroForm(
   }, [schema, mode, itemId, collection, defaultValues, onError, resolvedClient])
 
   // Run server-side field rules (debounced) whenever values change post-seed.
+  // Uses mountedRef so in-flight requests don't setState after unmount.
   const runFieldRules = useCallback(
     (next: Record<string, unknown>) => {
+      if (fieldRulesDebounce <= 0) return
       if (ruleDebounceRef.current) clearTimeout(ruleDebounceRef.current)
       ruleDebounceRef.current = setTimeout(() => {
+        ruleDebounceRef.current = null
         resolvedClient
           .request<{ data: { updates: Record<string, unknown> } }>(
             post('/field-rules/evaluate', { collection, values: next })
           )
           .then((res) => {
+            if (!mountedRef.current) return
             const updates = res.data?.updates
             if (updates && Object.keys(updates).length > 0) {
               setValuesState((prev) => ({ ...prev, ...updates }))
@@ -207,9 +240,9 @@ export function useNivaroForm(
           .catch(() => {
             // Field rules are best-effort; ignore evaluation failures.
           })
-      }, 300)
+      }, fieldRulesDebounce)
     },
-    [collection, resolvedClient]
+    [collection, resolvedClient, fieldRulesDebounce]
   )
 
   useEffect(() => {
@@ -284,19 +317,26 @@ export function useNivaroForm(
       const value = values[f.field]
 
       if (f.required && isEmpty(value)) {
-        ;(next[f.field] ??= []).push(`${f.label} is required`)
+        const arr = (next[f.field] ??= [])
+        arr.push(`${f.label} is required`)
       }
 
       for (const rule of f.validationRules ?? []) {
         if (rule.soft) continue // soft rules are warnings, not blockers
         const err = applyValidationRule(rule, value, f.label)
-        if (err) (next[f.field] ??= []).push(err)
+        if (err) {
+          const arr = (next[f.field] ??= [])
+          arr.push(err)
+        }
       }
 
       const customValidator = validate?.[f.field]
       if (customValidator) {
         const msg = customValidator(value, values)
-        if (msg) (next[f.field] ??= []).push(msg)
+        if (msg) {
+          const arr = (next[f.field] ??= [])
+          arr.push(msg)
+        }
       }
     }
 
@@ -306,7 +346,10 @@ export function useNivaroForm(
         if (next[field]) continue
         if (schema.fields.some((f) => f.field === field)) continue
         const msg = validator(values[field], values)
-        if (msg) (next[field] ??= []).push(msg)
+        if (msg) {
+          const arr = (next[field] ??= [])
+          arr.push(msg)
+        }
       }
     }
 
@@ -330,15 +373,40 @@ export function useNivaroForm(
             : await resolvedClient.request<{ data: Record<string, unknown> }>(
                 post(`/items/${collection}`, values)
               )
+        // Use server-returned values so computed fields / triggers are reflected
+        // in initialValues, keeping isDirty accurate after save.
         const saved = res.data ?? values
-        setInitialValues(values)
+        setInitialValues(saved)
         onSuccess?.(saved)
       } catch (err: unknown) {
         const error = err instanceof Error ? err : new Error(String(err))
         // Surface server-side field errors when present.
-        const response = (err as { response?: { field?: string; error?: string } })?.response
-        if (response?.field && response.error) {
-          setErrors((prev) => ({ ...prev, [response.field as string]: [response.error as string] }))
+        const response = (err as { response?: unknown })?.response
+        if (response != null && typeof response === 'object') {
+          const r = response as Record<string, unknown>
+          // Single-field error shape: { field, error }
+          if (typeof r.field === 'string' && typeof r.error === 'string') {
+            setErrors((prev) => ({
+              ...prev,
+              [r.field as string]: [r.error as string]
+            }))
+          }
+          // Multi-field error shape: { errors: [{ field, message }] }
+          else if (Array.isArray(r.errors)) {
+            const fieldErrors: FormErrors = {}
+            for (const e of r.errors) {
+              if (e != null && typeof e === 'object') {
+                const fe = e as Record<string, unknown>
+                if (typeof fe.field === 'string' && typeof fe.message === 'string') {
+                  const arr = (fieldErrors[fe.field] ??= [])
+                  arr.push(fe.message)
+                }
+              }
+            }
+            if (Object.keys(fieldErrors).length > 0) {
+              setErrors((prev) => ({ ...prev, ...fieldErrors }))
+            }
+          }
         }
         onError?.(error)
       } finally {
@@ -349,7 +417,7 @@ export function useNivaroForm(
   )
 
   const isDirty = useMemo(
-    () => JSON.stringify(values) !== JSON.stringify(initialValues),
+    () => !shallowEqual(values, initialValues),
     [values, initialValues]
   )
 
@@ -378,6 +446,7 @@ export function useNivaroForm(
     schemaLoading,
     schemaError,
     values,
+    initialValues,
     errors,
     isDirty,
     isSubmitting,

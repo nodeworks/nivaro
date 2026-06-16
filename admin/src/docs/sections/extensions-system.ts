@@ -7,13 +7,17 @@ export const extOverview: DocSection = {
     { type: 'h1', id: 'ext-overview', text: 'Extension Development — Overview' },
     {
       type: 'p',
-      text: 'Extensions are Node.js plugins that live in `api/extensions/<name>/`. Each extension exports a default object with an `id` string and a `register(ctx)` function. The loader discovers them automatically at startup and after a "Scan for new" request.'
+      text: 'Extensions are Node.js plugins that live in `api/extensions/<name>/`. Each exports a default object with an `id` and `register(ctx)` function. The loader auto-discovers them at startup and after "Scan for new" requests.'
     },
     {
       type: 'p',
-      text: 'Both TypeScript (`index.ts`) and compiled JS (`index.js`) are supported. TypeScript files are loaded directly via `tsx` in development.'
+      text: 'TypeScript (`index.ts`) and compiled JS (`index.js`) are both supported. TypeScript files load directly via `tsx` in dev mode.'
     },
-    { type: 'h3', text: 'Minimal extension' },
+    {
+      type: 'h3',
+      id: 'ext-overview-minimal',
+      text: 'Minimal Extension'
+    },
     {
       type: 'pre',
       code: `// api/extensions/my-extension/index.ts
@@ -27,6 +31,26 @@ const plugin: Extension = {
 };
 
 export default plugin;`
+    },
+    {
+      type: 'h3',
+      id: 'ext-overview-loading',
+      text: 'Loading & Reloading'
+    },
+    {
+      type: 'p',
+      text: 'Extensions are loaded at startup. Reload without restarting:'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/extensions/reload
+Authorization: Bearer <admin-token>
+
+// Returns list of newly loaded extensions and any errors`
+    },
+    {
+      type: 'note',
+      text: 'Extensions are auto-discovered from `api/extensions/*/index.{ts,js}`. Each must have a unique id. Duplicate IDs are logged and skipped.'
     }
   ]
 }
@@ -38,81 +62,78 @@ export const extContext: DocSection = {
     { type: 'h1', id: 'ext-context', text: 'Extension Context' },
     {
       type: 'p',
-      text: 'The `ctx` object passed to `register()` exposes everything an extension needs:'
+      text: 'The `ctx` object passed to `register()` provides access to the entire Nivaro platform. Every extension receives the same context object.'
+    },
+    {
+      type: 'h3',
+      id: 'ext-context-core',
+      text: 'Core Services'
     },
     {
       type: 'table',
-      head: ['Property', 'Type', 'Description'],
+      head: ['Property', 'Type', 'Purpose'],
       rows: [
-        ['app', 'FastifyInstance', 'The Fastify server. Register routes, decorators, hooks.'],
-        ['database', 'Knex', 'Knex connection to the MSSQL database.'],
-        ['inngest', 'Inngest', 'Inngest client for sending events and registering functions.'],
-        ['logger', 'FastifyBaseLogger', 'Structured pino logger, prefixed with the extension id.'],
-        [
-          'hooks',
-          '{ before, after }',
-          'Scoped hook helpers — tagged with the extension id for enable/disable.'
-        ],
-        [
-          'cron',
-          '{ schedule, unschedule }',
-          'Scoped cron helpers — paused/resumed when extension is toggled.'
-        ],
-        [
-          'callExternalApi',
-          '(nameOrId, options?) => Promise',
-          'Call a configured external API by name or numeric ID. Auth (bearer, api_key, basic, oauth2_cc) resolved automatically from the stored config.'
-        ],
-        [
-          'flows',
-          '{ registerOperation, registerTrigger, emit }',
-          'Register custom flow operation types and trigger types. They appear in the flow editor automatically. Call `emit()` to fire flows using a custom trigger.'
-        ],
-        [
-          'bulkActions',
-          '{ register(def) }',
-          'Register a bulk action that appears in the collection browser selection bar. `def.execute({ collection, ids })` is called server-side.'
-        ],
-        [
-          'itemActions',
-          '{ register(def) }',
-          'Register a contextual action button in the item editor toolbar. `def.execute({ collection, itemId })` is called server-side.'
-        ],
-        [
-          'notificationChannels',
-          '{ register(def) }',
-          'Register a notification delivery channel (e.g. Slack, SMS). `def.deliver(ctx)` is called for every notification routed to this channel.'
-        ],
-        [
-          'dashboardWidgets',
-          '{ register(def) }',
-          'Register a custom dashboard widget type. Appears in the widget picker with the declared label, icon, and config schema.'
-        ],
-        [
-          'storage',
-          '{ register(name, adapter), setActive(name) }',
-          'Register a named file storage adapter (e.g. S3, Azure Blob). Call `setActive()` to route all new uploads through it.'
-        ],
-        [
-          'fieldTypes',
-          '{ register(def) }',
-          'Register a custom field type with optional serialize/deserialize transforms. Appears in the field type picker in Data Model.'
-        ],
-        [
-          'collectionViews',
-          '{ register(def) }',
-          'Register a custom collection view mode (Kanban, calendar, Gantt, map). Shown in the view switcher on collection browser pages.'
-        ],
-        [
-          'importParsers',
-          '{ register(def) }',
-          'Register a file import parser for additional formats (Excel, JSON, XML). Parser is selected automatically by MIME type or extension in the import wizard.'
-        ],
-        [
-          'validators',
-          '{ register(def) }',
-          'Register a custom field validator operator (e.g. `phone_e164`, `iban`). The operator becomes available in Data Model → Field → Validation Rules.'
-        ]
+        ['app', 'FastifyInstance', 'Register routes, decorators, hooks. Scoped to /api prefix.'],
+        ['database', 'Knex', 'MSSQL connection via Knex query builder.'],
+        ['inngest', 'Inngest', 'Async job orchestration. Register functions, send events.'],
+        ['logger', 'FastifyBaseLogger', 'Structured pino logger prefixed with extension id.']
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'ext-context-hooks-cron',
+      text: 'Hooks & Cron'
+    },
+    {
+      type: 'table',
+      head: ['Property', 'Type', 'Purpose'],
+      rows: [
+        ['hooks', '{ before, after }', 'Intercept CRUD operations. Tagged for enable/disable per extension.'],
+        ['cron', '{ schedule, unschedule }', 'Recurring jobs. Paused/resumed when extension toggled.']
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'ext-context-external-data',
+      text: 'External Data & APIs'
+    },
+    {
+      type: 'table',
+      head: ['Property', 'Type', 'Purpose'],
+      rows: [
+        ['callExternalApi', 'Function', 'Call configured external API by name/ID. Auth resolved automatically.'],
+        ['flows', 'Object', 'Register flow ops/triggers. Emit trigger events to execute flows.']
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'ext-context-ui',
+      text: 'Admin UI'
+    },
+    {
+      type: 'table',
+      head: ['Property', 'Type', 'Purpose'],
+      rows: [
+        ['bulkActions', 'Object', 'Register selection bar buttons for collections.'],
+        ['itemActions', 'Object', 'Register toolbar buttons on item edit pages.'],
+        ['dashboardWidgets', 'Object', 'Register custom dashboard widget types.'],
+        ['collectionViews', 'Object', 'Register custom collection view modes (Kanban, calendar, etc).'],
+        ['notificationChannels', 'Object', 'Register delivery channels (Slack, SMS, custom).']
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'ext-context-schema',
+      text: 'Schema & Data'
+    },
+    {
+      type: 'table',
+      head: ['Property', 'Type', 'Purpose'],
+      rows: [
+        ['fieldTypes', 'Object', 'Register custom field types with serialize/deserialize.'],
+        ['validators', 'Object', 'Register field validation operators.'],
+        ['importParsers', 'Object', 'Register file format parsers for import wizard.'],
+        ['storage', 'Object', 'Register file storage adapters (S3, Azure, etc).']
       ]
     }
   ]

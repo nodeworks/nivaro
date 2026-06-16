@@ -13,17 +13,30 @@ function toInputValue(value: unknown, datetime: boolean): string {
   return str.slice(0, 16).replace(' ', 'T')
 }
 
-export function DateField({ field, value, onChange, disabled, readOnly }: FieldComponentProps) {
+export function DateField({
+  field,
+  value,
+  onChange,
+  error,
+  disabled,
+  readOnly,
+  inputId,
+  errorId
+}: FieldComponentProps) {
+  const id = inputId ?? field.field
   const datetime = field.fieldType === 'datetime'
   return (
     <input
       type={datetime ? 'datetime-local' : 'date'}
-      id={field.field}
+      id={id}
       name={field.field}
       value={toInputValue(value, datetime)}
       required={field.required}
       disabled={disabled}
       readOnly={readOnly}
+      aria-required={field.required}
+      aria-invalid={error != null && error.length > 0}
+      aria-describedby={errorId}
       onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
     />
   )

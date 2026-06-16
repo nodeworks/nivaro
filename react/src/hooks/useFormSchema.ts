@@ -1,5 +1,6 @@
-import type { Command, NivaroClient } from '@nivaro/sdk'
+import type { NivaroClient } from '@nivaro/sdk'
 import { useEffect, useRef, useState } from 'react'
+import { get } from '../lib/commands'
 import type {
   FormFieldDescriptor,
   FormFieldType,
@@ -62,11 +63,9 @@ interface CMSGroupRow {
   is_collapsed?: boolean | number | null
 }
 
-// `cmd` lives in an internal SDK module; recreate the minimal descriptor here so
-// we depend only on the public `Command` type.
-function get<T>(path: string, params?: Record<string, unknown>): Command<T> {
-  return { _method: 'GET', _path: path, _params: params } as Command<T>
-}
+// Sentinel injected by the active-layout assignments endpoint to mark the
+// ungrouped fields' position among groups.
+const UNGROUPED_POS_SENTINEL = '__ungrouped_pos__'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -133,8 +132,11 @@ export function normalizeFieldType(
       return type === 'date' ? 'date' : 'datetime'
     case 'select-dropdown':
     case 'select-radio':
-    case 'select-multiple-dropdown':
       return 'select'
+    case 'select-multiple-dropdown':
+      return 'checkbox-group'
+    case 'radio-buttons':
+      return 'radio'
     case 'file':
       return 'file'
     case 'many-to-one':
@@ -230,6 +232,8 @@ function buildSchema(
       const relation = buildFieldRelation(collection, f.field, relations)
       const type = f.type ?? 'string'
       const iface = f.interface ?? null
+      const groupFromMap = assignmentMap?.get(f.field)?.group_key ?? null
+      const sortFromMap = assignmentMap?.get(f.field)?.sort ?? null
       return {
         field: f.field,
         type,
@@ -240,8 +244,8 @@ function buildSchema(
         required: toBool(f.required),
         readonly: toBool(f.readonly),
         hidden: toBool(f.hidden),
-        sort: assignmentMap?.get(f.field)?.sort ?? f.sort ?? null,
-        group: assignmentMap ? (assignmentMap.get(f.field)?.group_key ?? null) : (f.group_key ?? null),
+        sort: sortFromMap ?? f.sort ?? null,
+        group: assignmentMap != null ? groupFromMap : (f.group_key ?? null),
         options:
           parseJsonColumn<Record<string, unknown>>(f.options) ??
           parseJsonColumn<Record<string, unknown>>(
@@ -284,10 +288,19 @@ function buildSchema(
 }
 
 // ─── Module-level cache ──────────────────────────────────────────────────────
+// Keyed by clientUrl::collection::includeHidden::layoutId so different
+// collection/layout combinations stay separate. Clients pointing to the same
+// URL share cached entries (intended for singleton/shared client patterns).
+// Call clearFormSchemaCache() after a schema mutation to bust stale entries.
 
 const schemaCache = new Map<string, FormSchema>()
 
-function cacheKey(clientUrl: string, collection: string, includeHidden: boolean, layoutId?: number): string {
+function cacheKey(
+  clientUrl: string,
+  collection: string,
+  includeHidden: boolean,
+  layoutId?: number
+): string {
   return `${clientUrl}::${collection}::${includeHidden ? 'h' : ''}::${layoutId ?? 'active'}`
 }
 
@@ -298,34 +311,48 @@ export async function fetchSchema(
   layoutId?: number
 ): Promise<FormSchema> {
   const groupsParams: Record<string, unknown> = {}
-  if (layoutId) groupsParams.layout_id = layoutId
+  if (layoutId != null) groupsParams.layout_id = layoutId
 
   const [collectionRes, groupsRes, assignmentsRes, activeLayoutRes] = await Promise.all([
     client.request<{ data: CMSCollectionResponse }>(get(`/collections/${collection}`)),
     client.request<{ data: CMSGroupRow[] }>(get(`/field-groups/${collection}`, groupsParams)),
-    layoutId
+    layoutId != null
       ? client.request<{ data: Array<{ field: string; group_key: string | null; sort: number }> }>(
           get(`/collection-layouts/${layoutId}/assignments`)
         )
-      : Promise.resolve({ data: [] as Array<{ field: string; group_key: string | null; sort: number }> }),
-    !layoutId
-      ? client.request<{ data: { ungrouped_sort?: number | null } }>(
-          get(`/collection-layouts/active`, { collection })
-        ).catch(() => ({ data: { ungrouped_sort: null } }))
+      : Promise.resolve({
+          data: [] as Array<{ field: string; group_key: string | null; sort: number }>
+        }),
+    layoutId == null
+      ? client
+          .request<{ data: { ungrouped_sort?: number | null } }>(
+            get('/collection-layouts/active', { collection })
+          )
+          .catch(() => ({ data: { ungrouped_sort: null } }))
       : Promise.resolve({ data: { ungrouped_sort: null } })
   ])
 
   const assignmentMap = new Map<string, { group_key: string | null; sort: number }>()
   let ungroupedSort: number | null = null
   for (const a of assignmentsRes.data ?? []) {
-    if (a.field === '__ungrouped_pos__') { ungroupedSort = a.sort; continue }
+    if (a.field === UNGROUPED_POS_SENTINEL) {
+      ungroupedSort = a.sort
+      continue
+    }
     assignmentMap.set(a.field, { group_key: a.group_key, sort: a.sort })
   }
   if (ungroupedSort === null) {
-    ungroupedSort = (activeLayoutRes.data as { ungrouped_sort?: number | null })?.ungrouped_sort ?? null
+    ungroupedSort =
+      (activeLayoutRes.data as { ungrouped_sort?: number | null })?.ungrouped_sort ?? null
   }
 
-  const schema = buildSchema(collection, collectionRes.data, groupsRes.data ?? [], includeHidden, assignmentMap)
+  const schema = buildSchema(
+    collection,
+    collectionRes.data,
+    groupsRes.data ?? [],
+    includeHidden,
+    assignmentMap
+  )
   schema.ungroupedSort = ungroupedSort
   return schema
 }
@@ -333,6 +360,10 @@ export async function fetchSchema(
 /**
  * Fetch + cache a collection's form schema. Caches by client URL + collection +
  * includeHidden flag so re-mounts and sibling forms share one request.
+ *
+ * NOTE: Pass a stable `client` reference. A new object on every render resets
+ * the cache key and re-fetches. Use `useMemo` or define the client outside the
+ * component tree.
  */
 export function useFormSchema(
   client: NivaroClient | null,
@@ -355,17 +386,17 @@ export function useFormSchema(
     }
     const cached = schemaCache.get(key as string)
     if (cached) {
+      setError(null)
       setSchema(cached)
       setLoading(false)
-      setError(null)
       return
     }
 
     const reqId = ++reqIdRef.current
     let active = true
+    setError(null)
     setSchema(null)
     setLoading(true)
-    setError(null)
 
     fetchSchema(client, collection, includeHidden, layoutId)
       .then((s) => {

@@ -529,14 +529,14 @@ export function createRetentionPolicy(
     'id' | 'created_by' | 'created_at' | 'updated_at' | 'last_run_at' | 'last_run_affected_count'
   >
 ): Command<{ data: RetentionPolicy }> {
-  return cmd('POST', '/retention', body)
+  return cmd('POST', '/retention', undefined, body)
 }
 
 export function updateRetentionPolicy(
   id: number,
   body: Partial<Omit<RetentionPolicy, 'id' | 'created_by' | 'created_at' | 'updated_at'>>
 ): Command<{ data: RetentionPolicy }> {
-  return cmd('PATCH', `/retention/${id}`, body)
+  return cmd('PATCH', `/retention/${id}`, undefined, body)
 }
 
 export function deleteRetentionPolicy(id: number): Command<void> {
@@ -551,7 +551,7 @@ export function runRetentionPolicy(
   id: number,
   dryRun = false
 ): Command<{ data: RetentionRunResult }> {
-  return cmd('POST', `/retention/${id}/run${dryRun ? '?dry_run=true' : ''}`)
+  return cmd('POST', `/retention/${id}/run`, dryRun ? { dry_run: 'true' } : undefined)
 }
 
 export function listRetentionRuns(policyId: number): Command<{ data: RetentionRun[] }> {

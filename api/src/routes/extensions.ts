@@ -160,7 +160,8 @@ export async function extensionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
   app.get('/', async (_req, reply) => {
-    const data = Array.from(extensionRegistry.values())
+    // Cloud extensions are internal — hidden from the tenant Extensions page
+    const data = Array.from(extensionRegistry.values()).filter((e) => !e.cloud)
     return reply.send({ data })
   })
 
