@@ -218,6 +218,38 @@ export function InlineTableField({
 
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [dropIdx, setDropIdx] = useState<number | null>(null)
+  const [bulkCount, setBulkCount] = useState(1)
+  const [bulkAdding, setBulkAdding] = useState(false)
+
+  function makeDefaultRow(withDefaults: boolean): Record<string, unknown> {
+    if (!withDefaults) return {}
+    const row: Record<string, unknown> = {}
+    for (const c of displayCols) {
+      if (c.field === manyField || c.field === 'id') continue
+      if (c.type === 'boolean') row[c.field] = false
+      else if (['integer','bigInteger','decimal','float','money','smallmoney','tinyint','smallint','bigint','int','numeric','real','double','number'].includes(c.type)) row[c.field] = 0
+      else row[c.field] = null
+    }
+    return row
+  }
+
+  async function addBulkRows(withDefaults: boolean) {
+    const n = Math.max(1, Math.min(100, bulkCount))
+    if (isNew && staging) {
+      for (let i = 0; i < n; i++) staging.queueRow(relatedCollection, manyField, makeDefaultRow(withDefaults))
+      return
+    }
+    setBulkAdding(true)
+    try {
+      await Promise.all(
+        Array.from({ length: n }, () =>
+          client.request(post(`/items/${relatedCollection}`, { ...makeDefaultRow(withDefaults), [manyField]: parentId }))
+        )
+      )
+      qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+    } catch { /* ignore */ }
+    finally { setBulkAdding(false) }
+  }
 
   function handleDragStart(ri: number) { setDragIdx(ri) }
   function handleDragOver(e: React.DragEvent, ri: number) { e.preventDefault(); setDropIdx(ri) }
@@ -296,6 +328,35 @@ export function InlineTableField({
   const isEditingNew = editState?.rowId === 'new'
 
   return (
+    <div className='space-y-1.5'>
+      <div className='flex items-center gap-2 text-[11px]'>
+        <span className='text-slate-400'>Add</span>
+        <input
+          type='number'
+          min={1}
+          max={100}
+          value={bulkCount}
+          onChange={e => setBulkCount(Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)))}
+          className='w-14 h-6 rounded border border-slate-200 px-2 text-[11px] text-slate-700 text-center focus:outline-none focus:ring-1 focus:ring-[#00ceff]'
+        />
+        <button
+          type='button'
+          disabled={bulkAdding}
+          onClick={() => addBulkRows(false)}
+          className='h-6 px-2.5 rounded border border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800 disabled:opacity-40 transition-colors'
+        >
+          blank {bulkCount === 1 ? 'row' : 'rows'}
+        </button>
+        <button
+          type='button'
+          disabled={bulkAdding}
+          onClick={() => addBulkRows(true)}
+          className='h-6 px-2.5 rounded border border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800 disabled:opacity-40 transition-colors'
+        >
+          with defaults
+        </button>
+        {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
+      </div>
     <div className='rounded-lg border border-slate-200 text-[12px]'>
       <table className='w-full table-fixed'>
         <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>
@@ -555,6 +616,7 @@ export function InlineTableField({
           </button>
         </div>
       )}
+    </div>
     </div>
   )
 }

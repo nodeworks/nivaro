@@ -77,11 +77,13 @@ export const INTERFACES_BY_TYPE: Record<string, InterfaceOption[]> = {
   ],
   m2o: [
     { value: 'relation-picker', label: 'Relation Picker (default)' },
+    { value: 'file-image', label: 'File Picker' },
     { value: 'input', label: 'Plain Text (FK value)' }
   ],
   m2m: [
     { value: 'relation-m2m', label: 'Tags Picker (default)' },
-    { value: 'select-multiple-m2m', label: 'Multiselect Combobox' }
+    { value: 'select-multiple-m2m', label: 'Multiselect Combobox' },
+    { value: 'files-m2m', label: 'File Picker' }
   ],
   o2m: [
     { value: 'relation-list', label: 'Related Items List (default)' },

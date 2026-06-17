@@ -3,6 +3,7 @@ import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
+import { FilePickerField, FileM2MField } from './FilePickerField'
 import { parseJson, toLocalDatetime } from './helpers'
 import { InlineGridField } from './InlineGridField'
 import { InlineTableField } from './InlineTableField'
@@ -47,6 +48,9 @@ export function FieldRenderer({
       )
     : null
   if (m2oRel?.one_collection) {
+    if (iface === 'file-image') {
+      return <FilePickerField value={value} onChange={onChange} disabled={field.readonly} />
+    }
     return (
       <RelationCombobox
         collection={m2oRel.one_collection}
@@ -76,6 +80,16 @@ export function FieldRenderer({
         })()
       : null
   if (m2mRel) {
+    if (iface === 'files-m2m') {
+      return (
+        <FileM2MField
+          relation={m2mRel}
+          parentId={itemId}
+          allRelations={relations}
+          disabled={field.readonly}
+        />
+      )
+    }
     const fieldOpts = parseJson<{ max_values?: number }>(field.options)
     if (fieldOpts?.max_values === 1) {
       return (
