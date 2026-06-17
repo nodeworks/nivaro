@@ -231,7 +231,7 @@ export function M2MCombobox({
                   <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
                 </div>
               ) : (
-              <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+              <CommandEmpty className='py-3 text-left text-[12px] text-muted-foreground px-3'>
                 No results
               </CommandEmpty>
               )}
@@ -468,7 +468,7 @@ export function M2MSingleSelectCombobox({
                 <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
               </div>
             ) : (
-            <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+            <CommandEmpty className='py-3 text-left text-[12px] text-muted-foreground px-3'>
               No results
             </CommandEmpty>
             )}

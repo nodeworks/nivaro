@@ -5,6 +5,7 @@ import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { parseJson, toLocalDatetime } from './helpers'
 import { InlineGridField } from './InlineGridField'
+import { InlineTableField } from './InlineTableField'
 import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
 import { RelationCombobox } from './RelationCombobox'
 import { RichTextEditor } from './RichTextEditor'
@@ -146,9 +147,9 @@ export function FieldRenderer({
     )
   }
 
-  const isNumeric = ['integer', 'bigInteger', 'float', 'decimal', 'numeric'].includes(field.type)
+  const isNumeric = ['integer', 'bigInteger', 'float', 'decimal', 'numeric', 'int', 'bigint', 'smallint', 'tinyint', 'real', 'money', 'smallmoney', 'double', 'number'].includes(field.type)
   if (isNumeric) {
-    const isInt = field.type === 'integer' || field.type === 'bigInteger'
+    const isInt = ['integer', 'bigInteger', 'int', 'bigint', 'smallint', 'tinyint'].includes(field.type)
     return (
       <Input
         type='number'
@@ -242,6 +243,33 @@ export function FieldRenderer({
         </p>
       )
     }
+  }
+
+  if (iface === 'inline-table') {
+    const o2mRel = relations.find(
+      (r) =>
+        r.one_collection === collection &&
+        !r.junction_field &&
+        (r.one_field === field.field || r.many_collection === field.field)
+    )
+    if (o2mRel) {
+      const o2mCol = o2mRel.many_collection ?? null
+      const o2mManyField = o2mRel.many_field ?? null
+      if (o2mCol && o2mManyField && itemId) {
+        const opts = typeof field.options === 'string'
+          ? (() => { try { return JSON.parse(field.options) } catch { return {} } })()
+          : (field.options ?? {})
+        const layoutId = (opts.layout_id as number | null) ?? null
+        return (
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutId={layoutId} />
+        )
+      }
+    }
+    return (
+      <p className='text-[12px] text-slate-400 py-1'>
+        Inline table editing not available in embedded form
+      </p>
+    )
   }
 
   // Select / dropdown

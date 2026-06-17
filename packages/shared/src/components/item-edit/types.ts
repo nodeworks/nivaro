@@ -17,6 +17,7 @@ export interface CMSField {
   placeholder: string | null
   repeater_schema: Record<string, unknown>[] | string | null
   dependency_config: Record<string, unknown> | string | null
+  layout_assigned?: boolean
 }
 
 export interface CMSRelation {

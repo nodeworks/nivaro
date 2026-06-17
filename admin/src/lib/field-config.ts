@@ -85,7 +85,8 @@ export const INTERFACES_BY_TYPE: Record<string, InterfaceOption[]> = {
   ],
   o2m: [
     { value: 'relation-list', label: 'Related Items List (default)' },
-    { value: 'inline-grid', label: 'Inline Grid' }
+    { value: 'inline-grid', label: 'Inline Grid' },
+    { value: 'inline-table', label: 'Inline Table' }
   ]
 }
 

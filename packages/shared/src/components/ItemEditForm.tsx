@@ -187,6 +187,23 @@ export function ItemEditForm({
       arr.splice(idx, 1)
       next.set(key, arr)
       return next
+    }),
+    updateRow: (rc, mf, idx, data) => setPendingO2MRows(prev => {
+      const next = new Map(prev)
+      const key = `${rc}.${mf}`
+      const arr = [...(next.get(key) ?? [])]
+      arr[idx] = { ...arr[idx], ...data }
+      next.set(key, arr)
+      return next
+    }),
+    reorderRows: (rc, mf, fromIdx, toIdx) => setPendingO2MRows(prev => {
+      const next = new Map(prev)
+      const key = `${rc}.${mf}`
+      const arr = [...(next.get(key) ?? [])]
+      const [moved] = arr.splice(fromIdx, 1)
+      arr.splice(toIdx, 0, moved)
+      next.set(key, arr)
+      return next
     })
   }), [pendingO2MRows])
 

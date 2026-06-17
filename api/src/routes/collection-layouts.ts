@@ -89,6 +89,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   })
 
   // GET /collection-layouts?collection=x[&active=true]
+  app.get('/:id', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const row = await db('nivaro_collection_layouts').where({ id }).first()
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    row.conditions = parseConditions(row.conditions)
+    return reply.send({ data: row })
+  })
+
   app.get('/', { preHandler: authenticate }, async (req, reply) => {
     const { collection, active } = req.query as { collection?: string; active?: string }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
@@ -96,7 +104,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     let q = db('nivaro_collection_layouts')
       .where({ collection })
       .orderBy('sort', 'asc')
-      .select('id', 'collection', 'name', 'slug', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule', 'allow_disable_pickers')
+      .select('id', 'collection', 'name', 'slug', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule', 'allow_disable_pickers', 'layout_type', 'row_order_field')
     if (active === 'true') q = q.where({ is_active: 1 })
 
     const rows = await q
@@ -106,7 +114,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
   // POST /collection-layouts
   app.post('/', { preHandler: requireAdmin }, async (req, reply) => {
-    const body = req.body as { collection: string; name: string; slug?: string }
+    const body = req.body as { collection: string; name: string; slug?: string; layout_type?: string }
     if (!body.collection || !body.name) return reply.code(400).send({ error: 'collection and name are required' })
 
     const maxSortRow = await db('nivaro_collection_layouts')
@@ -118,7 +126,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const autoSlug = body.slug ?? body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     try {
       await db('nivaro_collection_layouts')
-        .insert({ collection: body.collection, name: body.name, slug: autoSlug, is_active: 0, sort: maxSort + 1 })
+        .insert({ collection: body.collection, name: body.name, slug: autoSlug, is_active: 0, sort: maxSort + 1, layout_type: body.layout_type ?? 'grouped' })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : ''
       if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
@@ -141,7 +149,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean }>
+    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; row_order_field: string | null }>
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
     if (body.slug !== undefined) patch.slug = body.slug ?? null
@@ -157,6 +165,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.allow_clone !== undefined) patch.allow_clone = body.allow_clone ? 1 : 0
     if (body.allow_schedule !== undefined) patch.allow_schedule = body.allow_schedule ? 1 : 0
     if (body.allow_disable_pickers !== undefined) patch.allow_disable_pickers = body.allow_disable_pickers ? 1 : 0
+    if (body.layout_type !== undefined) patch.layout_type = body.layout_type
+    if (body.row_order_field !== undefined) patch.row_order_field = body.row_order_field ?? null
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 

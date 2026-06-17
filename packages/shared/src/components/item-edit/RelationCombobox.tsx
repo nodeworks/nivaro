@@ -116,7 +116,7 @@ export function RelationCombobox({
         <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
       </button>
       {open && (
-        <div className='absolute z-50 mt-1 w-full rounded-md border border-border bg-popover shadow-md'>
+        <div className='absolute z-50 mt-1 min-w-[240px] w-max max-w-[360px] rounded-md border border-border bg-popover shadow-md'>
           <div className='border-b p-1.5'>
             <input
               ref={inputRef}
@@ -160,7 +160,7 @@ export function RelationCombobox({
                         setOpen(false)
                       }}
                       className={cn(
-                        'flex w-full items-center gap-2 px-3 py-1.5 text-[13px] hover:bg-slate-50',
+                        'flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-slate-50',
                         sel && 'font-medium'
                       )}
                     >

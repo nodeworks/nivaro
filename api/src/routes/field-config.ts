@@ -14,6 +14,7 @@ function parseJsonSafe(val: unknown): unknown {
 
 interface FieldRow {
   field: string
+  type: string | null
   label: string | null
   note: string | null
   placeholder: string | null
@@ -38,6 +39,7 @@ interface FieldRow {
 function formatFieldConfig(row: FieldRow) {
   return {
     field: row.field,
+    type: row.type ?? null,
     label: row.label ?? null,
     note: row.note ?? null,
     placeholder: row.placeholder ?? null,
@@ -134,6 +136,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       .where({ collection })
       .select(
         'field',
+        'type',
         'label',
         'note',
         'hidden',

@@ -20,7 +20,7 @@ import type { CMSField, CMSRelation, RenderFieldProps } from './types'
 const NUMERIC_TYPES = new Set(['integer', 'float', 'decimal', 'bigInteger', 'number'])
 const TEXTUAL_TYPES = new Set(['string', 'text', 'richtext', 'textarea', 'markdown', 'json', 'csv'])
 const TEXTUAL_INTERFACES = new Set(['input', 'textarea', 'wysiwyg', 'markdown', 'input-rich-text-html', 'rich_text', 'extension-editorjs'])
-const RELATION_INTERFACES = new Set(['relation-m2o', 'relation-m2m', 'select-multiple-m2m', 'list-o2m', 'relation-list', 'inline-grid', 'file', 'files', 'image'])
+const RELATION_INTERFACES = new Set(['relation-m2o', 'relation-m2m', 'select-multiple-m2m', 'list-o2m', 'relation-list', 'inline-grid', 'inline-table', 'file', 'files', 'image'])
 
 function isAiEligible(field: { type?: string; interface?: string | null }): boolean {
   const iface = field.interface ?? ''

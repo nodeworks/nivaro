@@ -1,6 +1,7 @@
 export type { ItemEditFormProps } from './components/ItemEditForm'
 export { ItemEditForm } from './components/ItemEditForm'
 export { FieldRenderer } from './components/item-edit/FieldRenderer'
+export { InlineTableField } from './components/item-edit/InlineTableField'
 export * from './components/panels'
 export * from './context'
 export * from './hooks/useFormSchema'

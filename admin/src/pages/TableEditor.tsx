@@ -460,6 +460,8 @@ function normalizeDataType(col: { data_type: string; max_length: number | null }
 
 // ─── Add column form ──────────────────────────────────────────────────────────
 
+const NUMERIC_DATA_TYPES = new Set(['int', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric', 'float', 'real', 'money', 'smallmoney', 'integer', 'double'])
+
 const COLUMN_TYPES = [
   'string',
   'text',
@@ -4774,15 +4776,16 @@ function CascadeFiltersEditor({
   )
 }
 
-function LayoutPicker({ collection, value, onChange }: { collection?: string | null; value: string | null; onChange: (slug: string | null) => void }) {
+function LayoutPicker({ collection, value, onChange, layoutType }: { collection?: string | null; value: number | null; onChange: (id: number | null, slug: string | null) => void; layoutType?: 'grouped' | 'table' }) {
   const [open, setOpen] = useState(false)
-  const { data: layouts = [] } = useQuery({
+  const { data: allLayouts = [] } = useQuery({
     queryKey: ['collection-layouts-list', collection],
-    queryFn: () => api.get<{ data: Array<{ id: number; name: string; slug: string | null }> }>(`/collection-layouts?collection=${collection}`).then(r => r.data.data ?? []),
+    queryFn: () => api.get<{ data: Array<{ id: number; name: string; slug: string | null; layout_type?: string }> }>(`/collection-layouts?collection=${collection}`).then(r => r.data.data ?? []),
     enabled: !!collection,
     staleTime: 60_000,
   })
-  const selected = layouts.find(l => l.slug === value)
+  const layouts = layoutType ? allLayouts.filter(l => (l.layout_type ?? 'grouped') === layoutType) : allLayouts
+  const selected = layouts.find(l => l.id === value)
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -4797,10 +4800,10 @@ function LayoutPicker({ collection, value, onChange }: { collection?: string | n
           <CommandList>
             <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No layouts</CommandEmpty>
             <CommandGroup>
-              <CommandItem value='' onSelect={() => { onChange(null); setOpen(false) }} className='text-[11px] text-slate-400'>None</CommandItem>
+              <CommandItem value='' onSelect={() => { onChange(null, null); setOpen(false) }} className='text-[11px] text-slate-400'>None</CommandItem>
               {layouts.map(l => (
-                <CommandItem key={l.id} value={l.name} onSelect={() => { onChange(l.slug ?? null); setOpen(false) }} className='text-[11px]'>
-                  <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === l.slug ? 'opacity-100' : 'opacity-0')} />
+                <CommandItem key={l.id} value={l.name} onSelect={() => { onChange(l.id, l.slug ?? null); setOpen(false) }} className='text-[11px]'>
+                  <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === l.id ? 'opacity-100' : 'opacity-0')} />
                   {l.name}
                   {l.slug && <span className='ml-1.5 font-mono text-[10px] text-slate-400'>{l.slug}</span>}
                 </CommandItem>
@@ -4846,7 +4849,14 @@ function FieldSettingsPopover({
   const [maxValues, setMaxValues] = useState<string>(settings.max_values != null ? String(settings.max_values) : '')
   const [cascadeRules, setCascadeRules] = useState<CascadeFilterRule[]>([])
   const [gridLayoutSlug, setGridLayoutSlug] = useState<string | null>(null)
+  const [gridLayoutId, setGridLayoutId] = useState<number | null>(null)
   const [gridShowTotals, setGridShowTotals] = useState(false)
+  const [numFormat, setNumFormat] = useState<'int' | 'decimal' | 'currency' | ''>('')
+  const [numPrecisionFmt, setNumPrecisionFmt] = useState('2')
+  const [numCurrency, setNumCurrency] = useState('USD')
+  const [numAggregate, setNumAggregate] = useState<'sum' | 'count' | 'avg' | 'min' | 'max' | ''>('')
+
+  const isNumericAbstractType = ['integer', 'bigInteger', 'decimal', 'float', 'money', 'smallmoney', 'tinyint', 'smallint', 'bigint'].includes(abstractType ?? '')
 
   // Reset local state when popover opens
   function handleOpenChange(next: boolean) {
@@ -4863,12 +4873,17 @@ function FieldSettingsPopover({
       // dependencyConfig is already a parsed object from the API — use directly
       const dep = (dependencyConfig && typeof dependencyConfig === 'object') ? dependencyConfig : {}
       setCascadeRules(Array.isArray(dep.cascade_filters) ? dep.cascade_filters as CascadeFilterRule[] : [])
-      // Parse inline-grid options from settings.options
+      // Parse inline-grid / inline-table options from settings.options
       try {
         const opts = settings.options ? (typeof settings.options === 'string' ? JSON.parse(settings.options) : settings.options) as Record<string, unknown> : {}
-        setGridLayoutSlug((opts.layout_slug as string | null) ?? (opts.grid_layout_id != null ? String(opts.grid_layout_id) : null))
+        setGridLayoutSlug((opts.layout_slug as string | null) ?? null)
+        setGridLayoutId((opts.layout_id as number | null) ?? null)
         setGridShowTotals(!!(opts.grid_show_totals))
-      } catch { setGridLayoutSlug(null); setGridShowTotals(false) }
+        setNumFormat((opts.format as 'int' | 'decimal' | 'currency' | '') ?? '')
+        setNumPrecisionFmt(opts.precision != null ? String(opts.precision) : '2')
+        setNumCurrency((opts.currency as string) ?? 'USD')
+        setNumAggregate((opts.aggregate as 'sum' | 'count' | 'avg' | 'min' | 'max' | '') ?? '')
+      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate('') }
     }
     setOpen(next)
   }
@@ -4887,13 +4902,32 @@ function FieldSettingsPopover({
       }
       depPatch = Object.keys(merged).length > 0 ? merged : null
     }
-    // Inline-grid options for O2M
+    // Inline-grid / inline-table options for O2M
     let optionsPatch: string | null = null
-    if (abstractType === 'o2m' && iface === 'inline-grid') {
+    const needsOptionsPatch = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table')) || isNumericAbstractType
+    if (needsOptionsPatch) {
       try {
         const existing = settings.options ? (typeof settings.options === 'string' ? JSON.parse(settings.options) : settings.options) as Record<string, unknown> : {}
-        optionsPatch = JSON.stringify({ ...existing, layout_slug: gridLayoutSlug, grid_show_totals: gridShowTotals })
-      } catch { optionsPatch = JSON.stringify({ layout_slug: gridLayoutSlug, grid_show_totals: gridShowTotals }) }
+        const formatOpts: Record<string, unknown> = {}
+        if (isNumericAbstractType && numFormat) {
+          formatOpts.format = numFormat
+          if (numFormat === 'decimal') formatOpts.precision = parseInt(numPrecisionFmt, 10) || 2
+          if (numFormat === 'currency') formatOpts.currency = numCurrency || 'USD'
+        } else if (isNumericAbstractType) {
+          delete existing.format; delete existing.precision; delete existing.currency
+        }
+        if (isNumericAbstractType && numAggregate) {
+          formatOpts.aggregate = numAggregate
+        } else if (isNumericAbstractType) {
+          delete existing.aggregate
+        }
+        const o2mOpts = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table'))
+          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : {}) }
+          : {}
+        optionsPatch = JSON.stringify({ ...existing, ...o2mOpts, ...formatOpts })
+      } catch {
+        optionsPatch = JSON.stringify({ ...(isNumericAbstractType && numFormat ? { format: numFormat, ...(numFormat === 'decimal' ? { precision: parseInt(numPrecisionFmt, 10) || 2 } : {}), ...(numFormat === 'currency' ? { currency: numCurrency } : {}) } : {}) })
+      }
     }
     const patch: Partial<FieldSettings> & { dependency_config?: Record<string, unknown> | null; options?: string | null } = {
       label: label.trim() || null,
@@ -4907,7 +4941,7 @@ function FieldSettingsPopover({
       max_values: maxV && maxV > 0 ? maxV : null,
     }
     if (isM2O || isM2M) patch.dependency_config = depPatch
-    if (optionsPatch !== null) patch.options = optionsPatch
+    if (optionsPatch !== null || needsOptionsPatch) patch.options = optionsPatch
     onSave(patch as Partial<FieldSettings> & { dependency_config?: string })
     setOpen(false)
   }
@@ -4936,7 +4970,7 @@ function FieldSettingsPopover({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className='w-72 p-0 max-h-[600px] overflow-y-auto'
+        className='w-72 p-0 max-h-[700px] overflow-y-auto'
         align='end'
         onPointerDown={e => e.stopPropagation()}
         onClick={e => e.stopPropagation()}
@@ -5027,6 +5061,85 @@ function FieldSettingsPopover({
             </div>
           )}
 
+          {isNumericAbstractType && (
+            <div className='mt-3 border-t border-slate-100 pt-3 space-y-2'>
+              <p className='text-[11px] font-medium text-slate-600'>Display format</p>
+              <div className='flex gap-1.5'>
+                {([
+                  { val: '' as const, label: 'Default' },
+                  { val: 'int' as const, label: 'Integer' },
+                  { val: 'decimal' as const, label: 'Decimal' },
+                  { val: 'currency' as const, label: 'Currency' },
+                ] as { val: '' | 'int' | 'decimal' | 'currency'; label: string }[]).map(opt => (
+                  <button
+                    key={opt.val}
+                    type='button'
+                    onClick={() => setNumFormat(opt.val)}
+                    className={cn(
+                      'px-2 py-0.5 rounded text-[11px] border transition-colors',
+                      numFormat === opt.val
+                        ? 'bg-nvr-cyan text-white border-nvr-cyan'
+                        : 'border-slate-200 text-slate-600 hover:border-slate-400'
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {numFormat === 'decimal' && (
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-slate-500'>Decimal places</Label>
+                  <Input
+                    type='number'
+                    min={0}
+                    max={10}
+                    value={numPrecisionFmt}
+                    onChange={e => setNumPrecisionFmt(e.target.value)}
+                    className='h-7 text-[12px] w-24'
+                  />
+                </div>
+              )}
+              {numFormat === 'currency' && (
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-slate-500'>Currency code</Label>
+                  <Input
+                    value={numCurrency}
+                    onChange={e => setNumCurrency(e.target.value.toUpperCase())}
+                    placeholder='USD'
+                    className='h-7 text-[12px] w-24'
+                  />
+                </div>
+              )}
+              <div className='pt-1 space-y-1'>
+                <Label className='text-[11px] text-slate-500'>Footer aggregate</Label>
+                <div className='flex flex-wrap gap-1'>
+                  {([
+                    { val: '' as const, label: 'None' },
+                    { val: 'sum' as const, label: 'SUM' },
+                    { val: 'count' as const, label: 'COUNT' },
+                    { val: 'avg' as const, label: 'AVG' },
+                    { val: 'min' as const, label: 'MIN' },
+                    { val: 'max' as const, label: 'MAX' },
+                  ] as { val: '' | 'sum' | 'count' | 'avg' | 'min' | 'max'; label: string }[]).map(opt => (
+                    <button
+                      key={opt.val}
+                      type='button'
+                      onClick={() => setNumAggregate(opt.val)}
+                      className={cn(
+                        'px-2 py-0.5 rounded text-[11px] border transition-colors font-mono',
+                        numAggregate === opt.val
+                          ? 'bg-nvr-cyan text-white border-nvr-cyan'
+                          : 'border-slate-200 text-slate-600 hover:border-slate-400'
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {(isM2O || isM2M) && (
             <CascadeFiltersEditor
               rules={cascadeRules}
@@ -5036,14 +5149,16 @@ function FieldSettingsPopover({
             />
           )}
 
-          {abstractType === 'o2m' && iface === 'inline-grid' && (
+          {abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table') && (
             <div className='mt-4 border-t border-[#e2e8f0] pt-4 space-y-2'>
-              <p className='text-[11px] font-medium text-[#6b7280]'>Grid Layout</p>
-              <LayoutPicker collection={relatedCollection} value={gridLayoutSlug} onChange={setGridLayoutSlug} />
-              <div className='flex items-center gap-2'>
-                <Switch checked={gridShowTotals} onCheckedChange={setGridShowTotals} className='scale-75' />
-                <span className='text-[11px] text-slate-600'>Show column totals</span>
-              </div>
+              <p className='text-[11px] font-medium text-[#6b7280]'>{iface === 'inline-table' ? 'Table Layout' : 'Grid Layout'}</p>
+              <LayoutPicker collection={relatedCollection} value={gridLayoutId} onChange={(id, slug) => { setGridLayoutId(id); setGridLayoutSlug(slug) }} layoutType={iface === 'inline-table' ? 'table' : 'grouped'} />
+              {iface === 'inline-grid' && (
+                <div className='flex items-center gap-2'>
+                  <Switch checked={gridShowTotals} onCheckedChange={setGridShowTotals} className='scale-75' />
+                  <span className='text-[11px] text-slate-600'>Show column totals</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -5267,7 +5382,7 @@ function SortableFieldChip({
 
 // ── SortableUngroupedZone ─────────────────────────────────────────────────────
 
-function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll }: {
+function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll, isTableMode }: {
   localFieldOrder: Record<string, string[]>
   allFields: Array<{ field: string; type?: string; options?: string | null }>
   getColSpan: (f: string) => number
@@ -5281,6 +5396,7 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
   getRelatedCollection?: (f: string) => string | null
   onUnassign?: (f: string) => void
   onReturnAll?: () => void
+  isTableMode?: boolean
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'group:__ungrouped__' })
   const style = { transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0 : 1 }
@@ -5291,8 +5407,8 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
         <button type='button' {...attributes} {...listeners} className='cursor-grab touch-none rounded p-0.5 text-slate-300 hover:text-slate-500 active:cursor-grabbing'>
           <GripVertical className='h-3.5 w-3.5' />
         </button>
-        <span className='text-[11px] font-medium text-slate-500'>Ungrouped</span>
-        <span className='text-[10px] text-slate-300'>— fields rendered above sections in the item editor</span>
+        <span className='text-[11px] font-medium text-slate-500'>{isTableMode ? 'Columns' : 'Ungrouped'}</span>
+        <span className='text-[10px] text-slate-300'>{isTableMode ? '— column order in the table' : '— fields rendered above sections in the item editor'}</span>
         {fields.length > 0 && onReturnAll && (
           <button
             type='button'
@@ -5307,7 +5423,7 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
         <SortableContext items={fields} strategy={rectSortingStrategy}>
           <div className={cn('min-h-[52px] p-3', fields.length === 0 ? 'flex items-center justify-center' : 'grid grid-cols-12 gap-2 auto-rows-auto')}>
             {fields.length === 0 ? (
-              <p className='text-[11px] text-slate-300'>Drop fields here to leave them ungrouped</p>
+              <p className='text-[11px] text-slate-300'>{isTableMode ? 'Add fields to define table columns' : 'Drop fields here to leave them ungrouped'}</p>
             ) : fields.map(f => {
               const ft = allFields.find(af => af.field === f)
               const settings = getFieldSettings(f)
@@ -5322,7 +5438,7 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                   isM2O={kind === 'M2O'}
                   isM2M={kind === 'M2M'}
                   colSpan={getColSpan(f)}
-                  onColSpan={(span) => patchField(f, { col_span: span })}
+                  onColSpan={isTableMode ? undefined : (span) => patchField(f, { col_span: span })}
                   fieldSettings={settings}
                   onSettings={patch => handleFieldSettings(f, patch)}
                   m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields?.() : undefined}
@@ -5553,6 +5669,8 @@ interface CollectionLayout {
   allow_schedule?: boolean | number
   allow_disable_pickers?: boolean | number
   conditions?: { role_ids?: string[] } | null
+  layout_type?: 'grouped' | 'table'
+  row_order_field?: string | null
 }
 
 function LayoutVisibilitySection({
@@ -5704,7 +5822,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   })
 
   const patchLayoutMut = useMutation({
-    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'slug' | 'disable_comments' | 'disable_tasks' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers'>>) => {
+    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'slug' | 'disable_comments' | 'disable_tasks' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field'>>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
     },
@@ -5923,37 +6041,78 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                   <p className='text-[10px] text-slate-400'>Used to reference this layout in code. Only a–z, 0–9, and _.</p>
                 </div>
                 <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
-                  <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Tab mode</span>
+                  <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Layout type</span>
                   <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
-                    {(['tabs', 'steps'] as const).map((mode) => (
-                      <button key={mode} type='button' onClick={() => patchLayoutMut.mutate({ id: selected.id, tab_mode: mode })}
+                    {(['grouped', 'table'] as const).map((lt) => (
+                      <button key={lt} type='button' onClick={() => patchLayoutMut.mutate({ id: selected.id, layout_type: lt })}
                         className={cn('px-2.5 py-1 text-[11px] font-medium transition-colors capitalize',
-                          (selected.tab_mode ?? 'tabs') === mode
+                          (selected.layout_type ?? 'grouped') === lt
                             ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
                             : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200')}>
-                        {mode}
+                        {lt}
                       </button>
                     ))}
                   </div>
                 </div>
-                {(selected.tab_mode ?? 'tabs') === 'steps' && (
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Validate before Next</span>
-                    <input type='checkbox' checked={!!selected.validate_before_next} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, validate_before_next: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                )}
-                <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Summary panel</span>
-                    <input type='checkbox' checked={!!selected.summary_enabled} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_enabled: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                  {!!selected.summary_enabled && (
+                {(selected.layout_type ?? 'grouped') !== 'table' && (<>
+                  <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
+                    <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Tab mode</span>
+                    <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
+                      {(['tabs', 'steps'] as const).map((mode) => (
+                        <button key={mode} type='button' onClick={() => patchLayoutMut.mutate({ id: selected.id, tab_mode: mode })}
+                          className={cn('px-2.5 py-1 text-[11px] font-medium transition-colors capitalize',
+                            (selected.tab_mode ?? 'tabs') === mode
+                              ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
+                              : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200')}>
+                          {mode}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {(selected.tab_mode ?? 'tabs') === 'steps' && (
                     <label className='flex cursor-pointer items-center justify-between'>
-                      <span className='text-[11px] text-slate-500 dark:text-slate-400'>Show all fields in summary</span>
-                      <input type='checkbox' checked={!!selected.summary_show_all} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_show_all: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                      <span className='text-[11px] text-slate-500 dark:text-slate-400'>Validate before Next</span>
+                      <input type='checkbox' checked={!!selected.validate_before_next} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, validate_before_next: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
                     </label>
                   )}
-                </div>
+                  <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
+                    <label className='flex cursor-pointer items-center justify-between'>
+                      <span className='text-[11px] text-slate-500 dark:text-slate-400'>Summary panel</span>
+                      <input type='checkbox' checked={!!selected.summary_enabled} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_enabled: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                    </label>
+                    {!!selected.summary_enabled && (
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Show all fields in summary</span>
+                        <input type='checkbox' checked={!!selected.summary_show_all} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_show_all: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                      </label>
+                    )}
+                  </div>
+                </>)}
+                {(selected.layout_type ?? 'grouped') === 'table' && (
+                  <div className='border-t border-slate-200 dark:border-border pt-2 space-y-2'>
+                    <label className='flex cursor-pointer items-center justify-between'>
+                      <span className='text-[11px] text-slate-500 dark:text-slate-400'>Allow row reordering</span>
+                      <input type='checkbox'
+                        checked={!!selected.row_order_field}
+                        onChange={(e) => patchLayoutMut.mutate({ id: selected.id, row_order_field: e.target.checked ? (dbColumns.find(c => NUMERIC_DATA_TYPES.has(c.data_type.toLowerCase()))?.name ?? null) : null })}
+                        className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                    </label>
+                    {!!selected.row_order_field && (
+                      <div>
+                        <p className='text-[10px] text-slate-400 mb-1'>Order field</p>
+                        <select
+                          value={selected.row_order_field ?? ''}
+                          onChange={(e) => patchLayoutMut.mutate({ id: selected.id, row_order_field: e.target.value || null })}
+                          className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-700 dark:border-border dark:bg-background dark:text-slate-300'>
+                          <option value=''>— select field —</option>
+                          {dbColumns.filter(c => NUMERIC_DATA_TYPES.has(c.data_type.toLowerCase())).map(c => (
+                            <option key={c.name} value={c.name}>{c.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className='border-t border-slate-200 dark:border-border pt-2'>
                   <label className='flex cursor-pointer items-center justify-between'>
                     <span className='text-[11px] text-slate-500 dark:text-slate-400'>Enable AI features</span>
@@ -5986,7 +6145,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
             )}
           </div>
         )}
-        <FieldGroupsTab tableName={tableName} dbColumns={dbColumns} layoutId={effectiveId} />
+        <FieldGroupsTab tableName={tableName} dbColumns={dbColumns} layoutId={effectiveId} layoutType={selected?.layout_type ?? 'grouped'} />
       </div>
     </div>
   )
@@ -6061,7 +6220,7 @@ function SortableSlotCard({
   )
 }
 
-function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: string; dbColumns?: Array<{ name: string; data_type: string }>; layoutId: number | null }) {
+function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'grouped' }: { tableName: string; dbColumns?: Array<{ name: string; data_type: string }>; layoutId: number | null; layoutType?: 'grouped' | 'table' }) {
   const qc = useQueryClient()
 
   const { data: groups = [], isLoading: groupsLoading } = useQuery<FieldGroup[]>({
@@ -6844,16 +7003,20 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
         <div className='min-w-0 flex-1 space-y-3'>
           <div className='flex items-center justify-between'>
             <p className='text-[12px] text-slate-500'>
-              Drag fields into groups and set column widths for side-by-side layout.
+              {layoutType === 'table'
+                ? 'Drag fields into the Columns zone to define table column order. No groups or col widths in table mode.'
+                : 'Drag fields into groups and set column widths for side-by-side layout.'}
             </p>
-            <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding(true)}>
-              <Plus className='mr-1 h-3 w-3' />
-              Add Group
-            </Button>
+            {layoutType !== 'table' && (
+              <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding(true)}>
+                <Plus className='mr-1 h-3 w-3' />
+                Add Group
+              </Button>
+            )}
           </div>
 
         {/* Groups + Ungrouped — unified sortable list */}
-        {adding && (
+        {adding && layoutType !== 'table' && (
           <div className='rounded-lg border border-slate-200 bg-white p-4 space-y-3'>
             <p className='text-[12px] font-medium text-slate-700'>New Group</p>
             <div className='grid grid-cols-3 gap-3'>
@@ -6887,8 +7050,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
             <div className='space-y-3'>
               {orderedItems.map(item => {
                 if (item === '__ungrouped__') return (
-                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} onReturnAll={handleReturnAllToPool} />
+                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} onReturnAll={handleReturnAllToPool} isTableMode={layoutType === 'table'} />
                 )
+                if (layoutType === 'table') return null
                 if (SLOT_KEYS.includes(item as SlotKey)) return (
                   <SortableSlotCard key={item as SlotKey} slotKey={item as SlotKey} slots={slots} updateSlot={updateSlot}
                     editingSlot={editingSlot} setEditingSlot={setEditingSlot} slotLabelDraft={slotLabelDraft} setSlotLabelDraft={setSlotLabelDraft} />
