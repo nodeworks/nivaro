@@ -15,6 +15,7 @@ export function GroupSection({
   errors,
   visibleFields,
   lockedFields,
+  layoutAiEnabled,
   renderField
 }: {
   group: FieldGroup
@@ -27,6 +28,7 @@ export function GroupSection({
   errors: Record<string, string>
   visibleFields: Set<string>
   lockedFields: Set<string>
+  layoutAiEnabled?: boolean
   renderField?: (props: RenderFieldProps) => ReactNode
 }) {
   const [collapsed, setCollapsed] = useState(group.is_collapsed ?? false)
@@ -63,6 +65,7 @@ export function GroupSection({
                     error={errors[f.field]}
                     visible={visibleFields.has(f.field) || !visibleFields.size}
                     locked={lockedFields.has(f.field)}
+                    layoutAiEnabled={layoutAiEnabled}
                     renderField={renderField}
                   />
                 </div>

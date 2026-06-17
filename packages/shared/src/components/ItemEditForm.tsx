@@ -292,6 +292,7 @@ export function ItemEditForm({
   const sectionGroups = useMemo(() => groups.filter((g) => g.type === 'section'), [groups])
   const hasTabs = tabGroups.length > 0
   const layoutMeta = activeLayoutData?.layout
+  const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
   const isStepsMode = hasTabs && layoutMeta?.tab_mode === 'steps'
   const validateBeforeNext = !!layoutMeta?.validate_before_next
   const summaryEnabled = !!layoutMeta?.summary_enabled
@@ -304,8 +305,24 @@ export function ItemEditForm({
       return '__general__'
     }
   })
+  const [visitedSteps, setVisitedSteps] = useState<Set<string>>(() => {
+    const initial = (() => {
+      try {
+        return localStorage.getItem(`nvr_tab_${collection}`) ?? tabGroups[0]?.key ?? '__general__'
+      } catch {
+        return tabGroups[0]?.key ?? '__general__'
+      }
+    })()
+    return new Set([initial])
+  })
   const setActiveTab = (k: string) => {
     setActiveTabRaw(k)
+    setVisitedSteps((prev) => {
+      if (prev.has(k)) return prev
+      const next = new Set(prev)
+      next.add(k)
+      return next
+    })
     try {
       localStorage.setItem(`nvr_tab_${collection}`, k)
     } catch {
@@ -325,6 +342,7 @@ export function ItemEditForm({
   const completedSteps = useMemo(() => {
     const out = new Set<string>()
     for (const s of allSteps) {
+      if (isNew && !visitedSteps.has(s.key)) continue
       const stepFields =
         s.key === '__general__'
           ? [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])]
@@ -338,7 +356,7 @@ export function ItemEditForm({
       if (allFilled) out.add(s.key)
     }
     return out
-  }, [allSteps, ungroupedFields, sectionGroups, groupedMap, draft])
+  }, [allSteps, ungroupedFields, sectionGroups, groupedMap, draft, isNew, visitedSteps])
 
   function handleNext() {
     if (validateBeforeNext) {
@@ -560,6 +578,7 @@ export function ItemEditForm({
                 error={validationErrors[f.field]}
                 visible={true}
                 locked={isReadOnly}
+                layoutAiEnabled={layoutAiEnabled}
                 renderField={renderField}
               />
             </div>
@@ -591,6 +610,7 @@ export function ItemEditForm({
         errors={validationErrors}
         visibleFields={visibleFields}
         lockedFields={lockedFields}
+        layoutAiEnabled={layoutAiEnabled}
         renderField={renderField}
       />
     )
@@ -638,6 +658,7 @@ export function ItemEditForm({
                 error={validationErrors[f.field]}
                 visible={true}
                 locked={isReadOnly}
+                layoutAiEnabled={layoutAiEnabled}
                 renderField={renderField}
               />
             </div>
@@ -970,14 +991,14 @@ export function ItemEditForm({
         <div
           className={cn(
             'flex-1 min-h-0',
-            summaryEnabled && !isNew ? 'flex overflow-hidden' : 'overflow-y-auto'
+            summaryEnabled ? 'flex overflow-hidden' : 'overflow-y-auto'
           )}
         >
           <div
             ref={bodyRef}
             className={cn(
               'p-6 space-y-4',
-              summaryEnabled && !isNew ? 'flex-1 overflow-y-auto' : ''
+              summaryEnabled ? 'flex-1 overflow-y-auto' : ''
             )}
           >
             {showLockBanner && (
@@ -990,7 +1011,7 @@ export function ItemEditForm({
             )}
             {hasTabs ? (isStepsMode ? renderStepsMode() : renderTabMode()) : renderSectionMode()}
           </div>
-          {summaryEnabled && !isNew && (
+          {summaryEnabled && (
             <div className='w-64 shrink-0 overflow-y-auto border-l border-slate-200'>
               <SummaryPanel
                 allSteps={allSteps}

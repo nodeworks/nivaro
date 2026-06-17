@@ -1,8 +1,9 @@
-import { useQueries, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Info, SlidersHorizontal } from 'lucide-react'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertCircle, ChartLine, Info, Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { useState } from 'react'
 import { useNivaroClient } from '../../context'
-import { get } from '../../lib/commands'
+import { get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
@@ -16,6 +17,89 @@ import {
 import { useM2MStaging } from './M2MStagingContext'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
 
+const NUMERIC_TYPES = new Set(['integer', 'float', 'decimal', 'bigInteger', 'number'])
+const TEXTUAL_TYPES = new Set(['string', 'text', 'richtext', 'textarea', 'markdown', 'json', 'csv'])
+const TEXTUAL_INTERFACES = new Set(['input', 'textarea', 'wysiwyg', 'markdown', 'input-rich-text-html', 'rich_text', 'extension-editorjs'])
+const RELATION_INTERFACES = new Set(['relation-m2o', 'relation-m2m', 'select-multiple-m2m', 'list-o2m', 'relation-list', 'inline-grid', 'file', 'files', 'image'])
+
+function isAiEligible(field: { type?: string; interface?: string | null }): boolean {
+  const iface = field.interface ?? ''
+  if (RELATION_INTERFACES.has(iface) || iface.startsWith('relation-') || iface.endsWith('-m2o') || iface.endsWith('-m2m')) return false
+  if (TEXTUAL_TYPES.has(field.type ?? '') || TEXTUAL_INTERFACES.has(iface)) return true
+  // Fallback: no interface + scalar type → renders as text Input
+  if (!iface && field.type && !NUMERIC_TYPES.has(field.type)) return true
+  return false
+}
+
+function FieldSparkline({ collection, itemId, field }: { collection: string; itemId: string; field: string }) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const { data, isLoading } = useQuery({
+    queryKey: ['field-history', collection, itemId, field],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ timestamp: string; value: unknown }> }>(
+          get(`/items/${encodeURIComponent(collection)}/${encodeURIComponent(itemId)}/field-history/${encodeURIComponent(field)}`)
+        )
+        .then((r) => r.data ?? []),
+    enabled: open,
+    staleTime: 30_000
+  })
+
+  const W = 120, H = 28, PAD = 3
+  const points = (data ?? [])
+    .slice()
+    .reverse()
+    .filter((e) => e.value !== null && e.value !== undefined && !Number.isNaN(Number(e.value)))
+    .map((e) => ({ v: Number(e.value) }))
+
+  let chart: ReactNode = null
+  if (open) {
+    if (isLoading) {
+      chart = <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
+    } else if (points.length < 2) {
+      chart = <span className='text-[10px] text-slate-400 italic'>{points.length === 0 ? 'No history' : 'One value only'}</span>
+    } else {
+      const vals = points.map((p) => p.v)
+      const min = Math.min(...vals), max = Math.max(...vals)
+      const range = max - min || 1
+      const stepX = (W - PAD * 2) / (points.length - 1)
+      const coords = points.map((p, i) => ({
+        x: PAD + i * stepX,
+        y: PAD + (1 - (p.v - min) / range) * (H - PAD * 2)
+      }))
+      const poly = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ')
+      const last = coords[coords.length - 1]
+      chart = (
+        <span className='inline-flex items-center gap-1.5' title={`min ${min} · max ${max} · current ${vals[vals.length - 1]}`}>
+          <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className='overflow-visible'>
+            <polyline points={poly} fill='none' stroke='#00ceff' strokeWidth={1.5} strokeLinejoin='round' strokeLinecap='round' />
+            <circle cx={last.x} cy={last.y} r={2.5} fill='#00ceff' />
+          </svg>
+          <span className='font-mono text-[10px] text-slate-400'>{min}–{max}</span>
+        </span>
+      )
+    }
+  }
+
+  return (
+    <>
+      <button
+        type='button'
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          'inline-flex items-center rounded px-1 py-0.5 transition-colors',
+          open ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'text-slate-400 hover:bg-nvr-cyan/10 hover:text-nvr-cyan'
+        )}
+        title='Field change history'
+      >
+        <ChartLine className='h-3 w-3' />
+      </button>
+      {open && <span className='inline-flex items-center'>{chart}</span>}
+    </>
+  )
+}
+
 export function FieldRow({
   field,
   draft,
@@ -26,6 +110,7 @@ export function FieldRow({
   error,
   visible,
   locked,
+  layoutAiEnabled,
   renderField
 }: {
   field: CMSField
@@ -37,12 +122,25 @@ export function FieldRow({
   error?: string
   visible: boolean
   locked: boolean
+  layoutAiEnabled?: boolean
   renderField?: (props: RenderFieldProps) => ReactNode
 }) {
   // Hooks must be called before any early return
   const m2mStaging = useM2MStaging()
   const queryClient = useQueryClient()
   const client = useNivaroClient()
+  const [isGenerating, setIsGenerating] = useState(false)
+
+  async function handleGenerate() {
+    setIsGenerating(true)
+    try {
+      const res = await client.request<{ data: { value: string } }>(
+        post('/ai/generate', { collection, item_id: itemId !== 'new' ? itemId : undefined, field: field.field })
+      )
+      if (res.data?.value != null) onChange(field.field, res.data.value)
+    } catch { /* silently ignore — API returns 503 when no key configured */ }
+    finally { setIsGenerating(false) }
+  }
 
   // Compute cascade rules before early return so useQueries can subscribe
   const cascadeRules = getCascadeFilters(field.dependency_config)
@@ -220,6 +318,21 @@ export function FieldRow({
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
+        )}
+        {NUMERIC_TYPES.has(field.type) && itemId && itemId !== 'new' && (
+          <FieldSparkline collection={collection} itemId={itemId} field={field.field} />
+        )}
+        {isAiEligible(field) && layoutAiEnabled && (
+          <button
+            type='button'
+            onClick={handleGenerate}
+            disabled={isGenerating}
+            className='inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 disabled:opacity-50 transition-colors'
+            title='Generate with AI'
+          >
+            {isGenerating ? <Loader2 className='h-3 w-3 animate-spin' /> : <Sparkles className='h-3 w-3' />}
+            AI
+          </button>
         )}
         {locked && <span className='text-[10px] text-amber-500 font-medium'>(locked)</span>}
         {cascadeFilter && Object.keys(cascadeFilter).length > 0 && cascadeParentLabels.length > 0 && (

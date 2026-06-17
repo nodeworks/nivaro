@@ -73,12 +73,6 @@ export function FieldRenderer({
         })()
       : null
   if (m2mRel) {
-    if (!itemId || itemId === 'new')
-      return (
-        <p className='text-[12px] text-slate-400 py-1'>
-          Save the record first to manage related items
-        </p>
-      )
     const fieldOpts = parseJson<{ max_values?: number }>(field.options)
     if (fieldOpts?.max_values === 1) {
       return (

@@ -204,7 +204,15 @@ export function SummaryPanel({
   staging: M2MStagingCtx | null
   onFieldClick: (stepKey: string, fieldKey: string) => void
 }) {
-  const stepSections = allSteps
+  const hasGeneralStep = allSteps.some((s) => s.key === '__general__')
+  const syntheticSteps: StepDef[] = [
+    ...(!hasGeneralStep && ungroupedFields.length > 0
+      ? [{ key: '__general__', label: 'General' }]
+      : []),
+    ...allSteps
+  ]
+
+  const stepSections = syntheticSteps
     .map((step) => {
       const fields = (
         step.key === '__general__'
