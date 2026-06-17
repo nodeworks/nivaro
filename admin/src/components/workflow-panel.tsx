@@ -178,7 +178,6 @@ function BranchRow({
  * defines no splits and no branches are active.
  */
 export function WorkflowPanel({ collection, item }: { collection: string; item: string }) {
-  if (item === 'new') return null
   const queryClient = useQueryClient()
 
   // Reuse the pipeline-instance query (shared cache with PipelinePanel).
@@ -257,6 +256,7 @@ export function WorkflowPanel({ collection, item }: { collection: string; item: 
     }
   })
 
+  if (item === 'new') return null
   if (!instanceId) return null
   if (isLoading) {
     return (

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Bell, BellOff, Clock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
-import { useState } from 'react'
 import { useNavigate } from 'react-router'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -109,7 +109,7 @@ function CategoryBadge({ category }: { category: string }) {
 export function AlertsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [activeTab, setActiveTab] = useState('all')
+  const [activeTab, setActiveTab] = usePersistedTab<string>('nvr_tab_alerts', 'all')
 
   const { data: definitions = [], isLoading: defsLoading } = useQuery<AlertDefinition[]>({
     queryKey: ['alert-definitions'],

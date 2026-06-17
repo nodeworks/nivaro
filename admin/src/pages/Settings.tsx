@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   BrainCircuit,
+  Check,
   Clock,
   Database,
   Globe,
@@ -14,6 +15,7 @@ import {
   X
 } from 'lucide-react'
 import { useState } from 'react'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -219,7 +221,7 @@ export function SettingsPage() {
     queryFn: () => api.get<{ data: Role[] }>('/roles').then((r) => r.data.data)
   })
 
-  const [activeSection, setActiveSection] = useState<Section>('project')
+  const [activeSection, setActiveSection] = usePersistedTab<Section>('nvr_tab_settings', 'project')
 
   function toAdGroupArray(v: unknown): AdGroupRow[] {
     if (Array.isArray(v)) return v as AdGroupRow[]
@@ -555,16 +557,50 @@ export function SettingsPage() {
                     />
                   </Field>
                   <Field label='Accent Color'>
-                    <div className='flex items-center gap-3'>
-                      <input
-                        type='color'
-                        value={projectColor}
-                        onChange={(e) => setProjectColor(e.target.value)}
-                        className='h-9 w-14 cursor-pointer rounded-lg border border-slate-200 p-1 dark:border-border'
-                      />
-                      <code className='font-mono text-[12px] text-slate-500 dark:text-muted-foreground'>
-                        {projectColor}
-                      </code>
+                    <div className='flex flex-col gap-3'>
+                      <div className='flex flex-wrap gap-2'>
+                        {[
+                          '#00ceff', '#1e96d2', '#3b82f6', '#6366f1',
+                          '#8b5cf6', '#10b981', '#14b8a6', '#f97316',
+                          '#f43f5e', '#64748b',
+                        ].map((c) => (
+                          <button
+                            key={c}
+                            type='button'
+                            onClick={() => setProjectColor(c)}
+                            className='relative h-7 w-7 rounded-full border-2 transition-transform hover:scale-110'
+                            style={{
+                              backgroundColor: c,
+                              borderColor: projectColor === c ? 'white' : 'transparent',
+                              boxShadow: projectColor === c ? `0 0 0 2px ${c}` : undefined,
+                            }}
+                            aria-label={c}
+                          >
+                            {projectColor === c && (
+                              <Check className='absolute inset-0 m-auto h-3.5 w-3.5 text-white drop-shadow' />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      <div className='flex items-center gap-2'>
+                        <input
+                          type='color'
+                          value={projectColor}
+                          onChange={(e) => setProjectColor(e.target.value)}
+                          className='h-7 w-7 cursor-pointer rounded-md border border-slate-200 p-0.5 dark:border-border'
+                          title='Custom color'
+                        />
+                        <input
+                          type='text'
+                          value={projectColor}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setProjectColor(v)
+                          }}
+                          className='h-7 w-28 rounded-md border border-slate-200 bg-transparent px-2 font-mono text-[12px] text-slate-600 dark:border-border dark:text-muted-foreground'
+                          spellCheck={false}
+                        />
+                      </div>
                     </div>
                   </Field>
                 </SectionWrap>

@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   BarChart2,
   Bell,
+  BellDot,
   BookOpen,
   Braces,
   Building2,
@@ -51,7 +52,7 @@ import {
   Wifi,
   Workflow
 } from 'lucide-react'
-import { Suspense, useEffect, useState } from 'react'
+import { Component, type ReactNode, Suspense, useEffect, useState } from 'react'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
 import { CommandPalette } from '@/components/command-palette'
 import { NotificationBell } from '@/components/notification-bell'
@@ -134,7 +135,7 @@ export const navCategories: NavCategory[] = [
     items: [
       { icon: Activity, label: 'Activity', to: '/activity' },
       { icon: FileBarChart, label: 'Reports', to: '/reports' },
-      { icon: Bell, label: 'Alerts', to: '/alerts' },
+      { icon: BellDot, label: 'Alerts', to: '/alerts' },
       { icon: AlertTriangle, label: 'At-Risk Rules', to: '/at-risk' },
       { icon: Clock, label: 'SLA Rules', to: '/sla-rules' },
       { icon: Eye, label: 'Field Watches', to: '/field-watches' },
@@ -183,6 +184,36 @@ function findCategoryForPath(pathname: string): string | null {
     }
   }
   return null
+}
+
+class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { error: null }
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className='flex flex-1 min-h-0 flex-col items-center justify-center gap-3 p-8 text-center'>
+          <p className='text-sm font-medium text-slate-900 dark:text-foreground'>
+            Something went wrong loading this page.
+          </p>
+          <p className='max-w-sm text-xs text-muted-foreground'>{this.state.error.message}</p>
+          <button
+            type='button'
+            onClick={() => this.setState({ error: null })}
+            className='rounded-md bg-nvr-cyan px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110'
+          >
+            Try again
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 function NivaroMark({ size = 24, color = 'currentColor' }: { size?: number; color?: string }) {
@@ -287,14 +318,14 @@ function PanelNavItem({ icon: Icon, label, to }: NavItem) {
 export function AppLayout() {
   const { user } = useAuth()
   const { data: settings } = useSettings()
-  const { data: health } = useQuery({
+  useQuery({
     queryKey: ['health'],
     queryFn: () => api.get<{ cloud?: boolean }>('/health').then(r => r.data),
     staleTime: Number.POSITIVE_INFINITY,
     retry: false
   })
 
-const projectName = settings?.project_name ?? 'Nivaro'
+  const projectName = settings?.project_name ?? 'Nivaro'
 
   const location = useLocation()
   const extensionPlugins = useExtensionPlugins()
@@ -318,6 +349,13 @@ const projectName = settings?.project_name ?? 'Nivaro'
       document.title = `${settings.project_name} | Nivaro`
     }
   }, [settings?.project_name])
+
+  useEffect(() => {
+    const color = settings?.project_color ?? '#00ceff'
+    const el = document.documentElement
+    el.style.setProperty('--nvr-cyan', color)
+    el.style.setProperty('--nvr-cyan-dark', color)
+  }, [settings?.project_color])
 
   useEffect(() => {
     const cat = findCategoryForPath(location.pathname)
@@ -396,11 +434,6 @@ const projectName = settings?.project_name ?? 'Nivaro'
         <aside className='flex h-screen shrink-0 overflow-hidden bg-nvr-navy dark:bg-[#090c10]'>
           {/* Icon rail — always 52px */}
           <div className='flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.07]'>
-            {/* Workspace dot */}
-            <div className='flex w-full shrink-0 justify-center border-b border-white/[0.07] px-1.5 py-2 h-12'>
-              <WorkspaceSwitcher />
-            </div>
-
             {/* Logo mark */}
             <Tooltip>
               <TooltipTrigger asChild>
@@ -414,6 +447,11 @@ const projectName = settings?.project_name ?? 'Nivaro'
                 {projectName}
               </TooltipContent>
             </Tooltip>
+
+            {/* Workspace dot */}
+            <div className='flex w-full shrink-0 justify-center border-b border-white/[0.07] px-1.5 py-2 h-12'>
+              <WorkspaceSwitcher />
+            </div>
 
             {/* Category buttons */}
             <nav
@@ -535,7 +573,7 @@ const projectName = settings?.project_name ?? 'Nivaro'
           >
             <div className='flex h-full w-[168px] flex-col'>
               {/* Panel header */}
-              <div className='flex h-12 shrink-0 flex-col justify-center border-b border-white/[0.07] px-4'>
+              <div className='flex h-14 shrink-0 flex-col justify-center border-b border-white/[0.07] px-4'>
                 <p className='truncate text-[11px] font-medium leading-tight text-slate-500'>
                   {projectName}
                 </p>
@@ -545,7 +583,7 @@ const projectName = settings?.project_name ?? 'Nivaro'
               </div>
 
               {/* Nav items — no horizontal padding so active rows span full width */}
-              <nav className='min-h-0 flex-1 overflow-y-auto py-3'>
+              <nav className='min-h-0 flex-1 overflow-y-auto py-3' aria-label={`${activeCat.label} navigation`}>
                 <div className='space-y-0.5'>
                   {panelItems.map((item) => (
                     <PanelNavItem key={item.to} {...item} />
@@ -558,18 +596,20 @@ const projectName = settings?.project_name ?? 'Nivaro'
 
         {/* ─── Main area ───────────────────────────────────────────── */}
         <main id='main-content' className='flex flex-1 flex-col overflow-hidden bg-secondary'>
-          <Suspense fallback={null}>
-            {disabledPaths.size > 0 && [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
-              <Navigate to='/' replace />
-            ) : (
-              <div
-                key={location.pathname}
-                className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
-              >
-                <Outlet />
-              </div>
-            )}
-          </Suspense>
+          <PageErrorBoundary key={location.pathname}>
+            <Suspense fallback={null}>
+              {disabledPaths.size > 0 && [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
+                <Navigate to='/' replace />
+              ) : (
+                <div
+                  key={location.pathname}
+                  className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
+                >
+                  <Outlet />
+                </div>
+              )}
+            </Suspense>
+          </PageErrorBoundary>
         </main>
       </div>
       <CommandPalette />

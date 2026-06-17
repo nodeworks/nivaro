@@ -215,6 +215,15 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     '/:slug/execute',
     async (req: FastifyRequest, reply: FastifyReply) => {
       const { slug } = req.params as { slug: string }
+
+      // Attempt auth opportunistically so req.user/req.isAdmin are populated for
+      // access-level checks below. For public queries this is a no-op on failure.
+      try {
+        await authenticate(req, reply)
+      } catch {
+        // Will be re-enforced per access level below.
+      }
+
       const query = (await db('nivaro_custom_queries').where({ slug }).first()) as
         | CustomQueryRow
         | undefined
@@ -226,13 +235,12 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
       if (query.access === 'admin') {
-        await authenticate(req, reply)
+        if (!req.user) return reply.code(401).send({ error: 'Unauthorized' })
         if (!req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
       } else if (query.access === 'authenticated') {
-        await authenticate(req, reply)
         if (!req.user) return reply.code(401).send({ error: 'Unauthorized' })
       }
-      // access === 'public' only — explicitly allowed without auth.
+      // access === 'public' — no auth required.
 
       const defs = parseJson<ParamDef[]>(query.params) ?? []
       const incoming = (req.body as { params?: Record<string, unknown> })?.params ?? {}

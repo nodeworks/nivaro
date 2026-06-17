@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const pkgPath = 'sdk/package.json';
+const pkgPath = 'packages/sdk/package.json';
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 const [major, minor, patch] = pkg.version.split('.').map(Number);
 
@@ -28,7 +28,7 @@ const run = (args) => {
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
 
-run(['add', 'sdk/package.json']);
+run(['add', 'packages/sdk/package.json']);
 run(['commit', '-m', `chore: release @nivaro/sdk@${newVersion}`]);
 run(['tag', tag]);
 run(['push', 'origin', 'HEAD']);

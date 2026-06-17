@@ -25,6 +25,7 @@ import {
   Users
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { navSections } from '@/docs/index'
 import { DocRenderer } from '@/docs/renderer'
 import { cn } from '@/lib/utils'
@@ -60,7 +61,7 @@ const SECTION_ICONS: Record<string, React.ElementType> = {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function DocsPage() {
-  const [activeId, setActiveId] = useState('what-is-nivaro')
+  const [activeId, setActiveId] = usePersistedTab<string>('nvr_tab_docs', 'what-is-nivaro')
   const [query, setQuery] = useState('')
   const contentRef = useRef<HTMLDivElement>(null)
 

@@ -69,7 +69,21 @@ export async function authRoutes(app: FastifyInstance) {
 
     req.session.oidcState = state
     req.session.codeVerifier = codeVerifier
-    req.session.returnTo = (req.query as Record<string, string>).returnTo ?? `${config.ADMIN_URL}/`
+
+    // Only allow returnTo values that stay within the configured admin origin
+    // to prevent open-redirect attacks.
+    const rawReturnTo = (req.query as Record<string, string>).returnTo
+    const safeReturnTo = (() => {
+      if (!rawReturnTo) return `${config.ADMIN_URL}/`
+      try {
+        const parsed = new URL(rawReturnTo, config.ADMIN_URL)
+        const adminOrigin = new URL(config.ADMIN_URL).origin
+        return parsed.origin === adminOrigin ? parsed.href : `${config.ADMIN_URL}/`
+      } catch {
+        return `${config.ADMIN_URL}/`
+      }
+    })()
+    req.session.returnTo = safeReturnTo
 
     const url = await buildLoginUrl(state, codeVerifier)
     return reply.redirect(url.href)
@@ -156,8 +170,18 @@ export async function authRoutes(app: FastifyInstance) {
   app.get('/saml/login', async (req, reply) => {
     if (!samlEnabled()) return reply.code(404).send({ error: 'SAML is not configured' })
     try {
-      req.session.returnTo =
-        (req.query as Record<string, string>).returnTo ?? `${config.ADMIN_URL}/`
+      const rawReturnTo = (req.query as Record<string, string>).returnTo
+      const safeReturnTo = (() => {
+        if (!rawReturnTo) return `${config.ADMIN_URL}/`
+        try {
+          const parsed = new URL(rawReturnTo, config.ADMIN_URL)
+          const adminOrigin = new URL(config.ADMIN_URL).origin
+          return parsed.origin === adminOrigin ? parsed.href : `${config.ADMIN_URL}/`
+        } catch {
+          return `${config.ADMIN_URL}/`
+        }
+      })()
+      req.session.returnTo = safeReturnTo
       const url = await getSaml().getAuthorizeUrlAsync('', undefined, {})
       return reply.redirect(url)
     } catch (err) {
@@ -248,7 +272,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const user = await db('nivaro_users')
       .where({ email: email.toLowerCase().trim(), status: 'active' })
-      .first() as (User & { password_hash?: string | null }) | undefined
+      .first() as (UserWithTotp & { password_hash?: string | null }) | undefined
 
     if (!user?.password_hash) {
       // Constant-time rejection to avoid user enumeration
@@ -258,6 +282,12 @@ export async function authRoutes(app: FastifyInstance) {
 
     const valid = await verifyPassword(password, user.password_hash)
     if (!valid) return reply.code(401).send({ error: 'Invalid email or password' })
+
+    if (user.totp_enabled) {
+      req.session.userId = undefined
+      req.session.pendingTotpUserId = user.id
+      return reply.send({ ok: true, totp_required: true })
+    }
 
     req.session.userId = user.id
     await logActivity({ action: 'login', user: user.id, req })

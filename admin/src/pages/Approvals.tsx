@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, GripVertical, Plus, ThumbsUp, Trash2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -569,7 +570,7 @@ function ActiveInstances() {
 export function ApprovalsPage() {
   const qc = useQueryClient()
   const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [tab, setTab] = useState<'chains' | 'instances'>('chains')
+  const [tab, setTab] = usePersistedTab<'chains' | 'instances'>('nvr_tab_approvals', 'chains')
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
 

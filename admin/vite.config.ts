@@ -19,7 +19,8 @@ export default defineConfig({
     port: 3056,
     proxy: {
       '/api/': { target: 'http://localhost:3055', changeOrigin: true },
-      '/form/': { target: 'http://localhost:3055', changeOrigin: true }
+      '/form/': { target: 'http://localhost:3055', changeOrigin: true },
+      '/socket.io/': { target: 'http://localhost:3055', changeOrigin: true, ws: true }
     }
   },
   build: {

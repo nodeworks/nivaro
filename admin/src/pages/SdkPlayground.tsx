@@ -1,9 +1,13 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { createNivaro } from '@nivaro/sdk'
+import { ItemEditForm, NivaroProvider } from '@nivaro/react'
+import { FieldInput } from '@/pages/ItemEdit'
 import {
   Check,
   ChevronDown,
   ChevronRight,
   ChevronsUpDown,
+  Code,
   Code2,
   Copy,
   Layers,
@@ -11,7 +15,8 @@ import {
   Terminal,
   X
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -29,6 +34,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 
 // ─── Command catalog (mirrors sdk/src/index.ts) ──────────────────────────────
 //
@@ -1939,8 +1945,154 @@ type RunResult = {
   isError: boolean
 }
 
+function LiveFormTab() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [collection, setCollection] = useState(searchParams.get('lf_col') ?? '')
+  const [itemId, setItemId] = useState(searchParams.get('lf_id') ?? '')
+  const [colOpen, setColOpen] = useState(false)
+  const [colSearch, setColSearch] = useState('')
+  const [active, setActive] = useState<{ collection: string; itemId: string } | null>(
+    searchParams.get('lf_col') ? { collection: searchParams.get('lf_col')!, itemId: searchParams.get('lf_id') ?? '' } : null
+  )
+  const [result, setResult] = useState<{ ok: boolean; data: unknown } | null>(null)
+  const [showCode, setShowCode] = useState(false)
+
+  const client = useMemo(() => createNivaro(window.location.origin), [])
+
+  const { data: colData } = useQuery({
+    queryKey: ['collections'],
+    queryFn: () => api.get<{ data: { collection: string; display_name: string | null }[] }>('/collections').then((r) => r.data.data),
+    staleTime: 60_000,
+  })
+  const allCollections = (colData ?? [])
+    .map((c) => ({ value: c.collection, label: c.display_name || c.collection }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+  const filtered = colSearch
+    ? allCollections.filter((c) => c.label.toLowerCase().includes(colSearch.toLowerCase()) || c.value.toLowerCase().includes(colSearch.toLowerCase()))
+    : allCollections
+  const selectedLabel = allCollections.find((c) => c.value === collection)?.label ?? collection
+
+  function load() {
+    if (!collection.trim()) return
+    setResult(null)
+    setActive({ collection: collection.trim(), itemId: itemId.trim() })
+    setSearchParams((p) => { p.set('lf_col', collection.trim()); p.set('lf_id', itemId.trim()); return p }, { replace: true })
+  }
+
+  return (
+    <div className='flex flex-1 min-h-0 flex-col'>
+      {/* Picker toolbar */}
+      <div className='shrink-0 border-b border-slate-200 bg-slate-50 px-6 py-3 dark:border-border dark:bg-muted/30'>
+        <div className='flex flex-wrap items-end gap-3'>
+          <div className='flex flex-col gap-1'>
+            <label className='text-[11px] text-slate-500'>Collection</label>
+            <Popover open={colOpen} onOpenChange={setColOpen}>
+              <PopoverTrigger asChild>
+                <button type='button' className='flex h-8 w-52 items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-left outline-none focus:border-nvr-cyan dark:border-border dark:bg-muted'>
+                  <span className={collection ? 'text-slate-900 dark:text-foreground' : 'text-slate-400'}>
+                    {collection ? selectedLabel : 'Select collection…'}
+                  </span>
+                  <ChevronsUpDown className='h-3 w-3 text-slate-400 shrink-0' />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-52 p-0' align='start'>
+                <Command>
+                  <CommandInput placeholder='Search…' value={colSearch} onValueChange={setColSearch} className='text-[13px]' />
+                  <CommandList>
+                    <CommandEmpty>No collections found</CommandEmpty>
+                    <CommandGroup>
+                      {filtered.map((c) => (
+                        <CommandItem key={c.value} value={c.value} onSelect={() => { setCollection(c.value); setColSearch(''); setColOpen(false) }}>
+                          <div className='flex flex-col min-w-0'>
+                            <span className='text-[12px] font-medium truncate'>{c.label}</span>
+                            {c.label !== c.value && <span className='text-[10px] text-slate-400 truncate font-mono'>{c.value}</span>}
+                          </div>
+                          {collection === c.value && <Check className='ml-auto h-3 w-3 text-nvr-cyan shrink-0' />}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
+          <div className='flex flex-col gap-1'>
+            <label className='text-[11px] text-slate-500'>Item ID (blank = new)</label>
+            <input type='text' value={itemId} onChange={(e) => setItemId(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} placeholder='new'
+              className='h-8 w-36 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-muted' />
+          </div>
+          <button type='button' onClick={load} className='h-8 rounded-md bg-nvr-cyan px-4 text-[13px] font-semibold text-white hover:brightness-110'>
+            Load
+          </button>
+          {result && (
+            <span className={`text-[12px] font-medium ${result.ok ? 'text-emerald-600' : 'text-red-600'}`}>
+              {result.ok ? '✓ Saved' : '✗ Error'}
+            </span>
+          )}
+          <button
+            type='button'
+            onClick={() => setShowCode(c => !c)}
+            className={cn(
+              'ml-auto inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+              showCode
+                ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-cyan'
+                : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'
+            )}
+          >
+            <Code className='h-3.5 w-3.5' />
+            {showCode ? 'Hide Code' : 'View Code'}
+          </button>
+        </div>
+      </div>
+
+      {/* React code panel */}
+      {showCode && (
+        <div className='shrink-0 border-b border-slate-200 bg-slate-950 dark:border-border'>
+          <div className='flex items-center justify-between px-4 py-2 border-b border-slate-800'>
+            <span className='text-[11px] font-semibold text-slate-400 uppercase tracking-wider'>React usage</span>
+          </div>
+          <pre className='overflow-x-auto px-4 py-3 text-[12px] leading-relaxed text-slate-200'><code>{`import { NivaroProvider, ItemEditForm } from '@nivaro/react'
+import { createNivaro } from '@nivaro/sdk'
+
+const client = createNivaro('https://your-api-url.com')
+
+export function MyForm() {
+  return (
+    <NivaroProvider client={client}>
+      <ItemEditForm
+        collection="${active?.collection || 'your_collection'}"${active?.itemId ? `\n        itemId="${active.itemId}"` : ''}
+        onSaved={(id) => console.log('Saved:', id)}
+        onDeleted={() => console.log('Deleted')}
+      />
+    </NivaroProvider>
+  )
+}`}</code></pre>
+        </div>
+      )}
+
+      {/* Form — full width, fills remaining space */}
+      {active ? (
+        <NivaroProvider client={client}>
+          <ItemEditForm
+            key={`${active.collection}:${active.itemId}`}
+            collection={active.collection}
+            itemId={active.itemId || undefined}
+            onSaved={(id: string) => setResult({ ok: true, data: { id } })}
+            onDeleted={() => setResult({ ok: true, data: { deleted: true } })}
+            showRevisions={false}
+          />
+        </NivaroProvider>
+      ) : (
+        <div className='flex flex-1 items-center justify-center text-sm text-slate-400'>
+          Select a collection and click Load to preview the form
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SdkPlaygroundPage() {
-  const [activeTab, setActiveTab] = useState<'sdk' | 'react'>('sdk')
+  const [activeTab, setActiveTab] = usePersistedTab<'sdk' | 'react' | 'live'>('nvr_sdk_playground_tab', 'sdk')
   const [selectedName, setSelectedName] = useState<string>(COMMANDS[0].name)
   const [values, setValues] = useState<Record<string, string>>({})
   const [result, setResult] = useState<RunResult | null>(null)
@@ -2044,13 +2196,25 @@ export function SdkPlaygroundPage() {
               <Layers className='h-3.5 w-3.5' />
               @nivaro/react
             </button>
+            <button
+              type='button'
+              onClick={() => setActiveTab('live')}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors',
+                activeTab === 'live'
+                  ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                  : 'text-slate-500 hover:text-slate-700 dark:text-muted-foreground dark:hover:text-foreground'
+              )}
+            >
+              <Play className='h-3.5 w-3.5' />
+              Live Form
+            </button>
           </div>
         </div>
       </div>
 
-      {activeTab === 'react' ? (
-        <ReactReferenceTab />
-      ) : null}
+      {activeTab === 'react' ? <ReactReferenceTab /> : null}
+      {activeTab === 'live' ? <LiveFormTab /> : null}
 
       <div className={cn('flex flex-1 min-h-0 overflow-hidden', activeTab !== 'sdk' && 'hidden')}>
         {/* Left: searchable command list */}

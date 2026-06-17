@@ -1,6 +1,19 @@
 import { Monitor, Moon, ShieldCheck, Sun } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { useTheme } from '@/lib/theme'
+
+function safeLoginRedirect(raw: string | null | undefined): string {
+  if (!raw) return '/'
+  try {
+    const url = new URL(raw, window.location.origin)
+    if (url.origin !== window.location.origin) return '/'
+    return url.pathname + url.search + url.hash
+  } catch {
+    if (raw.startsWith('/') && !raw.startsWith('//')) return raw
+    return '/'
+  }
+}
 
 function PasswordLoginForm() {
   const [email, setEmail] = useState('')
@@ -20,9 +33,14 @@ function PasswordLoginForm() {
         body: JSON.stringify({ email, password }),
       })
       if (res.ok) {
-        const redirect = sessionStorage.getItem('nivaro_post_login_redirect')
+        const body = (await res.json().catch(() => null)) as { totp_required?: boolean } | null
+        if (body?.totp_required) {
+          window.location.href = '/login?totp=1'
+          return
+        }
+        const raw = sessionStorage.getItem('nivaro_post_login_redirect')
         sessionStorage.removeItem('nivaro_post_login_redirect')
-        window.location.href = redirect || '/'
+        window.location.href = safeLoginRedirect(raw)
         return
       }
       const body = (await res.json().catch(() => null)) as { error?: string } | null
@@ -114,9 +132,9 @@ function TotpForm() {
         body: JSON.stringify({ token })
       })
       if (res.ok) {
-        const redirect = sessionStorage.getItem('nivaro_post_login_redirect')
+        const raw = sessionStorage.getItem('nivaro_post_login_redirect')
         sessionStorage.removeItem('nivaro_post_login_redirect')
-        window.location.href = redirect || '/'
+        window.location.href = safeLoginRedirect(raw)
         return
       }
       const body = (await res.json().catch(() => null)) as { error?: string } | null
@@ -185,7 +203,7 @@ export function LoginPage() {
   const error = params.get('error')
   const redirectTo = params.get('redirect')
   const totpStep = params.get('totp') === '1'
-  const [tab, setTab] = useState<'microsoft' | 'password'>('microsoft')
+  const [tab, setTab] = usePersistedTab<'microsoft' | 'password'>('nvr_tab_login', 'microsoft')
 
   useEffect(() => {
     if (redirectTo) sessionStorage.setItem('nivaro_post_login_redirect', redirectTo)

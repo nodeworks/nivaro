@@ -7,6 +7,18 @@ import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { ThemeProvider } from '@/lib/theme'
 
+function safeRedirectPath(raw: string | null | undefined, fallback = '/'): string {
+  if (!raw) return fallback
+  try {
+    const url = new URL(raw, window.location.origin)
+    if (url.origin !== window.location.origin) return fallback
+    return url.pathname + url.search + url.hash
+  } catch {
+    if (raw.startsWith('/') && !raw.startsWith('//')) return raw
+    return fallback
+  }
+}
+
 const ActivityPage = lazy(() =>
   import('@/pages/Activity').then((m) => ({ default: m.ActivityPage }))
 )
@@ -222,9 +234,9 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   if (loading) return <AppShell />
   if (user) {
     const params = new URLSearchParams(window.location.search)
-    const to = params.get('redirect') ?? sessionStorage.getItem('nivaro_post_login_redirect') ?? '/'
+    const raw = params.get('redirect') ?? sessionStorage.getItem('nivaro_post_login_redirect')
     sessionStorage.removeItem('nivaro_post_login_redirect')
-    return <Navigate to={to} replace />
+    return <Navigate to={safeRedirectPath(raw)} replace />
   }
   return <>{children}</>
 }
@@ -235,11 +247,11 @@ function PostLoginRedirect() {
   const fired = useRef(false)
   useEffect(() => {
     if (loading || !user || fired.current) return
-    const to = sessionStorage.getItem('nivaro_post_login_redirect')
-    if (to) {
+    const raw = sessionStorage.getItem('nivaro_post_login_redirect')
+    if (raw) {
       fired.current = true
       sessionStorage.removeItem('nivaro_post_login_redirect')
-      navigate(to, { replace: true })
+      navigate(safeRedirectPath(raw), { replace: true })
     }
   }, [user, loading, navigate])
   return null

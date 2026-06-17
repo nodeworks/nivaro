@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -220,7 +221,7 @@ function MarketplaceTab() {
 
 export function ExtensionsPage() {
   const queryClient = useQueryClient()
-  const [tab, setTab] = useState('installed')
+  const [tab, setTab] = usePersistedTab<string>('nvr_tab_extensions', 'installed')
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['extensions'],

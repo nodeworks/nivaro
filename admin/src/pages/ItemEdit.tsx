@@ -193,8 +193,6 @@ function CascadeEffectController({
     if (cascadeRules.some(r => r.clear_on_parent_change)) {
       handleClearRef.current()
     }
-  // Only re-run when the filter value actually changes (parent changed)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cascadeFilterStr])
 
   useEffect(() => {
@@ -209,13 +207,12 @@ function CascadeEffectController({
     }).then(res => {
       if (((res.data.data ?? []) as unknown[]).length === 0) handleClearRef.current()
     }).catch(() => {})
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cascadeFilterStr])
 
   return null
 }
 
-function FieldInput({
+export function FieldInput({
   field,
   value,
   onChange,
@@ -241,7 +238,7 @@ function FieldInput({
   const iface = field.interface ?? ''
   // Relation interfaces: anything starting with 'relation-', the legacy
   // 'select-multiple-m2m' interface, or no interface at all (auto-detect).
-  const isRelationInterface = !iface || iface.startsWith('relation-') || iface === 'select-multiple-m2m'
+  const isRelationInterface = !iface || iface.startsWith('relation-') || iface === 'select-multiple-m2m' || iface.endsWith('-m2o') || iface.endsWith('-m2m')
   const m2oRelation = isRelationInterface
     ? findM2ORelation(relations, collection, field.field)
     : null
@@ -1713,7 +1710,7 @@ export function ItemEditPage() {
       }
     }, 150)
     // setActiveTab is stable enough (writes localStorage + setState); groupedFields drives lookup
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [groupedFields])
 
   // O2M virtual fields have no DB column and are handled by O2MPanel — exclude from editable fields
@@ -4499,7 +4496,7 @@ function O2MInlineGrid({
     }
     gridCtx?.register(stagingKey, flush)
     return () => gridCtx?.unregister(stagingKey)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [stagingKey, stagedEdits, stagedNew, stagedDeletes, parentId])
 
   const visibleRows = fetchedRows.filter(r => !stagedDeletes.has(String(r.id)))

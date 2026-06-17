@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 export function useIntersectionObserver(options?: IntersectionObserverInit) {
   const ref = useRef<HTMLDivElement | null>(null)
   const [isVisible, setIsVisible] = useState(false)
+  const optionsRef = useRef(options)
 
   useEffect(() => {
     const el = ref.current
@@ -13,11 +14,11 @@ export function useIntersectionObserver(options?: IntersectionObserverInit) {
         setIsVisible(true)
         observer.disconnect()
       }
-    }, options)
+    }, optionsRef.current)
 
     observer.observe(el)
     return () => observer.disconnect()
-  }, [options])
+  }, [])
 
   return { ref, isVisible }
 }

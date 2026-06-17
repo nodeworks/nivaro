@@ -1183,9 +1183,14 @@ export async function readItems(
   if (!allowed) throw new ForbiddenError()
 
   const rawConditions = (req?.query as Record<string, string>)?.conditions
-  const conditions: FilterCondition[] | undefined = rawConditions
-    ? (JSON.parse(rawConditions) as FilterCondition[])
-    : undefined
+  let conditions: FilterCondition[] | undefined
+  if (rawConditions) {
+    try {
+      conditions = JSON.parse(rawConditions) as FilterCondition[]
+    } catch {
+      conditions = undefined
+    }
+  }
 
   const allowedFields = await getAllowedFields(user, 'read', collection)
   const { fields = ['*'], filter = {}, sort = [], limit = 25, offset = 0, page, search } = query
@@ -1240,6 +1245,10 @@ export async function readItems(
   }
 
   if (search) {
+    // Escape MSSQL LIKE special characters to prevent wildcard injection.
+    // Bracket is the MSSQL escape character for [ itself.
+    const escapedSearch = search.replace(/[%_\[]/g, (c) => `[${c}]`)
+
     const [fieldMeta, actualCols] = await Promise.all([
       getFields(collection),
       db.raw(
@@ -1255,7 +1264,7 @@ export async function readItems(
       const applySearch = (qb: QB) => {
         qb.where((inner) => {
           for (const f of searchable) {
-            inner.orWhere(db.raw('??', [f.field]), 'like', `%${search}%`)
+            inner.orWhere(db.raw('??', [f.field]), 'like', `%${escapedSearch}%`)
           }
         })
       }

@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { toast } from 'sonner'
 import { TreePicker } from '@/components/tree-picker'
 import { Button } from '@/components/ui/button'
@@ -1037,7 +1038,7 @@ function SelectedTableView({
     { id: 'tree', label: 'Tree' },
     ...(table.registered ? [{ id: 'field-rules' as TabId, label: 'Field rules' }] : [])
   ]
-  const [activeTab, setActiveTab] = useState<TabId>('tree')
+  const [activeTab, setActiveTab] = usePersistedTab<TabId>(`nvr_tab_datamodel_${table.name}`, 'tree')
 
   return (
     <div className='flex min-h-0 flex-1 flex-col'>

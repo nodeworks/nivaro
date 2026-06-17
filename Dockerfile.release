@@ -15,7 +15,7 @@ WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY api/package.json ./api/
 COPY admin/package.json ./admin/
-COPY sdk/package.json ./sdk/
+COPY packages/sdk/package.json ./packages/sdk/
 RUN pnpm install --frozen-lockfile
 
 # ─── Stage 3: build SDK + API + Admin ────────────────────────────────────────
@@ -26,7 +26,7 @@ RUN apk add --no-cache git
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/api/node_modules ./api/node_modules
 COPY --from=deps /app/admin/node_modules ./admin/node_modules
-COPY --from=deps /app/sdk/node_modules ./sdk/node_modules
+COPY --from=deps /app/packages/sdk/node_modules ./packages/sdk/node_modules
 COPY . .
 RUN pnpm --filter @nivaro/sdk build
 # Inject cloud-only extensions before API build (fail-safe: exits 0 on any error).
@@ -53,12 +53,12 @@ RUN corepack enable pnpm
 # Install production deps only
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY api/package.json ./api/
-COPY sdk/package.json ./sdk/
+COPY packages/sdk/package.json ./packages/sdk/
 RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
 
 # Compiled API + SDK
 COPY --from=build /app/api/dist ./api/dist
-COPY --from=build /app/sdk/dist ./sdk/dist
+COPY --from=build /app/packages/sdk/dist ./packages/sdk/dist
 # Cloud extensions (injected from private repo during build — dir may not exist in OSS builds)
 COPY --from=build /app/api/cloud-extensions ./api/cloud-extensions
 

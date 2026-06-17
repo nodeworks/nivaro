@@ -11,7 +11,7 @@ import {
   CommandList,
   CommandSeparator
 } from '@/components/ui/command'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { titleCase } from '@/lib/utils'
 
@@ -179,6 +179,7 @@ export function CommandPalette() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className='overflow-hidden p-0 shadow-lg sm:max-w-[560px]'>
+        <DialogTitle className='sr-only'>Command palette</DialogTitle>
         <Command
           shouldFilter={false}
           className='[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-4 [&_[cmdk-input-wrapper]_svg]:w-4 [&_[cmdk-input]]:h-11 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-2'

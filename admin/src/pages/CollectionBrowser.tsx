@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { toast } from 'sonner'
 import { BulkActionBar } from '@/components/bulk-action-bar'
 import { ColumnPicker } from '@/components/column-picker'
@@ -188,7 +189,7 @@ export function CollectionBrowserPage() {
   const [isImporting, setIsImporting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [displayColumns, setDisplayColumns] = useState<string[]>([])
-  const [viewMode, setViewMode] = useState<'table' | 'tree'>('table')
+  const [viewMode, setViewMode] = usePersistedTab<'table' | 'tree'>(`nvr_viewmode_${collection ?? ''}`, 'table')
   const [movingNodeId, setMovingNodeId] = useState<string | number | null>(null)
   const presetsInitialized = useRef(false)
   const [hierarchyScopeParentId, setHierarchyScopeParentId] = useState<string | number | null>(null)

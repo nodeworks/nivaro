@@ -56,6 +56,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { CollectionFieldPickerPanel, type PickedField } from '@/components/field-picker'
@@ -4764,7 +4765,7 @@ function FieldSettingsPopover({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className='w-72 p-0'
+        className='w-72 p-0 max-h-[600px] overflow-y-auto'
         align='end'
         onPointerDown={e => e.stopPropagation()}
         onClick={e => e.stopPropagation()}
@@ -8005,7 +8006,7 @@ export function TableEditorPage() {
   const { table } = useParams<{ table: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const [tab, setTab] = useState<Tab>('fields')
+  const [tab, setTab] = usePersistedTab<Tab>(`nvr_tab_tableeditor_${table ?? ''}`, 'fields')
   const [showDrop, setShowDrop] = useState(false)
   const [dropConfirm, setDropConfirm] = useState('')
   const [extendMode, setExtendMode] = useState(false)

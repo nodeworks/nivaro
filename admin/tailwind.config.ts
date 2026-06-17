@@ -2,7 +2,7 @@ import type { Config } from 'tailwindcss'
 
 export default {
   darkMode: ['class'],
-  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  content: ['./index.html', './src/**/*.{ts,tsx}', '../packages/shared/src/**/*.{ts,tsx}'],
   theme: {
     container: {
       center: true,
@@ -51,8 +51,8 @@ export default {
           active: '#1e96d2'
         },
         nvr: {
-          cyan: '#1e96d2',
-          'cyan-dark': '#1a85bc',
+          cyan: 'var(--nvr-cyan)',
+          'cyan-dark': 'var(--nvr-cyan-dark)',
           navy: '#172940'
         }
       },

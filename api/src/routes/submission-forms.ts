@@ -345,6 +345,11 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       }
     }
 
+    // Guard: never allow public submissions to write into system tables
+    if (form.collection.startsWith('nivaro_')) {
+      return reply.code(400).send({ error: 'Form not found' })
+    }
+
     // Whitelist submitted data against allowed fields
     const allowedFields = parseJson<string[]>(form.fields) ?? []
     const submittedData = body.data ?? {}

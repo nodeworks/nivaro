@@ -13,6 +13,7 @@ import {
   X
 } from 'lucide-react'
 import { useState } from 'react'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -721,7 +722,7 @@ function UiPermissionsTab({
 // ─── Role detail panel ────────────────────────────────────────────────────────
 
 function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('permissions')
+  const [activeTab, setActiveTab] = usePersistedTab<ActiveTab>('nvr_tab_roles', 'permissions')
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const deleteRole = useMutation({

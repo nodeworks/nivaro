@@ -62,6 +62,16 @@ export async function itemsRoutes(app: FastifyInstance) {
   app.get('/:collection', async (req, reply) => {
     const { collection } = req.params as { collection: string }
     const q = req.query as Record<string, string>
+
+    let parsedFilter: Record<string, unknown> | undefined
+    if (q.filter) {
+      try {
+        parsedFilter = JSON.parse(q.filter) as Record<string, unknown>
+      } catch {
+        return reply.code(400).send({ error: 'Invalid filter: must be valid JSON' })
+      }
+    }
+
     const query: ItemsQuery = {
       fields: q.fields?.split(','),
       sort: q.sort?.split(','),
@@ -69,7 +79,7 @@ export async function itemsRoutes(app: FastifyInstance) {
       offset: q.offset ? Number(q.offset) : undefined,
       page: q.page ? Number(q.page) : undefined,
       search: q.search,
-      filter: q.filter ? (JSON.parse(q.filter) as Record<string, unknown>) : undefined
+      filter: parsedFilter
     }
     try {
       const result = await readItems(
@@ -91,12 +101,21 @@ export async function itemsRoutes(app: FastifyInstance) {
     const q = req.query as { format?: string; fields?: string; filter?: string; sort?: string }
     const format = q.format === 'json' ? 'json' : 'csv'
 
+    let parsedFilter: Record<string, unknown> | undefined
+    if (q.filter) {
+      try {
+        parsedFilter = JSON.parse(q.filter) as Record<string, unknown>
+      } catch {
+        return reply.code(400).send({ error: 'Invalid filter: must be valid JSON' })
+      }
+    }
+
     const query: ItemsQuery = {
       fields: q.fields?.split(','),
       sort: q.sort?.split(','),
       limit: 10000,
       offset: 0,
-      filter: q.filter ? (JSON.parse(q.filter) as Record<string, unknown>) : undefined
+      filter: parsedFilter
     }
 
     try {

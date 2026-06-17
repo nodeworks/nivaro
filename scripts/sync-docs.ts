@@ -270,8 +270,8 @@ const { data: project } = await nivaro.request(readItem<Project>('projects', id)
 MIT — see [LICENSE](https://github.com/nodeworks/nivaro/blob/main/LICENSE).
 `
 
-  writeFileSync(resolve(ROOT, 'sdk/README.md'), readme, 'utf8')
-  console.log('✓ sdk/README.md regenerated')
+  writeFileSync(resolve(ROOT, 'packages/sdk/README.md'), readme, 'utf8')
+  console.log('✓ packages/sdk/README.md regenerated')
 }
 
 // ─── Entry ────────────────────────────────────────────────────────────────────
