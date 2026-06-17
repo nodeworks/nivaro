@@ -78,6 +78,7 @@ export type RenderFieldProps = {
   relations: any[]
   cascadeFilter?: Record<string, unknown>
   unsatisfiedParentLabel?: string | null
+  requiredParentLabel?: string | null
 }
 
 export interface ItemEditContext {

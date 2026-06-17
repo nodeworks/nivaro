@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   cn,
   formatDate,
-  formatRelative,
-  formatNumber,
   formatFileSize,
+  formatNumber,
+  formatRelative,
   titleCase,
 } from '@/lib/utils'
 

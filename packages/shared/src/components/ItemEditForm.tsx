@@ -1,11 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  ArrowLeft,
-  ChevronDown,
-  Loader2,
-  Save,
-  Trash2
-} from 'lucide-react'
+import { ArrowLeft, ChevronDown, Loader2, Save, Trash2 } from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
@@ -19,20 +13,12 @@ import { toast } from 'sonner'
 import { ItemEditAuthContext, useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
-import { CommentPanel } from './panels'
-import { ItemLockBanner, useItemLock } from './panels'
-import { PipelinePanel, PipelineTransitionButtons } from './panels'
-import { RevisionsPanel } from './panels'
-import { TaskPanel } from './panels'
-import { WorkflowPanel } from './panels'
-import { Button } from './ui/button'
-import { Skeleton } from './ui/skeleton'
-import { GroupSection } from './item-edit/GroupSection'
 import { FieldRow, getColSpanClass } from './item-edit/FieldRow'
+import { GroupSection } from './item-edit/GroupSection'
+import { SENTINEL_FIELDS, SYSTEM_FIELDS } from './item-edit/helpers'
+import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import { StepsBar } from './item-edit/StepsBar'
 import { SummaryPanel } from './item-edit/SummaryPanel'
-import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
-import { SYSTEM_FIELDS, SENTINEL_FIELDS } from './item-edit/helpers'
 import type {
   ActiveLayoutData,
   CMSField,
@@ -42,16 +28,19 @@ import type {
   SlotAssignment,
   StepDef
 } from './item-edit/types'
+import { CommentPanel, ItemLockBanner, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
+import { Button } from './ui/button'
+import { Skeleton } from './ui/skeleton'
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
-export type { RenderFieldProps }
-export type { M2MStagingCtx }
 export { M2MStagingContext, useM2MStaging } from './item-edit/M2MStagingContext'
+export type { M2MStagingCtx, RenderFieldProps }
 
 export interface ItemEditFormProps {
   collection: string
   itemId?: string
+  layoutSlug?: string
   onBack?: () => void
   onSaved?: (id: string) => void
   onDeleted?: () => void
@@ -72,6 +61,7 @@ export interface ItemEditFormProps {
 export function ItemEditForm({
   collection,
   itemId: itemIdProp,
+  layoutSlug,
   onBack,
   onSaved,
   onDeleted,
@@ -93,13 +83,28 @@ export function ItemEditForm({
   const isNew = !itemIdProp || itemIdProp === 'new'
 
   // ── Data fetching ──────────────────────────────────────────────────────────
-  const { data: fieldConfig, isLoading: fieldsLoading } = useQuery<CMSField[]>({
-    queryKey: ['field-config', collection],
+  const { data: activeLayoutData } = useQuery<ActiveLayoutData | null>({
+    queryKey: ['active-layout', collection, layoutSlug ?? null],
     queryFn: () =>
       client
-        .request<{ data: CMSField[] }>(get(`/field-config/${collection}`))
-        .then((r) => r.data ?? []),
+        .request<{ data: ActiveLayoutData | null }>(
+          get('/collection-layouts/active', { collection, ...(layoutSlug ? { slug: layoutSlug } : {}) })
+        )
+        .then((r) => r.data)
+        .catch(() => null),
     staleTime: 60_000
+  })
+
+  const layoutId = activeLayoutData?.layout?.id ?? null
+
+  const { data: fieldConfig, isLoading: fieldsLoading } = useQuery<CMSField[]>({
+    queryKey: ['field-config', collection, layoutId],
+    queryFn: () =>
+      client
+        .request<{ data: CMSField[] }>(get(`/field-config/${collection}`, layoutId ? { layout_id: String(layoutId) } : undefined))
+        .then((r) => r.data ?? []),
+    staleTime: 60_000,
+    enabled: !layoutSlug || activeLayoutData !== undefined
   })
 
   const { data: relations = [] } = useQuery<CMSRelation[]>({
@@ -108,18 +113,6 @@ export function ItemEditForm({
       client
         .request<{ data: CMSRelation[] }>(get(`/data-model/relations/for/${collection}`))
         .then((r) => r.data ?? []),
-    staleTime: 60_000
-  })
-
-  const { data: activeLayoutData } = useQuery<ActiveLayoutData | null>({
-    queryKey: ['active-layout', collection],
-    queryFn: () =>
-      client
-        .request<{ data: ActiveLayoutData | null }>(
-          get('/collection-layouts/active', { collection })
-        )
-        .then((r) => r.data)
-        .catch(() => null),
     staleTime: 60_000
   })
 
@@ -240,23 +233,36 @@ export function ItemEditForm({
 
   // ── Item lock ──────────────────────────────────────────────────────────────
   const lockEnabled = showLockBanner && !isNew && !!colMeta?.item_locking_enabled
-  const { lockHolder, acquired: _acquired, isReadOnly, takeOver, takingOver } = useItemLock(
-    collection,
-    !isNew ? itemId : undefined,
-    lockEnabled
-  )
+  const {
+    lockHolder,
+    acquired: _acquired,
+    isReadOnly,
+    takeOver,
+    takingOver
+  } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled)
 
   // ── Layout / groups ────────────────────────────────────────────────────────
+  const assignments: SlotAssignment[] = activeLayoutData?.assignments ?? []
+
+  // When a specific layout is requested by slug, only show fields explicitly
+  // assigned to that layout — unassigned fields should not appear.
+  const assignedFieldSet = useMemo<Set<string> | null>(() => {
+    if (!layoutSlug || !activeLayoutData) return null
+    return new Set(assignments.map((a) => a.field))
+  }, [layoutSlug, activeLayoutData, assignments])
+
   const allFields = useMemo<CMSField[]>(() => {
     if (!fieldConfig) return []
-    return [...fieldConfig].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
-  }, [fieldConfig])
+    // Slug requested but layout not yet resolved — suppress stale cache to avoid field flash
+    if (layoutSlug && activeLayoutData === undefined) return []
+    const sorted = [...fieldConfig].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+    if (!assignedFieldSet) return sorted
+    return sorted.filter((f) => assignedFieldSet.has(f.field) || SYSTEM_FIELDS.has(f.field) || SENTINEL_FIELDS.has(f.field))
+  }, [fieldConfig, assignedFieldSet, layoutSlug, activeLayoutData])
 
   const groups = useMemo<FieldGroup[]>(() => {
     return (activeLayoutData?.groups ?? []).sort((a, b) => a.sort - b.sort)
   }, [activeLayoutData])
-
-  const assignments: SlotAssignment[] = activeLayoutData?.assignments ?? []
 
   const groupedMap = useMemo<Record<string, CMSField[]>>(() => {
     const map: Record<string, CMSField[]> = {}
@@ -272,10 +278,7 @@ export function ItemEditForm({
     () =>
       allFields.filter(
         (f) =>
-          !f.group_key &&
-          !f.hidden &&
-          !SYSTEM_FIELDS.has(f.field) &&
-          !SENTINEL_FIELDS.has(f.field)
+          !f.group_key && !f.hidden && !SYSTEM_FIELDS.has(f.field) && !SENTINEL_FIELDS.has(f.field)
       ),
     [allFields]
   )

@@ -1,7 +1,6 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { createNivaro } from '@nivaro/sdk'
 import { ItemEditForm, NivaroProvider } from '@nivaro/react'
-import { FieldInput } from '@/pages/ItemEdit'
+import { createNivaro } from '@nivaro/sdk'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Check,
   ChevronDown,
@@ -15,7 +14,7 @@ import {
   Terminal,
   X
 } from 'lucide-react'
-import { useMemo, useState, useEffect } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -32,9 +31,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { usePersistedTab } from '@/hooks/usePersistedTab'
+import { FieldInput } from '@/pages/ItemEdit'
 
 // ─── Command catalog (mirrors sdk/src/index.ts) ──────────────────────────────
 //
@@ -1147,6 +1147,59 @@ function buildRequest(cmd: CmdDef, values: Record<string, string>): BuiltRequest
   }
 }
 
+// Token-based TypeScript/JSX syntax highlighter — no deps
+function highlightTs(code: string): string {
+  const KW = /\b(import|export|from|const|let|var|function|return|async|await|new|type|interface|if|else|for|of|in|default|null|undefined|true|false)\b/g
+  const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  let out = ''
+  let i = 0
+  const src = code
+  while (i < src.length) {
+    // template literal
+    if (src[i] === '`') {
+      let j = i + 1
+      while (j < src.length && src[j] !== '`') { if (src[j] === '\\') j++; j++ }
+      out += `<span style="color:#a3e635">${escape(src.slice(i, j + 1))}</span>`; i = j + 1; continue
+    }
+    // single/double quoted string
+    if (src[i] === '"' || src[i] === "'") {
+      const q = src[i]; let j = i + 1
+      while (j < src.length && src[j] !== q) { if (src[j] === '\\') j++; j++ }
+      out += `<span style="color:#a3e635">${escape(src.slice(i, j + 1))}</span>`; i = j + 1; continue
+    }
+    // line comment
+    if (src[i] === '/' && src[i + 1] === '/') {
+      const end = src.indexOf('\n', i)
+      const chunk = end === -1 ? src.slice(i) : src.slice(i, end)
+      out += `<span style="color:#6b7280">${escape(chunk)}</span>`; i = end === -1 ? src.length : end; continue
+    }
+    // JSX tag name (uppercase = component, lowercase = html tag)
+    if (src[i] === '<' && /[A-Za-z]/.test(src[i + 1] ?? '')) {
+      out += `<span style="color:#60a5fa">&lt;</span>`; i++; continue
+    }
+    if (src[i] === '<' && src[i + 1] === '/') {
+      out += `<span style="color:#60a5fa">&lt;/</span>`; i += 2; continue
+    }
+    // word — check keyword
+    if (/[A-Za-z_$]/.test(src[i])) {
+      let j = i
+      while (j < src.length && /[A-Za-z0-9_$]/.test(src[j])) j++
+      const word = src.slice(i, j)
+      if (KW.test(word)) {
+        KW.lastIndex = 0
+        out += `<span style="color:#c084fc">${escape(word)}</span>`
+      } else if (/^[A-Z]/.test(word)) {
+        out += `<span style="color:#34d399">${escape(word)}</span>`
+      } else {
+        out += escape(word)
+      }
+      i = j; continue
+    }
+    out += escape(src[i]); i++
+  }
+  return out
+}
+
 function buildSnippet(cmd: CmdDef, values: Record<string, string>): string {
   const pathArgs = cmd.params
     .filter((param) => param.in === 'path')
@@ -1949,10 +2002,12 @@ function LiveFormTab() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [collection, setCollection] = useState(searchParams.get('lf_col') ?? '')
   const [itemId, setItemId] = useState(searchParams.get('lf_id') ?? '')
+  const [layoutSlug, setLayoutSlug] = useState(searchParams.get('lf_slug') ?? '')
   const [colOpen, setColOpen] = useState(false)
   const [colSearch, setColSearch] = useState('')
-  const [active, setActive] = useState<{ collection: string; itemId: string } | null>(
-    searchParams.get('lf_col') ? { collection: searchParams.get('lf_col')!, itemId: searchParams.get('lf_id') ?? '' } : null
+  const [layoutOpen, setLayoutOpen] = useState(false)
+  const [active, setActive] = useState<{ collection: string; itemId: string; layoutSlug: string } | null>(
+    searchParams.get('lf_col') ? { collection: searchParams.get('lf_col')!, itemId: searchParams.get('lf_id') ?? '', layoutSlug: searchParams.get('lf_slug') ?? '' } : null
   )
   const [result, setResult] = useState<{ ok: boolean; data: unknown } | null>(null)
   const [showCode, setShowCode] = useState(false)
@@ -1964,6 +2019,22 @@ function LiveFormTab() {
     queryFn: () => api.get<{ data: { collection: string; display_name: string | null }[] }>('/collections').then((r) => r.data.data),
     staleTime: 60_000,
   })
+
+  const { data: layouts = [] } = useQuery({
+    queryKey: ['collection-layouts', collection],
+    queryFn: () => api.get<{ data: Array<{ id: number; name: string; slug: string | null; is_active: number }> }>(`/collection-layouts?collection=${collection}`).then((r) => r.data.data ?? []),
+    enabled: !!collection,
+    staleTime: 30_000,
+  })
+
+  const lastAutoColRef = useRef('')
+  useEffect(() => {
+    if (!collection || !layouts.length) return
+    if (lastAutoColRef.current === collection) return
+    lastAutoColRef.current = collection
+    const active = layouts.find((l) => !!l.is_active)
+    setLayoutSlug(active?.slug ?? '')
+  }, [collection, layouts])
   const allCollections = (colData ?? [])
     .map((c) => ({ value: c.collection, label: c.display_name || c.collection }))
     .sort((a, b) => a.label.localeCompare(b.label))
@@ -1975,8 +2046,8 @@ function LiveFormTab() {
   function load() {
     if (!collection.trim()) return
     setResult(null)
-    setActive({ collection: collection.trim(), itemId: itemId.trim() })
-    setSearchParams((p) => { p.set('lf_col', collection.trim()); p.set('lf_id', itemId.trim()); return p }, { replace: true })
+    setActive({ collection: collection.trim(), itemId: itemId.trim(), layoutSlug: layoutSlug.trim() })
+    setSearchParams((p) => { p.set('lf_col', collection.trim()); p.set('lf_id', itemId.trim()); if (layoutSlug.trim()) p.set('lf_slug', layoutSlug.trim()); else p.delete('lf_slug'); return p }, { replace: true })
   }
 
   return (
@@ -2021,6 +2092,48 @@ function LiveFormTab() {
             <input type='text' value={itemId} onChange={(e) => setItemId(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} placeholder='new'
               className='h-8 w-36 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-muted' />
           </div>
+          <div className='flex flex-col gap-1'>
+            <label className='text-[11px] text-slate-500'>Layout</label>
+            <Popover open={layoutOpen} onOpenChange={setLayoutOpen}>
+              <PopoverTrigger asChild>
+                <button type='button' disabled={!collection} className='flex h-8 w-44 items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-left outline-none focus:border-nvr-cyan dark:border-border dark:bg-muted disabled:opacity-40'>
+                  <div className='flex min-w-0 flex-1 items-center gap-1.5'>
+                    <span className={`truncate ${layoutSlug ? 'text-slate-900 dark:text-foreground' : 'text-slate-400'}`}>
+                      {layoutSlug ? (layouts.find((l) => l.slug === layoutSlug)?.name ?? layoutSlug) : 'No layout'}
+                    </span>
+                    {layoutSlug && !!layouts.find((l) => l.slug === layoutSlug)?.is_active && (
+                      <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold bg-nvr-cyan/15 text-nvr-cyan'>Active</span>
+                    )}
+                  </div>
+                  <ChevronsUpDown className='h-3 w-3 text-slate-400 shrink-0' />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-52 p-0' align='start'>
+                <Command>
+                  <CommandList>
+                    <CommandGroup>
+                      <CommandItem value='__none__' onSelect={() => { setLayoutSlug(''); setLayoutOpen(false) }}>
+                        <span className='text-[12px] text-slate-500 italic'>No layout</span>
+                        {!layoutSlug && <Check className='ml-auto h-3 w-3 text-nvr-cyan shrink-0' />}
+                      </CommandItem>
+                      {layouts.map((l) => (
+                        <CommandItem key={l.id} value={l.name} onSelect={() => { setLayoutSlug(l.slug ?? ''); setLayoutOpen(false) }}>
+                          <div className='flex min-w-0 flex-1 flex-col'>
+                            <div className='flex items-center gap-1.5'>
+                              <span className='text-[12px] font-medium truncate'>{l.name}</span>
+                              {!!l.is_active && <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold bg-nvr-cyan/15 text-nvr-cyan'>Active</span>}
+                            </div>
+                            {l.slug && <span className='font-mono text-[10px] text-slate-400 truncate'>{l.slug}</span>}
+                          </div>
+                          {layoutSlug === l.slug && <Check className='ml-1 h-3 w-3 text-nvr-cyan shrink-0' />}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
           <button type='button' onClick={load} className='h-8 rounded-md bg-nvr-cyan px-4 text-[13px] font-semibold text-white hover:brightness-110'>
             Load
           </button>
@@ -2051,7 +2164,7 @@ function LiveFormTab() {
           <div className='flex items-center justify-between px-4 py-2 border-b border-slate-800'>
             <span className='text-[11px] font-semibold text-slate-400 uppercase tracking-wider'>React usage</span>
           </div>
-          <pre className='overflow-x-auto px-4 py-3 text-[12px] leading-relaxed text-slate-200'><code>{`import { NivaroProvider, ItemEditForm } from '@nivaro/react'
+          <pre className='overflow-x-auto px-4 py-3 text-[12px] leading-relaxed text-slate-200'><code dangerouslySetInnerHTML={{ __html: highlightTs(`import { NivaroProvider, ItemEditForm } from '@nivaro/react'
 import { createNivaro } from '@nivaro/sdk'
 
 const client = createNivaro('https://your-api-url.com')
@@ -2060,13 +2173,13 @@ export function MyForm() {
   return (
     <NivaroProvider client={client}>
       <ItemEditForm
-        collection="${active?.collection || 'your_collection'}"${active?.itemId ? `\n        itemId="${active.itemId}"` : ''}
+        collection="${active?.collection || 'your_collection'}"${active?.itemId ? `\n        itemId="${active.itemId}"` : ''}${active?.layoutSlug ? `\n        layoutSlug="${active.layoutSlug}"` : ''}
         onSaved={(id) => console.log('Saved:', id)}
         onDeleted={() => console.log('Deleted')}
       />
     </NivaroProvider>
   )
-}`}</code></pre>
+}`) }} /></pre>
         </div>
       )}
 
@@ -2074,9 +2187,10 @@ export function MyForm() {
       {active ? (
         <NivaroProvider client={client}>
           <ItemEditForm
-            key={`${active.collection}:${active.itemId}`}
+            key={`${active.collection}:${active.itemId}:${active.layoutSlug}`}
             collection={active.collection}
             itemId={active.itemId || undefined}
+            layoutSlug={active.layoutSlug || undefined}
             onSaved={(id: string) => setResult({ ok: true, data: { id } })}
             onDeleted={() => setResult({ ok: true, data: { deleted: true } })}
             showRevisions={false}
@@ -2380,8 +2494,9 @@ export function SdkPlaygroundPage() {
                   {copied ? 'Copied' : 'Copy'}
                 </Button>
               </div>
-              <pre className='overflow-x-auto bg-slate-900 p-3.5 font-mono text-[12px] leading-relaxed text-cyan-200'>
-                {`import { createNivaro, ${selected.name} } from '@nivaro/sdk'\n\nconst nivaro = createNivaro(window.location.origin, { token })\n${snippet}`}
+              <pre className='overflow-x-auto bg-slate-900 p-3.5 font-mono text-[12px] leading-relaxed text-slate-200'>
+                {/* highlightTs escapes all user-derived content via its escape() helper — XSS-safe */}
+                <code dangerouslySetInnerHTML={{ __html: highlightTs(`import { createNivaro, ${selected.name} } from '@nivaro/sdk'\n\nconst nivaro = createNivaro(window.location.origin, { token })\n${snippet}`) }} />
               </pre>
             </div>
 

@@ -63,6 +63,11 @@ type LayoutFormProps = {
   nextButtonClassName?: string
   /** Extra content rendered before the Save button on the last step (steps mode only) */
   lastStepActions?: React.ReactNode
+  /**
+   * Layout slug that was used to load this form's schema.
+   * Informational only — schema resolution happens in useNivaroForm.
+   */
+  layoutSlug?: string
 }
 
 function colSpanStyle(span: number | undefined): React.CSSProperties {
@@ -102,7 +107,8 @@ export function LayoutForm({
   stepNavClassName,
   prevButtonClassName,
   nextButtonClassName,
-  lastStepActions
+  lastStepActions,
+  layoutSlug: _layoutSlug
 }: LayoutFormProps) {
   const { schema, values, errors, setValue, isVisible, isLocked, isSubmitting, gridFlushersRef } =
     form

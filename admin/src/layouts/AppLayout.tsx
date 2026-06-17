@@ -40,8 +40,8 @@ import {
   ScrollText,
   Settings,
   Shield,
-  ShieldOff,
   ShieldCheck,
+  ShieldOff,
   SlidersHorizontal,
   Terminal,
   ThumbsUp,
@@ -61,7 +61,7 @@ import { ThemeSwitcher } from '@/components/theme-switcher'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { useExtensionPlugins, useCloudPlugins } from '@/extensions/store'
+import { useCloudPlugins, useExtensionPlugins } from '@/extensions/store'
 import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from "@/lib/api"
 import { logout, useAuth } from '@/lib/auth'

@@ -30,6 +30,7 @@
     "format": "biome format --write .",
     "lint": "biome lint .",
     "lint:fix": "biome lint --write .",
+    "fix:import-order": "biome check --linter-enabled=false --formatter-enabled=false --write .",
     "dead-code": "fallow dead-code",
     "dupes": "fallow dupes",
     "health": "fallow health",

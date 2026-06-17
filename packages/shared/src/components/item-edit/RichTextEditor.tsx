@@ -21,7 +21,7 @@ import {
   UnderlineIcon,
   X
 } from 'lucide-react'
-import { type ReactNode, useMemo, useRef, useState, useEffect } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '../../lib/utils'
 
 // ─── EditorJS JSON → HTML ──────────────────────────────────────────────────────

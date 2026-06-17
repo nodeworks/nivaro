@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { getInterfaces, getDefaultInterface, getDisplays, getDefaultDisplay, parseJson } from '@/lib/field-config'
+import { describe, expect, it } from 'vitest'
+import { getDefaultDisplay, getDefaultInterface, getDisplays, getInterfaces, parseJson } from '@/lib/field-config'
 
 describe('getInterfaces', () => {
   it('returns string interfaces', () => {

@@ -70,8 +70,10 @@ function cacheKey(
   clientUrl: string,
   collection: string,
   includeHidden: boolean,
-  layoutId?: number
+  layoutId?: number,
+  layoutSlug?: string
 ): string {
+  if (layoutSlug) return `${clientUrl}::${collection}::${includeHidden ? 'h' : ''}::slug=${layoutSlug}`
   return `${clientUrl}::${collection}::${includeHidden ? 'h' : ''}::${layoutId ?? 'active'}`
 }
 
@@ -79,7 +81,8 @@ export async function fetchSchema(
   client: NivaroClient,
   collection: string,
   includeHidden: boolean,
-  layoutId?: number
+  layoutId?: number,
+  layoutSlug?: string
 ): Promise<FormSchema> {
   if (layoutId != null) {
     // Explicit layout: fetch collection + layout meta + groups + assignments
@@ -138,7 +141,9 @@ export async function fetchSchema(
   const [collectionRes, activeRes] = await Promise.all([
     client.request<{ data: CMSCollectionResponse }>(get(`/collections/${collection}`)),
     client
-      .request<{ data: ActiveLayoutData }>(get('/collection-layouts/active', { collection }))
+      .request<{ data: ActiveLayoutData }>(
+        get('/collection-layouts/active', layoutSlug ? { collection, slug: layoutSlug } : { collection })
+      )
       .catch(() => ({
         data: {
           groups: [] as CMSGroupRow[],
@@ -183,9 +188,10 @@ export function useFormSchema(
   client: NivaroClient | null,
   collection: string,
   includeHidden = false,
-  layoutId?: number
+  layoutId?: number,
+  layoutSlug?: string
 ): { schema: FormSchema | null; loading: boolean; error: Error | null } {
-  const key = client ? cacheKey(client.url, collection, includeHidden, layoutId) : null
+  const key = client ? cacheKey(client.url, collection, includeHidden, layoutId, layoutSlug) : null
   const [schema, setSchema] = useState<FormSchema | null>(() =>
     key ? (schemaCache.get(key) ?? null) : null
   )
@@ -212,7 +218,7 @@ export function useFormSchema(
     setSchema(null)
     setLoading(true)
 
-    fetchSchema(client, collection, includeHidden, layoutId)
+    fetchSchema(client, collection, includeHidden, layoutId, layoutSlug)
       .then((s) => {
         if (!active || reqId !== reqIdRef.current) return
         schemaCache.set(key as string, s)
@@ -228,7 +234,7 @@ export function useFormSchema(
     return () => {
       active = false
     }
-  }, [client, collection, includeHidden, key, layoutId])
+  }, [client, collection, includeHidden, key, layoutId, layoutSlug])
 
   return { schema, loading, error }
 }

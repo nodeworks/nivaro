@@ -1,8 +1,6 @@
 import { Copy, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { type CMSField, type CMSRelation, api } from '@/lib/api'
-import { findM2ORelation } from '@/lib/relations'
 import { RelationPicker } from '@/components/relation-picker'
 import { Button } from '@/components/ui/button'
 import {
@@ -16,6 +14,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { api, type CMSField, type CMSRelation } from '@/lib/api'
+import { findM2ORelation } from '@/lib/relations'
 import { cn, titleCase } from '@/lib/utils'
 
 const SKIP_FIELDS = new Set([

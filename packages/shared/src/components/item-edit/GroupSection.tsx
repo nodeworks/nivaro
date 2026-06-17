@@ -1,8 +1,8 @@
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useState } from 'react'
-import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps } from './types'
 import { FieldRow, getColSpanClass } from './FieldRow'
+import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps } from './types'
 
 export function GroupSection({
   group,

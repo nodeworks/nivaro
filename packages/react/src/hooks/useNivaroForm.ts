@@ -143,6 +143,7 @@ export function useNivaroForm(
     validate,
     includeHidden = false,
     layoutId,
+    layoutSlug,
     fieldRulesDebounce = 300
   } = options
 
@@ -150,7 +151,7 @@ export function useNivaroForm(
     schema,
     loading: schemaLoading,
     error: schemaError
-  } = useFormSchema(resolvedClient, collection, includeHidden, layoutId)
+  } = useFormSchema(resolvedClient, collection, includeHidden, layoutId, layoutSlug)
 
   const [values, setValuesState] = useState<Record<string, unknown>>({})
   const [initialValues, setInitialValues] = useState<Record<string, unknown>>({})

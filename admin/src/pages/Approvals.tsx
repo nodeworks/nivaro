@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, GripVertical, Plus, ThumbsUp, Trash2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -24,6 +23,7 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api } from '@/lib/api'
 import { cn, formatDate } from '@/lib/utils'
 

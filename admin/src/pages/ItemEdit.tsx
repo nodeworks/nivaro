@@ -9,12 +9,12 @@ import {
   ChevronsUpDown,
   ChevronUp,
   ExternalLink,
+  EyeOff,
   FunctionSquare,
+  Info,
   LayoutTemplate,
   Loader2,
-  Info,
   Network,
-  EyeOff,
   PanelRight,
   Play,
   Plus,
@@ -29,7 +29,6 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { ApprovalPanel } from '@/components/approval-panel'
 import { CloneDialog } from '@/components/clone-dialog'
-import { RichTextEditor } from '@/components/rich-text-editor'
 import { CommentPanel } from '@/components/comment-panel'
 import { ErpStatusBadge } from '@/components/erp-status-badge'
 import { FieldHistorySparkline } from '@/components/field-history-sparkline'
@@ -39,6 +38,7 @@ import { PipelinePanel, PipelineTransitionButtons } from '@/components/pipeline-
 import { RelationLabel } from '@/components/relation-label'
 import { RelationPicker } from '@/components/relation-picker'
 import { RevisionsPanel } from '@/components/revisions-panel'
+import { RichTextEditor } from '@/components/rich-text-editor'
 import { TaskPanel } from '@/components/task-panel'
 import { TranslationEditor } from '@/components/translation-editor'
 import { TreePicker } from '@/components/tree-picker'
@@ -67,8 +67,8 @@ import {
   api,
   type CMSField,
   type CMSRelation,
-  type SubRow,
-  type RecordTemplate
+  type RecordTemplate, 
+  type SubRow
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import {

@@ -6,15 +6,15 @@ import { get } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
-import { useM2MStaging } from './M2MStagingContext'
+import { FieldRenderer } from './FieldRenderer'
 import {
   CascadeEffectController,
-  SYSTEM_FIELDS,
   getCascadeFilters,
-  getColSpanClass
+  getColSpanClass, 
+  SYSTEM_FIELDS
 } from './helpers'
+import { useM2MStaging } from './M2MStagingContext'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
-import { FieldRenderer } from './FieldRenderer'
 
 export function FieldRow({
   field,
@@ -135,25 +135,32 @@ export function FieldRow({
 
   // Cascade filter computation
   let cascadeFilter: Record<string, unknown> | undefined
-  let cascadeParentLabel: string | null = null
+  const cascadeParentLabels: string[] = []
   let unsatisfiedParentLabel: string | null = null
+  let requiredParentLabel: string | null = null
   for (const rule of cascadeRules) {
     const parentVal =
       draft[rule.parent_field] ??
       (() => {
-        const parentM2mRel = relations.find(
-          (r) =>
-            r.one_collection === collection && r.one_field === rule.parent_field && r.junction_field
+        const r = relations.find(
+          (r) => r.one_collection === collection && r.one_field === rule.parent_field
         )
-        if (parentM2mRel) {
-          const key =
-            parentM2mRel.one_field ??
-            `${parentM2mRel.many_collection}.${parentM2mRel.junction_field}`
-          const staged = m2mStaging?.getStagedLinks(key) ?? []
-          if (staged.length > 0) return staged[0]
-          const committed = m2mParentCommitted[rule.parent_field] ?? []
-          if (committed.length > 0) return committed[0]
+        if (!r) return null
+        let parentM2mRel = r
+        if (!parentM2mRel.junction_field) {
+          const companion = relations.find(
+            (c) => c.many_collection === r.many_collection && c.id !== r.id
+          )
+          if (companion?.many_field) parentM2mRel = { ...r, junction_field: companion.many_field }
+          else return null
         }
+        const key =
+          parentM2mRel.one_field ??
+          `${parentM2mRel.many_collection}.${parentM2mRel.junction_field}`
+        const staged = m2mStaging?.getStagedLinks(key) ?? []
+        if (staged.length > 0) return staged[0]
+        const committed = m2mParentCommitted[rule.parent_field] ?? []
+        if (committed.length > 0) return committed[0]
         return null
       })()
     if (parentVal != null && parentVal !== '') {
@@ -161,9 +168,12 @@ export function FieldRow({
       cascadeFilter[rule.filter_column] = rule.filter_is_m2m
         ? { _some: { id: { _eq: parentVal } } }
         : { _eq: parentVal }
-      if (!cascadeParentLabel) cascadeParentLabel = titleCase(String(rule.parent_field))
-    } else if (!unsatisfiedParentLabel) {
-      unsatisfiedParentLabel = titleCase(String(rule.parent_field))
+      cascadeParentLabels.push(titleCase(String(rule.parent_field)))
+    } else {
+      if (!unsatisfiedParentLabel) unsatisfiedParentLabel = titleCase(String(rule.parent_field))
+      if (rule.show_all_if_no_parent === false && !requiredParentLabel) {
+        requiredParentLabel = titleCase(String(rule.parent_field))
+      }
     }
   }
 
@@ -212,11 +222,20 @@ export function FieldRow({
           </TooltipProvider>
         )}
         {locked && <span className='text-[10px] text-amber-500 font-medium'>(locked)</span>}
-        {cascadeFilter && Object.keys(cascadeFilter).length > 0 && cascadeParentLabel && (
-          <span className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff] dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
-            <SlidersHorizontal className='h-2.5 w-2.5' />
-            Filtered by {cascadeParentLabel}
-          </span>
+        {cascadeFilter && Object.keys(cascadeFilter).length > 0 && cascadeParentLabels.length > 0 && (
+          <TooltipProvider delayDuration={100}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff] dark:bg-nvr-cyan/15 dark:text-nvr-cyan max-w-[180px] min-w-0'>
+                  <SlidersHorizontal className='h-2.5 w-2.5 shrink-0' />
+                  <span className='truncate'>Filtered by {cascadeParentLabels.join(', ')}</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side='top' className='text-[12px]'>
+                Filtered by {cascadeParentLabels.join(', ')}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
       </div>
       <div className={cn(locked && 'pointer-events-none opacity-60')}>
@@ -230,7 +249,8 @@ export function FieldRow({
             itemId,
             relations,
             cascadeFilter,
-            unsatisfiedParentLabel
+            unsatisfiedParentLabel,
+            requiredParentLabel
           })
         ) : (
           <FieldRenderer
@@ -241,6 +261,7 @@ export function FieldRow({
             collection={collection}
             itemId={itemId}
             cascadeFilter={cascadeFilter}
+            requiredParentLabel={requiredParentLabel}
           />
         )}
       </div>

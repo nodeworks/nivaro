@@ -5,10 +5,10 @@ import {
   ChevronRight,
   ChevronsUpDown,
   Download,
-  Flag,
-  FunctionSquare,
   Eye,
   EyeOff,
+  Flag,
+  FunctionSquare,
   Loader2,
   Pencil,
   Plus,
@@ -21,7 +21,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { toast } from 'sonner'
 import { BulkActionBar } from '@/components/bulk-action-bar'
 import { ColumnPicker } from '@/components/column-picker'
@@ -47,6 +46,7 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import {
   api,
   type CMSField,

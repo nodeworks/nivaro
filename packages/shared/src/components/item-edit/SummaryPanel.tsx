@@ -2,9 +2,9 @@ import { useQuery } from '@tanstack/react-query'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
-import { RelatedItemLabel } from './RelationCombobox'
-import { SYSTEM_FIELDS, SENTINEL_FIELDS, parseJson } from './helpers'
+import { parseJson, SENTINEL_FIELDS, SYSTEM_FIELDS } from './helpers'
 import type { M2MStagingCtx } from './M2MStagingContext'
+import { RelatedItemLabel } from './RelationCombobox'
 import type { CMSField, CMSRelation, FieldGroup, StepDef } from './types'
 
 // ─── M2MSummaryCount ──────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
-import { rawRows } from '../db/raw-rows.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 

@@ -1,5 +1,5 @@
 import { config } from './config.js'
-import { closeDb, runMigrationsSafely, migrationSource } from './db/index.js'
+import { closeDb, migrationSource, runMigrationsSafely } from './db/index.js'
 import { registerActivityHooks } from './hooks/activity.js'
 import { registerAiValidationHooks, setApp as setAiValidationApp } from './hooks/ai-validation.js'
 import { registerAlertHooks, setApp as setAlertApp } from './hooks/alerts.js'

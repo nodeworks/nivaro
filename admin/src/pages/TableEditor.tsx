@@ -1,3 +1,19 @@
+import type { Modifier } from '@dnd-kit/core'
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  type DragOverEvent,
+  DragOverlay,
+  type DragStartEvent,
+  KeyboardSensor,
+  PointerSensor,
+  pointerWithin,
+  rectIntersection,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -18,22 +34,6 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import {
-  DndContext,
-  DragOverlay,
-  type DragEndEvent,
-  type DragOverEvent,
-  type DragStartEvent,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
-  pointerWithin,
-  rectIntersection,
-  useSensor,
-  useSensors,
-  useDroppable,
-} from '@dnd-kit/core'
-import type { Modifier } from '@dnd-kit/core'
 
 const snapLeftEdgeToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
   if (draggingNodeRect && activatorEvent && 'clientX' in activatorEvent) {
@@ -46,22 +46,34 @@ const snapLeftEdgeToCursor: Modifier = ({ activatorEvent, draggingNodeRect, tran
   }
   return transform
 }
+
+const snapCenterToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
+  if (draggingNodeRect && activatorEvent && 'clientX' in activatorEvent) {
+    const e = activatorEvent as PointerEvent
+    return {
+      ...transform,
+      x: transform.x + e.clientX - (draggingNodeRect.left + draggingNodeRect.width / 2),
+      y: transform.y + e.clientY - (draggingNodeRect.top + draggingNodeRect.height / 2)
+    }
+  }
+  return transform
+}
+
 import {
-  SortableContext,
   arrayMove,
+  rectSortingStrategy,
+  SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
-  rectSortingStrategy,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { CollectionFieldPickerPanel, type PickedField } from '@/components/field-picker'
-import { IconPicker } from '@/components/icon-picker'
 import { FormulaBuilder } from '@/components/formula-builder'
+import { IconPicker } from '@/components/icon-picker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -86,6 +98,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api } from '@/lib/api'
 import {
   CHOICE_INTERFACES,
@@ -3126,6 +3139,82 @@ function serializeTemplate(tokens: TemplateToken[]): string {
   return tokens.map((t) => (t.type === 'field' ? `{{${t.value}}}` : t.value)).join('')
 }
 
+function SortableTemplateToken({
+  id,
+  tok,
+  idx,
+  onUpdate,
+  onRemove
+}: {
+  id: string
+  tok: TemplateToken
+  idx: number
+  onUpdate: (idx: number, value: string) => void
+  onRemove: (idx: number) => void
+}) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const style = {
+    transform: DndCSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  }
+  const handle = (
+    <span
+      ref={setActivatorNodeRef}
+      {...listeners}
+      className='inline-flex cursor-grab items-center text-slate-300 hover:text-slate-500 dark:text-muted-foreground'
+    >
+      <GripVertical className='h-3 w-3 shrink-0' />
+    </span>
+  )
+  if (tok.type === 'field') {
+    return (
+      <span
+        ref={setNodeRef}
+        style={style}
+        {...attributes}
+        className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[12px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+      >
+        {handle}
+        {tok.value.split('.').map(titleCase).join(' → ')}
+        <button
+          type='button'
+          onClick={() => onRemove(idx)}
+          className='text-nvr-navy/50 hover:text-red-500 dark:text-nvr-cyan/50'
+        >
+          ×
+        </button>
+      </span>
+    )
+  }
+  return (
+    <span
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      className='inline-flex items-center gap-0.5 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 dark:border-border dark:bg-muted'
+    >
+      {handle}
+      <input
+        value={tok.value}
+        onChange={(e) => onUpdate(idx, e.target.value)}
+        onPointerDown={(e) => e.stopPropagation()}
+        placeholder='text…'
+        size={Math.max(4, tok.value.length || 4)}
+        className='bg-transparent text-[12px] text-slate-700 outline-none dark:text-foreground'
+      />
+      <button
+        type='button'
+        onClick={() => onRemove(idx)}
+        onPointerDown={(e) => e.stopPropagation()}
+        className='text-slate-300 hover:text-red-500 dark:text-muted-foreground'
+      >
+        ×
+      </button>
+    </span>
+  )
+}
+
 function DisplayTemplateEditor({
   value,
   onChange,
@@ -3135,60 +3224,101 @@ function DisplayTemplateEditor({
   onChange: (v: string) => void
   collection: string
 }) {
-  const tokens = parseTemplate(value)
+  const [tokens, setTokens] = useState<TemplateToken[]>(() => parseTemplate(value))
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+
+  // Sync inbound value changes without clobbering local empty-text tokens
+  const prevValueRef = useRef(value)
+  useEffect(() => {
+    if (value !== serializeTemplate(tokens) && value !== prevValueRef.current) {
+      setTokens(parseTemplate(value))
+    }
+    prevValueRef.current = value
+  }, [value])
+
+  // Stable IDs keyed to content so dnd-kit tracks correctly across re-renders
+  const tokenIds = tokens.map((t, i) => `${t.type}:${i}`)
+  const activeToken = activeId != null ? tokens[tokenIds.indexOf(activeId)] ?? null : null
+
+  function commit(next: TemplateToken[]) {
+    setTokens(next)
+    onChange(serializeTemplate(next))
+  }
 
   function updateToken(idx: number, text: string) {
-    const next = tokens.map((t, i) => (i === idx ? { ...t, value: text } : t))
-    onChange(serializeTemplate(next))
+    commit(tokens.map((t, i) => (i === idx ? { ...t, value: text } : t)))
   }
 
   function removeToken(idx: number) {
-    onChange(serializeTemplate(tokens.filter((_, i) => i !== idx)))
+    commit(tokens.filter((_, i) => i !== idx))
+  }
+
+  function addText() {
+    commit([...tokens, { type: 'text', value: '' }])
   }
 
   function insertField(picked: PickedField) {
-    const field = picked.path.join('.')
-    const last = tokens[tokens.length - 1]
-    const next: TemplateToken[] =
-      last?.type === 'text'
-        ? [...tokens.slice(0, -1), last, { type: 'field', value: field }, { type: 'text', value: '' }]
-        : [...tokens, { type: 'field', value: field }, { type: 'text', value: '' }]
-    onChange(serializeTemplate(next))
+    commit([...tokens, { type: 'field', value: picked.path.join('.') }])
     setPickerOpen(false)
   }
 
+  function handleDragEnd(event: DragEndEvent) {
+    setActiveId(null)
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIdx = tokenIds.indexOf(String(active.id))
+    const newIdx = tokenIds.indexOf(String(over.id))
+    if (oldIdx === -1 || newIdx === -1) return
+    commit(arrayMove(tokens, oldIdx, newIdx))
+  }
+
   return (
-    <div className='flex flex-wrap items-center gap-1 min-h-8 rounded-md border border-slate-200 bg-white px-2 py-1'>
+    <div className='flex flex-wrap items-center gap-1 min-h-8 rounded-md border border-slate-200 bg-white px-2 py-1.5 dark:border-border dark:bg-background'>
       {tokens.length === 0 && (
-        <span className='text-[12px] text-slate-400'>e.g. {'{{name}}'} — {'{{status}}'}</span>
+        <span className='text-[12px] text-slate-400'>Add fields and text to build a display template</span>
       )}
-      {tokens.map((tok, idx) =>
-        tok.type === 'field' ? (
-          <span
-            key={`f-${idx}`}
-            className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[12px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
-          >
-            {tok.value.split('.').map(titleCase).join(' → ')}
-            <button
-              type='button'
-              onClick={() => removeToken(idx)}
-              className='text-nvr-navy/50 hover:text-red-500 dark:text-nvr-cyan/50'
-            >
-              ×
-            </button>
-          </span>
-        ) : (
-          <input
-            key={`t-${idx}`}
-            value={tok.value}
-            onChange={(e) => updateToken(idx, e.target.value)}
-            placeholder={idx === 0 && tokens.length <= 1 ? 'text…' : undefined}
-            size={Math.max(1, tok.value.length || (idx === 0 && tokens.length <= 1 ? 6 : 1))}
-            className='flex-shrink bg-transparent text-[13px] text-slate-700 outline-none placeholder-slate-300'
-          />
-        )
-      )}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={({ active }) => setActiveId(String(active.id))}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setActiveId(null)}
+      >
+        <SortableContext items={tokenIds} strategy={rectSortingStrategy}>
+          {tokens.map((tok, idx) => (
+            <SortableTemplateToken
+              key={tokenIds[idx]}
+              id={tokenIds[idx]}
+              tok={tok}
+              idx={idx}
+              onUpdate={updateToken}
+              onRemove={removeToken}
+            />
+          ))}
+        </SortableContext>
+        <DragOverlay dropAnimation={null} modifiers={[snapCenterToCursor]}>
+          {activeToken?.type === 'field' ? (
+            <span className='inline-flex cursor-grabbing items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[12px] font-medium text-nvr-navy shadow-md dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
+              <GripVertical className='h-3 w-3 shrink-0' />
+              {activeToken.value.split('.').map(titleCase).join(' → ')}
+            </span>
+          ) : activeToken?.type === 'text' ? (
+            <span className='inline-flex cursor-grabbing items-center gap-0.5 rounded border border-slate-300 bg-white px-1.5 py-0.5 shadow-md dark:border-border dark:bg-muted'>
+              <GripVertical className='h-3 w-3 shrink-0 text-slate-300' />
+              <span className='text-[12px] text-slate-700 dark:text-foreground'>{activeToken.value || 'text…'}</span>
+            </span>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
+      <button
+        type='button'
+        onClick={addText}
+        className='inline-flex items-center gap-0.5 rounded border border-dashed border-slate-300 px-1.5 py-0.5 text-[11px] text-slate-400 hover:border-nvr-cyan hover:text-nvr-cyan'
+      >
+        <Plus className='h-3 w-3' /> text
+      </button>
       <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
         <PopoverTrigger asChild>
           <button
@@ -3220,10 +3350,27 @@ function SettingsTab({
 }) {
   const qc = useQueryClient()
   const meta = tableData.collection_meta
-  const [displayName, setDisplayName] = useState(meta?.display_name ?? '')
-  const [icon, setIcon] = useState(meta?.icon ?? '')
-  const [note, setNote] = useState(meta?.note ?? '')
-  const [displayTemplate, setDisplayTemplate] = useState(meta?.display_template ?? '')
+
+  // Draft state: null means "use server value". Set on edit, cleared on save.
+  const [nameDraft, setNameDraft] = useState<string | null>(null)
+  const [iconDraft, setIconDraft] = useState<string | null>(null)
+  const [noteDraft, setNoteDraft] = useState<string | null>(null)
+  const [templateDraft, setTemplateDraft] = useState<string | null>(null)
+
+  // Reset drafts when tableName changes (navigating between tables)
+  const prevTableRef = useRef(tableName)
+  if (prevTableRef.current !== tableName) {
+    prevTableRef.current = tableName
+    if (nameDraft !== null) setNameDraft(null)
+    if (iconDraft !== null) setIconDraft(null)
+    if (noteDraft !== null) setNoteDraft(null)
+    if (templateDraft !== null) setTemplateDraft(null)
+  }
+
+  const displayName = nameDraft ?? (meta?.display_name ?? '')
+  const icon = iconDraft ?? (meta?.icon ?? '')
+  const note = noteDraft ?? (meta?.note ?? '')
+  const displayTemplate = templateDraft ?? (meta?.display_template ?? '')
 
   const registerMutation = useMutation({
     mutationFn: () =>
@@ -3235,6 +3382,12 @@ function SettingsTab({
       }),
     onSuccess: () => {
       toast.success('Collection settings saved')
+      setNameDraft(null)
+      setIconDraft(null)
+      setNoteDraft(null)
+      // Don't clear templateDraft — clearing it causes DisplayTemplateEditor to briefly
+      // see stale meta and reset its internal tokens state before the refetch completes.
+      // Draft is cleared naturally on table navigation via prevTableRef.
       qc.invalidateQueries({ queryKey: ['data-model-table', tableName] })
       onRefresh()
     },
@@ -3264,20 +3417,20 @@ function SettingsTab({
             <Label className='mb-1 block text-[12px]'>Display name</Label>
             <Input
               value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
+              onChange={(e) => setNameDraft(e.target.value)}
               placeholder={tableName}
               className='text-[13px]'
             />
           </div>
           <div>
             <Label className='mb-1 block text-[12px]'>Icon</Label>
-            <IconPicker value={icon} onChange={setIcon} />
+            <IconPicker value={icon} onChange={setIconDraft} />
           </div>
           <div>
             <Label className='mb-1 block text-[12px]'>Note</Label>
             <Input
               value={note}
-              onChange={(e) => setNote(e.target.value)}
+              onChange={(e) => setNoteDraft(e.target.value)}
               placeholder='A short description of this collection'
               className='text-[13px]'
             />
@@ -3286,7 +3439,7 @@ function SettingsTab({
             <Label className='mb-1 block text-[12px]'>Display template</Label>
             <DisplayTemplateEditor
               value={displayTemplate}
-              onChange={setDisplayTemplate}
+              onChange={setTemplateDraft}
               collection={tableName}
             />
             <p className='mt-1 text-[11px] text-slate-400'>
@@ -4210,6 +4363,7 @@ interface CascadeFilterRule {
   clear_on_parent_change: boolean
   clear_on_unavailable: boolean
   filter_is_m2m?: boolean
+  show_all_if_no_parent?: boolean
 }
 
 interface CascadeParentField {
@@ -4249,6 +4403,7 @@ function CascadeFiltersEditor({
   const relatedFields: string[] = relColMeta?.fields?.map((f: { field: string }) => f.field) ?? []
   const [clearOnChange, setClearOnChange] = useState(true)
   const [clearOnUnavailable, setClearOnUnavailable] = useState(false)
+  const [showAllIfNoParent, setShowAllIfNoParent] = useState(true)
 
   function openAdd() {
     setEditingIdx(null)
@@ -4256,6 +4411,7 @@ function CascadeFiltersEditor({
     setFilterColumn('')
     setClearOnChange(true)
     setClearOnUnavailable(false)
+    setShowAllIfNoParent(true)
     setAdding(true)
   }
 
@@ -4277,6 +4433,7 @@ function CascadeFiltersEditor({
       clear_on_parent_change: clearOnChange,
       clear_on_unavailable: clearOnUnavailable,
       filter_is_m2m: computeFilterIsMm(fc),
+      show_all_if_no_parent: showAllIfNoParent,
     }])
     setAdding(false)
   }
@@ -4315,6 +4472,10 @@ function CascadeFiltersEditor({
 
   function toggleUnavailable(idx: number, val: boolean) {
     onChange(rules.map((r, i) => i === idx ? { ...r, clear_on_unavailable: val } : r))
+  }
+
+  function toggleShowAll(idx: number, val: boolean) {
+    onChange(rules.map((r, i) => i === idx ? { ...r, show_all_if_no_parent: val } : r))
   }
 
   return (
@@ -4439,6 +4600,11 @@ function CascadeFiltersEditor({
                   <span className='text-[10px] text-slate-400'>Clear if value unavailable</span>
                   <span className='flex-1' />
                   <Switch checked={rule.clear_on_unavailable ?? false} onCheckedChange={val => toggleUnavailable(idx, val)} className='scale-75' />
+                </div>
+                <div className='mt-1 flex items-center gap-1.5'>
+                  <span className='text-[10px] text-slate-400'>Show all options if parent not set</span>
+                  <span className='flex-1' />
+                  <Switch checked={rule.show_all_if_no_parent ?? true} onCheckedChange={val => toggleShowAll(idx, val)} className='scale-75' />
                 </div>
               </div>
             )
@@ -4579,6 +4745,10 @@ function CascadeFiltersEditor({
               <Switch checked={clearOnUnavailable} onCheckedChange={setClearOnUnavailable} className='scale-75' />
               <span className='text-[11px] text-slate-600'>Clear if value no longer in options</span>
             </div>
+            <div className='flex items-center gap-2'>
+              <Switch checked={showAllIfNoParent} onCheckedChange={setShowAllIfNoParent} className='scale-75' />
+              <span className='text-[11px] text-slate-600'>Show all options if parent not set</span>
+            </div>
           </div>
           <div className='flex items-center gap-2'>
             <span className='flex-1' />
@@ -4604,15 +4774,15 @@ function CascadeFiltersEditor({
   )
 }
 
-function LayoutPicker({ collection, value, onChange }: { collection?: string | null; value: number | null; onChange: (id: number | null) => void }) {
+function LayoutPicker({ collection, value, onChange }: { collection?: string | null; value: string | null; onChange: (slug: string | null) => void }) {
   const [open, setOpen] = useState(false)
   const { data: layouts = [] } = useQuery({
     queryKey: ['collection-layouts-list', collection],
-    queryFn: () => api.get<{ data: Array<{ id: number; name: string }> }>(`/collection-layouts?collection=${collection}`).then(r => r.data.data ?? []),
+    queryFn: () => api.get<{ data: Array<{ id: number; name: string; slug: string | null }> }>(`/collection-layouts?collection=${collection}`).then(r => r.data.data ?? []),
     enabled: !!collection,
     staleTime: 60_000,
   })
-  const selected = layouts.find(l => l.id === value)
+  const selected = layouts.find(l => l.slug === value)
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -4629,9 +4799,10 @@ function LayoutPicker({ collection, value, onChange }: { collection?: string | n
             <CommandGroup>
               <CommandItem value='' onSelect={() => { onChange(null); setOpen(false) }} className='text-[11px] text-slate-400'>None</CommandItem>
               {layouts.map(l => (
-                <CommandItem key={l.id} value={l.name} onSelect={() => { onChange(l.id); setOpen(false) }} className='text-[11px]'>
-                  <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === l.id ? 'opacity-100' : 'opacity-0')} />
+                <CommandItem key={l.id} value={l.name} onSelect={() => { onChange(l.slug ?? null); setOpen(false) }} className='text-[11px]'>
+                  <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === l.slug ? 'opacity-100' : 'opacity-0')} />
                   {l.name}
+                  {l.slug && <span className='ml-1.5 font-mono text-[10px] text-slate-400'>{l.slug}</span>}
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -4674,7 +4845,7 @@ function FieldSettingsPopover({
   const [inlineRelation, setInlineRelation] = useState(settings.inline_relation)
   const [maxValues, setMaxValues] = useState<string>(settings.max_values != null ? String(settings.max_values) : '')
   const [cascadeRules, setCascadeRules] = useState<CascadeFilterRule[]>([])
-  const [gridLayoutId, setGridLayoutId] = useState<number | null>(null)
+  const [gridLayoutSlug, setGridLayoutSlug] = useState<string | null>(null)
   const [gridShowTotals, setGridShowTotals] = useState(false)
 
   // Reset local state when popover opens
@@ -4695,9 +4866,9 @@ function FieldSettingsPopover({
       // Parse inline-grid options from settings.options
       try {
         const opts = settings.options ? (typeof settings.options === 'string' ? JSON.parse(settings.options) : settings.options) as Record<string, unknown> : {}
-        setGridLayoutId((opts.grid_layout_id as number | null) ?? null)
+        setGridLayoutSlug((opts.layout_slug as string | null) ?? (opts.grid_layout_id != null ? String(opts.grid_layout_id) : null))
         setGridShowTotals(!!(opts.grid_show_totals))
-      } catch { setGridLayoutId(null); setGridShowTotals(false) }
+      } catch { setGridLayoutSlug(null); setGridShowTotals(false) }
     }
     setOpen(next)
   }
@@ -4721,8 +4892,8 @@ function FieldSettingsPopover({
     if (abstractType === 'o2m' && iface === 'inline-grid') {
       try {
         const existing = settings.options ? (typeof settings.options === 'string' ? JSON.parse(settings.options) : settings.options) as Record<string, unknown> : {}
-        optionsPatch = JSON.stringify({ ...existing, grid_layout_id: gridLayoutId, grid_show_totals: gridShowTotals })
-      } catch { optionsPatch = JSON.stringify({ grid_layout_id: gridLayoutId, grid_show_totals: gridShowTotals }) }
+        optionsPatch = JSON.stringify({ ...existing, layout_slug: gridLayoutSlug, grid_show_totals: gridShowTotals })
+      } catch { optionsPatch = JSON.stringify({ layout_slug: gridLayoutSlug, grid_show_totals: gridShowTotals }) }
     }
     const patch: Partial<FieldSettings> & { dependency_config?: Record<string, unknown> | null; options?: string | null } = {
       label: label.trim() || null,
@@ -4868,7 +5039,7 @@ function FieldSettingsPopover({
           {abstractType === 'o2m' && iface === 'inline-grid' && (
             <div className='mt-4 border-t border-[#e2e8f0] pt-4 space-y-2'>
               <p className='text-[11px] font-medium text-[#6b7280]'>Grid Layout</p>
-              <LayoutPicker collection={relatedCollection} value={gridLayoutId} onChange={setGridLayoutId} />
+              <LayoutPicker collection={relatedCollection} value={gridLayoutSlug} onChange={setGridLayoutSlug} />
               <div className='flex items-center gap-2'>
                 <Switch checked={gridShowTotals} onCheckedChange={setGridShowTotals} className='scale-75' />
                 <span className='text-[11px] text-slate-600'>Show column totals</span>
@@ -5368,6 +5539,7 @@ interface CollectionLayout {
   id: number
   collection: string
   name: string
+  slug?: string | null
   is_active: boolean | number
   sort: number
   disable_comments?: boolean | number
@@ -5479,7 +5651,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   // Auto-seed "Default" layout for collections that have none yet
   useEffect(() => {
     if (layoutsLoaded && layouts.length === 0 && tableName) {
-      api.post('/collection-layouts', { collection: tableName, name: 'Default' })
+      api.post('/collection-layouts', { collection: tableName, name: 'Default', slug: 'default' })
         .then(() => qc.invalidateQueries({ queryKey: ['collection-layouts', tableName] }))
     }
   }, [layoutsLoaded, layouts.length, tableName, qc])
@@ -5494,8 +5666,12 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   const [editingName, setEditingName] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
 
+  function nameToSlug(name: string) {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+  }
+
   const createMut = useMutation({
-    mutationFn: (name: string) => api.post('/collection-layouts', { collection: tableName, name }),
+    mutationFn: (name: string) => api.post('/collection-layouts', { collection: tableName, name, slug: nameToSlug(name) }),
     onSuccess: () => { invalidateLayouts(); setAdding(false); setNewName('') },
     onError: () => toast.error('Failed to create layout')
   })
@@ -5507,7 +5683,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
 
   const cloneMut = useMutation({
     mutationFn: ({ id, name }: { id: number; name: string }) =>
-      api.post<{ data: CollectionLayout }>(`/collection-layouts/${id}/clone`, { name }),
+      api.post<{ data: CollectionLayout }>(`/collection-layouts/${id}/clone`, { name, slug: nameToSlug(name) }),
     onSuccess: (res) => {
       invalidateLayouts()
       setSelectedId(res.data.data.id)
@@ -5528,7 +5704,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   })
 
   const patchLayoutMut = useMutation({
-    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'disable_comments' | 'disable_tasks' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers'>>) => {
+    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'slug' | 'disable_comments' | 'disable_tasks' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers'>>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
     },
@@ -5537,6 +5713,14 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
 
   const selected = layouts.find((l) => l.id === effectiveId) ?? null
   const [settingsExpanded, setSettingsExpanded] = useState(false)
+  const [slugDraft, setSlugDraft] = useState<string>('')
+  const [slugEditing, setSlugEditing] = useState(false)
+
+  // Sync slug draft when selection changes
+  useEffect(() => {
+    setSlugDraft(selected?.slug ?? '')
+    setSlugEditing(false)
+  }, [selected?.id])
 
   return (
     <div className='flex min-h-0 gap-4'>
@@ -5697,7 +5881,48 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
             {/* Expanded edit panel */}
             {settingsExpanded && (
               <div className='space-y-2 border-t border-slate-200 px-3 py-3 dark:border-border'>
-                <div className='flex items-center justify-between'>
+                <div className='space-y-1'>
+                  <label className='block text-[11px] font-medium text-slate-600 dark:text-slate-300'>Machine name (slug)</label>
+                  <div className='flex items-center gap-1.5'>
+                    <input
+                      value={slugDraft}
+                      onChange={(e) => {
+                        setSlugDraft(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))
+                        setSlugEditing(true)
+                      }}
+                      onBlur={() => {
+                        if (slugEditing && selected) {
+                          patchLayoutMut.mutate({ id: selected.id, slug: slugDraft || null })
+                          setSlugEditing(false)
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && selected) {
+                          patchLayoutMut.mutate({ id: selected.id, slug: slugDraft || null })
+                          setSlugEditing(false)
+                          e.currentTarget.blur()
+                        }
+                      }}
+                      placeholder='e.g. my_layout'
+                      className='flex-1 rounded border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+                    />
+                    {!slugDraft && selected?.name && (
+                      <button
+                        type='button'
+                        onClick={() => {
+                          const gen = selected.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+                          setSlugDraft(gen)
+                          patchLayoutMut.mutate({ id: selected.id, slug: gen })
+                        }}
+                        className='shrink-0 rounded border border-dashed border-slate-300 px-1.5 py-0.5 text-[10px] text-slate-400 hover:border-nvr-cyan hover:text-nvr-cyan'
+                      >
+                        Generate
+                      </button>
+                    )}
+                  </div>
+                  <p className='text-[10px] text-slate-400'>Used to reference this layout in code. Only a–z, 0–9, and _.</p>
+                </div>
+                <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
                   <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Tab mode</span>
                   <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
                     {(['tabs', 'steps'] as const).map((mode) => (
@@ -5971,6 +6196,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
   // ── Local optimistic state ──
   const [localGroupOrder, setLocalGroupOrder] = useState<(number | '__ungrouped__' | SlotKey)[]>([])
   const [localAssignments, setLocalAssignments] = useState<Record<string, string | null>>({})
+  const [localColSpans, setLocalColSpans] = useState<Record<string, number | null>>({})
+  const [localOverrides, setLocalOverrides] = useState<Record<string, Record<string, unknown>>>({})
   const [localFieldOrder, setLocalFieldOrder] = useState<Record<string, string[]>>({})
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
@@ -6030,6 +6257,22 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
         fieldOrder.__unassigned__.push(f.field)
       }
     }
+    // Build per-layout col_span map from fieldConfig (which has the layout overlay applied)
+    const colSpans: Record<string, number | null> = {}
+    const overrides: Record<string, Record<string, unknown>> = {}
+    for (const f of sorted) {
+      const fc = fieldConfig.find(fc => fc.field === f.field)
+      const opts = fc?.options
+      const parsed = (() => { try { return typeof opts === 'string' ? JSON.parse(opts) : opts } catch { return null } })()
+      const span = parsed?.col_span
+      colSpans[f.field] = typeof span === 'number' ? span : null
+      const raw = (fc as Record<string, unknown> | undefined)?._overrides
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        overrides[f.field] = raw as Record<string, unknown>
+      }
+    }
+    setLocalColSpans(colSpans)
+    setLocalOverrides(overrides)
     setLocalAssignments(assignments)
     setLocalFieldOrder(fieldOrder)
 
@@ -6066,12 +6309,13 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       const seq = changeSeqRef.current
       const pool = new Set(localFieldOrder.__pool__ ?? [])
       const ungroupedPos = localGroupOrder.indexOf('__ungrouped__')
-      const assignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean }> = [
+      const assignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean; col_span?: number | null; overrides?: Record<string, unknown> | null }> = [
         ...Object.entries(localAssignments)
           .filter(([f]) => !pool.has(f))
           .map(([f, gk]) => {
             const order = localFieldOrder[gk ?? '__unassigned__'] ?? []
-            return { field: f, group_key: gk ?? null, sort: order.indexOf(f) >= 0 ? order.indexOf(f) : 0 }
+            const ov = localOverrides[f]
+            return { field: f, group_key: gk ?? null, sort: order.indexOf(f) >= 0 ? order.indexOf(f) : 0, col_span: localColSpans[f] ?? null, overrides: ov && Object.keys(ov).length > 0 ? ov : null }
           }),
         { field: '__ungrouped_pos__', group_key: null, sort: ungroupedPos >= 0 ? ungroupedPos : localGroupOrder.length },
         // Page slot sentinels — sort derived from position in localGroupOrder
@@ -6100,7 +6344,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
         })
     }, 400)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [localAssignments, localFieldOrder, localGroupOrder, slots, layoutId, invalidateFieldConfig])
+  }, [localAssignments, localColSpans, localOverrides, localFieldOrder, localGroupOrder, slots, layoutId, invalidateFieldConfig])
 
   const createMut = useMutation({
     mutationFn: (body: { collection: string; key: string; label: string; type: 'section' | 'tab' | 'metadata' }) =>
@@ -6134,9 +6378,36 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       api.post('/field-groups/reorder', { collection: tableName, order })
   })
 
+  // Keys that are per-layout overrides (not global field settings)
+  const LAYOUT_OVERRIDE_KEYS = ['label', 'interface', 'note', 'placeholder', 'required', 'hidden', 'readonly', 'options', 'inline_relation', 'max_values']
+
   const patchField = useCallback((field: string, patch: Record<string, unknown>) => {
     if (layoutId && ('group_key' in patch || 'sort' in patch)) {
       // State update triggers the debounced save effect — just mark dirty
+      hasLocalChangeRef.current = true
+      changeSeqRef.current++
+    } else if (layoutId && 'col_span' in patch) {
+      // col_span is per-layout — store in localColSpans and let debounced assignment save handle it
+      const span = patch.col_span as number | null
+      setLocalColSpans(prev => ({ ...prev, [field]: span }))
+      hasLocalChangeRef.current = true
+      changeSeqRef.current++
+    } else if (layoutId && Object.keys(patch).some(k => LAYOUT_OVERRIDE_KEYS.includes(k))) {
+      // All other field settings are per-layout overrides when a layout is active
+      setLocalOverrides(prev => {
+        const existing = prev[field] ?? {}
+        // Flatten inline_relation / max_values into the options sub-object
+        const patched = { ...existing }
+        const optionKeys = ['inline_relation', 'max_values']
+        for (const [k, v] of Object.entries(patch)) {
+          if (optionKeys.includes(k)) {
+            patched.options = { ...(typeof patched.options === 'object' && patched.options ? patched.options : {}), [k]: v } as Record<string, unknown>
+          } else {
+            patched[k] = v
+          }
+        }
+        return { ...prev, [field]: patched }
+      })
       hasLocalChangeRef.current = true
       changeSeqRef.current++
     } else {
@@ -6308,32 +6579,39 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
   }
 
   const getColSpan = useCallback((f: string) => {
+    if (layoutId) {
+      const span = localColSpans[f]
+      if (span != null) return span
+    }
     const field = allFields.find(af => af.field === f)
     return parseColSpan(field?.options)
-  }, [allFields])
+  }, [allFields, layoutId, localColSpans])
 
   const getFieldSettings = useCallback((f: string): FieldSettings => {
     const fc = fieldConfig.find(c => c.field === f)
-    // Read options from fieldConfig (field-config endpoint now returns parsed options)
-    // This ensures max_values/inline_relation are fresh after every patch without
-    // waiting for collection-meta to refetch.
     const rawOpts = (fc as Record<string, unknown> | undefined)?.options
     let opts: Record<string, unknown> = {}
     try {
       opts = typeof rawOpts === 'string' ? JSON.parse(rawOpts) : ((rawOpts as Record<string, unknown>) ?? {})
     } catch { /* noop */ }
+
+    // Merge per-layout overrides optimistically (local state, not yet saved)
+    const ov = localOverrides[f] ?? {}
+    const ovOpts = typeof ov.options === 'object' && ov.options ? (ov.options as Record<string, unknown>) : {}
+    const mergedOpts = { ...opts, ...ovOpts }
+
     return {
-      label: fc?.label ?? null,
-      interface: fc?.interface ?? null,
-      note: fc?.note ?? null,
-      placeholder: (fc as Record<string, unknown> | undefined)?.placeholder as string | null ?? null,
-      required: !!fc?.required,
-      hidden: !!fc?.hidden,
-      readonly: !!fc?.readonly,
-      inline_relation: opts.inline_relation === true,
-      max_values: typeof opts.max_values === 'number' ? opts.max_values : null,
+      label: (ov.label !== undefined ? ov.label : fc?.label) as string | null ?? null,
+      interface: (ov.interface !== undefined ? ov.interface : fc?.interface) as string | null ?? null,
+      note: (ov.note !== undefined ? ov.note : fc?.note) as string | null ?? null,
+      placeholder: (ov.placeholder !== undefined ? ov.placeholder : (fc as Record<string, unknown> | undefined)?.placeholder) as string | null ?? null,
+      required: ov.required !== undefined ? !!ov.required : !!fc?.required,
+      hidden: ov.hidden !== undefined ? !!ov.hidden : !!fc?.hidden,
+      readonly: ov.readonly !== undefined ? !!ov.readonly : !!fc?.readonly,
+      inline_relation: mergedOpts.inline_relation === true,
+      max_values: typeof mergedOpts.max_values === 'number' ? mergedOpts.max_values : null,
     }
-  }, [fieldConfig])
+  }, [fieldConfig, localOverrides])
 
   const handleFieldSettings = useCallback((f: string, patch: Partial<FieldSettings> & { dependency_config?: string }) => {
     patchField(f, patch)

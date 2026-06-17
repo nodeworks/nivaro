@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { useAuth } from './auth'
 import { api } from './api'
+import { useAuth } from './auth'
 
 export function useUiPermissions(): Set<string> {
   const { user } = useAuth()

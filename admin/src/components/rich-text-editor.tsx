@@ -1,24 +1,24 @@
-import { useEditor, EditorContent } from '@tiptap/react'
-import StarterKit from '@tiptap/starter-kit'
-import Placeholder from '@tiptap/extension-placeholder'
 import Link from '@tiptap/extension-link'
+import Placeholder from '@tiptap/extension-placeholder'
 import Underline from '@tiptap/extension-underline'
+import { EditorContent, useEditor } from '@tiptap/react'
+import StarterKit from '@tiptap/starter-kit'
 import {
   Bold,
-  Italic,
-  UnderlineIcon,
-  Strikethrough,
+  Check,
+  Code,
   Heading1,
   Heading2,
   Heading3,
+  Italic,
+  Link2Off,
+  Link as LinkIcon,
   List,
   ListOrdered,
-  Quote,
-  Code,
   Minus,
-  Link as LinkIcon,
-  Link2Off,
-  Check,
+  Quote,
+  Strikethrough,
+  UnderlineIcon,
   X,
 } from 'lucide-react'
 import { useRef, useState } from 'react'

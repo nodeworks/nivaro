@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { renderDisplayTemplate, extractTemplateFields, findM2ORelation } from '@/lib/relations'
+import { describe, expect, it } from 'vitest'
+import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from '@/lib/relations'
 import { makeRelation } from '@/test/fixtures'
 
 describe('renderDisplayTemplate', () => {

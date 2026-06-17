@@ -36,6 +36,7 @@ export type CascadeRule = {
   filter_is_m2m?: boolean
   clear_on_parent_change?: boolean
   clear_on_unavailable?: boolean
+  show_all_if_no_parent?: boolean // default true; when false, field is disabled until parent is set
 }
 
 export function getCascadeFilters(

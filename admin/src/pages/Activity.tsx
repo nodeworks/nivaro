@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table'
-import { type CMSField, type Collection, api } from '@/lib/api'
+import { api, type CMSField, type Collection } from '@/lib/api'
 import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import { formatDateTime, formatNumber, titleCase } from '@/lib/utils'
 

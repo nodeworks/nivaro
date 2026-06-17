@@ -5,7 +5,6 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Inngest } from 'inngest'
 import type { Knex } from 'knex'
 import type { Database } from '../db/index.js'
-import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import {
   emitTrigger,
   type OpFieldSchema,
@@ -16,6 +15,7 @@ import {
   registerTrigger
 } from '../flows/registry.js'
 import { type HookAction, hooks } from '../hooks/registry.js'
+import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'

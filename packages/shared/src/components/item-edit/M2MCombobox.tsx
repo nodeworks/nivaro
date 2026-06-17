@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn } from '../../lib/utils'
+import { Button } from '../ui/button'
 import {
   Command,
   CommandEmpty,
@@ -13,10 +14,9 @@ import {
   CommandList
 } from '../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { Button } from '../ui/button'
-import type { CMSRelation } from './types'
 import { useM2MStaging } from './M2MStagingContext'
 import { RelatedItemLabel } from './RelationCombobox'
+import type { CMSRelation } from './types'
 
 // ─── M2MCombobox (multi-select) ────────────────────────────────────────────────
 
@@ -24,12 +24,14 @@ export function M2MCombobox({
   relation,
   parentId,
   allRelations,
-  extraFilter
+  extraFilter,
+  requiredParent
 }: {
   relation: CMSRelation
   parentId: string
   allRelations: CMSRelation[]
   extraFilter?: Record<string, unknown>
+  requiredParent?: string
 }) {
   const client = useNivaroClient()
   const staging = useM2MStaging()
@@ -117,6 +119,19 @@ export function M2MCombobox({
     const tmpl = colMeta?.display_template ?? null
     if (!tmpl) return String(item._display ?? item.id ?? '')
     return tmpl.replace(/\{\{([^}]+)\}\}/g, (_, k: string) => String(item[k.trim()] ?? ''))
+  }
+
+  if (requiredParent) {
+    return (
+      <button
+        type='button'
+        disabled
+        className='flex h-8 w-full items-center gap-1.5 rounded-md border border-input bg-background px-3 text-[13px] text-muted-foreground opacity-50 cursor-not-allowed'
+      >
+        <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 opacity-50' />
+        Select {requiredParent} first
+      </button>
+    )
   }
 
   return (
@@ -249,12 +264,14 @@ export function M2MSingleSelectCombobox({
   relation,
   parentId,
   allRelations,
-  extraFilter
+  extraFilter,
+  requiredParent
 }: {
   relation: CMSRelation
   parentId: string
   allRelations: CMSRelation[]
   extraFilter?: Record<string, unknown>
+  requiredParent?: string
 }) {
   const client = useNivaroClient()
   const staging = useM2MStaging()
@@ -365,6 +382,19 @@ export function M2MSingleSelectCombobox({
     for (const id of stagedLinks) staging?.unstageLink(stagingKey, id)
     if (committedItem) staging?.stageUnlink(stagingKey, committedItem.id)
     setOpen(false)
+  }
+
+  if (requiredParent) {
+    return (
+      <button
+        type='button'
+        disabled
+        className='w-full h-9 px-3 text-[13px] border border-input rounded-md bg-background text-left flex items-center justify-between opacity-50 cursor-not-allowed'
+      >
+        <span className='truncate text-muted-foreground'>Select {requiredParent} first</span>
+        <ChevronsUpDown className='h-3.5 w-3.5 text-slate-400 shrink-0 ml-2' />
+      </button>
+    )
   }
 
   return (

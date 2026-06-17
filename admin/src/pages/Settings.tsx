@@ -15,7 +15,6 @@ import {
   X
 } from 'lucide-react'
 import { useState } from 'react'
-import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,6 +29,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api, type CMSSettings, type Role } from '@/lib/api'
 import { useSettings } from '@/lib/useSettings'
 import { cn } from '@/lib/utils'

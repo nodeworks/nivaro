@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
-import { rawRows } from '../db/raw-rows.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 
@@ -37,6 +37,7 @@ interface CMSCollection {
   display_name: string | null
   icon: string | null
   note: string | null
+  display_template: string | null
   hidden: boolean
   singleton: boolean
 }
@@ -295,7 +296,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
             ? {
                 display_name: collectionMeta.display_name,
                 icon: collectionMeta.icon,
-                note: collectionMeta.note
+                note: collectionMeta.note,
+                display_template: collectionMeta.display_template
               }
             : null,
           columns,

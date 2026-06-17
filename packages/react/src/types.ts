@@ -145,6 +145,11 @@ export type UseNivaroFormOptions = {
    */
   layoutId?: number
   /**
+   * Layout slug to resolve a specific named layout variant.
+   * When set, overrides `layoutId` and fetches the layout by its machine name.
+   */
+  layoutSlug?: string
+  /**
    * Debounce delay in ms for server-side field-rules evaluation (default 300).
    * Pass 0 to disable server evaluation entirely.
    */

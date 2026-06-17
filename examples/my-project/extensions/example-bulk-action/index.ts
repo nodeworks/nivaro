@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import type { Extension } from '@nivaro/api/extensions/loader'
 
 const extension: Extension = {

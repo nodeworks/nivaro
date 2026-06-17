@@ -1,5 +1,5 @@
-import knex, { type Knex } from 'knex'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import knex, { type Knex } from 'knex'
 import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 
 // Single Knex connection to the Nivaro Cloud meta DB (cloud_tenants table).

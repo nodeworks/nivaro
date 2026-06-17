@@ -169,15 +169,17 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       targetLayoutId = active?.id ?? null
     }
 
-    const assignmentMap = new Map<string, { group_key: string | null; sort: number; label_override: string | null; is_visible: number | null; default_expanded: number | null }>()
+    const assignmentMap = new Map<string, { group_key: string | null; sort: number; label_override: string | null; is_visible: number | null; default_expanded: number | null; col_span: number | null; overrides: Record<string, unknown> | null }>()
     let ungrouped_sort: number | null = null
     if (targetLayoutId !== null) {
       const assignments = await db('nivaro_layout_field_assignments')
         .where({ layout_id: targetLayoutId })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded')
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'col_span', 'overrides')
       for (const a of assignments) {
         if (a.field === '__ungrouped_pos__') { ungrouped_sort = a.sort; continue }
-        assignmentMap.set(a.field, { group_key: a.group_key, sort: a.sort, label_override: a.label_override ?? null, is_visible: a.is_visible ?? null, default_expanded: a.default_expanded ?? null })
+        let overrides: Record<string, unknown> | null = null
+        try { overrides = a.overrides ? (typeof a.overrides === 'string' ? JSON.parse(a.overrides) : a.overrides) : null } catch { /* noop */ }
+        assignmentMap.set(a.field, { group_key: a.group_key, sort: a.sort, label_override: a.label_override ?? null, is_visible: a.is_visible ?? null, default_expanded: a.default_expanded ?? null, col_span: a.col_span ?? null, overrides })
       }
     }
 
@@ -186,11 +188,32 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     const formatted = rows.map((row, idx) => {
       const assignment = assignmentMap.get(row.field)
       const base = formatFieldConfig(row)
+      const ov = assignment?.overrides ?? null
+
+      // Overlay per-layout col_span and overrides so the frontend reads layout-scoped values
+      let options = base.options as Record<string, unknown> | null
+      if (assignment?.col_span != null) {
+        options = { ...(options ?? {}), col_span: assignment.col_span }
+      }
+      if (ov?.options && typeof ov.options === 'object') {
+        options = { ...(options ?? {}), ...(ov.options as Record<string, unknown>) }
+      }
+
       return {
         ...base,
+        options,
+        label: ov?.label !== undefined ? (ov.label as string | null) : base.label,
+        note: ov?.note !== undefined ? (ov.note as string | null) : base.note,
+        hidden: ov?.hidden !== undefined ? !!ov.hidden : base.hidden,
+        readonly: ov?.readonly !== undefined ? !!ov.readonly : base.readonly,
+        required: ov?.required !== undefined ? !!ov.required : base.required,
+        interface: ov?.interface !== undefined ? (ov.interface as string | null) : base.interface,
+        placeholder: ov?.placeholder !== undefined ? (ov.placeholder as string | null) : (base as Record<string, unknown>).placeholder ?? null,
+        dependency_config: ov?.dependency_config !== undefined ? ov.dependency_config : (base as Record<string, unknown>).dependency_config ?? null,
         group_key: assignment ? assignment.group_key : base.group_key,
         sort: assignment ? assignment.sort : (row.sort ?? idx),
-        layout_assigned: assignment !== undefined
+        layout_assigned: assignment !== undefined,
+        _overrides: ov
       }
     })
 

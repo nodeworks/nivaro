@@ -1,14 +1,14 @@
 import { Badge } from '../ui/badge'
 import { Input } from '../ui/input'
-import { Switch } from '../ui/switch'
 import { Label } from '../ui/label'
+import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
-import type { CMSField, CMSRelation } from './types'
 import { parseJson, toLocalDatetime } from './helpers'
-import { RelationCombobox } from './RelationCombobox'
-import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
 import { InlineGridField } from './InlineGridField'
+import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
+import { RelationCombobox } from './RelationCombobox'
 import { RichTextEditor } from './RichTextEditor'
+import type { CMSField, CMSRelation } from './types'
 
 export function FieldRenderer({
   field,
@@ -17,7 +17,8 @@ export function FieldRenderer({
   relations,
   collection,
   itemId,
-  cascadeFilter
+  cascadeFilter,
+  requiredParentLabel
 }: {
   field: CMSField
   value: unknown
@@ -26,6 +27,7 @@ export function FieldRenderer({
   collection: string
   itemId: string
   cascadeFilter?: Record<string, unknown>
+  requiredParentLabel?: string | null
 }) {
   const iface = field.interface ?? ''
   const isRelIface =
@@ -50,6 +52,7 @@ export function FieldRenderer({
         disabled={field.readonly}
         placeholder={field.placeholder ?? undefined}
         extraFilter={cascadeFilter}
+        requiredParent={requiredParentLabel ?? undefined}
       />
     )
   }
@@ -84,6 +87,7 @@ export function FieldRenderer({
           parentId={itemId}
           allRelations={relations}
           extraFilter={cascadeFilter}
+          requiredParent={requiredParentLabel ?? undefined}
         />
       )
     }
@@ -93,6 +97,7 @@ export function FieldRenderer({
         parentId={itemId}
         allRelations={relations}
         extraFilter={cascadeFilter}
+        requiredParent={requiredParentLabel ?? undefined}
       />
     )
   }

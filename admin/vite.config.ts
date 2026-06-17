@@ -10,7 +10,8 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    include: ['graphiql', '@graphiql/react', '@graphiql/plugin-explorer']
+    include: ['graphiql', '@graphiql/react', '@graphiql/plugin-explorer'],
+    exclude: ['@nivaro/react', '@nivaro/shared', '@nivaro/sdk']
   },
   worker: {
     format: 'es'

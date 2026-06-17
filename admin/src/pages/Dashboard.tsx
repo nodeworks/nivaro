@@ -15,7 +15,7 @@ import {
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
-import { type CMSField, type Collection, api } from "@/lib/api"
+import { api, type CMSField, type Collection } from "@/lib/api"
 import { useAuth } from '@/lib/auth'
 import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import { cn, formatDateTime, formatNumber, titleCase } from '@/lib/utils'

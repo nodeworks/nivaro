@@ -14,7 +14,8 @@ export function RelationCombobox({
   onChange,
   disabled,
   placeholder,
-  extraFilter
+  extraFilter,
+  requiredParent
 }: {
   collection: string
   value: unknown
@@ -22,6 +23,7 @@ export function RelationCombobox({
   disabled?: boolean
   placeholder?: string
   extraFilter?: Record<string, unknown>
+  requiredParent?: string
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -82,6 +84,19 @@ export function RelationCombobox({
   const tmpl = colMeta?.display_template
   const selectedLabel = selected ? applyDisplayTemplate(tmpl, selected) : null
   const showLoader = !!value && isLoadingSelected && !selected
+
+  if (requiredParent) {
+    return (
+      <button
+        type='button'
+        disabled
+        className='flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm text-left opacity-50 cursor-not-allowed'
+      >
+        <span className='truncate text-muted-foreground'>Select {requiredParent} first</span>
+        <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
+      </button>
+    )
+  }
 
   return (
     <div ref={rootRef} className='relative'>

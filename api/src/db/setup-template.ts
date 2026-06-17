@@ -12,9 +12,9 @@
  *   4. New tenants cloned from template already have the new migration
  */
 
+import knex from 'knex'
 // @ts-ignore — no @types/pg; pg types not needed for this one-shot script
 import pg from 'pg'
-import knex from 'knex'
 import { migrationSource } from './index.js'
 
 const TEMPLATE_DB = 'nivaro_template'

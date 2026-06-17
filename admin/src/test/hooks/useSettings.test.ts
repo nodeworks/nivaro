@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { renderHook, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
-import { useSettings } from '@/lib/useSettings'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CMSSettings } from '@/lib/api'
+import { useSettings } from '@/lib/useSettings'
 
 // vi.mock is hoisted before variable declarations — use vi.hoisted() to share
 // values between the factory closure and the rest of the test file.

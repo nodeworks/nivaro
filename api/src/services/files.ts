@@ -5,7 +5,7 @@ import mime from 'mime-types'
 import { monotonicFactory } from 'ulid'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
-import { getTenantSlug, getTenantId } from '../db/tenant-context.js'
+import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
 import { getStorage, getStorageProviderName } from './storage/index.js'
 

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getExtensionPlugins, getCloudPlugins } from '@/extensions/store'
+import { getCloudPlugins, getExtensionPlugins } from '@/extensions/store'
 
 export const WORKSPACE_KEY = 'nivaro_workspace'
 

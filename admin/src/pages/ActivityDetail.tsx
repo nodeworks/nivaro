@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { type ActivityEntry, type CMSField, api } from '@/lib/api'
+import { type ActivityEntry, api, type CMSField } from '@/lib/api'
 import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import { formatDateTime } from '@/lib/utils'
 
