@@ -18,7 +18,8 @@ export function FieldRenderer({
   collection,
   itemId,
   cascadeFilter,
-  requiredParentLabel
+  requiredParentLabel,
+  onCountChange
 }: {
   field: CMSField
   value: unknown
@@ -28,6 +29,7 @@ export function FieldRenderer({
   itemId: string
   cascadeFilter?: Record<string, unknown>
   requiredParentLabel?: string | null
+  onCountChange?: (count: number) => void
 }) {
   const iface = field.interface ?? ''
   const isRelIface =
@@ -82,6 +84,7 @@ export function FieldRenderer({
           allRelations={relations}
           extraFilter={cascadeFilter}
           requiredParent={requiredParentLabel ?? undefined}
+          onCountChange={onCountChange}
         />
       )
     }
@@ -92,6 +95,7 @@ export function FieldRenderer({
         allRelations={relations}
         extraFilter={cascadeFilter}
         requiredParent={requiredParentLabel ?? undefined}
+        onCountChange={onCountChange}
       />
     )
   }
@@ -223,16 +227,18 @@ export function FieldRenderer({
     if (o2mRel) {
       const o2mCol = o2mRel.many_collection ?? null
       const o2mManyField = o2mRel.many_field ?? null
-      if (o2mCol && o2mManyField && itemId && itemId !== 'new') {
+      if (o2mCol && o2mManyField && itemId) {
+        const opts = typeof field.options === 'string'
+          ? (() => { try { return JSON.parse(field.options) } catch { return {} } })()
+          : (field.options ?? {})
+        const layoutSlug = (opts.layout_slug as string | null) ?? null
         return (
-          <InlineGridField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} />
+          <InlineGridField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutSlug={layoutSlug} />
         )
       }
       return (
         <p className='text-[12px] text-slate-400 py-1'>
-          {!itemId || itemId === 'new'
-            ? 'Save the record first to manage related rows'
-            : 'Inline grid editing not available in embedded form'}
+          Inline grid editing not available in embedded form
         </p>
       )
     }

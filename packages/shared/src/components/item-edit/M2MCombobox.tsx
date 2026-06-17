@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, Loader2, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn } from '../../lib/utils'
@@ -25,13 +25,15 @@ export function M2MCombobox({
   parentId,
   allRelations,
   extraFilter,
-  requiredParent
+  requiredParent,
+  onCountChange
 }: {
   relation: CMSRelation
   parentId: string
   allRelations: CMSRelation[]
   extraFilter?: Record<string, unknown>
   requiredParent?: string
+  onCountChange?: (count: number) => void
 }) {
   const client = useNivaroClient()
   const staging = useM2MStaging()
@@ -72,7 +74,8 @@ export function M2MCombobox({
           })
         )
         .then((r) => r.data ?? []),
-    staleTime: 30_000
+    staleTime: 30_000,
+    enabled: !!parentId && parentId !== 'new'
   })
 
   const filterParam = extraFilter ? JSON.stringify(extraFilter) : undefined
@@ -99,6 +102,14 @@ export function M2MCombobox({
   const committedIds = new Set(committedItems.map((i) => String(i[junctionField])))
   const stagedLinkIds = new Set(stagedLinks.map(String))
   const allSelectedIds = new Set([...committedIds, ...stagedLinkIds])
+
+  const onCountChangeRef = useRef(onCountChange)
+  onCountChangeRef.current = onCountChange
+  const mountedRef = useRef(false)
+  useEffect(() => {
+    if (!mountedRef.current) { mountedRef.current = true; return }
+    onCountChangeRef.current?.(allSelectedIds.size)
+  }, [allSelectedIds.size])
 
   function handleToggle(optId: unknown) {
     const strId = String(optId)
@@ -265,13 +276,15 @@ export function M2MSingleSelectCombobox({
   parentId,
   allRelations,
   extraFilter,
-  requiredParent
+  requiredParent,
+  onCountChange
 }: {
   relation: CMSRelation
   parentId: string
   allRelations: CMSRelation[]
   extraFilter?: Record<string, unknown>
   requiredParent?: string
+  onCountChange?: (count: number) => void
 }) {
   const client = useNivaroClient()
   const staging = useM2MStaging()
@@ -312,7 +325,8 @@ export function M2MSingleSelectCombobox({
           })
         )
         .then((r) => r.data ?? []),
-    staleTime: 30_000
+    staleTime: 30_000,
+    enabled: !!parentId && parentId !== 'new'
   })
 
   const filterParam = extraFilter ? JSON.stringify(extraFilter) : undefined
@@ -341,6 +355,14 @@ export function M2MSingleSelectCombobox({
   const stagedRelatedId = stagedLinks.length > 0 ? stagedLinks[stagedLinks.length - 1] : null
   const currentRelatedId = stagedRelatedId ?? committedRelatedId
   const isPendingChange = stagedLinks.length > 0 || stagedUnlinks.size > 0
+
+  const singleOnCountChangeRef = useRef(onCountChange)
+  singleOnCountChangeRef.current = onCountChange
+  const singleMountedRef = useRef(false)
+  useEffect(() => {
+    if (!singleMountedRef.current) { singleMountedRef.current = true; return }
+    singleOnCountChangeRef.current?.(currentRelatedId != null ? 1 : 0)
+  }, [currentRelatedId])
 
   const { data: currentItemData } = useQuery<Record<string, unknown>>({
     queryKey: ['relation-single', relatedCollection, String(currentRelatedId)],

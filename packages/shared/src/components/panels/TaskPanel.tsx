@@ -37,6 +37,12 @@ interface User {
   email: string
 }
 
+export interface PendingTask {
+  title: string
+  assignee: string | null
+  due_date: string
+}
+
 function userName(u: User | undefined): string {
   if (!u) return 'Unknown'
   return [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
@@ -104,12 +110,16 @@ export function TaskPanel({
   collection,
   item,
   title,
-  defaultExpanded
+  defaultExpanded,
+  queuedTasks,
+  onQueueTask
 }: {
   collection: string
   item: string
   title?: string
   defaultExpanded?: boolean
+  queuedTasks?: PendingTask[]
+  onQueueTask?: (task: PendingTask) => void
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -182,12 +192,26 @@ export function TaskPanel({
     onError: () => toast.error('Failed to delete task')
   })
 
-  if (!item || item === 'new') return null
+  if (!item) return null
 
+  const isNew = item === 'new'
   const openTasks = tasks.filter((t) => t.status !== 'completed')
   const completedTasks = tasks.filter((t) => t.status === 'completed')
   const usersById = new Map(users.map((u) => [u.id, u]))
   const now = Date.now()
+
+  function handleCreate() {
+    if (!newTitle.trim()) return
+    if (isNew && onQueueTask) {
+      onQueueTask({ title: newTitle.trim(), assignee: newAssignee, due_date: newDueDate })
+      setAdding(false)
+      setNewTitle('')
+      setNewAssignee(null)
+      setNewDueDate('')
+    } else {
+      createMut.mutate()
+    }
+  }
 
   return (
     <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
@@ -205,7 +229,70 @@ export function TaskPanel({
           className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
         />
       </button>
-      {expanded && (
+      {expanded && isNew && (
+        <div className='border-t border-slate-100'>
+          <div className='flex items-center justify-between px-4 py-2'>
+            {!adding && (
+              <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding(true)}>
+                <Plus className='mr-1 h-3.5 w-3.5' />
+                Add task
+              </Button>
+            )}
+          </div>
+          <div className='space-y-3 px-4 pb-4'>
+            {adding && (
+              <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3'>
+                <div>
+                  <Label className='mb-1 block text-[11px]'>Title</Label>
+                  <Input
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    className='h-8 bg-white text-[12px]'
+                    placeholder='What needs to be done?'
+                    autoFocus
+                  />
+                </div>
+                <div className='grid grid-cols-2 gap-3'>
+                  <div>
+                    <Label className='mb-1 block text-[11px]'>Assignee</Label>
+                    <AssigneeCombobox users={users} value={newAssignee} onChange={setNewAssignee} />
+                  </div>
+                  <div>
+                    <Label className='mb-1 block text-[11px]'>Due date</Label>
+                    <Input type='date' value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} className='h-8 bg-white text-[12px]' />
+                  </div>
+                </div>
+                <div className='flex justify-end gap-2'>
+                  <Button type='button' variant='outline' size='sm' className='h-7 text-[12px]' onClick={() => setAdding(false)}>Cancel</Button>
+                  <Button type='button' size='sm' className='h-7 text-[12px]' disabled={!newTitle.trim()} onClick={handleCreate}>
+                    Queue Task
+                  </Button>
+                </div>
+              </div>
+            )}
+            {(queuedTasks ?? []).length > 0 && (
+              <div className='divide-y divide-slate-100'>
+                {(queuedTasks ?? []).map((t, i) => (
+                  <div key={i} className='flex items-start gap-2.5 py-2'>
+                    <span className='mt-0.5 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>Pending</span>
+                    <div className='min-w-0 flex-1'>
+                      <p className='text-[13px] font-medium text-slate-800'>{t.title}</p>
+                      <div className='mt-0.5 flex items-center gap-3 text-[11px] text-slate-400'>
+                        {t.assignee && <span>{userName(usersById.get(t.assignee))}</span>}
+                        {t.due_date && <span>Due {formatDate(t.due_date)}</span>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(queuedTasks ?? []).length === 0 && !adding && (
+              <p className='py-1 text-[12px] text-slate-400'>Tasks will be created after the record is saved.</p>
+            )}
+          </div>
+        </div>
+      )}
+      {expanded && !isNew && (
         <div className='border-t border-slate-100'>
           <div className='flex items-center justify-between px-4 py-2'>
             {!adding && (
@@ -309,7 +396,7 @@ export function TaskPanel({
                     size='sm'
                     className='h-7 text-[12px]'
                     disabled={!newTitle.trim() || !newAssignee || createMut.isPending}
-                    onClick={() => createMut.mutate()}
+                    onClick={handleCreate}
                   >
                     {createMut.isPending ? 'Creating…' : 'Create Task'}
                   </Button>

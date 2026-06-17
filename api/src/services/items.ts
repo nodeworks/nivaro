@@ -1196,12 +1196,26 @@ export async function readItems(
   const { fields = ['*'], filter = {}, sort = [], limit = 25, offset = 0, page, search } = query
 
   const effectiveOffset = page ? (page - 1) * limit : offset
-  const selectFields =
+  let selectFields =
     allowedFields === null
       ? fields[0] === '*'
         ? ['*']
         : fields
       : fields.filter((f) => f === '*' || allowedFields.includes(f))
+
+  // Strip sensitive columns from system tables not backed by nivaro_fields
+  const SYSTEM_SENSITIVE: Record<string, string[]> = {
+    nivaro_users: ['password_hash', 'totp_secret', 'static_token', 'external_id']
+  }
+  const sensitiveCols = SYSTEM_SENSITIVE[collection]
+  if (sensitiveCols) {
+    if (selectFields[0] === '*') {
+      const allCols = await db(collection).columnInfo()
+      selectFields = Object.keys(allCols).filter((c) => !sensitiveCols.includes(c))
+    } else {
+      selectFields = selectFields.filter((f) => !sensitiveCols.includes(f))
+    }
+  }
 
   // Pre-load relations for this collection (and prime cache for nested ones)
   clearRelCache()

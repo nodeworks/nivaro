@@ -53,7 +53,8 @@ function M2MSummaryCount({
           })
         )
         .then((r) => r.data ?? []),
-    staleTime: 30_000
+    staleTime: 30_000,
+    enabled: !!parentId && parentId !== 'new'
   })
 
   const { data: colMeta } = useQuery<{ display_template?: string }>({
@@ -191,6 +192,7 @@ export function SummaryPanel({
   collection,
   itemId,
   staging,
+  errors,
   onFieldClick
 }: {
   allSteps: StepDef[]
@@ -202,6 +204,7 @@ export function SummaryPanel({
   collection: string
   itemId: string
   staging: M2MStagingCtx | null
+  errors?: Record<string, string>
   onFieldClick: (stepKey: string, fieldKey: string) => void
 }) {
   const hasGeneralStep = allSteps.some((s) => s.key === '__general__')
@@ -241,6 +244,7 @@ export function SummaryPanel({
           {fields.map((f, fi) => {
             const val = draft[f.field]
             const label = f.label ?? titleCase(f.field)
+            const hasError = !!errors?.[f.field]
             return (
               <button
                 key={f.field}
@@ -248,10 +252,11 @@ export function SummaryPanel({
                 onClick={() => onFieldClick(step.key, f.field)}
                 className={cn(
                   'flex w-full flex-col px-4 py-2 text-left hover:bg-slate-50 transition-colors',
-                  fi < fields.length - 1 && 'border-b border-slate-50'
+                  fi < fields.length - 1 && 'border-b border-slate-50',
+                  hasError && 'bg-red-50 hover:bg-red-50'
                 )}
               >
-                <span className='text-[10px] font-medium text-slate-400 truncate'>{label}</span>
+                <span className={cn('text-[10px] font-medium truncate', hasError ? 'text-red-500' : 'text-slate-400')}>{label}</span>
                 <span className='mt-0.5 w-full text-[12px] min-w-0 overflow-hidden'>
                   <SummaryFieldValue
                     field={f}

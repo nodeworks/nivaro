@@ -1,7 +1,8 @@
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useState } from 'react'
-import { FieldRow, getColSpanClass } from './FieldRow'
+import { useRef, useState } from 'react'
+import { FieldRow } from './FieldRow'
+import { resolveColSpan, useContainerWidth } from './helpers'
 import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps } from './types'
 
 export function GroupSection({
@@ -16,7 +17,8 @@ export function GroupSection({
   visibleFields,
   lockedFields,
   layoutAiEnabled,
-  renderField
+  renderField,
+  onCountChange
 }: {
   group: FieldGroup
   fields: CMSField[]
@@ -30,9 +32,13 @@ export function GroupSection({
   lockedFields: Set<string>
   layoutAiEnabled?: boolean
   renderField?: (props: RenderFieldProps) => ReactNode
+  onCountChange?: (field: string, count: number) => void
 }) {
   const [collapsed, setCollapsed] = useState(group.is_collapsed ?? false)
   const hasErrors = fields.some((f) => errors[f.field])
+  const gridRef = useRef<HTMLDivElement>(null)
+  const containerWidth = useContainerWidth(gridRef)
+
   return (
     <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
       <button
@@ -50,11 +56,11 @@ export function GroupSection({
       </button>
       {!collapsed && (
         <div className='border-t border-slate-100 px-5 py-5'>
-          <div className='grid grid-cols-12 gap-4 items-start'>
+          <div ref={gridRef} className='grid grid-cols-12 gap-4 items-start'>
             {fields
               .filter((f) => !f.hidden)
               .map((f) => (
-                <div key={f.field} className={getColSpanClass(f.options)}>
+                <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, containerWidth)}` }}>
                   <FieldRow
                     field={f}
                     draft={draft}
@@ -67,6 +73,7 @@ export function GroupSection({
                     locked={lockedFields.has(f.field)}
                     layoutAiEnabled={layoutAiEnabled}
                     renderField={renderField}
+                    onCountChange={onCountChange}
                   />
                 </div>
               ))}

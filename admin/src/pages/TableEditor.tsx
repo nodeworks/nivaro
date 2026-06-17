@@ -5327,7 +5327,7 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                   onSettings={patch => handleFieldSettings(f, patch)}
                   m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields?.() : undefined}
                   dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
-                  relatedCollection={(kind === 'M2O' || kind === 'M2M') ? getRelatedCollection?.(f) : undefined}
+                  relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
                   onUnassign={onUnassign ? () => onUnassign(f) : undefined}
                   inGrid
                 />
@@ -5508,7 +5508,7 @@ function SortableGroupCard({
                   onSettings={onFieldSettings ? patch => onFieldSettings(f, patch) : undefined}
                   m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields?.() : undefined}
                   dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
-                  relatedCollection={(kind === 'M2O' || kind === 'M2M') ? getRelatedCollection?.(f) : undefined}
+                  relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
                   onUnassign={onUnassign ? () => onUnassign(f) : undefined}
                   inGrid
                 />
@@ -6393,23 +6393,35 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       hasLocalChangeRef.current = true
       changeSeqRef.current++
     } else if (layoutId && Object.keys(patch).some(k => LAYOUT_OVERRIDE_KEYS.includes(k))) {
-      // All other field settings are per-layout overrides when a layout is active
-      setLocalOverrides(prev => {
-        const existing = prev[field] ?? {}
-        // Flatten inline_relation / max_values into the options sub-object
-        const patched = { ...existing }
-        const optionKeys = ['inline_relation', 'max_values']
-        for (const [k, v] of Object.entries(patch)) {
-          if (optionKeys.includes(k)) {
-            patched.options = { ...(typeof patched.options === 'object' && patched.options ? patched.options : {}), [k]: v } as Record<string, unknown>
-          } else {
-            patched[k] = v
+      // options / dependency_config live on nivaro_fields — always send directly, never via layout assignments
+      const { options: rawOptions, dependency_config: rawDepConfig, ...layoutPatch } = patch
+      if (rawOptions !== undefined || rawDepConfig !== undefined) {
+        const directPatch: Record<string, unknown> = {}
+        if (rawOptions !== undefined) directPatch.options = rawOptions
+        if (rawDepConfig !== undefined) directPatch.dependency_config = rawDepConfig
+        api.patch(`/field-config/${tableName}/${field}`, directPatch)
+          .then(() => { invalidateFieldConfig(); invalidateMeta() })
+          .catch(() => { toast.error(`Failed to save settings for field "${field}"`) })
+      }
+      if (Object.keys(layoutPatch).some(k => LAYOUT_OVERRIDE_KEYS.includes(k))) {
+        // All other field settings are per-layout overrides when a layout is active
+        setLocalOverrides(prev => {
+          const existing = prev[field] ?? {}
+          // Flatten inline_relation / max_values into the options sub-object
+          const patched = { ...existing }
+          const optionKeys = ['inline_relation', 'max_values']
+          for (const [k, v] of Object.entries(layoutPatch)) {
+            if (optionKeys.includes(k)) {
+              patched.options = { ...(typeof patched.options === 'object' && patched.options ? patched.options : {}), [k]: v } as Record<string, unknown>
+            } else {
+              patched[k] = v
+            }
           }
-        }
-        return { ...prev, [field]: patched }
-      })
-      hasLocalChangeRef.current = true
-      changeSeqRef.current++
+          return { ...prev, [field]: patched }
+        })
+        hasLocalChangeRef.current = true
+        changeSeqRef.current++
+      }
     } else {
       api.patch(`/field-config/${tableName}/${field}`, patch)
         .then(() => { invalidateFieldConfig(); invalidateMeta() })
@@ -6610,6 +6622,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       readonly: ov.readonly !== undefined ? !!ov.readonly : !!fc?.readonly,
       inline_relation: mergedOpts.inline_relation === true,
       max_values: typeof mergedOpts.max_values === 'number' ? mergedOpts.max_values : null,
+      options: typeof rawOpts === 'string' ? rawOpts : (rawOpts ? JSON.stringify(rawOpts) : null),
     }
   }, [fieldConfig, localOverrides])
 
@@ -6729,6 +6742,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
       if (!junction) return null
       return relations.find(r => r.many_collection === junction.many_collection && r.many_field === junction.junction_field && r.one_field !== fieldName)?.one_collection ?? null
     }
+    if (kind === 'O2M') {
+      return relations.find(r => r.one_field === fieldName && !r.junction_field)?.many_collection ?? null
+    }
     return null
   }, [relations, relKind])
 
@@ -6799,7 +6815,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId }: { tableName: st
                         onSettings={patch => handleFieldSettings(f, patch)}
                         m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields() : undefined}
                         dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig(f) : undefined}
-                        relatedCollection={(kind === 'M2O' || kind === 'M2M') ? getRelatedCollection(f) : undefined}
+                        relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection(f) : undefined}
                       />
                     )
                   }

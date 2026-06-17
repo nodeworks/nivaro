@@ -283,6 +283,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       group_key: string | null
       sort: number | null
       col_span: number | null
+      options: string | null
       inline_relation: boolean | null
       max_values: number | null
       visibility_rules: unknown
@@ -307,6 +308,9 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     if ('interface' in body) patch.interface = body.interface ?? null
     if ('group_key' in body) patch.group_key = body.group_key ?? null
     if ('sort' in body) patch.sort = body.sort ?? null
+    if ('options' in body && !('col_span' in body) && !('inline_relation' in body) && !('max_values' in body)) {
+      patch.options = body.options ?? null
+    }
     if ('col_span' in body || 'inline_relation' in body || 'max_values' in body) {
       let opts: Record<string, unknown> = {}
       try { opts = JSON.parse(String(existing.options ?? '{}')) } catch { /* noop */ }

@@ -1,5 +1,5 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, ChartLine, Info, Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { ChartLine, Info, Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
@@ -111,7 +111,8 @@ export function FieldRow({
   visible,
   locked,
   layoutAiEnabled,
-  renderField
+  renderField,
+  onCountChange
 }: {
   field: CMSField
   draft: Record<string, unknown>
@@ -124,6 +125,7 @@ export function FieldRow({
   locked: boolean
   layoutAiEnabled?: boolean
   renderField?: (props: RenderFieldProps) => ReactNode
+  onCountChange?: (field: string, count: number) => void
 }) {
   // Hooks must be called before any early return
   const m2mStaging = useM2MStaging()
@@ -351,7 +353,7 @@ export function FieldRow({
           </TooltipProvider>
         )}
       </div>
-      <div className={cn(locked && 'pointer-events-none opacity-60')}>
+      <div className={cn(locked && 'pointer-events-none opacity-60', error && 'ring-1 ring-red-400 rounded-md')}>
         {renderField ? (
           renderField({
             field,
@@ -375,15 +377,10 @@ export function FieldRow({
             itemId={itemId}
             cascadeFilter={cascadeFilter}
             requiredParentLabel={requiredParentLabel}
+            onCountChange={onCountChange ? (count) => onCountChange(field.field, count) : undefined}
           />
         )}
       </div>
-      {error && (
-        <p className='text-[12px] text-destructive flex items-center gap-1'>
-          <AlertCircle className='h-3 w-3' />
-          {error}
-        </p>
-      )}
     </div>
   )
 }

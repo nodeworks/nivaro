@@ -6,6 +6,7 @@ import {
   CalendarClock,
   Check,
   ChevronDown,
+  ChevronRight,
   ChevronsUpDown,
   ChevronUp,
   ExternalLink,
@@ -67,9 +68,10 @@ import {
   api,
   type CMSField,
   type CMSRelation,
-  type RecordTemplate, 
+  type RecordTemplate,
   type SubRow
 } from '@/lib/api'
+import { FieldRenderer } from '@nivaro/shared'
 import { useAuth } from '@/lib/auth'
 import {
   extractTemplateFields,
@@ -1469,14 +1471,15 @@ export function ItemEditPage() {
       const fieldCfg = fieldConfigMap[field.field] as Record<string, unknown> | undefined
       const fieldIface = fieldCfg?.interface as string | null
       if (field.interface === 'inline-grid' || fieldIface === 'inline-grid') {
-        const opts = (() => { try { return JSON.parse(fieldCfg?.options as string ?? '{}') as Record<string, unknown> } catch { return {} } })()
+        const rawOpts = fieldCfg?.options
+        const opts = (typeof rawOpts === 'object' && rawOpts ? rawOpts : (() => { try { return JSON.parse(rawOpts as string ?? '{}') } catch { return {} } })()) as Record<string, unknown>
         return (
           <div key={field.field} className='col-span-12 space-y-1.5'>
             <Label className='text-slate-600'>{field.label ?? titleCase(field.field)}</Label>
             <O2MInlineGrid
               relation={o2mRel}
               parentId={id}
-              layoutId={(opts.grid_layout_id as number | null) ?? null}
+              layoutSlug={(opts.layout_slug as string | null) ?? null}
               showTotals={!!(opts.grid_show_totals)}
             />
           </div>
@@ -4451,23 +4454,73 @@ function LinkRelationPopover({
 function O2MInlineGrid({
   relation,
   parentId,
-  layoutId,
+  layoutSlug,
   showTotals,
 }: {
   relation: CMSRelation
   parentId: string
-  layoutId: number | null
+  layoutSlug?: string | null
   showTotals?: boolean
 }) {
   const qc = useQueryClient()
   const gridCtx = useO2MGridContext()
 
+  const { data: activeLayoutData } = useQuery({
+    queryKey: ['active-layout', relation.many_collection, layoutSlug ?? null],
+    queryFn: () => api.get(`/collection-layouts/active`, { params: { collection: relation.many_collection, slug: layoutSlug } }).then(r => r.data.data ?? null),
+    staleTime: 60_000,
+    enabled: !!layoutSlug,
+  })
+
+  const layoutId: number | null = layoutSlug ? (activeLayoutData?.layout?.id ?? null) : null
+
   const { data: fieldConfigData = [] } = useQuery({
     queryKey: ['field-config', relation.many_collection, layoutId],
     queryFn: () => api.get(`/field-config/${relation.many_collection}${layoutId ? `?layout_id=${layoutId}` : ''}`).then(r => (r.data.data ?? []) as CMSField[]),
     staleTime: 60_000,
+    enabled: !layoutSlug || activeLayoutData !== undefined,
   })
-  const columns = fieldConfigData.filter(f => !f.hidden && f.field !== relation.many_field && f.field !== 'id')
+
+  const { data: childRelations = [] } = useQuery({
+    queryKey: ['collection-meta', relation.many_collection],
+    queryFn: () => api.get(`/collections/${relation.many_collection}`).then(r => r.data.data),
+    staleTime: 10 * 60_000,
+    select: (d: Record<string, unknown>) => ((d?.relations ?? []) as CMSRelation[]),
+  })
+  // Layout group support — compute before columns so column filter can use form mode
+  const sectionGroups = useMemo(() =>
+    ((activeLayoutData?.groups ?? []) as Array<{ id: number; key: string; label: string; type: string; sort: number }>)
+      .filter(g => g.type === 'section')
+      .sort((a, b) => a.sort - b.sort),
+    [activeLayoutData]
+  )
+  const useFormMode = sectionGroups.length > 0
+
+  const columns = useMemo(() => fieldConfigData.filter(f => {
+    if (f.hidden) return false
+    if (f.field === relation.many_field || f.field === 'id') return false
+    if (useFormMode) {
+      const raw = f as unknown as Record<string, unknown>
+      if (!raw.layout_assigned) return false
+      if (raw.is_visible === 0 || raw.is_visible === false) return false
+    }
+    return true
+  }), [fieldConfigData, relation.many_field, useFormMode])
+
+  const fieldsByGroup = useMemo(() => {
+    if (!useFormMode) return null
+    const map = new Map<string | null, CMSField[]>()
+    for (const col of columns) {
+      const key = col.group_key ?? null
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(col)
+    }
+    return map
+  }, [columns, useFormMode])
+
+  // Form-mode state: which row is open + its draft
+  const [formRowId, setFormRowId] = useState<string | 'new' | null>(null)
+  const [formDraft, setFormDraft] = useState<Record<string, unknown>>({})
 
   const { data: fetchedRows = [] } = useQuery({
     queryKey: ['o2m-grid', relation.many_collection, relation.many_field, parentId],
@@ -4523,6 +4576,87 @@ function O2MInlineGrid({
     return <input type='text' value={val === null || val === undefined ? '' : String(val)} onChange={e => set(e.target.value || null)} className={cls} />
   }
 
+  function renderViewCell(col: CMSField, val: unknown) {
+    if (val === null || val === undefined) return <span className='text-slate-300 dark:text-muted-foreground/40'>—</span>
+    if (col.type === 'boolean') return <span className={val ? 'text-emerald-600' : 'text-slate-400'}>{val ? 'Yes' : 'No'}</span>
+    if (col.type === 'datetime' || col.type === 'date') {
+      try { return <span>{new Date(String(val)).toLocaleDateString()}</span> } catch { /* fall */ }
+    }
+    return <span className='truncate'>{String(val)}</span>
+  }
+
+  function renderFormField(col: CMSField, draft: Record<string, unknown>, set: (k: string, v: unknown) => void, rowId: string) {
+    return (
+      <FieldRenderer
+        field={{ ...col, sort: col.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
+        value={draft[col.field] ?? null}
+        onChange={(v) => set(col.field, v)}
+        relations={childRelations}
+        collection={relation.many_collection}
+        itemId={rowId}
+      />
+    )
+  }
+
+  function commitForm() {
+    if (formRowId === 'new') {
+      setStagedNew(p => [...p, formDraft])
+    } else if (formRowId) {
+      setStagedEdits(p => { const n = new Map(p); n.set(formRowId, { ...(n.get(formRowId) ?? {}), ...formDraft }); return n })
+    }
+    setFormRowId(null)
+    setFormDraft({})
+  }
+
+  const groupedFormPanel = useFormMode && formRowId !== null && (
+    <div className='border-t border-slate-200 dark:border-border p-3 bg-slate-50/50 dark:bg-muted/10'>
+      <div className='rounded-lg border border-slate-200 dark:border-border bg-white dark:bg-card overflow-hidden'>
+        <div className='flex items-center justify-between border-b border-slate-100 dark:border-border px-3 py-2 bg-slate-50 dark:bg-muted/20'>
+          <span className='text-[11px] font-semibold text-slate-600 dark:text-muted-foreground uppercase tracking-wide'>
+            {formRowId === 'new' ? 'New Row' : 'Edit Row'}
+          </span>
+          <div className='flex items-center gap-2'>
+            <button type='button' onClick={() => { setFormRowId(null); setFormDraft({}) }} className='text-[11px] text-slate-400 hover:text-slate-600 px-2 py-0.5 rounded'>Cancel</button>
+            <button type='button' onClick={commitForm} className='text-[11px] font-medium bg-[#00ceff] text-white px-2.5 py-0.5 rounded hover:brightness-110'>
+              {formRowId === 'new' ? 'Add' : 'Save'}
+            </button>
+          </div>
+        </div>
+        <div className='p-3 space-y-4'>
+          {/* Ungrouped fields */}
+          {(fieldsByGroup?.get(null) ?? []).length > 0 && (
+            <div className='grid grid-cols-2 gap-x-4 gap-y-2'>
+              {(fieldsByGroup?.get(null) ?? []).map(col => (
+                <div key={col.field}>
+                  <label className='block text-[11px] font-medium text-slate-500 dark:text-muted-foreground mb-1'>{col.label ?? titleCase(col.field)}</label>
+                  {renderFormField(col, formDraft, (k, v) => setFormDraft(d => ({ ...d, [k]: v })), formRowId ?? 'new')}
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Section groups */}
+          {sectionGroups.map(g => {
+            const gFields = fieldsByGroup?.get(g.key) ?? []
+            if (!gFields.length) return null
+            return (
+              <div key={g.key}>
+                <div className='text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-2 pb-1 border-b border-slate-100 dark:border-border'>{g.label}</div>
+                <div className='grid grid-cols-2 gap-x-4 gap-y-2'>
+                  {gFields.map(col => (
+                    <div key={col.field}>
+                      <label className='block text-[11px] font-medium text-slate-500 dark:text-muted-foreground mb-1'>{col.label ?? titleCase(col.field)}</label>
+                      {renderFormField(col, formDraft, (k, v) => setFormDraft(d => ({ ...d, [k]: v })), formRowId ?? 'new')}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+
   return (
     <div className='rounded-lg border border-slate-200 dark:border-border overflow-hidden'>
       {hasPending && (
@@ -4540,23 +4674,47 @@ function O2MInlineGrid({
                   {col.label ?? titleCase(col.field)}
                 </th>
               ))}
-              <th className='w-8' />
+              <th className='w-16' />
             </tr>
           </thead>
           <tbody className='divide-y divide-slate-100 dark:divide-border'>
-            {visibleRows.map(row => (
-              <tr key={String(row.id)} className='hover:bg-slate-50/50 dark:hover:bg-muted/20'>
-                {columns.map(col => <td key={col.field} className='px-2 py-0.5'>{renderCell(col, row, false, -1)}</td>)}
+            {visibleRows.map(row => {
+              const id = String(row.id)
+              const displayRow = { ...row, ...(stagedEdits.get(id) ?? {}) }
+              return (
+                <tr key={id} className={`hover:bg-slate-50/50 dark:hover:bg-muted/20 ${formRowId === id ? 'bg-nvr-cyan/5 dark:bg-nvr-cyan/10' : ''}`}>
+                  {useFormMode
+                    ? columns.map(col => <td key={col.field} className='px-2 py-1.5 text-[12px] text-slate-700 dark:text-foreground'>{renderViewCell(col, displayRow[col.field])}</td>)
+                    : columns.map(col => <td key={col.field} className='px-2 py-0.5'>{renderCell(col, row, false, -1)}</td>)
+                  }
+                  <td className='px-1'>
+                    <div className='flex items-center gap-0.5 justify-end'>
+                      {useFormMode && (
+                        <button type='button' onClick={() => { setFormRowId(id); setFormDraft({ ...displayRow }) }} className='rounded p-1 text-slate-300 hover:text-slate-600 dark:hover:text-foreground'>
+                          <ChevronRight className='h-3.5 w-3.5' />
+                        </button>
+                      )}
+                      <button type='button' onClick={() => setStagedDeletes(p => { const n = new Set(p); n.add(id); return n })} className='rounded p-1 text-slate-300 hover:text-red-400'>
+                        <X className='h-3.5 w-3.5' />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+            {!useFormMode && stagedNew.map((row, idx) => (
+              <tr key={`new-${idx}`} className='bg-nvr-cyan/5 dark:bg-nvr-cyan/10'>
+                {columns.map(col => <td key={col.field} className='px-2 py-0.5'>{renderCell(col, row, true, idx)}</td>)}
                 <td className='px-1'>
-                  <button type='button' onClick={() => setStagedDeletes(p => { const n = new Set(p); n.add(String(row.id)); return n })} className='rounded p-1 text-slate-300 hover:text-red-400'>
+                  <button type='button' onClick={() => setStagedNew(p => p.filter((_, i) => i !== idx))} className='rounded p-1 text-slate-300 hover:text-red-400'>
                     <X className='h-3.5 w-3.5' />
                   </button>
                 </td>
               </tr>
             ))}
-            {stagedNew.map((row, idx) => (
+            {useFormMode && stagedNew.map((row, idx) => (
               <tr key={`new-${idx}`} className='bg-nvr-cyan/5 dark:bg-nvr-cyan/10'>
-                {columns.map(col => <td key={col.field} className='px-2 py-0.5'>{renderCell(col, row, true, idx)}</td>)}
+                {columns.map(col => <td key={col.field} className='px-2 py-1.5 text-[12px] text-slate-700 dark:text-foreground'>{renderViewCell(col, row[col.field])}</td>)}
                 <td className='px-1'>
                   <button type='button' onClick={() => setStagedNew(p => p.filter((_, i) => i !== idx))} className='rounded p-1 text-slate-300 hover:text-red-400'>
                     <X className='h-3.5 w-3.5' />
@@ -4580,8 +4738,13 @@ function O2MInlineGrid({
           )}
         </table>
       </div>
+      {groupedFormPanel}
       <div className='border-t border-slate-100 dark:border-border px-3 py-2'>
-        <button type='button' onClick={() => setStagedNew(p => [...p, {}])} className='inline-flex items-center gap-1.5 text-[12px] font-medium text-[#00ceff] hover:text-[#00ceff]/80'>
+        <button
+          type='button'
+          onClick={() => useFormMode ? (setFormRowId('new'), setFormDraft({})) : setStagedNew(p => [...p, {}])}
+          className='inline-flex items-center gap-1.5 text-[12px] font-medium text-[#00ceff] hover:text-[#00ceff]/80'
+        >
           <Plus className='h-3.5 w-3.5' />
           Add row
         </button>

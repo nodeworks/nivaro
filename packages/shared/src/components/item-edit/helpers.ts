@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { type RefObject, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 
@@ -99,10 +99,34 @@ export function CascadeEffectController({
 // ─── Column span ───────────────────────────────────────────────────────────────
 
 export const COL_SPAN_CLASS: Record<number, string> = {
-  3: 'col-span-12 sm:col-span-3',
-  4: 'col-span-12 sm:col-span-4',
-  6: 'col-span-12 sm:col-span-6',
+  3: 'col-span-12',
+  4: 'col-span-12',
+  6: 'col-span-12',
   12: 'col-span-12'
+}
+
+export function useContainerWidth(ref: RefObject<HTMLElement | null>): number {
+  const [width, setWidth] = useState(9999)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    setWidth(el.getBoundingClientRect().width)
+    const ro = new ResizeObserver(([entry]) => {
+      setWidth(entry.contentRect.width)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [ref])
+  return width
+}
+
+export function resolveColSpan(options: Record<string, unknown> | string | null, containerWidth: number): number {
+  const parsed = parseJson<{ col_span?: number }>(options)
+  const cfg = parsed?.col_span ?? 0
+  const configured = [3, 4, 6, 12].includes(cfg) ? cfg : 12
+  if (containerWidth < 480) return 12
+  if (containerWidth < 800) return configured <= 6 ? 6 : 12
+  return configured
 }
 
 export function getColSpanClass(options: Record<string, unknown> | string | null): string {

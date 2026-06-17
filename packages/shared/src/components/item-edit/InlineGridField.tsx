@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Loader2, X } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
-import type { CMSField } from './types'
+import { useO2MStaging } from './O2MStagingContext'
+import type { ActiveLayoutData, CMSField, FieldGroup } from './types'
 
 const NON_DISPLAY_TYPES = new Set([
   'alias',
@@ -19,28 +20,56 @@ const NON_DISPLAY_TYPES = new Set([
 export function InlineGridField({
   relatedCollection,
   manyField,
-  parentId
+  parentId,
+  layoutSlug
 }: {
   relatedCollection: string
   manyField: string
   parentId: string
+  layoutSlug?: string | null
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
+  const staging = useO2MStaging()
+  const isNew = parentId === 'new'
+
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<Record<string, unknown>>({})
   const [addingNew, setAddingNew] = useState(false)
   const [newDraft, setNewDraft] = useState<Record<string, unknown>>({})
   const [saving, setSaving] = useState(false)
 
-  const { data: cols = [] } = useQuery<CMSField[]>({
-    queryKey: ['field-config', relatedCollection],
+  // Layout data (for grouped edit form)
+  const { data: activeLayoutData } = useQuery<ActiveLayoutData | null>({
+    queryKey: ['active-layout', relatedCollection, layoutSlug ?? null],
     queryFn: () =>
       client
-        .request<{ data: CMSField[] }>(get(`/field-config/${relatedCollection}`))
-        .then((r) => r.data ?? []),
-    staleTime: 60_000
+        .request<{ data: ActiveLayoutData | null }>(
+          get('/collection-layouts/active', {
+            collection: relatedCollection,
+            ...(layoutSlug ? { slug: layoutSlug } : {})
+          })
+        )
+        .then((r) => r.data)
+        .catch(() => null),
+    staleTime: 60_000,
+    enabled: !!layoutSlug
   })
+
+  const layoutId = layoutSlug ? (activeLayoutData?.layout?.id ?? null) : null
+
+  const { data: cols = [] } = useQuery<CMSField[]>({
+    queryKey: ['field-config', relatedCollection, layoutId],
+    queryFn: () =>
+      client
+        .request<{ data: CMSField[] }>(
+          get(`/field-config/${relatedCollection}`, layoutId ? { layout_id: String(layoutId) } : undefined)
+        )
+        .then((r) => r.data ?? []),
+    staleTime: 60_000,
+    enabled: !layoutSlug || activeLayoutData !== undefined
+  })
+
   const { data: rows = [], isLoading } = useQuery<Record<string, unknown>[]>({
     queryKey: ['o2m-rows', relatedCollection, manyField, parentId],
     queryFn: () =>
@@ -52,12 +81,32 @@ export function InlineGridField({
           })
         )
         .then((r) => r.data ?? []),
+    enabled: !isNew,
     staleTime: 30_000
   })
+
+  const pendingRows = isNew && staging ? staging.getPendingRows(relatedCollection, manyField) : []
 
   const displayCols = cols.filter(
     (c) => !c.hidden && !NON_DISPLAY_TYPES.has(c.type) && c.field !== manyField && c.field !== 'id'
   )
+
+  // Groups from layout for the edit form
+  const sectionGroups: FieldGroup[] = useMemo(
+    () => (activeLayoutData?.groups ?? []).filter(g => g.type === 'section').sort((a, b) => a.sort - b.sort),
+    [activeLayoutData]
+  )
+
+  const fieldsByGroup = useMemo(() => {
+    if (!sectionGroups.length) return null
+    const map = new Map<string | null, CMSField[]>()
+    for (const col of displayCols) {
+      const key = col.group_key ?? null
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(col)
+    }
+    return map
+  }, [displayCols, sectionGroups])
 
   async function saveEdit(id: string) {
     setSaving(true)
@@ -73,6 +122,12 @@ export function InlineGridField({
   }
 
   async function saveNew() {
+    if (isNew && staging) {
+      staging.queueRow(relatedCollection, manyField, { ...newDraft })
+      setAddingNew(false)
+      setNewDraft({})
+      return
+    }
     setSaving(true)
     try {
       await client.request(
@@ -113,7 +168,7 @@ export function InlineGridField({
     return <span className='truncate'>{String(val)}</span>
   }
 
-  function renderEditCell(
+  function renderEditInput(
     col: CMSField,
     draft: Record<string, unknown>,
     set: (k: string, v: unknown) => void
@@ -139,7 +194,7 @@ export function InlineGridField({
           type='number'
           value={String(v)}
           onChange={(e) => set(col.field, e.target.value === '' ? null : Number(e.target.value))}
-          className='w-full rounded border border-slate-200 px-1.5 py-0.5 text-[12px] focus:outline-none focus:border-[#00ceff]'
+          className='w-full rounded border border-slate-200 px-2 py-1.5 text-[12px] focus:outline-none focus:border-[#00ceff]'
         />
       )
     }
@@ -149,7 +204,7 @@ export function InlineGridField({
           type='date'
           value={String(v).slice(0, 10)}
           onChange={(e) => set(col.field, e.target.value || null)}
-          className='w-full rounded border border-slate-200 px-1.5 py-0.5 text-[12px] focus:outline-none focus:border-[#00ceff]'
+          className='w-full rounded border border-slate-200 px-2 py-1.5 text-[12px] focus:outline-none focus:border-[#00ceff]'
         />
       )
     if (col.type === 'datetime')
@@ -160,7 +215,7 @@ export function InlineGridField({
           onChange={(e) =>
             set(col.field, e.target.value ? new Date(e.target.value).toISOString() : null)
           }
-          className='w-full rounded border border-slate-200 px-1.5 py-0.5 text-[12px] focus:outline-none focus:border-[#00ceff]'
+          className='w-full rounded border border-slate-200 px-2 py-1.5 text-[12px] focus:outline-none focus:border-[#00ceff]'
         />
       )
     return (
@@ -168,23 +223,112 @@ export function InlineGridField({
         type='text'
         value={String(v)}
         onChange={(e) => set(col.field, e.target.value)}
-        className='w-full rounded border border-slate-200 px-1.5 py-0.5 text-[12px] focus:outline-none focus:border-[#00ceff]'
+        className='w-full rounded border border-slate-200 px-2 py-1.5 text-[12px] focus:outline-none focus:border-[#00ceff]'
       />
     )
   }
 
-  if (isLoading)
+  // Grouped edit form — renders when layout has sections
+  function renderGroupedForm(
+    draft: Record<string, unknown>,
+    set: (k: string, v: unknown) => void,
+    onSave: () => void,
+    onCancel: () => void,
+    label: string
+  ) {
+    const ungrouped = fieldsByGroup?.get(null) ?? []
+
+    return (
+      <div className='border border-slate-200 rounded-lg bg-white overflow-hidden'>
+        <div className='flex items-center justify-between border-b border-slate-100 px-3 py-2 bg-slate-50'>
+          <span className='text-[11px] font-semibold text-slate-600 uppercase tracking-wide'>{label}</span>
+          <div className='flex items-center gap-2'>
+            <button
+              type='button'
+              onClick={onCancel}
+              className='text-[11px] text-slate-400 hover:text-slate-600 px-2 py-0.5 rounded'
+            >
+              Cancel
+            </button>
+            <button
+              type='button'
+              disabled={saving}
+              onClick={onSave}
+              className='text-[11px] font-medium bg-[#00ceff] text-white px-2.5 py-0.5 rounded hover:brightness-110 disabled:opacity-50'
+            >
+              {saving ? '…' : 'Save'}
+            </button>
+          </div>
+        </div>
+        <div className='p-3 space-y-4'>
+          {/* Ungrouped fields first */}
+          {ungrouped.length > 0 && (
+            <div className='grid grid-cols-2 gap-x-4 gap-y-2'>
+              {ungrouped.map((col) => (
+                <div key={col.field}>
+                  <label className='block text-[11px] font-medium text-slate-500 mb-1'>
+                    {col.label ?? titleCase(col.field)}
+                  </label>
+                  {renderEditInput(col, draft, set)}
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Grouped sections */}
+          {sectionGroups.map((g) => {
+            const gFields = fieldsByGroup?.get(g.key) ?? []
+            if (!gFields.length) return null
+            return (
+              <div key={g.key}>
+                <div className='text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-2 pb-1 border-b border-slate-100'>
+                  {g.label}
+                </div>
+                <div className='grid grid-cols-2 gap-x-4 gap-y-2'>
+                  {gFields.map((col) => (
+                    <div key={col.field}>
+                      <label className='block text-[11px] font-medium text-slate-500 mb-1'>
+                        {col.label ?? titleCase(col.field)}
+                      </label>
+                      {renderEditInput(col, draft, set)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  // Flat inline row edit cells (no layout)
+  function renderInlineEditCells(
+    draft: Record<string, unknown>,
+    set: (k: string, v: unknown) => void
+  ) {
+    return displayCols.map((c) => (
+      <td key={c.field} className='px-3 py-1.5'>
+        {renderEditInput(c, draft, set)}
+      </td>
+    ))
+  }
+
+  if (!isNew && isLoading)
     return (
       <div className='py-3 text-center text-[12px] text-slate-400'>
         <Loader2 className='h-4 w-4 animate-spin inline' />
       </div>
     )
 
+  const displayRows = isNew ? pendingRows : rows
+  const useGroupedForm = !!fieldsByGroup && sectionGroups.length > 0
+
   return (
     <div className='rounded-lg border border-slate-200 overflow-hidden text-[12px]'>
       <table className='w-full'>
         <thead className='bg-slate-50 border-b border-slate-200'>
           <tr>
+            {isNew && <th className='px-3 py-2 text-left font-medium text-slate-400 text-[11px] w-16'>Status</th>}
             {displayCols.map((c) => (
               <th
                 key={c.field}
@@ -197,9 +341,33 @@ export function InlineGridField({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, ri) => {
+          {/* Pending rows (new item, not yet saved) */}
+          {isNew && pendingRows.map((row, ri) => (
+            <tr key={ri} className='border-b border-slate-100 bg-amber-50/40'>
+              <td className='px-3 py-1.5'>
+                <span className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>Pending</span>
+              </td>
+              {displayCols.map((c) => (
+                <td key={c.field} className='px-3 py-1.5 text-slate-600'>
+                  {renderCell(c, row[c.field])}
+                </td>
+              ))}
+              <td className='px-2 py-1.5'>
+                <button
+                  type='button'
+                  onClick={() => staging?.removeRow(relatedCollection, manyField, ri)}
+                  className='rounded p-0.5 text-slate-400 hover:text-red-500'
+                >
+                  <X className='h-3 w-3' />
+                </button>
+              </td>
+            </tr>
+          ))}
+
+          {/* Saved rows */}
+          {!isNew && rows.map((row, ri) => {
             const id = String(row.id)
-            const isEditing = editingId === id
+            const isEditing = editingId === id && !useGroupedForm
             return (
               <tr
                 key={id}
@@ -211,7 +379,7 @@ export function InlineGridField({
                 {displayCols.map((c) => (
                   <td key={c.field} className='px-3 py-1.5'>
                     {isEditing
-                      ? renderEditCell(c, editDraft, (k, v) =>
+                      ? renderEditInput(c, editDraft, (k, v) =>
                           setEditDraft((d) => ({ ...d, [k]: v }))
                         )
                       : renderCell(c, row[c.field])}
@@ -263,13 +431,12 @@ export function InlineGridField({
               </tr>
             )
           })}
-          {addingNew && (
+
+          {/* Inline add-row (no layout) */}
+          {addingNew && !useGroupedForm && (
             <tr className='border-b border-slate-100 bg-nvr-cyan/5'>
-              {displayCols.map((c) => (
-                <td key={c.field} className='px-3 py-1.5'>
-                  {renderEditCell(c, newDraft, (k, v) => setNewDraft((d) => ({ ...d, [k]: v })))}
-                </td>
-              ))}
+              {isNew && <td className='px-3 py-1.5' />}
+              {renderInlineEditCells(newDraft, (k, v) => setNewDraft((d) => ({ ...d, [k]: v })))}
               <td className='px-2 py-1.5'>
                 <div className='flex items-center gap-1 justify-end'>
                   <button
@@ -282,10 +449,7 @@ export function InlineGridField({
                   </button>
                   <button
                     type='button'
-                    onClick={() => {
-                      setAddingNew(false)
-                      setNewDraft({})
-                    }}
+                    onClick={() => { setAddingNew(false); setNewDraft({}) }}
                     className='rounded px-1.5 py-0.5 text-slate-400 hover:text-slate-700 text-[11px]'
                   >
                     Cancel
@@ -294,15 +458,47 @@ export function InlineGridField({
               </td>
             </tr>
           )}
-          {rows.length === 0 && !addingNew && (
+
+          {displayRows.length === 0 && !addingNew && (
             <tr>
-              <td colSpan={displayCols.length + 1} className='px-3 py-4 text-center text-slate-400'>
-                No rows
+              <td colSpan={displayCols.length + (isNew ? 2 : 1)} className='px-3 py-4 text-center text-slate-400'>
+                {isNew ? 'No pending rows' : 'No rows'}
               </td>
             </tr>
           )}
         </tbody>
       </table>
+
+      {/* Grouped edit form — appears below table when layout has sections */}
+      {editingId && useGroupedForm && (() => {
+        const row = rows.find(r => String(r.id) === editingId)
+        if (!row) return null
+        return (
+          <div className='border-t border-slate-200 p-3'>
+            {renderGroupedForm(
+              editDraft,
+              (k, v) => setEditDraft((d) => ({ ...d, [k]: v })),
+              () => saveEdit(editingId),
+              () => setEditingId(null),
+              'Edit Row'
+            )}
+          </div>
+        )
+      })()}
+
+      {/* Grouped add form — appears below table when layout has sections */}
+      {addingNew && useGroupedForm && (
+        <div className='border-t border-slate-200 p-3'>
+          {renderGroupedForm(
+            newDraft,
+            (k, v) => setNewDraft((d) => ({ ...d, [k]: v })),
+            saveNew,
+            () => { setAddingNew(false); setNewDraft({}) },
+            'New Row'
+          )}
+        </div>
+      )}
+
       {!addingNew && (
         <div className='border-t border-slate-100 px-3 py-1.5'>
           <button

@@ -35,12 +35,16 @@ export function CommentPanel({
   collection,
   item,
   title,
-  defaultExpanded
+  defaultExpanded,
+  queuedComments,
+  onQueueComment
 }: {
   collection: string
   item: string | number
   title?: string
   defaultExpanded?: boolean
+  queuedComments?: string[]
+  onQueueComment?: (text: string) => void
 }) {
   const client = useNivaroClient()
   const { userId } = useItemEditAuth()
@@ -57,6 +61,7 @@ export function CommentPanel({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
 
+  const isNew = !item || item === 'new'
   const queryKey = ['comments', collection, String(item)]
 
   const { data, isLoading, isError } = useQuery({
@@ -64,7 +69,8 @@ export function CommentPanel({
     queryFn: () =>
       client
         .request<{ data: Comment[] }>(get('/comments', { collection, item }))
-        .then((r) => r.data)
+        .then((r) => r.data),
+    enabled: !isNew
   })
 
   const comments: Comment[] = data ?? []
@@ -98,7 +104,12 @@ export function CommentPanel({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!draft.trim()) return
-    create.mutate(draft.trim())
+    if (isNew && onQueueComment) {
+      onQueueComment(draft.trim())
+      setDraft('')
+    } else {
+      create.mutate(draft.trim())
+    }
   }
 
   return (
@@ -110,9 +121,11 @@ export function CommentPanel({
       >
         <MessageSquare className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         <span className='text-[12px] font-semibold text-slate-500'>{title || 'Comments'}</span>
-        {!expanded && comments.length > 0 && (
+        {!expanded && (comments.length > 0 || (queuedComments ?? []).length > 0) && (
           <span className='ml-1 text-[11px] text-slate-400'>
-            {comments.length} comment{comments.length !== 1 ? 's' : ''}
+            {isNew
+              ? `${(queuedComments ?? []).length} pending`
+              : `${comments.length} comment${comments.length !== 1 ? 's' : ''}`}
           </span>
         )}
         <ChevronDown
@@ -121,6 +134,36 @@ export function CommentPanel({
       </button>
       {expanded && (
         <div className='border-t border-slate-100 p-6'>
+          {isNew ? (
+            <div className='space-y-4'>
+              <form onSubmit={handleSubmit} className='space-y-2'>
+                <Textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder='Write a comment…'
+                  rows={3}
+                  className='text-[13px]'
+                />
+                <div className='flex items-center justify-between'>
+                  <p className='text-[11px] text-slate-400'>Comment will be posted after the record is saved.</p>
+                  <Button type='submit' size='sm' disabled={!draft.trim()}>
+                    Queue
+                  </Button>
+                </div>
+              </form>
+              {(queuedComments ?? []).length > 0 && (
+                <div className='space-y-2'>
+                  <Separator />
+                  {(queuedComments ?? []).map((text, i) => (
+                    <div key={i} className='flex gap-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2'>
+                      <span className='mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>Pending</span>
+                      <p className='text-[13px] leading-relaxed text-slate-600'>{text}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (<>
           <form onSubmit={handleSubmit} className='space-y-2'>
             <Textarea
               value={draft}
@@ -239,6 +282,7 @@ export function CommentPanel({
               })}
             </div>
           )}
+          </>)}
         </div>
       )}
     </div>

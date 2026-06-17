@@ -27,6 +27,7 @@ export function makeField(overrides?: Partial<CMSField>): CMSField {
     is_translatable: false,
     options: null,
     label: null,
+    placeholder: null,
     ...overrides,
   }
 }

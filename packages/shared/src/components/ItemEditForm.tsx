@@ -13,10 +13,11 @@ import { toast } from 'sonner'
 import { ItemEditAuthContext, useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
-import { FieldRow, getColSpanClass } from './item-edit/FieldRow'
+import { FieldRow } from './item-edit/FieldRow'
 import { GroupSection } from './item-edit/GroupSection'
-import { SENTINEL_FIELDS, SYSTEM_FIELDS } from './item-edit/helpers'
+import { resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
+import { O2MStagingContext, type O2MStagingCtx } from './item-edit/O2MStagingContext'
 import { StepsBar } from './item-edit/StepsBar'
 import { SummaryPanel } from './item-edit/SummaryPanel'
 import type {
@@ -29,8 +30,21 @@ import type {
   StepDef
 } from './item-edit/types'
 import { CommentPanel, ItemLockBanner, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
+import type { PendingTask } from './panels/TaskPanel'
 import { Button } from './ui/button'
 import { Skeleton } from './ui/skeleton'
+
+// ─── GridContainer — measures its own width for responsive col spans ──────────
+
+function GridContainer({ children }: { children: (containerWidth: number) => ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const containerWidth = useContainerWidth(ref)
+  return (
+    <div ref={ref} className='grid grid-cols-12 gap-4 items-start'>
+      {children(containerWidth)}
+    </div>
+  )
+}
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
@@ -142,6 +156,39 @@ export function ItemEditForm({
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
   const [isDirty, setIsDirty] = useState(false)
   const initialDataRef = useRef<Record<string, unknown>>({})
+  const touchedFields = useRef<Set<string>>(new Set())
+
+  // ── Pending comments (new records) ────────────────────────────────────────
+  const [pendingComments, setPendingComments] = useState<string[]>([])
+  const handleQueueComment = useCallback((text: string) => {
+    setPendingComments((prev) => [...prev, text])
+  }, [])
+
+  // ── Pending tasks (new records) ────────────────────────────────────────────
+  const [pendingTasks, setPendingTasks] = useState<PendingTask[]>([])
+  const handleQueueTask = useCallback((task: PendingTask) => {
+    setPendingTasks((prev) => [...prev, task])
+  }, [])
+
+  // ── Pending O2M rows (new records) ─────────────────────────────────────────
+  const [pendingO2MRows, setPendingO2MRows] = useState<Map<string, Record<string, unknown>[]>>(new Map())
+  const o2mStagingCtx = useMemo<O2MStagingCtx>(() => ({
+    getPendingRows: (rc, mf) => pendingO2MRows.get(`${rc}.${mf}`) ?? [],
+    queueRow: (rc, mf, data) => setPendingO2MRows(prev => {
+      const next = new Map(prev)
+      const key = `${rc}.${mf}`
+      next.set(key, [...(next.get(key) ?? []), data])
+      return next
+    }),
+    removeRow: (rc, mf, idx) => setPendingO2MRows(prev => {
+      const next = new Map(prev)
+      const key = `${rc}.${mf}`
+      const arr = [...(next.get(key) ?? [])]
+      arr.splice(idx, 1)
+      next.set(key, arr)
+      return next
+    })
+  }), [pendingO2MRows])
 
   // ── M2M staging ────────────────────────────────────────────────────────────
   const [m2mLinks, setM2mLinks] = useState<Map<string, unknown[]>>(new Map())
@@ -222,9 +269,34 @@ export function ItemEditForm({
         return next
       })
       setIsDirty(true)
+      const isEmpty = value === null || value === undefined || value === ''
+      if (!isEmpty) touchedFields.current.add(field)
       setValidationErrors((prev) => {
         const next = { ...prev }
-        delete next[field]
+        const fieldMeta = (fieldConfig ?? []).find((f) => f.field === field)
+        if (fieldMeta?.required && isEmpty && touchedFields.current.has(field)) {
+          next[field] = 'This field is required'
+        } else {
+          delete next[field]
+        }
+        return next
+      })
+    },
+    [fieldConfig]
+  )
+
+  const handleM2MCountChange = useCallback(
+    (field: string, count: number) => {
+      if (count > 0) touchedFields.current.add(field)
+      setValidationErrors((prev) => {
+        const fieldMeta = (fieldConfig ?? []).find((f) => f.field === field)
+        if (!fieldMeta?.required) return prev
+        const next = { ...prev }
+        if (count === 0 && touchedFields.current.has(field)) {
+          next[field] = 'This field is required'
+        } else {
+          delete next[field]
+        }
         return next
       })
     },
@@ -415,6 +487,29 @@ export function ItemEditForm({
     showTasks
   ])
 
+  // ── Client-side validation ─────────────────────────────────────────────────
+  function validateAll(): boolean {
+    const errs: Record<string, string> = {}
+    for (const f of allFields) {
+      if (f.hidden || f.readonly || SYSTEM_FIELDS.has(f.field) || SENTINEL_FIELDS.has(f.field)) continue
+      if (f.required) {
+        const v = draft[f.field]
+        if (v === null || v === undefined || v === '') errs[f.field] = 'This field is required'
+      }
+    }
+    if (Object.keys(errs).length > 0) {
+      setValidationErrors(errs)
+      toast.error('Please fill in all required fields')
+      return false
+    }
+    return true
+  }
+
+  function handleSave() {
+    if (!validateAll()) return
+    saveMut.mutate()
+  }
+
   // ── Save / delete ──────────────────────────────────────────────────────────
   const saveMut = useMutation({
     mutationFn: async () => {
@@ -487,12 +582,54 @@ export function ItemEditForm({
         )
       }
 
+      if (isNew && pendingComments.length > 0) {
+        await Promise.all(
+          pendingComments.map((text) =>
+            client.request(post('/comments', { collection, item: savedId, text })).catch(() => {})
+          )
+        )
+      }
+
+      if (isNew && pendingO2MRows.size > 0) {
+        const flushOps: Promise<unknown>[] = []
+        for (const [key, rowList] of pendingO2MRows.entries()) {
+          const [rc, mf] = key.split('.')
+          for (const data of rowList) {
+            flushOps.push(
+              client.request(post(`/items/${rc}`, { ...data, [mf]: savedId })).catch(() => {})
+            )
+          }
+        }
+        await Promise.all(flushOps)
+      }
+
+      if (isNew && pendingTasks.length > 0) {
+        await Promise.all(
+          pendingTasks.map((t) =>
+            client
+              .request(
+                post('/tasks', {
+                  collection,
+                  item: savedId,
+                  title: t.title,
+                  assignee: t.assignee,
+                  due_date: t.due_date || undefined
+                })
+              )
+              .catch(() => {})
+          )
+        )
+      }
+
       return savedId
     },
     onSuccess: (id) => {
       setIsDirty(false)
       setM2mLinks(new Map())
       setM2mUnlinks(new Map())
+      setPendingComments([])
+      setPendingTasks([])
+      setPendingO2MRows(new Map())
       toast.success(isNew ? 'Record created' : 'Changes saved')
       qc.invalidateQueries({ queryKey: ['item', collection] })
       qc.invalidateQueries({ queryKey: ['m2m-items'] })
@@ -523,7 +660,6 @@ export function ItemEditForm({
   const lockedFields = new Set<string>()
 
   function renderSentinel(key: string) {
-    if (isNew) return null
     if (key === '__pipeline__' && showPipeline) {
       return (
         <PipelinePanel
@@ -532,6 +668,7 @@ export function ItemEditForm({
           item={itemId}
           title={pipelineSlot?.label_override ?? undefined}
           defaultExpanded={pipelineSlot?.default_expanded ?? false}
+          onBeforeTransition={validateAll}
         />
       )
     }
@@ -543,6 +680,8 @@ export function ItemEditForm({
           item={itemId}
           title={commentsSlot?.label_override ?? undefined}
           defaultExpanded={commentsSlot?.default_expanded ?? false}
+          queuedComments={isNew ? pendingComments : undefined}
+          onQueueComment={isNew ? handleQueueComment : undefined}
         />
       )
     }
@@ -554,6 +693,8 @@ export function ItemEditForm({
           item={itemId}
           title={tasksSlot?.label_override ?? undefined}
           defaultExpanded={tasksSlot?.default_expanded ?? false}
+          queuedTasks={isNew ? pendingTasks : undefined}
+          onQueueTask={isNew ? handleQueueTask : undefined}
         />
       )
     }
@@ -565,9 +706,9 @@ export function ItemEditForm({
     if (visible.length === 0) return null
     return (
       <div key='__ungrouped__' className='rounded-xl border border-slate-200 bg-white px-5 py-5'>
-        <div className='grid grid-cols-12 gap-4 items-start'>
-          {visible.map((f) => (
-            <div key={f.field} className={getColSpanClass(f.options)}>
+        <GridContainer>
+          {(cw) => visible.map((f) => (
+            <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
               <FieldRow
                 field={f}
                 draft={draft}
@@ -580,10 +721,11 @@ export function ItemEditForm({
                 locked={isReadOnly}
                 layoutAiEnabled={layoutAiEnabled}
                 renderField={renderField}
+                onCountChange={handleM2MCountChange}
               />
             </div>
           ))}
-        </div>
+        </GridContainer>
       </div>
     )
   }
@@ -612,6 +754,7 @@ export function ItemEditForm({
         lockedFields={lockedFields}
         layoutAiEnabled={layoutAiEnabled}
         renderField={renderField}
+        onCountChange={handleM2MCountChange}
       />
     )
   }
@@ -624,14 +767,14 @@ export function ItemEditForm({
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
           return <div key={key ?? i}>{renderSectionItem(item)}</div>
         })}
-        {!pipelineSlot && showPipeline && !isNew && (
-          <PipelinePanel collection={collection} item={itemId} />
+        {!pipelineSlot && showPipeline && (
+          <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} />
         )}
-        {!tasksSlot && showTasks && !isNew && <TaskPanel collection={collection} item={itemId} />}
-        {!commentsSlot && showComments && !isNew && (
-          <CommentPanel collection={collection} item={itemId} />
+        {!tasksSlot && showTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
+        {!commentsSlot && showComments && (
+          <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
-        {showWorkflow && !isNew && <WorkflowPanel collection={collection} item={itemId} />}
+        {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
       </div>
     )
   }
@@ -645,9 +788,9 @@ export function ItemEditForm({
     ).filter((f) => !f.hidden)
     return (
       <div className='rounded-xl border border-slate-200 bg-white px-5 py-5'>
-        <div className='grid grid-cols-12 gap-4 items-start'>
-          {fields.map((f) => (
-            <div key={f.field} className={getColSpanClass(f.options)}>
+        <GridContainer>
+          {(cw) => fields.map((f) => (
+            <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
               <FieldRow
                 field={f}
                 draft={draft}
@@ -660,10 +803,11 @@ export function ItemEditForm({
                 locked={isReadOnly}
                 layoutAiEnabled={layoutAiEnabled}
                 renderField={renderField}
+                onCountChange={handleM2MCountChange}
               />
             </div>
           ))}
-        </div>
+        </GridContainer>
       </div>
     )
   }
@@ -701,18 +845,17 @@ export function ItemEditForm({
           })}
         </div>
         {renderTabContent(activeTab)}
-        {!isNew &&
-          sectionOrder
-            .filter((item) => typeof item === 'string' && item !== '__ungrouped__')
-            .map((item) => renderSentinel(item as '__pipeline__' | '__comments__' | '__tasks__'))}
-        {!isNew && !pipelineSlot && showPipeline && (
-          <PipelinePanel collection={collection} item={itemId} />
+        {sectionOrder
+          .filter((item) => typeof item === 'string' && item !== '__ungrouped__')
+          .map((item) => renderSentinel(item as '__pipeline__' | '__comments__' | '__tasks__'))}
+        {!pipelineSlot && showPipeline && (
+          <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} />
         )}
-        {!isNew && !tasksSlot && showTasks && <TaskPanel collection={collection} item={itemId} />}
-        {!isNew && !commentsSlot && showComments && (
-          <CommentPanel collection={collection} item={itemId} />
+        {!tasksSlot && showTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
+        {!commentsSlot && showComments && (
+          <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
-        {showWorkflow && !isNew && <WorkflowPanel collection={collection} item={itemId} />}
+        {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
       </div>
     )
   }
@@ -747,6 +890,7 @@ export function ItemEditForm({
                 collection={collection}
                 item={itemId}
                 onBeforeTransition={() => {
+                  if (!validateAll()) return false
                   if (isDirty) {
                     toast.error('Save changes before transitioning')
                     return false
@@ -758,7 +902,7 @@ export function ItemEditForm({
             {isLast ? (
               <button
                 type='button'
-                onClick={() => saveMut.mutate()}
+                onClick={() => handleSave()}
                 disabled={saveMut.isPending || isReadOnly}
                 className='inline-flex h-9 items-center gap-1.5 rounded-md bg-[#00ceff] px-3 text-[12px] font-medium text-white transition-colors hover:bg-[#00b8e0] disabled:opacity-50'
               >
@@ -803,30 +947,34 @@ export function ItemEditForm({
 
     return (
       <div className='space-y-4 min-w-0 flex-1'>
-        {!isNew && preTabSentinels.map((key) => renderSentinel(key))}
+        {preTabSentinels.map((key) => renderSentinel(key))}
         <div className='rounded-xl border border-slate-200 bg-white px-5 py-3'>
           <StepsBar
             steps={allSteps}
             active={activeTab}
             completed={completedSteps}
+            errorSteps={new Set(
+              allSteps
+                .filter((s) => (groupedMap[s.key] ?? []).some((f) => validationErrors[f.field]))
+                .map((s) => s.key)
+            )}
             onStepClick={setActiveTab}
           />
         </div>
         {renderTabContent(activeTab)}
-        {!isNew &&
-          postTabItems.map((item) =>
-            renderSectionItem(
-              item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__'
-            )
-          )}
-        {!isNew && !pipelineSlot && showPipeline && (
-          <PipelinePanel collection={collection} item={itemId} defaultExpanded={false} />
+        {postTabItems.map((item) =>
+          renderSectionItem(
+            item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__'
+          )
         )}
-        {!isNew && !tasksSlot && showTasks && (
-          <TaskPanel collection={collection} item={itemId} defaultExpanded={false} />
+        {!pipelineSlot && showPipeline && (
+          <PipelinePanel collection={collection} item={itemId} defaultExpanded={false} onBeforeTransition={validateAll} />
         )}
-        {!isNew && !commentsSlot && showComments && (
-          <CommentPanel collection={collection} item={itemId} defaultExpanded={false} />
+        {!tasksSlot && showTasks && (
+          <TaskPanel collection={collection} item={itemId} defaultExpanded={false} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />
+        )}
+        {!commentsSlot && showComments && (
+          <CommentPanel collection={collection} item={itemId} defaultExpanded={false} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
         {stepNav}
@@ -887,6 +1035,7 @@ export function ItemEditForm({
   const canDelete = !isNew && isAdmin
 
   return (
+    <O2MStagingContext.Provider value={o2mStagingCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
       <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
         {showHeader && (
@@ -914,6 +1063,7 @@ export function ItemEditForm({
                   collection={collection}
                   item={itemId}
                   onBeforeTransition={() => {
+                    if (!validateAll()) return false
                     if (isDirty) {
                       toast.error('Save changes before transitioning')
                       return false
@@ -972,7 +1122,7 @@ export function ItemEditForm({
               {!isStepsMode && (
                 <Button
                   type='button'
-                  onClick={() => saveMut.mutate()}
+                  onClick={() => handleSave()}
                   disabled={saveMut.isPending || isReadOnly}
                   className='gap-1.5'
                 >
@@ -1023,6 +1173,7 @@ export function ItemEditForm({
                 collection={collection}
                 itemId={itemId}
                 staging={m2mStagingCtx}
+                errors={validationErrors}
                 onFieldClick={(stepKey, fieldKey) => {
                   setActiveTab(stepKey)
                   setTimeout(() => {
@@ -1054,5 +1205,6 @@ export function ItemEditForm({
         </div>
       </div>
     </M2MStagingContext.Provider>
+    </O2MStagingContext.Provider>
   )
 }

@@ -898,7 +898,13 @@ function PipelinePanelInner({
 
   return (
     <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
-      <div className='flex items-center gap-3 px-4 py-2.5'>
+      <div
+        role='button'
+        tabIndex={0}
+        onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setExpanded((v) => !v)}
+        className='flex w-full cursor-pointer items-center gap-2 px-4 py-2.5'
+      >
         <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         <span className='text-[12px] font-semibold text-slate-500'>{title || 'Pipeline'}</span>
         <div className='flex items-center gap-1.5'>
@@ -911,7 +917,10 @@ function PipelinePanelInner({
           {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
         </div>
         {!expanded && hasTransitions && (
-          <div className='flex flex-wrap items-center gap-1.5'>
+          <div
+            className='flex flex-wrap items-center gap-1.5'
+            onClick={(e) => e.stopPropagation()}
+          >
             {renderTransitionButtons(transitions, true)}
           </div>
         )}
@@ -920,7 +929,7 @@ function PipelinePanelInner({
             size='sm'
             variant='outline'
             className='h-7 gap-1.5 text-[11px]'
-            onClick={() => startPipeline.mutate()}
+            onClick={(e) => { e.stopPropagation(); startPipeline.mutate() }}
             disabled={startPipeline.isPending}
           >
             {startPipeline.isPending ? (
@@ -931,18 +940,12 @@ function PipelinePanelInner({
             Start
           </Button>
         )}
-        <button
-          type='button'
-          onClick={() => setExpanded((v) => !v)}
-          className='ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600'
-        >
-          <ChevronDown
-            className={cn(
-              'h-3.5 w-3.5 transition-transform duration-150',
-              expanded && 'rotate-180'
-            )}
-          />
-        </button>
+        <ChevronDown
+          className={cn(
+            'ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150',
+            expanded && 'rotate-180'
+          )}
+        />
       </div>
       {!expanded && pendingTransition && (
         <div className='border-t border-slate-100 px-4 py-3'>{confirmForm}</div>

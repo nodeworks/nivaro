@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, ChevronDown, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, Loader2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -115,15 +115,6 @@ export function RelationCombobox({
         )}
         <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
       </button>
-      {!!value && !disabled && (
-        <button
-          type='button'
-          onClick={() => onChange(null)}
-          className='absolute right-8 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded'
-        >
-          <span className='text-xs'>×</span>
-        </button>
-      )}
       {open && (
         <div className='absolute z-50 mt-1 w-full rounded-md border border-border bg-popover shadow-md'>
           <div className='border-b p-1.5'>
@@ -132,16 +123,26 @@ export function RelationCombobox({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder='Search…'
-              className='w-full rounded px-2 py-1 text-sm bg-muted/40 focus:outline-none'
+              className='w-full rounded px-2 py-1 text-[13px] bg-muted/40 focus:outline-none'
             />
           </div>
           <div className='max-h-52 overflow-y-auto py-1'>
+            {!!value && !disabled && (
+              <button
+                type='button'
+                onClick={() => { onChange(null); setOpen(false) }}
+                className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-slate-50 border-b border-slate-100'
+              >
+                <X className='h-3.5 w-3.5 text-slate-400' />
+                Clear selection
+              </button>
+            )}
             {isLoadingOptions ? (
               <div className='flex items-center justify-center py-4'>
                 <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
               </div>
             ) : (data ?? []).length === 0 ? (
-              <p className='px-3 py-2 text-sm text-muted-foreground'>No results</p>
+              <p className='px-3 py-2 text-[13px] text-muted-foreground'>No results</p>
             ) : (
               [...(data ?? [])]
                 .sort((a, b) =>
@@ -159,11 +160,11 @@ export function RelationCombobox({
                         setOpen(false)
                       }}
                       className={cn(
-                        'flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-accent',
+                        'flex w-full items-center gap-2 px-3 py-1.5 text-[13px] hover:bg-slate-50',
                         sel && 'font-medium'
                       )}
                     >
-                      <Check className={cn('h-3.5 w-3.5', sel ? 'text-primary' : 'opacity-0')} />
+                      <Check className={cn('h-3.5 w-3.5 shrink-0', sel ? 'text-[#00ceff]' : 'opacity-0')} />
                       {label}
                     </button>
                   )

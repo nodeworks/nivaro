@@ -424,6 +424,7 @@ export type CMSField = {
   is_translatable: boolean
   options: string | null // JSON — includes col_span, slider config, choices, etc.
   label: string | null
+  placeholder: string | null
 }
 
 export interface CMSNotification {

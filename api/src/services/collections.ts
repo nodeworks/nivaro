@@ -43,9 +43,48 @@ export async function listTableCollections(): Promise<CMSCollection[]> {
   return all.filter((c) => tableNames.has(c.collection))
 }
 
+const SYNTHETIC_COLLECTIONS: Record<string, Partial<CMSCollection>> = {
+  nivaro_users: {
+    display_name: 'Users',
+    display_template: '{{first_name}} {{last_name}}',
+    hidden: false,
+    singleton: false,
+    accountability: 'all',
+    versioning: false,
+  }
+}
+
 export async function getCollection(name: string): Promise<CMSCollection | undefined> {
   const col = await db<CMSCollection>('nivaro_collections').where({ collection: name }).first()
-  return col ? serializeCollection(col) : undefined
+  if (col) return serializeCollection(col)
+  const synthetic = SYNTHETIC_COLLECTIONS[name]
+  if (!synthetic) return undefined
+  return {
+    id: 0,
+    collection: name,
+    display_name: null,
+    singular: null,
+    plural: null,
+    icon: null,
+    note: null,
+    color: null,
+    hidden: false,
+    singleton: false,
+    sort_field: null,
+    archive_field: null,
+    archive_value: null,
+    unarchive_value: null,
+    display_template: null,
+    group: null,
+    sort: null,
+    accountability: 'all',
+    versioning: false,
+    workspace: null,
+    picker_filter: null,
+    created_at: new Date(0),
+    updated_at: new Date(0),
+    ...synthetic,
+  } as CMSCollection
 }
 
 export async function createCollection(
