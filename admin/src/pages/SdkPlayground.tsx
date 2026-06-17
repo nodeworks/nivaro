@@ -2006,6 +2006,27 @@ function LiveFormTab() {
   const [colOpen, setColOpen] = useState(false)
   const [colSearch, setColSearch] = useState('')
   const [layoutOpen, setLayoutOpen] = useState(false)
+  const [previewWidth, setPreviewWidth] = useState<number | null>(null)
+  const previewContainerRef = useRef<HTMLDivElement>(null)
+  const dragStateRef = useRef<{ startX: number; startW: number } | null>(null)
+
+  function startResize(e: React.MouseEvent) {
+    e.preventDefault()
+    const startW = previewContainerRef.current?.offsetWidth ?? previewWidth ?? 800
+    dragStateRef.current = { startX: e.clientX, startW }
+    function onMove(ev: MouseEvent) {
+      if (!dragStateRef.current) return
+      const delta = ev.clientX - dragStateRef.current.startX
+      setPreviewWidth(Math.max(320, dragStateRef.current.startW + delta))
+    }
+    function onUp() {
+      dragStateRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
   const [active, setActive] = useState<{ collection: string; itemId: string; layoutSlug: string } | null>(
     searchParams.get('lf_col') ? { collection: searchParams.get('lf_col')!, itemId: searchParams.get('lf_id') ?? '', layoutSlug: searchParams.get('lf_slug') ?? '' } : null
   )
@@ -2142,11 +2163,31 @@ function LiveFormTab() {
               {result.ok ? '✓ Saved' : '✗ Error'}
             </span>
           )}
+          <div className='ml-auto flex items-center gap-1.5'>
+            {previewWidth && (
+              <span className='font-mono text-[11px] text-slate-400'>{previewWidth}px</span>
+            )}
+            {(['375', '768'] as const).map((w) => (
+              <button key={w} type='button' onClick={() => setPreviewWidth(Number(w))}
+                className={cn('h-7 rounded border px-2 text-[11px] font-medium transition-colors',
+                  previewWidth === Number(w)
+                    ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-cyan'
+                    : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground')}>
+                {w === '375' ? 'Mobile' : 'Tablet'}
+              </button>
+            ))}
+            {previewWidth && (
+              <button type='button' onClick={() => setPreviewWidth(null)}
+                className='h-7 rounded border border-slate-200 px-2 text-[11px] font-medium text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'>
+                Full
+              </button>
+            )}
+          </div>
           <button
             type='button'
             onClick={() => setShowCode(c => !c)}
             className={cn(
-              'ml-auto inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+              'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
               showCode
                 ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-cyan'
                 : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'
@@ -2183,19 +2224,35 @@ export function MyForm() {
         </div>
       )}
 
-      {/* Form — full width, fills remaining space */}
+      {/* Form preview — resizable */}
       {active ? (
-        <NivaroProvider client={client}>
-          <ItemEditForm
-            key={`${active.collection}:${active.itemId}:${active.layoutSlug}`}
-            collection={active.collection}
-            itemId={active.itemId || undefined}
-            layoutSlug={active.layoutSlug || undefined}
-            onSaved={(id: string) => setResult({ ok: true, data: { id } })}
-            onDeleted={() => setResult({ ok: true, data: { deleted: true } })}
-            showRevisions={false}
-          />
-        </NivaroProvider>
+        <div className='flex flex-1 min-h-0 overflow-auto' style={{ backgroundColor: '#f8fafc' }}>
+          <div
+            ref={previewContainerRef}
+            className='relative flex flex-col'
+            style={{ width: previewWidth ? `${previewWidth}px` : '100%', minWidth: 320, flexShrink: 0 }}
+          >
+            <NivaroProvider client={client}>
+              <ItemEditForm
+                key={`${active.collection}:${active.itemId}:${active.layoutSlug}`}
+                collection={active.collection}
+                itemId={active.itemId || undefined}
+                layoutSlug={active.layoutSlug || undefined}
+                onSaved={(id: string) => setResult({ ok: true, data: { id } })}
+                onDeleted={() => setResult({ ok: true, data: { deleted: true } })}
+                showRevisions={false}
+              />
+            </NivaroProvider>
+            {/* Drag handle */}
+            <div
+              onMouseDown={startResize}
+              className='group absolute right-0 top-0 bottom-0 w-3 cursor-col-resize select-none flex items-center justify-center'
+              title='Drag to resize'
+            >
+              <div className='w-0.5 h-10 rounded-full bg-slate-300 opacity-0 group-hover:opacity-100 transition-opacity dark:bg-slate-600' />
+            </div>
+          </div>
+        </div>
       ) : (
         <div className='flex flex-1 items-center justify-center text-sm text-slate-400'>
           Select a collection and click Load to preview the form
