@@ -35,6 +35,8 @@ interface FKRow {
 interface CMSCollection {
   collection: string
   display_name: string | null
+  singular: string | null
+  plural: string | null
   icon: string | null
   note: string | null
   display_template: string | null
@@ -295,6 +297,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
           collection_meta: collectionMeta
             ? {
                 display_name: collectionMeta.display_name,
+                singular: collectionMeta.singular,
+                plural: collectionMeta.plural,
                 icon: collectionMeta.icon,
                 note: collectionMeta.note,
                 display_template: collectionMeta.display_template
@@ -607,6 +611,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
     const { table } = req.params as { table: string }
     const body = req.body as {
       display_name?: string
+      singular?: string | null
+      plural?: string | null
       icon?: string
       note?: string
       display_template?: string | null
@@ -622,6 +628,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
           .where({ collection: table })
           .update({
             display_name: body.display_name ?? existing.display_name,
+            ...('singular' in body ? { singular: body.singular } : {}),
+            ...('plural' in body ? { plural: body.plural } : {}),
             icon: body.icon ?? existing.icon,
             note: body.note ?? existing.note,
             ...(body.display_template !== undefined
@@ -633,6 +641,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
         await db('nivaro_collections').insert({
           collection: table,
           display_name: body.display_name ?? null,
+          singular: body.singular ?? null,
+          plural: body.plural ?? null,
           icon: body.icon ?? null,
           note: body.note ?? null,
           display_template: body.display_template ?? null,

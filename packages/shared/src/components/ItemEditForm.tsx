@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ChevronDown, Loader2, Save, Trash2 } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, Loader2, Save, Trash2 } from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
@@ -15,7 +15,7 @@ import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { FieldRow } from './item-edit/FieldRow'
 import { GroupSection } from './item-edit/GroupSection'
-import { resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
+import { applyDisplayTemplate, resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import { O2MStagingContext, type O2MStagingCtx } from './item-edit/O2MStagingContext'
 import { StepsBar } from './item-edit/StepsBar'
@@ -130,11 +130,11 @@ export function ItemEditForm({
     staleTime: 60_000
   })
 
-  const { data: colMeta } = useQuery<{ display_name?: string; item_locking_enabled?: boolean }>({
+  const { data: colMeta } = useQuery<{ display_name?: string; singular?: string | null; display_template?: string | null; item_locking_enabled?: boolean }>({
     queryKey: ['col-meta', collection],
     queryFn: () =>
       client
-        .request<{ data: { display_name?: string; item_locking_enabled?: boolean } }>(
+        .request<{ data: { display_name?: string; singular?: string | null; display_template?: string | null; item_locking_enabled?: boolean } }>(
           get(`/collections/${collection}`)
         )
         .then((r) => r.data),
@@ -402,6 +402,7 @@ export function ItemEditForm({
   const isStepsMode = hasTabs && layoutMeta?.tab_mode === 'steps'
   const validateBeforeNext = !!layoutMeta?.validate_before_next
   const summaryEnabled = !!layoutMeta?.summary_enabled
+  const [summaryCollapsed, setSummaryCollapsed] = useState(false)
 
   const bodyRef = useRef<HTMLDivElement>(null)
   // Per-container active tab: Map<containerId, tabKey>
@@ -1204,6 +1205,10 @@ export function ItemEditForm({
   }
 
   const title = colMeta?.display_name ?? titleCase(collection ?? '')
+  const singularTitle = colMeta?.singular || title
+  const itemTitle = !isNew && itemData && colMeta?.display_template
+    ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
+    : title
   const canDelete = !isNew && isAdmin
 
   return (
@@ -1227,7 +1232,7 @@ export function ItemEditForm({
               </button>
             )}
             <h1 className='text-base font-semibold text-slate-800'>
-              {isNew ? `New ${title}` : title}
+              {isNew ? `New ${singularTitle}` : itemTitle}
             </h1>
             <div className='ml-auto flex items-center gap-2'>
               {!isNew && showPipeline && !isStepsMode && (
@@ -1334,44 +1339,61 @@ export function ItemEditForm({
             {hasTabs ? (isStepsMode ? renderStepsMode() : renderTabMode()) : renderSectionMode()}
           </div>
           {summaryEnabled && (
-            <div className='w-64 shrink-0 overflow-y-auto border-l border-slate-200'>
-              <SummaryPanel
-                allSteps={allTabGroups.length > 0 ? allTabGroups.map((g) => ({ key: g.key, label: g.label })) : allSteps}
-                groupedMap={groupedMap}
-                ungroupedFields={ungroupedFields}
-                sectionGroups={sectionGroups}
-                draft={draft}
-                relations={relations}
-                collection={collection}
-                itemId={itemId}
-                staging={m2mStagingCtx}
-                errors={validationErrors}
-                onFieldClick={(stepKey, fieldKey) => {
-                  setActiveTab(stepKey)
-                  setTimeout(() => {
-                    const el = document.querySelector(
-                      `[data-field="${fieldKey}"]`
-                    ) as HTMLElement | null
-                    if (el) {
-                      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                      el.classList.add('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md')
-                      setTimeout(
-                        () =>
-                          el.classList.remove(
-                            'ring-2',
-                            'ring-nvr-cyan',
-                            'ring-offset-2',
-                            'rounded-md'
-                          ),
-                        1500
-                      )
-                      ;(
-                        el.querySelector('input,textarea,select,button') as HTMLElement | null
-                      )?.focus()
-                    }
-                  }, 80)
-                }}
-              />
+            <div className='flex shrink-0 border-l border-slate-200'>
+              <button
+                type='button'
+                onClick={() => setSummaryCollapsed(v => !v)}
+                title={summaryCollapsed ? 'Expand summary' : 'Collapse summary'}
+                className='flex w-6 shrink-0 items-start justify-center pt-3 text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors'
+              >
+                {summaryCollapsed
+                  ? <ChevronLeft className='h-3.5 w-3.5' />
+                  : <ChevronRight className='h-3.5 w-3.5' />}
+              </button>
+              <div
+                className='overflow-hidden transition-all duration-200'
+                style={{ width: summaryCollapsed ? 0 : 232 }}
+              >
+                <div className='w-[232px] overflow-y-auto h-full'>
+                  <SummaryPanel
+                    allSteps={allTabGroups.length > 0 ? allTabGroups.map((g) => ({ key: g.key, label: g.label })) : allSteps}
+                    groupedMap={groupedMap}
+                    ungroupedFields={ungroupedFields}
+                    sectionGroups={sectionGroups}
+                    draft={draft}
+                    relations={relations}
+                    collection={collection}
+                    itemId={itemId}
+                    staging={m2mStagingCtx}
+                    errors={validationErrors}
+                    onFieldClick={(stepKey, fieldKey) => {
+                      setActiveTab(stepKey)
+                      setTimeout(() => {
+                        const el = document.querySelector(
+                          `[data-field="${fieldKey}"]`
+                        ) as HTMLElement | null
+                        if (el) {
+                          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                          el.classList.add('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md')
+                          setTimeout(
+                            () =>
+                              el.classList.remove(
+                                'ring-2',
+                                'ring-nvr-cyan',
+                                'ring-offset-2',
+                                'rounded-md'
+                              ),
+                            1500
+                          )
+                          ;(
+                            el.querySelector('input,textarea,select,button') as HTMLElement | null
+                          )?.focus()
+                        }
+                      }, 80)
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           )}
         </div>

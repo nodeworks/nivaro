@@ -55,6 +55,8 @@ export type DBTableDetail = {
   registered: boolean
   collection_meta: {
     display_name: string | null
+    singular: string | null
+    plural: string | null
     icon: string | null
     note: string | null
     display_template: string | null
@@ -128,7 +130,7 @@ export const schemaApi = {
 
   registerCollection: (
     table: string,
-    body: { display_name?: string; icon?: string; note?: string; display_template?: string | null }
+    body: { display_name?: string; singular?: string | null; plural?: string | null; icon?: string; note?: string; display_template?: string | null }
   ) => api.post(`/data-model/tables/${table}/register`, body).then((r) => r.data),
 
   unregisterCollection: (table: string) => api.delete(`/data-model/tables/${table}/unregister`),

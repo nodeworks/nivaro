@@ -2013,6 +2013,7 @@ function LiveFormTab() {
   const [colSearch, setColSearch] = useState('')
   const [itemPickerOpen, setItemPickerOpen] = useState(false)
   const [itemSearch, setItemSearch] = useState('')
+  const [itemSelectedLabel, setItemSelectedLabel] = useState<string | null>(null)
   const [layoutOpen, setLayoutOpen] = useState(false)
   const [previewWidth, setPreviewWidth] = useState<number | null>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
@@ -2084,6 +2085,7 @@ function LiveFormTab() {
   useEffect(() => {
     if (initialMountRef.current) { initialMountRef.current = false; return }
     setItemId('')
+    setItemSelectedLabel(null)
   }, [collection])
 
   const tmpl = colMeta?.display_template ?? null
@@ -2161,14 +2163,17 @@ function LiveFormTab() {
                   disabled={!collection}
                   className='flex h-8 w-52 items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-left outline-none focus:border-nvr-cyan dark:border-border dark:bg-muted disabled:opacity-40'
                 >
-                  <span className={itemId && itemId !== 'new' ? 'text-slate-900 dark:text-foreground truncate flex-1 min-w-0' : 'text-slate-400'}>
-                    {itemId && itemId !== 'new'
-                      ? (selectedItemData ? applyTmpl(tmpl, selectedItemData) : itemId)
-                      : 'New item'}
-                  </span>
-                  {itemsFetching
-                    ? <Loader2 className='h-3 w-3 text-slate-400 shrink-0 animate-spin' />
-                    : <ChevronsUpDown className='h-3 w-3 text-slate-400 shrink-0' />}
+                  {itemId && itemId !== 'new' ? (
+                    (() => {
+                      const label = itemSelectedLabel ?? (selectedItemData ? applyTmpl(tmpl, selectedItemData) : null)
+                      return label
+                        ? <span className='text-slate-900 dark:text-foreground truncate flex-1 min-w-0'>{label}</span>
+                        : <Loader2 className='h-3 w-3 text-slate-400 shrink-0 animate-spin' />
+                    })()
+                  ) : (
+                    <span className='text-slate-400'>New item</span>
+                  )}
+                  <ChevronsUpDown className='h-3 w-3 text-slate-400 shrink-0 ml-auto' />
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-52 p-0' align='start'>
@@ -2180,7 +2185,12 @@ function LiveFormTab() {
                     className='text-[13px]'
                   />
                   <CommandList>
-                    <CommandEmpty>{itemsFetching ? 'Loading…' : 'No items found'}</CommandEmpty>
+                    <CommandEmpty>No items found</CommandEmpty>
+                    {itemsFetching && sortedItems.length === 0 && (
+                      <div className='flex justify-center py-3'>
+                        <Loader2 className='h-4 w-4 animate-spin text-slate-400' />
+                      </div>
+                    )}
                     <CommandGroup>
                       <CommandItem
                         value='__new__'
@@ -2196,7 +2206,7 @@ function LiveFormTab() {
                           <CommandItem
                             key={id}
                             value={`${label} ${id}`}
-                            onSelect={() => { setItemId(id); setItemSearch(''); setItemPickerOpen(false) }}
+                            onSelect={() => { setItemId(id); setItemSelectedLabel(label); setItemSearch(''); setItemPickerOpen(false) }}
                           >
                             <div className='flex flex-col min-w-0 flex-1'>
                               <span className='text-[12px] font-medium truncate'>{label}</span>
@@ -2222,7 +2232,7 @@ function LiveFormTab() {
                       {layoutSlug ? (layouts.find((l) => l.slug === layoutSlug)?.name ?? layoutSlug) : 'No layout'}
                     </span>
                     {layoutSlug && !!layouts.find((l) => l.slug === layoutSlug)?.is_active && (
-                      <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold bg-nvr-cyan/15 text-nvr-cyan'>Active</span>
+                      <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold bg-nvr-cyan/15 text-nvr-cyan'>Default</span>
                     )}
                   </div>
                   <ChevronsUpDown className='h-3 w-3 text-slate-400 shrink-0' />
@@ -2241,7 +2251,7 @@ function LiveFormTab() {
                           <div className='flex min-w-0 flex-1 flex-col'>
                             <div className='flex items-center gap-1.5'>
                               <span className='text-[12px] font-medium truncate'>{l.name}</span>
-                              {!!l.is_active && <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold bg-nvr-cyan/15 text-nvr-cyan'>Active</span>}
+                              {!!l.is_active && <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold bg-nvr-cyan/15 text-nvr-cyan'>Default</span>}
                             </div>
                             {l.slug && <span className='font-mono text-[10px] text-slate-400 truncate'>{l.slug}</span>}
                           </div>

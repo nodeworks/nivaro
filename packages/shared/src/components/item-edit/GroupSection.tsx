@@ -1,18 +1,18 @@
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import * as LucideIcons from 'lucide-react'
-import type { LucideProps } from 'lucide-react'
-import type { FC, ReactNode } from 'react'
+import type { ReactNode } from 'react'
+import type React from 'react'
 import { useRef, useState } from 'react'
 import { cn, titleCase } from '../../lib/utils'
 import { FieldRow } from './FieldRow'
 import { resolveColSpan, useContainerWidth } from './helpers'
 import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps } from './types'
 
-function resolveIcon(name: string | null | undefined): FC<LucideProps> | null {
+function resolveIcon(name: string | null | undefined): React.ElementType | null {
   if (!name) return null
   const pascal = name.replace(/(^|-)([a-z])/g, (_, _sep, c: string) => c.toUpperCase())
   const icon = (LucideIcons as Record<string, unknown>)[pascal]
-  return typeof icon === 'function' ? (icon as FC<LucideProps>) : null
+  return icon ? (icon as React.ElementType) : null
 }
 
 function formatDisplayValue(value: unknown): string {

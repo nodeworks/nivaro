@@ -3493,6 +3493,8 @@ function SettingsTab({
 
   // Draft state: null means "use server value". Set on edit, cleared on save.
   const [nameDraft, setNameDraft] = useState<string | null>(null)
+  const [singularDraft, setSingularDraft] = useState<string | null>(null)
+  const [pluralDraft, setPluralDraft] = useState<string | null>(null)
   const [iconDraft, setIconDraft] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState<string | null>(null)
   const [templateDraft, setTemplateDraft] = useState<string | null>(null)
@@ -3502,12 +3504,16 @@ function SettingsTab({
   if (prevTableRef.current !== tableName) {
     prevTableRef.current = tableName
     if (nameDraft !== null) setNameDraft(null)
+    if (singularDraft !== null) setSingularDraft(null)
+    if (pluralDraft !== null) setPluralDraft(null)
     if (iconDraft !== null) setIconDraft(null)
     if (noteDraft !== null) setNoteDraft(null)
     if (templateDraft !== null) setTemplateDraft(null)
   }
 
   const displayName = nameDraft ?? (meta?.display_name ?? '')
+  const singular = singularDraft ?? (meta?.singular ?? '')
+  const plural = pluralDraft ?? (meta?.plural ?? '')
   const icon = iconDraft ?? (meta?.icon ?? '')
   const note = noteDraft ?? (meta?.note ?? '')
   const displayTemplate = templateDraft ?? (meta?.display_template ?? '')
@@ -3516,6 +3522,8 @@ function SettingsTab({
     mutationFn: () =>
       schemaApi.registerCollection(tableName, {
         display_name: displayName || undefined,
+        singular: singular || null,
+        plural: plural || null,
         icon: icon || undefined,
         note: note || undefined,
         display_template: displayTemplate || null
@@ -3523,6 +3531,8 @@ function SettingsTab({
     onSuccess: () => {
       toast.success('Collection settings saved')
       setNameDraft(null)
+      setSingularDraft(null)
+      setPluralDraft(null)
       setIconDraft(null)
       setNoteDraft(null)
       // Don't clear templateDraft — clearing it causes DisplayTemplateEditor to briefly
@@ -3561,6 +3571,26 @@ function SettingsTab({
               placeholder={tableName}
               className='text-[13px]'
             />
+          </div>
+          <div className='grid grid-cols-2 gap-3'>
+            <div>
+              <Label className='mb-1 block text-[12px]'>Singular</Label>
+              <Input
+                value={singular}
+                onChange={(e) => setSingularDraft(e.target.value)}
+                placeholder={displayName || tableName}
+                className='text-[13px]'
+              />
+            </div>
+            <div>
+              <Label className='mb-1 block text-[12px]'>Plural</Label>
+              <Input
+                value={plural}
+                onChange={(e) => setPluralDraft(e.target.value)}
+                placeholder={displayName || tableName}
+                className='text-[13px]'
+              />
+            </div>
           </div>
           <div>
             <Label className='mb-1 block text-[12px]'>Icon</Label>
@@ -6159,14 +6189,14 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
           <div className='mb-3 flex items-center gap-2'>
             <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>{selected.name}</span>
             {selected.is_active ? (
-              <span className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan'>Active</span>
+              <span className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan'>Default Layout</span>
             ) : (
               <button
                 type='button'
                 onClick={() => activateMut.mutate(selected.id)}
                 className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/20'
               >
-                Set active
+                Set Default Layout
               </button>
             )}
             <div className='ml-auto flex items-center gap-1'>

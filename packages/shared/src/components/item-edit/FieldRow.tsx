@@ -236,6 +236,7 @@ export function FieldRow({
   // Cascade filter computation
   let cascadeFilter: Record<string, unknown> | undefined
   const cascadeParentLabels: string[] = []
+  const cascadeParentFieldKeys: string[] = []
   let unsatisfiedParentLabel: string | null = null
   let requiredParentLabel: string | null = null
   for (const rule of cascadeRules) {
@@ -269,11 +270,27 @@ export function FieldRow({
         ? { _some: { id: { _eq: parentVal } } }
         : { _eq: parentVal }
       cascadeParentLabels.push(titleCase(String(rule.parent_field)))
+      cascadeParentFieldKeys.push(String(rule.parent_field))
     } else {
       if (!unsatisfiedParentLabel) unsatisfiedParentLabel = titleCase(String(rule.parent_field))
       if (rule.show_all_if_no_parent === false && !requiredParentLabel) {
         requiredParentLabel = titleCase(String(rule.parent_field))
       }
+    }
+  }
+
+  function flashParentFields() {
+    for (const key of cascadeParentFieldKeys) {
+      const el = document.querySelector<HTMLElement>(`[data-field="${key}"]`)
+      if (!el) continue
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.style.transition = 'box-shadow 0.15s ease'
+      el.style.boxShadow = '0 0 0 2px #00ceff, 0 0 0 5px rgba(0,206,255,0.25)'
+      el.style.borderRadius = '12px'
+      setTimeout(() => {
+        el.style.boxShadow = 'none'
+        setTimeout(() => { el.style.transition = ''; el.style.borderRadius = '' }, 300)
+      }, 900)
     }
   }
 
@@ -341,13 +358,17 @@ export function FieldRow({
           <TooltipProvider delayDuration={100}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff] dark:bg-nvr-cyan/15 dark:text-nvr-cyan max-w-[280px] min-w-0'>
+                <button
+                  type='button'
+                  onClick={flashParentFields}
+                  className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff] dark:bg-nvr-cyan/15 dark:text-nvr-cyan max-w-[280px] min-w-0 cursor-pointer hover:bg-[rgba(0,206,255,0.22)] transition-colors'
+                >
                   <SlidersHorizontal className='h-2.5 w-2.5 shrink-0' />
                   <span className='truncate'>Filtered by {cascadeParentLabels.join(', ')}</span>
-                </span>
+                </button>
               </TooltipTrigger>
               <TooltipContent side='top' className='text-[12px]'>
-                Filtered by {cascadeParentLabels.join(', ')}
+                Click to highlight {cascadeParentLabels.join(', ')}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
