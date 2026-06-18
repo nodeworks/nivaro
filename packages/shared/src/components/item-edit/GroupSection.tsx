@@ -343,12 +343,11 @@ function SummaryStrip({
   }
 
   return (
-    <div className='flex flex-wrap items-stretch gap-y-1.5 border-t border-slate-100 px-5 py-2'>
-      {summaryFields.map((key, i) => (
-        <React.Fragment key={key}>
-          {i > 0 && <div className='self-stretch w-px bg-slate-200 mx-3' />}
+    <div className='flex flex-wrap gap-1.5 border-t border-slate-100 px-5 py-2'>
+      {summaryFields.map((key) => (
+        <div key={key} className='inline-flex items-center gap-1.5 rounded border border-slate-200 bg-slate-50 px-2.5 py-1'>
           {renderItem(key)}
-        </React.Fragment>
+        </div>
       ))}
     </div>
   )
