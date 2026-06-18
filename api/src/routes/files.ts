@@ -16,6 +16,13 @@ import {
 } from '../services/files.js'
 import { getStorage } from '../services/storage/index.js'
 
+function contentDisposition(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7E]/g, '_')
+  const encoded = encodeURIComponent(filename)
+  if (ascii === filename) return `inline; filename="${ascii}"`
+  return `inline; filename="${ascii}"; filename*=UTF-8''${encoded}`
+}
+
 const MAX_DIMENSION = 4000
 const TRANSFORM_FORMATS = ['webp', 'jpeg', 'png'] as const
 type TransformFormat = (typeof TRANSFORM_FORMATS)[number]
@@ -164,7 +171,7 @@ export async function filesRoutes(app: FastifyInstance) {
     reportFileBandwidth(file).catch(() => {})
     reply
       .header('Content-Type', contentType)
-      .header('Content-Disposition', `inline; filename="${file.filename_download}"`)
+      .header('Content-Disposition', contentDisposition(file.filename_download ?? 'file'))
     return reply.send(buffer)
   })
 

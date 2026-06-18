@@ -357,34 +357,6 @@ export function InlineTableField({
         {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
       </div>
 
-      {defaultsOpen && (
-        <div className='rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2'>
-          <p className='text-[11px] font-medium text-slate-500'>Default values</p>
-          <div className='grid gap-x-4 gap-y-2' style={{ gridTemplateColumns: `repeat(${Math.min(displayCols.length, 3)}, 1fr)` }}>
-            {displayCols.map(c => (
-              <div key={c.field} className='space-y-0.5 min-w-0'>
-                <label className='text-[10px] text-slate-400 block truncate'>{c.label ?? titleCase(c.field)}</label>
-                <FieldRenderer
-                  field={c}
-                  value={defaultValues[c.field] ?? null}
-                  onChange={v => setDefaultField(c.field, v)}
-                  relations={childRelations}
-                  collection={relatedCollection}
-                  itemId='new'
-                />
-              </div>
-            ))}
-          </div>
-          <button
-            type='button'
-            disabled={bulkAdding}
-            onClick={() => addBulkRows(true)}
-            className='h-7 px-3 rounded bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-40 transition-colors'
-          >
-            Add {bulkCount} {bulkCount === 1 ? 'row' : 'rows'} with these values
-          </button>
-        </div>
-      )}
 
     <div className='rounded-lg border border-slate-200 text-[12px]'>
       <table className='w-full table-fixed'>
@@ -401,6 +373,38 @@ export function InlineTableField({
           </tr>
         </thead>
         <tbody>
+          {/* Defaults row */}
+          {defaultsOpen && (
+            <tr className='border-b border-[#00ceff]/20 bg-[#00ceff]/5'>
+              {(rowOrderField || isNew) && <td className='w-6' />}
+              {isNew && <td className='px-3 py-1 align-middle w-16'>
+                <span className='text-[10px] font-medium text-[#009abe]'>Defaults</span>
+              </td>}
+              {displayCols.map(c => (
+                <td key={c.field} className='px-2 py-1 align-top'>
+                  <FieldRenderer
+                    field={c}
+                    value={defaultValues[c.field] ?? null}
+                    onChange={v => setDefaultField(c.field, v)}
+                    relations={childRelations}
+                    collection={relatedCollection}
+                    itemId='new'
+                  />
+                </td>
+              ))}
+              <td className='px-1 py-1 align-top'>
+                <button
+                  type='button'
+                  disabled={bulkAdding}
+                  onClick={() => addBulkRows(true)}
+                  className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50 whitespace-nowrap'
+                >
+                  {bulkAdding ? '…' : `Add ${bulkCount}`}
+                </button>
+              </td>
+            </tr>
+          )}
+
           {/* Pending rows for new parent */}
           {isNew && pendingRows.map((row, ri) => {
             const pendingRowId = `pending:${ri}`

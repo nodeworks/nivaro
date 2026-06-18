@@ -2426,78 +2426,165 @@ function RelationFormDiagram({
   }
 
   if (relType === 'm2m') {
+    const autoJunctionName =
+      form.m2m_auto_junction_name ||
+      (form.m2m_one_collection ? `${tableName}_${form.m2m_one_collection}` : '')
     return (
-      <div className='flex items-stretch gap-1.5'>
-        <DiagNode
-          nodeRole='This table'
-          roleCls='text-[#009abe]'
-          containerCls='bg-[rgba(0,206,255,0.06)] border-[rgba(0,206,255,0.3)]'
-          tableContent={thisTableDisplay}
-          fields={[]}
-        />
-        <DiagArrow />
-        <DiagNode
-          nodeRole='Junction table'
-          roleCls='text-amber-700'
-          containerCls='bg-amber-50 border-amber-200'
-          tableContent={
-            <TblSel
-              allTables={allTables}
-              value={form.m2m_junction}
-              onChange={(v) =>
-                patch({ m2m_junction: v, m2m_many_field: '', m2m_junction_field: '' })
+      <div className='space-y-3'>
+        {/* Auto / existing toggle */}
+        <div className='flex gap-1 rounded-md border border-slate-200 bg-slate-50 p-0.5 w-fit'>
+          <button
+            type='button'
+            onClick={() => patch({ m2m_auto: true })}
+            className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-[12px] font-medium transition-colors ${
+              form.m2m_auto
+                ? 'bg-white text-nvr-navy shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {form.m2m_auto && <Check className='h-3 w-3 text-nvr-cyan' />}
+            Auto-generate junction table
+          </button>
+          <button
+            type='button'
+            onClick={() => patch({ m2m_auto: false })}
+            className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-[12px] font-medium transition-colors ${
+              !form.m2m_auto
+                ? 'bg-white text-nvr-navy shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {!form.m2m_auto && <Check className='h-3 w-3 text-nvr-cyan' />}
+            Use existing table
+          </button>
+        </div>
+
+        {form.m2m_auto ? (
+          <div className='flex items-stretch gap-1.5'>
+            <DiagNode
+              nodeRole='This table'
+              roleCls='text-[#009abe]'
+              containerCls='bg-[rgba(0,206,255,0.06)] border-[rgba(0,206,255,0.3)]'
+              tableContent={thisTableDisplay}
+              fields={[]}
+            />
+            <DiagArrow />
+            <DiagNode
+              nodeRole='Junction table (auto)'
+              roleCls='text-amber-700'
+              containerCls='bg-amber-50 border-amber-200'
+              tableContent={
+                <span className='font-mono text-[12px] font-semibold text-amber-700'>
+                  {autoJunctionName || '…'}
+                </span>
               }
+              fields={[
+                {
+                  label: 'Custom name (optional)',
+                  input: (
+                    <Input
+                      value={form.m2m_auto_junction_name}
+                      onChange={(e) => patch({ m2m_auto_junction_name: e.target.value })}
+                      placeholder={
+                        form.m2m_one_collection
+                          ? `${tableName}_${form.m2m_one_collection}`
+                          : 'e.g. articles_tags'
+                      }
+                      className='h-7 font-mono text-[12px]'
+                    />
+                  )
+                }
+              ]}
             />
-          }
-          fields={[
-            {
-              label: 'FK pointing to this table',
-              input: (
-                <ColSel
-                  table={form.m2m_junction}
-                  value={form.m2m_many_field}
-                  onChange={(v) => patch({ m2m_many_field: v })}
+            <DiagArrow />
+            <DiagNode
+              nodeRole='Target table'
+              roleCls='text-slate-500'
+              containerCls='bg-slate-50 border-slate-200'
+              tableContent={
+                <TblSel
+                  allTables={allTables}
+                  value={form.m2m_one_collection}
+                  onChange={(v) => patch({ m2m_one_collection: v })}
                 />
-              )
-            },
-            {
-              label: 'FK pointing to target table',
-              input: (
-                <ColSel
-                  table={form.m2m_junction}
-                  value={form.m2m_junction_field}
-                  onChange={(v) => patch({ m2m_junction_field: v })}
-                />
-              )
-            }
-          ]}
-        />
-        <DiagArrow />
-        <DiagNode
-          nodeRole='Target table'
-          roleCls='text-slate-500'
-          containerCls='bg-slate-50 border-slate-200'
-          tableContent={
-            <TblSel
-              allTables={allTables}
-              value={form.m2m_one_collection}
-              onChange={(v) => patch({ m2m_one_collection: v, m2m_one_field: '' })}
+              }
+              fields={[]}
             />
-          }
-          fields={[
-            {
-              label: 'Referenced field',
-              input: (
-                <ColSel
-                  table={form.m2m_one_collection}
-                  value={form.m2m_one_field}
-                  onChange={(v) => patch({ m2m_one_field: v })}
-                  placeholder='id (default)'
+          </div>
+        ) : (
+          <div className='flex items-stretch gap-1.5'>
+            <DiagNode
+              nodeRole='This table'
+              roleCls='text-[#009abe]'
+              containerCls='bg-[rgba(0,206,255,0.06)] border-[rgba(0,206,255,0.3)]'
+              tableContent={thisTableDisplay}
+              fields={[]}
+            />
+            <DiagArrow />
+            <DiagNode
+              nodeRole='Junction table'
+              roleCls='text-amber-700'
+              containerCls='bg-amber-50 border-amber-200'
+              tableContent={
+                <TblSel
+                  allTables={allTables}
+                  value={form.m2m_junction}
+                  onChange={(v) =>
+                    patch({ m2m_junction: v, m2m_many_field: '', m2m_junction_field: '' })
+                  }
                 />
-              )
-            }
-          ]}
-        />
+              }
+              fields={[
+                {
+                  label: 'FK pointing to this table',
+                  input: (
+                    <ColSel
+                      table={form.m2m_junction}
+                      value={form.m2m_many_field}
+                      onChange={(v) => patch({ m2m_many_field: v })}
+                    />
+                  )
+                },
+                {
+                  label: 'FK pointing to target table',
+                  input: (
+                    <ColSel
+                      table={form.m2m_junction}
+                      value={form.m2m_junction_field}
+                      onChange={(v) => patch({ m2m_junction_field: v })}
+                    />
+                  )
+                }
+              ]}
+            />
+            <DiagArrow />
+            <DiagNode
+              nodeRole='Target table'
+              roleCls='text-slate-500'
+              containerCls='bg-slate-50 border-slate-200'
+              tableContent={
+                <TblSel
+                  allTables={allTables}
+                  value={form.m2m_one_collection}
+                  onChange={(v) => patch({ m2m_one_collection: v, m2m_one_field: '' })}
+                />
+              }
+              fields={[
+                {
+                  label: 'Referenced field',
+                  input: (
+                    <ColSel
+                      table={form.m2m_one_collection}
+                      value={form.m2m_one_field}
+                      onChange={(v) => patch({ m2m_one_field: v })}
+                      placeholder='id (default)'
+                    />
+                  )
+                }
+              ]}
+            />
+          </div>
+        )}
       </div>
     )
   }
@@ -2598,6 +2685,8 @@ const DEFAULT_REL_FORM = {
   m2m_junction_field: '',
   m2m_one_collection: '',
   m2m_one_field: '',
+  m2m_auto: true,
+  m2m_auto_junction_name: '',
   m2a_many_field: '',
   m2a_one_collection_field: '',
   m2a_one_allowed_collections: '',
@@ -2662,14 +2751,26 @@ function RelationsTab({
         one_collection: tableName,
         one_field: form.o2m_many_collection
       }
-    if (selectedType === 'm2m')
+    if (selectedType === 'm2m') {
+      if (form.m2m_auto) {
+        const junctionName =
+          form.m2m_auto_junction_name || `${tableName}_${form.m2m_one_collection}`
+        return {
+          many_collection: junctionName,
+          many_field: `${tableName}_id`,
+          one_collection: tableName,
+          one_field: 'id',
+          junction_field: `${form.m2m_one_collection}_id`
+        }
+      }
       return {
         many_collection: form.m2m_junction,
         many_field: form.m2m_many_field,
         one_collection: tableName,
-        one_field: form.m2m_one_field || form.m2m_one_collection,
+        one_field: form.m2m_one_field || 'id',
         junction_field: form.m2m_junction_field
       }
+    }
     return {
       many_collection: tableName,
       many_field: form.m2a_many_field,
@@ -2681,13 +2782,15 @@ function RelationsTab({
   const isFormValid = (): boolean => {
     if (selectedType === 'm2o') return !!form.m2o_many_field && !!form.m2o_one_collection
     if (selectedType === 'o2m') return !!form.o2m_many_collection && !!form.o2m_many_field
-    if (selectedType === 'm2m')
+    if (selectedType === 'm2m') {
+      if (form.m2m_auto) return !!form.m2m_one_collection
       return (
         !!form.m2m_junction &&
         !!form.m2m_many_field &&
         !!form.m2m_junction_field &&
         !!form.m2m_one_collection
       )
+    }
     return !!form.m2a_many_field && !!form.m2a_one_collection_field
   }
 
@@ -2708,7 +2811,12 @@ function RelationsTab({
       const companion = cmsRelations.find(
         (r) => r.many_collection === rel.many_collection && r.many_field === rel.junction_field && r.id !== rel.id
       )
-      const target = companion?.one_collection ?? rel.one_collection
+      const target =
+        companion?.one_collection ??
+        (rel.junction_field?.endsWith('_id')
+          ? rel.junction_field.slice(0, -3)
+          : rel.junction_field) ??
+        rel.one_collection
       return `${tableName} ↔ ${target} (via ${rel.many_collection})`
     }
     return `${tableName}.${rel.many_field} → any (${rel.one_collection_field})`
@@ -2725,17 +2833,21 @@ function RelationsTab({
       base.o2m_many_collection = rel.many_collection
       base.o2m_many_field = rel.many_field
     } else if (t === 'm2m') {
+      base.m2m_auto = false
       base.m2m_junction = rel.many_collection
       base.m2m_many_field = rel.many_field
       base.m2m_junction_field = rel.junction_field ?? ''
-      // rel.one_collection is the SOURCE (this) table — target must be resolved
-      // from the companion relation where many_field === junction_field
       const companion = cmsRelations.find(
         (r) => r.many_collection === rel.many_collection &&
                r.many_field === rel.junction_field &&
                r.id !== rel.id
       )
-      base.m2m_one_collection = companion?.one_collection ?? ''
+      // fall back to stripping _id suffix if no companion exists yet
+      const derivedTarget =
+        companion?.one_collection ??
+        (rel.junction_field?.endsWith('_id') ? rel.junction_field.slice(0, -3) : rel.junction_field) ??
+        ''
+      base.m2m_one_collection = derivedTarget
       base.m2m_one_field = companion?.one_field ?? ''
     } else {
       base.m2a_many_field = rel.many_field
@@ -2811,6 +2923,32 @@ function RelationsTab({
       if (selectedType === 'm2a' && form.m2a_is_new_field && form.m2a_many_field) {
         await schemaApi.addColumn(tableName, { name: form.m2a_many_field, type: form.m2a_new_field_type, nullable: true })
         await api.post(`/collections/${tableName}/fields`, { field: form.m2a_many_field, type: form.m2a_new_field_type })
+      }
+      if (selectedType === 'm2m' && form.m2m_auto && form.m2m_one_collection) {
+        const junctionName =
+          form.m2m_auto_junction_name || `${tableName}_${form.m2m_one_collection}`
+        const sourceFK = `${tableName}_id`
+        const targetFK = `${form.m2m_one_collection}_id`
+        await schemaApi.createTable({ name: junctionName })
+        await schemaApi.addColumn(junctionName, { name: sourceFK, type: 'integer', nullable: false })
+        await schemaApi.addColumn(junctionName, { name: targetFK, type: 'integer', nullable: false })
+        // primary relation (junction → source/this table)
+        await schemaApi.createRelation({
+          many_collection: junctionName,
+          many_field: sourceFK,
+          one_collection: tableName,
+          one_field: 'id',
+          junction_field: targetFK
+        })
+        // companion relation (junction → target table) — needed for summary display
+        await schemaApi.createRelation({
+          many_collection: junctionName,
+          many_field: targetFK,
+          one_collection: form.m2m_one_collection,
+          one_field: 'id',
+          junction_field: sourceFK
+        })
+        return
       }
       return schemaApi.createRelation(buildPayload())
     },

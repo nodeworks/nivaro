@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clock, File, Loader2, Plus, Upload, X } from 'lucide-react'
+import { Clock, File, FileAudio, FileCode, FileSpreadsheet, FileText, FileVideo, Loader2, Plus, Upload, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useGridFlush, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
@@ -37,6 +37,21 @@ function isImage(type: string | null) {
   return !!type && type.startsWith('image/')
 }
 
+function fileIcon(type: string | null, cls: string) {
+  if (!type) return <File className={cls} strokeWidth={1.5} />
+  if (type.startsWith('video/')) return <FileVideo className={cls} strokeWidth={1.5} />
+  if (type.startsWith('audio/')) return <FileAudio className={cls} strokeWidth={1.5} />
+  if (type === 'application/pdf') return <FileText className={cls} strokeWidth={1.5} />
+  if (type.startsWith('text/')) return <FileText className={cls} strokeWidth={1.5} />
+  if (type.includes('spreadsheet') || type.includes('excel') || type === 'text/csv')
+    return <FileSpreadsheet className={cls} strokeWidth={1.5} />
+  if (type.includes('wordprocessing') || type.includes('msword'))
+    return <FileText className={cls} strokeWidth={1.5} />
+  if (type.includes('json') || type.includes('javascript') || type.includes('typescript') || type.includes('xml'))
+    return <FileCode className={cls} strokeWidth={1.5} />
+  return <File className={cls} strokeWidth={1.5} />
+}
+
 function FileThumb({
   url,
   type,
@@ -64,7 +79,7 @@ function FileThumb({
   }
   return (
     <div className={cn(dim, 'flex items-center justify-center rounded bg-slate-100 shrink-0')}>
-      <File className={size === 'sm' ? 'h-4 w-4' : 'h-6 w-6'} strokeWidth={1.5} />
+      {fileIcon(type, size === 'sm' ? 'h-4 w-4' : 'h-6 w-6')}
     </div>
   )
 }
@@ -498,7 +513,7 @@ export function FileM2MField({
           get('/files', {
             filter: JSON.stringify({ id: { _in: allFileIds } }),
             limit: String(allFileIds.length),
-            fields: 'id,filename_download,title,type,filesize'
+            fields: 'id,filename_download,title,type,filesize,uploaded_on,uploaded_by_name'
           })
         )
         .then(r => r.data ?? [])
@@ -564,55 +579,66 @@ export function FileM2MField({
   return (
     <div className='space-y-2'>
       {(allFileIds.length > 0 || pendingFiles.length > 0) && (
-        <div className='flex flex-wrap gap-2'>
+        <div className='flex flex-col gap-1.5'>
           {allFileIds.map(id => {
             const f = filesMap[id]
             return (
-              <div key={id} className='group relative'>
+              <div key={id} className='flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50'>
                 <FileThumb
                   url={getUrl(id)}
                   type={f?.type ?? null}
                   filename={f?.filename_download ?? id}
-                  size='lg'
+                  size='sm'
                 />
-                <div className='absolute inset-0 rounded flex items-end justify-center opacity-0 group-hover:opacity-100 bg-gradient-to-t from-black/40 to-transparent transition-opacity'>
-                  <p className='text-[9px] text-white truncate max-w-full px-1 pb-1'>
+                <div className='flex-1 min-w-0'>
+                  <p className='text-[12px] font-medium text-slate-700 truncate'>
                     {f?.title || f?.filename_download || id}
                   </p>
+                  <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
+                    {f?.type && <span className='text-[10px] text-slate-400'>{f.type}</span>}
+                    {f?.filesize != null && <span className='text-[10px] text-slate-400'>{fmtSize(f.filesize)}</span>}
+                    {f?.uploaded_on && <span className='text-[10px] text-slate-400'>{fmtDate(f.uploaded_on)}</span>}
+                    {f?.uploaded_by_name && <span className='text-[10px] text-slate-500'>by {f.uploaded_by_name}</span>}
+                  </div>
                 </div>
                 {!disabled && (
                   <button
                     type='button'
                     onClick={() => removeFile(id)}
-                    className='absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600'
+                    className='text-slate-300 hover:text-red-400 p-0.5 shrink-0'
                   >
-                    <X className='h-2.5 w-2.5' />
+                    <X className='h-3.5 w-3.5' />
                   </button>
                 )}
               </div>
             )
           })}
           {pendingFiles.map(pf => (
-            <div key={pf.url} className='group relative'>
+            <div key={pf.url} className='flex items-center gap-2 rounded-lg border border-amber-200 p-2 bg-amber-50/50'>
               <FileThumb
                 url={pf.url}
                 type={pf.file.type || null}
                 filename={pf.file.name}
-                size='lg'
+                size='sm'
               />
-              <div className='absolute inset-0 rounded bg-amber-400/10 border border-amber-300 flex items-start justify-end p-0.5'>
-                <Clock className='h-3 w-3 text-amber-500' />
-              </div>
-              <div className='absolute inset-0 rounded flex items-end justify-center opacity-0 group-hover:opacity-100 bg-gradient-to-t from-black/40 to-transparent transition-opacity'>
-                <p className='text-[9px] text-white truncate max-w-full px-1 pb-1'>{pf.file.name}</p>
+              <div className='flex-1 min-w-0'>
+                <div className='flex items-center gap-1'>
+                  <Clock className='h-3 w-3 text-amber-400 shrink-0' />
+                  <p className='text-[12px] font-medium text-slate-700 truncate'>{pf.file.name}</p>
+                </div>
+                <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
+                  {pf.file.type && <span className='text-[10px] text-slate-400'>{pf.file.type}</span>}
+                  <span className='text-[10px] text-slate-400'>{fmtSize(pf.file.size)}</span>
+                  <span className='text-[10px] text-amber-500'>Pending upload</span>
+                </div>
               </div>
               {!disabled && (
                 <button
                   type='button'
                   onClick={() => removePending(pf.url)}
-                  className='absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600'
+                  className='text-slate-300 hover:text-red-400 p-0.5 shrink-0'
                 >
-                  <X className='h-2.5 w-2.5' />
+                  <X className='h-3.5 w-3.5' />
                 </button>
               )}
             </div>

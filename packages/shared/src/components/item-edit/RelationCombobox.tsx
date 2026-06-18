@@ -104,7 +104,7 @@ export function RelationCombobox({
         type='button'
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
-        className='flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm text-left hover:bg-accent disabled:opacity-50'
+        className='flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm text-left hover:bg-slate-50 disabled:opacity-50'
       >
         {showLoader ? (
           <Loader2 className='h-3.5 w-3.5 animate-spin text-muted-foreground' />

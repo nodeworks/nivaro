@@ -70,7 +70,10 @@ export function FieldRenderer({
     isRelIface && !m2oRel
       ? (() => {
           const r = relations.find(
-            (rel) => rel.one_collection === collection && rel.one_field === field.field
+            (rel) =>
+              rel.one_collection === collection &&
+              (rel.one_field === field.field ||
+                (rel.junction_field != null && rel.many_collection === field.field))
           )
           if (!r) return null
           if (r.junction_field) return r
