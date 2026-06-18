@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, ChevronDown, Loader2, X } from 'lucide-react'
+import { Check, ChevronDown, Loader2, Search, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -117,13 +117,14 @@ export function RelationCombobox({
       </button>
       {open && (
         <div className='absolute z-50 mt-1 min-w-[240px] w-max max-w-[360px] rounded-md border border-border bg-popover shadow-md'>
-          <div className='border-b p-1.5'>
+          <div className='flex items-center border-b px-3'>
+            <Search className='mr-2 h-4 w-4 shrink-0 opacity-50' />
             <input
               ref={inputRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder='Search…'
-              className='w-full rounded px-2 py-1 text-[13px] bg-muted/40 focus:outline-none'
+              className='flex h-9 w-full bg-transparent py-3 text-[13px] outline-none placeholder:text-muted-foreground'
             />
           </div>
           <div className='max-h-52 overflow-y-auto py-1'>
@@ -159,12 +160,11 @@ export function RelationCombobox({
                         onChange(item.id)
                         setOpen(false)
                       }}
-                      className={cn(
-                        'flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-slate-50',
-                        sel && 'font-medium'
-                      )}
+                      className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-slate-50'
                     >
-                      <Check className={cn('h-3.5 w-3.5 shrink-0', sel ? 'text-[#00ceff]' : 'opacity-0')} />
+                      <div className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors', sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300')}>
+                        {sel && <Check className='h-2.5 w-2.5 text-white' />}
+                      </div>
                       {label}
                     </button>
                   )

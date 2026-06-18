@@ -462,6 +462,16 @@ export function M2MSingleSelectCombobox({
             onValueChange={setSearch}
             className='h-9 text-[12px]'
           />
+          {currentRelatedId != null && (
+            <button
+              type='button'
+              onClick={() => { handleClear(); setOpen(false) }}
+              className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-slate-50 border-b border-slate-100'
+            >
+              <X className='h-3.5 w-3.5 text-slate-400' />
+              Clear selection
+            </button>
+          )}
           <CommandList>
             {isLoadingOptions ? (
               <div className='flex items-center justify-center py-4'>
@@ -474,13 +484,6 @@ export function M2MSingleSelectCombobox({
             )}
             {!isLoadingOptions && (
             <CommandGroup>
-              <CommandItem
-                value='__clear__'
-                onSelect={handleClear}
-                className='text-[12px] text-slate-400'
-              >
-                Clear selection
-              </CommandItem>
               {[...options]
                 .sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
                 .map((opt) => {
