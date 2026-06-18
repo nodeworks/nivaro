@@ -411,7 +411,7 @@ export function M2MSingleSelectCombobox({
       <button
         type='button'
         disabled
-        className='w-full h-9 px-3 text-[13px] border border-input rounded-md bg-background text-left flex items-center justify-between opacity-50 cursor-not-allowed'
+        className='w-full h-9 px-3 text-[12px] border border-input rounded-md bg-background text-left flex items-center justify-between opacity-50 cursor-not-allowed'
       >
         <span className='truncate text-muted-foreground'>Select {requiredParent} first</span>
         <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
@@ -431,12 +431,12 @@ export function M2MSingleSelectCombobox({
         <button
           type='button'
           className={cn(
-            'w-full h-9 px-3 text-[13px] border rounded-md bg-white text-left flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors',
+            'w-full h-9 px-3 text-[12px] border rounded-md bg-white text-left flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors',
             isPendingChange ? 'border-nvr-cyan/50' : 'border-slate-200'
           )}
         >
           {isLoadingLabel ? (
-            <span className='text-slate-400 text-[13px]'>Loading…</span>
+            <span className='text-slate-400 text-[12px]'>Loading…</span>
           ) : (
             <span
               className={cn(
@@ -460,7 +460,7 @@ export function M2MSingleSelectCombobox({
             placeholder='Search…'
             value={search}
             onValueChange={setSearch}
-            className='h-9 text-[13px]'
+            className='h-9 text-[12px]'
           />
           <CommandList>
             {isLoadingOptions ? (
@@ -477,7 +477,7 @@ export function M2MSingleSelectCombobox({
               <CommandItem
                 value='__clear__'
                 onSelect={handleClear}
-                className='text-[13px] text-slate-400'
+                className='text-[12px] text-slate-400'
               >
                 Clear selection
               </CommandItem>
@@ -491,7 +491,7 @@ export function M2MSingleSelectCombobox({
                       key={optId}
                       value={optId}
                       onSelect={() => handleSelect(opt.id)}
-                      className='flex items-center gap-2 text-[13px]'
+                      className='flex items-center gap-2 text-[12px]'
                     >
                       <div
                         className={cn(
