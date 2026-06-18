@@ -12,7 +12,7 @@ import {
 } from '../ui/sheet'
 import { useO2MStaging } from './O2MStagingContext'
 import { FieldRenderer } from './FieldRenderer'
-import { applyDisplayTemplate, SENTINEL_FIELDS } from './helpers'
+import { applyDisplayTemplate, parseJson, SENTINEL_FIELDS } from './helpers'
 import type { CMSField, CMSRelation } from './types'
 
 interface RowRevision {
@@ -244,6 +244,22 @@ export function InlineTableField({
     return result
   }, [rows, pendingRows, m2oRelMap])
 
+  // For relation-grouped fields, track which collection needs group/option expansion
+  const m2oGroupedConfig = useMemo(() => {
+    const map = new Map<string, { groupField: string; optionField: string }>()
+    for (const c of displayCols) {
+      const rel = m2oRelMap.get(c.field)
+      if (!rel?.one_collection) continue
+      if (c.interface === 'relation-grouped') {
+        const opts = parseJson<{ group_field?: string; option_field?: string }>(c.options)
+        if (opts?.group_field && opts?.option_field) {
+          map.set(rel.one_collection, { groupField: opts.group_field, optionField: opts.option_field })
+        }
+      }
+    }
+    return map
+  }, [displayCols, m2oRelMap])
+
   const m2oQueryKey = useMemo(
     () => ['m2o-display', relatedCollection, ...Array.from(m2oLookupIds.entries()).flat(2)],
     [relatedCollection, m2oLookupIds]
@@ -254,26 +270,52 @@ export function InlineTableField({
     queryKey: m2oQueryKey,
     queryFn: async () => {
       const result: Record<string, Record<string, string>> = {}
-      for (const [oneCollection, ids] of m2oLookupIds) {
-        const [colMeta, data] = await Promise.all([
+      // Fetch all collection metas first so we know which fields to expand
+      const colMetas = await Promise.all(
+        [...m2oLookupIds.keys()].map((oneCollection) =>
           client
             .request<{ data: { display_template?: string | null } }>(get(`/collections/${oneCollection}`))
-            .then((r) => r.data),
-          client
+            .then((r) => ({ collection: oneCollection, meta: r.data }))
+        )
+      )
+      await Promise.all(
+        colMetas.map(async ({ collection: oneCollection, meta: colMeta }) => {
+          const ids = m2oLookupIds.get(oneCollection)!
+          const grouped = m2oGroupedConfig.get(oneCollection)
+          let fieldsParam: string | undefined
+          if (grouped) {
+            fieldsParam = `id,${grouped.groupField}.*,${grouped.optionField}.*`
+          } else {
+            const tmpl = colMeta?.display_template ?? undefined
+            const dottedFields = tmpl
+              ? [...tmpl.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1]).filter((f) => f.includes('.'))
+              : []
+            fieldsParam = dottedFields.length > 0 ? ['id', ...dottedFields].join(',') : undefined
+          }
+          const data = await client
             .request<{ data: Record<string, unknown>[] }>(
               get(`/items/${oneCollection}`, {
                 filter: JSON.stringify({ id: { _in: ids } }),
-                limit: ids.length
+                limit: ids.length,
+                ...(fieldsParam ? { fields: fieldsParam } : {})
               })
             )
             .then((r) => r.data ?? [])
-        ])
-        const tmpl = colMeta?.display_template ?? undefined
-        result[oneCollection] = {}
-        for (const item of data) {
-          result[oneCollection][String(item.id)] = applyDisplayTemplate(tmpl, item)
-        }
-      }
+          result[oneCollection] = {}
+          for (const item of data) {
+            if (grouped) {
+              const gSub = item[grouped.groupField] as Record<string, unknown> | null
+              const oSub = item[grouped.optionField] as Record<string, unknown> | null
+              const gLabel = gSub ? applyDisplayTemplate(null, gSub) : null
+              const oLabel = oSub ? applyDisplayTemplate(null, oSub) : null
+              result[oneCollection][String(item.id)] = [gLabel, oLabel].filter(Boolean).join(' — ') || String(item.id)
+            } else {
+              const tmpl = colMeta?.display_template ?? undefined
+              result[oneCollection][String(item.id)] = applyDisplayTemplate(tmpl, item)
+            }
+          }
+        })
+      )
       return result
     },
     enabled: m2oLookupIds.size > 0,
