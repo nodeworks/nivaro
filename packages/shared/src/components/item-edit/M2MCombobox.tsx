@@ -436,7 +436,7 @@ export function M2MSingleSelectCombobox({
           )}
         >
           {isLoadingLabel ? (
-            <span className='text-slate-400 text-[12px]'>Loading…</span>
+            <Loader2 className='h-3.5 w-3.5 animate-spin text-muted-foreground' />
           ) : (
             <span
               className={cn(

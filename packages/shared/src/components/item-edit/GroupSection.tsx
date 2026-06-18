@@ -1,11 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, Mail, User } from 'lucide-react'
 import * as LucideIcons from 'lucide-react'
 import React, { type ReactNode } from 'react'
 import { useRef, useState } from 'react'
-import { useOptionalNivaroClient } from '../../context'
+import { useNavigation, useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu'
 import { FieldRow } from './FieldRow'
 import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpers'
 import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps, SlotAssignment } from './types'
@@ -98,6 +104,7 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
 // Tiny inline user pill — used in SummaryStrip only
 function SummaryUserName({ userId }: { userId: string }) {
   const client = useOptionalNivaroClient()
+  const { navigate } = useNavigation()
   const { data: user } = useQuery<{ first_name: string | null; last_name: string | null; email: string } | null>({
     queryKey: ['user-chip', userId],
     queryFn: () =>
@@ -110,10 +117,24 @@ function SummaryUserName({ userId }: { userId: string }) {
   const name = user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId
   const initials = name.split(' ').map((p: string) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
   return (
-    <span className='inline-flex items-center gap-1 rounded-full bg-slate-100 py-px pl-0.5 pr-2'>
-      <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
-      <span className='text-[11px] text-slate-600'>{name}</span>
-    </span>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 py-px pl-0.5 pr-2 hover:bg-slate-200 transition-colors'>
+          <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
+          <span className='text-[11px] text-slate-600'>{name}</span>
+        </span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='start' className='text-[12px]'>
+        <DropdownMenuItem className='gap-2 text-[12px]' onSelect={() => navigate(`/users/${userId}`)}>
+          <User className='h-3.5 w-3.5' /> View profile
+        </DropdownMenuItem>
+        {user?.email && (
+          <DropdownMenuItem className='gap-2 text-[12px]' onSelect={() => window.open(`mailto:${user.email}`)}>
+            <Mail className='h-3.5 w-3.5' /> Send email
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -186,6 +207,7 @@ export function OwnersInline({ collection, itemId, label }: { collection: string
 // Single user chip — fetches user by id, shows initials avatar + name
 function UserChip({ userId }: { userId: string }) {
   const client = useOptionalNivaroClient()
+  const { navigate } = useNavigation()
   const { data: user } = useQuery<{ id: number; first_name: string | null; last_name: string | null; email: string } | null>({
     queryKey: ['user-chip', userId],
     queryFn: () =>
@@ -198,12 +220,26 @@ function UserChip({ userId }: { userId: string }) {
   const name = user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId
   const initials = name.split(' ').map((p: string) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
   return (
-    <div className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'>
-      <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
-        {initials}
-      </span>
-      <span className='text-[12px] text-slate-700'>{name}</span>
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <div className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 hover:bg-slate-100 transition-colors'>
+          <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+            {initials}
+          </span>
+          <span className='text-[12px] text-slate-700'>{name}</span>
+        </div>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='start' className='text-[12px]'>
+        <DropdownMenuItem className='gap-2 text-[12px]' onSelect={() => navigate(`/users/${userId}`)}>
+          <User className='h-3.5 w-3.5' /> View profile
+        </DropdownMenuItem>
+        {user?.email && (
+          <DropdownMenuItem className='gap-2 text-[12px]' onSelect={() => window.open(`mailto:${user.email}`)}>
+            <Mail className='h-3.5 w-3.5' /> Send email
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -244,6 +280,7 @@ function SummaryStrip({
   ownersAssignment,
   m2mCounts,
   o2mCounts,
+  hideEmpty,
 }: {
   summaryFields: string[]
   fields: CMSField[]
@@ -254,8 +291,18 @@ function SummaryStrip({
   ownersAssignment?: SlotAssignment | null
   m2mCounts?: Record<string, number>
   o2mCounts?: Record<string, number>
+  hideEmpty?: boolean
 }) {
-  if (summaryFields.length === 0) return null
+  const visibleFields = hideEmpty
+    ? summaryFields.filter((key) => {
+        if (key === '__owners__') return true // async — always show
+        if (m2mCounts && key in m2mCounts) return (m2mCounts[key] ?? 0) > 0
+        if (o2mCounts && key in o2mCounts) return (o2mCounts[key] ?? 0) > 0
+        const v = draft[key]
+        return v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0)
+      })
+    : summaryFields
+  if (visibleFields.length === 0) return null
 
   const renderItem = (key: string): React.ReactNode => {
     if (key === '__owners__') {
@@ -344,7 +391,7 @@ function SummaryStrip({
 
   return (
     <div className='flex flex-wrap gap-1.5 border-t border-slate-100 px-5 py-2'>
-      {summaryFields.map((key) => (
+      {visibleFields.map((key) => (
         <div key={key} className='inline-flex items-center gap-1.5 rounded border border-slate-200 bg-slate-50 px-2.5 py-1'>
           {renderItem(key)}
         </div>
@@ -376,7 +423,8 @@ export function GroupSection({
   m2mCounts,
   o2mCounts,
   footerSlot,
-  ownersAssignment
+  ownersAssignment,
+  hideEmptySummary
 }: {
   group: FieldGroup
   fields: CMSField[]
@@ -401,6 +449,7 @@ export function GroupSection({
   o2mCounts?: Record<string, number>
   footerSlot?: ReactNode
   ownersAssignment?: SlotAssignment | null
+  hideEmptySummary?: boolean
 }) {
   const [localCollapsed, setLocalCollapsed] = useState(group.is_collapsed ?? false)
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
@@ -453,6 +502,7 @@ export function GroupSection({
           ownersAssignment={ownersAssignment}
           m2mCounts={m2mCounts}
           o2mCounts={o2mCounts}
+          hideEmpty={!!group.summary_hide_empty || !!hideEmptySummary}
         />
       )}
       {!collapsed && (

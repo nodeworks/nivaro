@@ -190,6 +190,10 @@ export function ItemEditForm({
 
   // ── Pending O2M rows (new records) ─────────────────────────────────────────
   const [pendingO2MRows, setPendingO2MRows] = useState<Map<string, Record<string, unknown>[]>>(new Map())
+  // Pending edits/deletes for existing rows (saveMode='pending')
+  const [pendingO2MEdits, setPendingO2MEdits] = useState<Map<string, Map<string, Record<string, unknown>>>>(new Map())
+  const [pendingO2MDeletes, setPendingO2MDeletes] = useState<Map<string, Set<string>>>(new Map())
+
   const o2mStagingCtx = useMemo<O2MStagingCtx>(() => ({
     getPendingRows: (rc, mf) => pendingO2MRows.get(`${rc}.${mf}`) ?? [],
     queueRow: (rc, mf, data) => setPendingO2MRows(prev => {
@@ -222,8 +226,53 @@ export function ItemEditForm({
       arr.splice(toIdx, 0, moved)
       next.set(key, arr)
       return next
-    })
-  }), [pendingO2MRows])
+    }),
+    getPendingEdits: (rc, mf) => pendingO2MEdits.get(`${rc}.${mf}`) ?? new Map(),
+    getPendingDeletes: (rc, mf) => pendingO2MDeletes.get(`${rc}.${mf}`) ?? new Set(),
+    queueEdit: (rc, mf, rowId, changes) => setPendingO2MEdits(prev => {
+      const next = new Map(prev)
+      const key = `${rc}.${mf}`
+      const edits = new Map(next.get(key) ?? [])
+      edits.set(rowId, { ...(edits.get(rowId) ?? {}), ...changes })
+      next.set(key, edits)
+      return next
+    }),
+    queueDelete: (rc, mf, rowId) => {
+      setPendingO2MDeletes(prev => {
+        const next = new Map(prev)
+        const key = `${rc}.${mf}`
+        const dels = new Set(next.get(key) ?? [])
+        dels.add(rowId)
+        next.set(key, dels)
+        return next
+      })
+      // Remove any pending edit for this row
+      setPendingO2MEdits(prev => {
+        const next = new Map(prev)
+        const key = `${rc}.${mf}`
+        const edits = new Map(next.get(key) ?? [])
+        edits.delete(rowId)
+        next.set(key, edits)
+        return next
+      })
+    },
+    cancelPendingEdit: (rc, mf, rowId) => setPendingO2MEdits(prev => {
+      const next = new Map(prev)
+      const key = `${rc}.${mf}`
+      const edits = new Map(next.get(key) ?? [])
+      edits.delete(rowId)
+      next.set(key, edits)
+      return next
+    }),
+    cancelPendingDelete: (rc, mf, rowId) => setPendingO2MDeletes(prev => {
+      const next = new Map(prev)
+      const key = `${rc}.${mf}`
+      const dels = new Set(next.get(key) ?? [])
+      dels.delete(rowId)
+      next.set(key, dels)
+      return next
+    }),
+  }), [pendingO2MRows, pendingO2MEdits, pendingO2MDeletes])
 
   // ── M2M staging ────────────────────────────────────────────────────────────
   const [m2mLinks, setM2mLinks] = useState<Map<string, unknown[]>>(new Map())
@@ -423,6 +472,7 @@ export function ItemEditForm({
   const isStepsMode = hasTabs && layoutMeta?.tab_mode === 'steps'
   const validateBeforeNext = !!layoutMeta?.validate_before_next
   const summaryEnabled = !!layoutMeta?.summary_enabled
+  const hideEmptySummary = !!layoutMeta?.summary_hide_empty
   // Layout-level disable flags override props when a layout is active
   const effectiveShowRevisions = layoutMeta ? !layoutMeta.disable_revisions && showRevisions : showRevisions
   const effectiveShowComments = layoutMeta ? !layoutMeta.disable_comments && showComments : showComments
@@ -722,6 +772,26 @@ export function ItemEditForm({
         await Promise.all(flushOps)
       }
 
+      // Flush pending edits/deletes from saveMode='pending' inline tables
+      if (pendingO2MEdits.size > 0 || pendingO2MDeletes.size > 0) {
+        const flushOps: Promise<unknown>[] = []
+        for (const [key, edits] of pendingO2MEdits.entries()) {
+          const [rc] = key.split('.')
+          for (const [rowId, changes] of edits.entries()) {
+            flushOps.push(client.request(patch(`/items/${rc}/${rowId}`, changes)).catch(() => {}))
+          }
+        }
+        for (const [key, deletes] of pendingO2MDeletes.entries()) {
+          const [rc] = key.split('.')
+          for (const rowId of deletes) {
+            flushOps.push(client.request(del(`/items/${rc}/${rowId}`)).catch(() => {}))
+          }
+        }
+        await Promise.all(flushOps)
+        setPendingO2MEdits(new Map())
+        setPendingO2MDeletes(new Map())
+      }
+
       if (isNew && pendingTasks.length > 0) {
         await Promise.all(
           pendingTasks.map((t) =>
@@ -1001,6 +1071,7 @@ export function ItemEditForm({
         }
         summaryFields={parseSummaryFields(g.summary_fields)}
         m2mCounts={fieldCounts}
+        hideEmptySummary={hideEmptySummary}
       />
     )
   }

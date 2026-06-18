@@ -37,7 +37,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { type Addendum, api, type CMSField } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, titleCase } from '@/lib/utils'
-import { ItemEditAuthContext, ItemEditForm, NivaroProvider } from '@nivaro/shared'
+import { ItemEditAuthContext, ItemEditForm, NavigationContext, NivaroProvider } from '@nivaro/shared'
 import { createNivaro } from '@nivaro/sdk'
 
 // ─── Local types ──────────────────────────────────────────────────────────────
@@ -529,6 +529,7 @@ export function ItemEditPage() {
 
   return (
     <NivaroProvider client={client}>
+    <NavigationContext.Provider value={{ navigate }}>
     <ItemEditAuthContext.Provider value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}>
       <div className='flex flex-1 min-h-0 flex-col'>
 
@@ -674,6 +675,7 @@ export function ItemEditPage() {
         />
       </div>
     </ItemEditAuthContext.Provider>
+    </NavigationContext.Provider>
     </NivaroProvider>
   )
 }

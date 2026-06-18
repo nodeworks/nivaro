@@ -4481,6 +4481,7 @@ interface FieldGroup {
   hide_when_empty?: boolean | number
   visibility_mode?: 'always' | 'new_only' | 'existing_only'
   summary_fields?: string | null
+  summary_hide_empty?: boolean | number
 }
 
 // ── Width options ──────────────────────────────────────────────────────────────
@@ -5040,6 +5041,7 @@ function FieldSettingsPopover({
   const [numPrecisionFmt, setNumPrecisionFmt] = useState('2')
   const [numCurrency, setNumCurrency] = useState('USD')
   const [numAggregate, setNumAggregate] = useState<'sum' | 'count' | 'avg' | 'min' | 'max' | ''>('')
+  const [saveMode, setSaveMode] = useState<'immediate' | 'pending'>('immediate')
 
   const isNumericAbstractType = ['integer', 'bigInteger', 'decimal', 'float', 'money', 'smallmoney', 'tinyint', 'smallint', 'bigint'].includes(abstractType ?? '')
 
@@ -5070,7 +5072,8 @@ function FieldSettingsPopover({
         setNumPrecisionFmt(opts.precision != null ? String(opts.precision) : '2')
         setNumCurrency((opts.currency as string) ?? 'USD')
         setNumAggregate((opts.aggregate as 'sum' | 'count' | 'avg' | 'min' | 'max' | '') ?? '')
-      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate('') }
+        setSaveMode((opts.save_mode as 'immediate' | 'pending') ?? 'immediate')
+      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate(''); setSaveMode('immediate') }
     }
     setOpen(next)
   }
@@ -5109,7 +5112,7 @@ function FieldSettingsPopover({
           delete existing.aggregate
         }
         const o2mOpts = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table'))
-          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : {}) }
+          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : { save_mode: saveMode }) }
           : {}
         const fileOpts = (iface === 'file-image' || iface === 'files-m2m')
           ? { allow_upload: allowUpload, allow_pick: allowPick }
@@ -5362,6 +5365,12 @@ function FieldSettingsPopover({
                 <div className='flex items-center gap-2'>
                   <Switch checked={gridShowTotals} onCheckedChange={setGridShowTotals} className='scale-75' />
                   <span className='text-[11px] text-slate-600'>Show column totals</span>
+                </div>
+              )}
+              {iface === 'inline-table' && (
+                <div className='flex items-center gap-2'>
+                  <Switch checked={saveMode === 'pending'} onCheckedChange={v => setSaveMode(v ? 'pending' : 'immediate')} className='scale-75' />
+                  <span className='text-[11px] text-slate-600'>Always pending save (save with main form)</span>
                 </div>
               )}
               {iface === 'inline-table' && onRowRevisionsChange && (
@@ -5773,7 +5782,7 @@ function SortableGroupCard({
   containerGroups?: FieldGroup[]
   onSetContainer?: (id: number, container_id: number | null) => void
   onToggleCollapsed?: (id: number) => void
-  onGroupSettings?: (id: number, patch: Partial<Pick<FieldGroup, 'hide_when_empty' | 'visibility_mode' | 'summary_fields'>>) => void
+  onGroupSettings?: (id: number, patch: Partial<Pick<FieldGroup, 'hide_when_empty' | 'visibility_mode' | 'summary_fields' | 'summary_hide_empty'>>) => void
   getRowRevisions?: (f: string) => boolean
   onRowRevisions?: (f: string, v: boolean) => void
 }) {
@@ -5926,6 +5935,15 @@ function SortableGroupCard({
                     })()}
                     {fieldNames.length === 0 && <p className='text-[11px] text-slate-300'>No fields assigned</p>}
                   </div>
+                  <label className='flex items-center gap-2 text-[11px] text-slate-600 mt-2'>
+                    <input
+                      type='checkbox'
+                      checked={!!group.summary_hide_empty}
+                      onChange={e => onGroupSettings(group.id, { summary_hide_empty: e.target.checked })}
+                      className='h-3.5 w-3.5'
+                    />
+                    Hide fields with no values
+                  </label>
                 </div>
               </PopoverContent>
             </Popover>
@@ -6064,6 +6082,7 @@ interface CollectionLayout {
   validate_before_next?: boolean | number
   summary_enabled?: boolean | number
   summary_show_all?: boolean | number
+  summary_hide_empty?: boolean | number
   ai_enabled?: boolean | number
   allow_clone?: boolean | number
   allow_schedule?: boolean | number
@@ -6222,7 +6241,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   })
 
   const patchLayoutMut = useMutation({
-    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'slug' | 'disable_comments' | 'disable_tasks' | 'disable_revisions' | 'disable_clone' | 'disable_delete' | 'accordion_mode' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field'>>) => {
+    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'slug' | 'disable_comments' | 'disable_tasks' | 'disable_revisions' | 'disable_clone' | 'disable_delete' | 'accordion_mode' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'summary_hide_empty' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field'>>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
     },
@@ -6461,6 +6480,12 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                       <label className='flex cursor-pointer items-center justify-between'>
                         <span className='text-[11px] text-slate-500 dark:text-slate-400'>Show all fields in summary</span>
                         <input type='checkbox' checked={!!selected.summary_show_all} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_show_all: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                      </label>
+                    )}
+                    {!!selected.summary_enabled && (
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide fields with no values</span>
+                        <input type='checkbox' checked={!!selected.summary_hide_empty} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_hide_empty: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
                       </label>
                     )}
                   </div>

@@ -33,13 +33,15 @@ export function InlineTableField({
   manyField,
   parentId,
   layoutId,
-  showRowRevisions
+  showRowRevisions,
+  saveMode = 'immediate'
 }: {
   relatedCollection: string
   manyField: string
   parentId: string
   layoutId?: number | null
   showRowRevisions?: boolean
+  saveMode?: 'immediate' | 'pending'
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -139,7 +141,10 @@ export function InlineTableField({
     return [...rawRows].sort((a, b) => Number(a[rowOrderField] ?? 0) - Number(b[rowOrderField] ?? 0))
   }, [rawRows, rowOrderField])
 
-  const pendingRows = isNew && staging ? staging.getPendingRows(relatedCollection, manyField) : []
+  const isPendingMode = saveMode === 'pending'
+  const pendingRows = (isNew || isPendingMode) && staging ? staging.getPendingRows(relatedCollection, manyField) : []
+  const pendingEdits = isPendingMode && staging ? staging.getPendingEdits(relatedCollection, manyField) : new Map<string, Record<string, unknown>>()
+  const pendingDeletes = isPendingMode && staging ? staging.getPendingDeletes(relatedCollection, manyField) : new Set<string>()
 
   const SPECIAL_GROUP_KEYS = new Set(['__apply_values__', '__create_with_defaults__'])
   const displayCols = cols.filter(
@@ -262,7 +267,7 @@ export function InlineTableField({
         return
       }
       if (editState.rowId === 'new') {
-        if (isNew && staging) {
+        if ((isNew || isPendingMode) && staging) {
           staging.queueRow(relatedCollection, manyField, { ...editState.draft })
           setEditState(null)
           return
@@ -270,6 +275,11 @@ export function InlineTableField({
         await client.request(post(`/items/${relatedCollection}`, { ...editState.draft, [manyField]: parentId }))
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       } else {
+        if (isPendingMode && staging) {
+          staging.queueEdit(relatedCollection, manyField, editState.rowId, editState.draft)
+          setEditState(null)
+          return
+        }
         await client.request(patch(`/items/${relatedCollection}/${editState.rowId}`, editState.draft))
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       }
@@ -363,6 +373,11 @@ export function InlineTableField({
 
   async function deleteRow(id: unknown, e: React.MouseEvent) {
     e.stopPropagation()
+    if (isPendingMode && staging) {
+      staging.queueDelete(relatedCollection, manyField, String(id))
+      if (editState?.rowId === String(id)) setEditState(null)
+      return
+    }
     try {
       await client.request(del(`/items/${relatedCollection}/${id}`))
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
@@ -499,7 +514,7 @@ export function InlineTableField({
         <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>
           <tr>
             {(rowOrderField || isNew) && <th className='w-6' />}
-            {isNew && <th className='px-3 py-2 text-left font-medium text-slate-400 text-[11px] w-16'>Status</th>}
+            {(isNew || isPendingMode) && <th className='px-3 py-2 text-left font-medium text-slate-400 text-[11px] w-20'>Status</th>}
             {displayCols.map((c) => (
               <th key={c.field} className='px-3 py-2 text-left font-medium text-slate-500 text-[11px]'>
                 {c.label ?? titleCase(c.field)}
@@ -513,7 +528,7 @@ export function InlineTableField({
           {defaultsOpen && (
             <tr className='border-b border-[#00ceff]/20 bg-[#00ceff]/5'>
               {(rowOrderField || isNew) && <td className='w-6' />}
-              {isNew && <td className='px-3 py-1 align-middle w-16'>
+              {(isNew || isPendingMode) && <td className='px-3 py-1 align-middle w-20'>
                 <span className='text-[10px] font-medium text-[#009abe]'>Defaults</span>
               </td>}
               {defaultsCols.map(c => (
@@ -624,35 +639,51 @@ export function InlineTableField({
             const isEditing = editState?.rowId === id
             const isDragging = dragIdx === ri
             const isDropTarget = dropIdx === ri && dragIdx !== ri
+            const isPendingEdit = pendingEdits.has(id)
+            const isPendingDelete = pendingDeletes.has(id)
+            // Merge pending edit changes into display values
+            const displayRow = isPendingEdit ? { ...row, ...pendingEdits.get(id) } : row
             return (
               <tr key={id}
-                draggable={!!rowOrderField && !isEditing}
+                draggable={!!rowOrderField && !isEditing && !isPendingDelete}
                 onDragStart={() => handleDragStart(ri)}
                 onDragOver={(e) => handleDragOver(e, ri)}
                 onDrop={handleDrop}
                 onDragEnd={handleDragEnd}
-                onClick={() => !isEditing && startEdit(row)}
+                onClick={() => !isEditing && !isPendingDelete && startEdit(row)}
                 className={cn('border-b border-slate-100 transition-colors',
                   isDragging ? 'opacity-40' : '',
                   isDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
-                  isEditing
-                    ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
-                    : ri % 2 === 0
+                  isPendingDelete ? 'opacity-50 bg-red-50/40 cursor-default line-through' : '',
+                  !isPendingDelete && isEditing ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default' : '',
+                  !isPendingDelete && !isEditing
+                    ? ri % 2 === 0
                       ? 'bg-white hover:bg-slate-50/80 cursor-pointer'
                       : 'bg-slate-50/50 hover:bg-slate-100/60 cursor-pointer'
+                    : ''
                 )}>
                 {rowOrderField && (
                   <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
                     <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
                   </td>
                 )}
+                {isPendingMode && (
+                  <td className='px-3 py-1 align-middle w-20'>
+                    {isPendingDelete
+                      ? <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5'>Delete</span>
+                      : isPendingEdit
+                        ? <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5'>Edited</span>
+                        : null
+                    }
+                  </td>
+                )}
                 {displayCols.map((c) => (
                   <td key={c.field} className='px-2 py-1 align-top'>
-                    {isEditing ? (
+                    {isEditing && !isPendingDelete ? (
                       <div onClick={(e) => e.stopPropagation()}>
                         <FieldRenderer
                           field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
-                          value={editState.draft[c.field] ?? null}
+                          value={editState!.draft[c.field] ?? null}
                           onChange={(v) => setDraftField(c.field, v)}
                           relations={childRelations}
                           collection={relatedCollection}
@@ -660,16 +691,16 @@ export function InlineTableField({
                         />
                       </div>
                     ) : (
-                      <div className='py-0.5 overflow-hidden'>{renderCell(c, row[c.field])}</div>
+                      <div className='py-0.5 overflow-hidden'>{renderCell(c, displayRow[c.field])}</div>
                     )}
                   </td>
                 ))}
                 <td className='px-1 py-1 align-middle'>
-                  {isEditing ? (
+                  {isEditing && !isPendingDelete ? (
                     <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
                       <button type='button' disabled={saving} onClick={saveEdit}
                         className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'>
-                        {saving ? '…' : 'Save'}
+                        {saving ? '…' : isPendingMode ? 'Queue' : 'Save'}
                       </button>
                       <button type='button' onClick={cancelEdit}
                         className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'>
@@ -678,17 +709,34 @@ export function InlineTableField({
                     </div>
                   ) : (
                     <div className='flex items-center justify-end gap-0.5'>
-                      {showRowRevisions && (
-                        <button type='button' title='Row history'
-                          onClick={(e) => { e.stopPropagation(); setHistoryRow(row) }}
-                          className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'>
-                          <History className='h-3 w-3' />
+                      {isPendingDelete ? (
+                        <button type='button' title='Undo delete'
+                          onClick={(e) => { e.stopPropagation(); staging?.cancelPendingDelete(relatedCollection, manyField, id) }}
+                          className='rounded px-1.5 py-0.5 text-[10px] text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400'>
+                          Undo
                         </button>
+                      ) : (
+                        <>
+                          {isPendingEdit && (
+                            <button type='button' title='Undo edit'
+                              onClick={(e) => { e.stopPropagation(); staging?.cancelPendingEdit(relatedCollection, manyField, id) }}
+                              className='rounded p-0.5 text-amber-400 hover:text-amber-600 text-[10px]'>
+                              ↩
+                            </button>
+                          )}
+                          {showRowRevisions && (
+                            <button type='button' title='Row history'
+                              onClick={(e) => { e.stopPropagation(); setHistoryRow(row) }}
+                              className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'>
+                              <History className='h-3 w-3' />
+                            </button>
+                          )}
+                          <button type='button' onClick={(e) => deleteRow(row.id, e)}
+                            className='rounded p-0.5 text-slate-300 hover:text-red-500'>
+                            <X className='h-3 w-3' />
+                          </button>
+                        </>
                       )}
-                      <button type='button' onClick={(e) => deleteRow(row.id, e)}
-                        className='rounded p-0.5 text-slate-300 hover:text-red-500'>
-                        <X className='h-3 w-3' />
-                      </button>
                     </div>
                   )}
                 </td>
@@ -700,7 +748,7 @@ export function InlineTableField({
           {isEditingNew && (
             <tr className='border-b border-slate-100 bg-[#f0fbff] dark:bg-nvr-cyan/5'>
               {(rowOrderField || isNew) && <td className='w-6' />}
-              {isNew && <td className='px-3 py-1.5' />}
+              {(isNew || isPendingMode) && <td className='px-3 py-1.5' />}
               {displayCols.map((c) => (
                 <td key={c.field} className='px-2 py-1 align-top'>
                   <div onClick={(e) => e.stopPropagation()}>
@@ -730,9 +778,9 @@ export function InlineTableField({
             </tr>
           )}
 
-          {(isNew ? pendingRows : rows).length === 0 && !isEditingNew && (
+          {(isNew || isPendingMode ? pendingRows : rows).length === 0 && (!isPendingMode || rows.length === 0) && !isEditingNew && (
             <tr>
-              <td colSpan={displayCols.length + (isNew ? 2 : 1) + (rowOrderField || isNew ? 1 : 0)} className='px-3 py-14 text-center text-slate-400'>
+              <td colSpan={displayCols.length + ((isNew || isPendingMode) ? 2 : 1) + (rowOrderField || isNew ? 1 : 0)} className='px-3 py-14 text-center text-slate-400'>
                 {isNew ? 'No pending rows' : 'No rows yet'}
               </td>
             </tr>
@@ -749,7 +797,7 @@ export function InlineTableField({
             <tfoot>
               <tr className='border-t border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600'>
                 {(rowOrderField || isNew) && <td />}
-                {isNew && <td />}
+                {(isNew || isPendingMode) && <td />}
                 {displayCols.map(c => {
                   const opts = c.options ? (typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown> : {}
                   const agg = opts.aggregate as string | undefined

@@ -59,3 +59,17 @@ export const ItemEditAuthContext = createContext<ItemEditAuthContextValue>({
 export function useItemEditAuth(): ItemEditAuthContextValue {
   return useContext(ItemEditAuthContext)
 }
+
+// ─── Navigation context (injected by consumers; no-op default) ────────────
+
+export type NavigationContextValue = {
+  navigate: (path: string) => void
+}
+
+export const NavigationContext = createContext<NavigationContextValue>({
+  navigate: (path) => { window.location.href = path },
+})
+
+export function useNavigation(): NavigationContextValue {
+  return useContext(NavigationContext)
+}

@@ -42,6 +42,7 @@ export interface FieldGroup {
   hide_when_empty?: boolean | number
   visibility_mode?: 'always' | 'new_only' | 'existing_only'
   summary_fields?: string[] | string | null
+  summary_hide_empty?: boolean | number
 }
 
 export interface SlotAssignment {
@@ -62,6 +63,7 @@ export interface LayoutMeta {
   validate_before_next: boolean
   summary_enabled: boolean
   summary_show_all: boolean
+  summary_hide_empty?: boolean
   ai_enabled: boolean
   disable_comments?: boolean | number
   disable_tasks?: boolean | number

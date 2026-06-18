@@ -273,8 +273,9 @@ export function FieldRenderer({
           : (field.options ?? {})
         const layoutId = (opts.layout_id as number | null) ?? null
         const showRowRevisions = !!opts.show_row_revisions
+        const saveMode = (opts.save_mode as 'immediate' | 'pending') ?? 'immediate'
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutId={layoutId} showRowRevisions={showRowRevisions} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutId={layoutId} showRowRevisions={showRowRevisions} saveMode={saveMode} />
         )
       }
     }

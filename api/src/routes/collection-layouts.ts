@@ -75,7 +75,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.conditions = parseConditions(layout.conditions)
 
     const [groups, assignments] = await Promise.all([
-      db('nivaro_field_groups').where({ layout_id: layout.id }).select('id','key','label','type','icon','sort','is_collapsed','container_id','tab_mode','hide_when_empty','visibility_mode','summary_fields').orderBy('sort', 'asc'),
+      db('nivaro_field_groups').where({ layout_id: layout.id }).select('id','key','label','type','icon','sort','is_collapsed','container_id','tab_mode','hide_when_empty','visibility_mode','summary_fields','summary_hide_empty').orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: layout.id })
         .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides')
@@ -104,7 +104,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     let q = db('nivaro_collection_layouts')
       .where({ collection })
       .orderBy('sort', 'asc')
-      .select('id', 'collection', 'name', 'slug', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'disable_revisions', 'disable_clone', 'disable_delete', 'accordion_mode', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule', 'allow_disable_pickers', 'layout_type', 'row_order_field')
+      .select('id', 'collection', 'name', 'slug', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'disable_revisions', 'disable_clone', 'disable_delete', 'accordion_mode', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'summary_hide_empty', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule', 'allow_disable_pickers', 'layout_type', 'row_order_field')
     if (active === 'true') q = q.where({ is_active: 1 })
 
     const rows = await q
@@ -149,7 +149,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; disable_comments: boolean; disable_tasks: boolean; disable_revisions: boolean; disable_clone: boolean; disable_delete: boolean; accordion_mode: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; row_order_field: string | null }>
+    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; disable_comments: boolean; disable_tasks: boolean; disable_revisions: boolean; disable_clone: boolean; disable_delete: boolean; accordion_mode: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; summary_hide_empty: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; row_order_field: string | null }>
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
     if (body.slug !== undefined) patch.slug = body.slug ?? null
@@ -164,6 +164,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.validate_before_next !== undefined) patch.validate_before_next = body.validate_before_next ? 1 : 0
     if (body.summary_enabled !== undefined) patch.summary_enabled = body.summary_enabled ? 1 : 0
     if (body.summary_show_all !== undefined) patch.summary_show_all = body.summary_show_all ? 1 : 0
+    if (body.summary_hide_empty !== undefined) patch.summary_hide_empty = body.summary_hide_empty ? 1 : 0
     if (body.ai_enabled !== undefined) patch.ai_enabled = body.ai_enabled ? 1 : 0
     if (body.conditions !== undefined) patch.conditions = body.conditions == null ? null : JSON.stringify(body.conditions)
     if (body.allow_clone !== undefined) patch.allow_clone = body.allow_clone ? 1 : 0
