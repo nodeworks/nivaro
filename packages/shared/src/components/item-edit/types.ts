@@ -57,6 +57,9 @@ export interface LayoutMeta {
   summary_enabled: boolean
   summary_show_all: boolean
   ai_enabled: boolean
+  disable_comments?: boolean | number
+  disable_tasks?: boolean | number
+  disable_revisions?: boolean | number
 }
 
 export interface ActiveLayoutData {

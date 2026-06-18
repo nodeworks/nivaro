@@ -690,7 +690,7 @@ export function InlineTableField({
 
           {(isNew ? pendingRows : rows).length === 0 && !isEditingNew && (
             <tr>
-              <td colSpan={displayCols.length + (isNew ? 2 : 1) + (rowOrderField || isNew ? 1 : 0)} className='px-3 py-4 text-center text-slate-400'>
+              <td colSpan={displayCols.length + (isNew ? 2 : 1) + (rowOrderField || isNew ? 1 : 0)} className='px-3 py-14 text-center text-slate-400'>
                 {isNew ? 'No pending rows' : 'No rows yet'}
               </td>
             </tr>

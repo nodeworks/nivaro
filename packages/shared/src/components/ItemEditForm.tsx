@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, Loader2, Save, Trash2 } from 'lucide-react'
+import { CloneDialog } from './item-edit/CloneDialog'
 import {
   type ReactNode,
   useCallback,
@@ -60,6 +61,7 @@ export interface ItemEditFormProps {
   onDeleted?: () => void
   showHeader?: boolean
   showRevisions?: boolean
+  showClone?: boolean
   showPipeline?: boolean
   showWorkflow?: boolean
   showComments?: boolean
@@ -68,6 +70,8 @@ export interface ItemEditFormProps {
   className?: string
   headerClassName?: string
   renderField?: (props: RenderFieldProps) => ReactNode
+  extraTopContent?: ReactNode
+  extraBottomContent?: ReactNode
 }
 
 // ─── ItemEditForm ──────────────────────────────────────────────────────────────
@@ -81,6 +85,7 @@ export function ItemEditForm({
   onDeleted,
   showHeader = true,
   showRevisions = true,
+  showClone = true,
   showPipeline = true,
   showWorkflow = true,
   showComments = true,
@@ -88,7 +93,9 @@ export function ItemEditForm({
   showLockBanner = true,
   className,
   headerClassName,
-  renderField
+  renderField,
+  extraTopContent,
+  extraBottomContent
 }: ItemEditFormProps) {
   const client = useNivaroClient()
   const { isAdmin } = useContext(ItemEditAuthContext)
@@ -402,6 +409,10 @@ export function ItemEditForm({
   const isStepsMode = hasTabs && layoutMeta?.tab_mode === 'steps'
   const validateBeforeNext = !!layoutMeta?.validate_before_next
   const summaryEnabled = !!layoutMeta?.summary_enabled
+  // Layout-level disable flags override props when a layout is active
+  const effectiveShowRevisions = layoutMeta ? !layoutMeta.disable_revisions && showRevisions : showRevisions
+  const effectiveShowComments = layoutMeta ? !layoutMeta.disable_comments && showComments : showComments
+  const effectiveShowTasks = layoutMeta ? !layoutMeta.disable_tasks && showTasks : showTasks
   const [summaryCollapsed, setSummaryCollapsed] = useState(false)
 
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -531,9 +542,9 @@ export function ItemEditForm({
     ]
     if (showPipeline && pipelineSlot && isVisible(pipelineSlot))
       entries.push({ item: '__pipeline__', sort: pipelineSlot.sort, tie: 2 })
-    if (showTasks && tasksSlot && isVisible(tasksSlot))
+    if (effectiveShowTasks && tasksSlot && isVisible(tasksSlot))
       entries.push({ item: '__tasks__', sort: tasksSlot.sort, tie: 3 })
-    if (showComments && commentsSlot && isVisible(commentsSlot))
+    if (effectiveShowComments && commentsSlot && isVisible(commentsSlot))
       entries.push({ item: '__comments__', sort: commentsSlot.sort, tie: 4 })
     return entries.sort((a, b) => a.sort - b.sort || a.tie - b.tie).map((e) => e.item)
   }, [
@@ -544,8 +555,8 @@ export function ItemEditForm({
     commentsSlot,
     tasksSlot,
     showPipeline,
-    showComments,
-    showTasks
+    effectiveShowComments,
+    effectiveShowTasks
   ])
 
   // ── Client-side validation ─────────────────────────────────────────────────
@@ -733,7 +744,7 @@ export function ItemEditForm({
         />
       )
     }
-    if (key === '__comments__' && showComments) {
+    if (key === '__comments__' && effectiveShowComments) {
       return (
         <CommentPanel
           key='__comments__'
@@ -746,7 +757,7 @@ export function ItemEditForm({
         />
       )
     }
-    if (key === '__tasks__' && showTasks) {
+    if (key === '__tasks__' && effectiveShowTasks) {
       return (
         <TaskPanel
           key='__tasks__'
@@ -942,8 +953,8 @@ export function ItemEditForm({
         {!pipelineSlot && showPipeline && (
           <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} />
         )}
-        {!tasksSlot && showTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
-        {!commentsSlot && showComments && (
+        {!tasksSlot && effectiveShowTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
+        {!commentsSlot && effectiveShowComments && (
           <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
@@ -1025,8 +1036,8 @@ export function ItemEditForm({
         {!pipelineSlot && showPipeline && (
           <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} />
         )}
-        {!tasksSlot && showTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
-        {!commentsSlot && showComments && (
+        {!tasksSlot && effectiveShowTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
+        {!commentsSlot && effectiveShowComments && (
           <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
@@ -1143,10 +1154,10 @@ export function ItemEditForm({
         {!pipelineSlot && showPipeline && (
           <PipelinePanel collection={collection} item={itemId} defaultExpanded={false} onBeforeTransition={validateAll} />
         )}
-        {!tasksSlot && showTasks && (
+        {!tasksSlot && effectiveShowTasks && (
           <TaskPanel collection={collection} item={itemId} defaultExpanded={false} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />
         )}
-        {!commentsSlot && showComments && (
+        {!commentsSlot && effectiveShowComments && (
           <CommentPanel collection={collection} item={itemId} defaultExpanded={false} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
@@ -1249,13 +1260,23 @@ export function ItemEditForm({
                   }}
                 />
               )}
-              {showRevisions && !isNew && (
+              {effectiveShowRevisions && !isNew && (
                 <RevisionsPanel
                   collection={collection}
                   item={itemId}
                   onRollback={() =>
                     qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
                   }
+                />
+              )}
+              {showClone && !isNew && isAdmin && (
+                <CloneDialog
+                  collection={collection}
+                  itemId={itemId}
+                  fields={fieldConfig ?? []}
+                  relations={relations}
+                  currentValues={itemData ?? {}}
+                  onSuccess={(newId) => onSaved?.(String(newId))}
                 />
               )}
               {canDelete &&
@@ -1328,6 +1349,7 @@ export function ItemEditForm({
               summaryEnabled ? 'flex-1 overflow-y-auto' : ''
             )}
           >
+            {extraTopContent}
             {showLockBanner && (
               <ItemLockBanner
                 lockHolder={lockHolder}
@@ -1337,6 +1359,7 @@ export function ItemEditForm({
               />
             )}
             {hasTabs ? (isStepsMode ? renderStepsMode() : renderTabMode()) : renderSectionMode()}
+            {extraBottomContent}
           </div>
           {summaryEnabled && (
             <div className='flex shrink-0 border-l border-slate-200'>

@@ -1,4 +1,4 @@
-import { ItemEditForm, NivaroProvider } from '@nivaro/react'
+import { ItemEditAuthContext, ItemEditForm, NivaroProvider } from '@nivaro/react'
 import { createNivaro } from '@nivaro/sdk'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
@@ -35,7 +35,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { FieldInput } from '@/pages/ItemEdit'
+
 
 // ─── Command catalog (mirrors sdk/src/index.ts) ──────────────────────────────
 //
@@ -2342,15 +2342,16 @@ export function MyForm() {
             style={{ width: previewWidth ? `${previewWidth}px` : '100%', minWidth: 320, flexShrink: 0 }}
           >
             <NivaroProvider client={client}>
-              <ItemEditForm
-                key={`${active.collection}:${active.itemId}:${active.layoutSlug}`}
-                collection={active.collection}
-                itemId={active.itemId || undefined}
-                layoutSlug={active.layoutSlug || undefined}
-                onSaved={(id: string) => setResult({ ok: true, data: { id } })}
-                onDeleted={() => setResult({ ok: true, data: { deleted: true } })}
-                showRevisions={false}
-              />
+              <ItemEditAuthContext.Provider value={{ isAdmin: true, userId: '' }}>
+                <ItemEditForm
+                  key={`${active.collection}:${active.itemId}:${active.layoutSlug}`}
+                  collection={active.collection}
+                  itemId={active.itemId || undefined}
+                  layoutSlug={active.layoutSlug || undefined}
+                  onSaved={(id: string) => setResult({ ok: true, data: { id } })}
+                  onDeleted={() => setResult({ ok: true, data: { deleted: true } })}
+                />
+              </ItemEditAuthContext.Provider>
             </NivaroProvider>
             {/* Drag handle */}
             <div

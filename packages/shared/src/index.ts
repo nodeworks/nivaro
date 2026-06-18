@@ -1,5 +1,6 @@
 export type { ItemEditFormProps } from './components/ItemEditForm'
 export { ItemEditForm } from './components/ItemEditForm'
+export { CloneDialog } from './components/item-edit/CloneDialog'
 export { FieldRenderer } from './components/item-edit/FieldRenderer'
 export { InlineTableField } from './components/item-edit/InlineTableField'
 export * from './components/panels'

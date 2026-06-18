@@ -16,7 +16,7 @@ export function StepsBar({
   onStepClick: (k: string) => void
 }) {
   return (
-    <div className='w-full grid pt-4 pb-2' style={{ gridTemplateColumns: `repeat(${steps.length}, 1fr)` }}>
+    <div className='w-full grid pt-6 pb-2' style={{ gridTemplateColumns: `repeat(${steps.length}, 1fr)` }}>
       {steps.map((s, i) => {
         const isActive = s.key === active
         const isDone = completed.has(s.key) && !isActive
