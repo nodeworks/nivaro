@@ -272,8 +272,9 @@ export function FieldRenderer({
           ? (() => { try { return JSON.parse(field.options) } catch { return {} } })()
           : (field.options ?? {})
         const layoutId = (opts.layout_id as number | null) ?? null
+        const showRowRevisions = !!opts.show_row_revisions
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutId={layoutId} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutId={layoutId} showRowRevisions={showRowRevisions} />
         )
       }
     }

@@ -75,10 +75,10 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.conditions = parseConditions(layout.conditions)
 
     const [groups, assignments] = await Promise.all([
-      db('nivaro_field_groups').where({ layout_id: layout.id }).select('id','key','label','type','icon','sort','is_collapsed','container_id','tab_mode').orderBy('sort', 'asc'),
+      db('nivaro_field_groups').where({ layout_id: layout.id }).select('id','key','label','type','icon','sort','is_collapsed','container_id','tab_mode','hide_when_empty','visibility_mode','summary_fields').orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: layout.id })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'col_span', 'overrides')
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides')
         .orderBy('sort', 'asc')
     ])
 
@@ -104,7 +104,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     let q = db('nivaro_collection_layouts')
       .where({ collection })
       .orderBy('sort', 'asc')
-      .select('id', 'collection', 'name', 'slug', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'disable_revisions', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule', 'allow_disable_pickers', 'layout_type', 'row_order_field')
+      .select('id', 'collection', 'name', 'slug', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'disable_revisions', 'disable_clone', 'accordion_mode', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule', 'allow_disable_pickers', 'layout_type', 'row_order_field')
     if (active === 'true') q = q.where({ is_active: 1 })
 
     const rows = await q
@@ -149,7 +149,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; disable_comments: boolean; disable_tasks: boolean; disable_revisions: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; row_order_field: string | null }>
+    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; disable_comments: boolean; disable_tasks: boolean; disable_revisions: boolean; disable_clone: boolean; accordion_mode: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; row_order_field: string | null }>
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
     if (body.slug !== undefined) patch.slug = body.slug ?? null
@@ -157,6 +157,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.disable_comments !== undefined) patch.disable_comments = body.disable_comments ? 1 : 0
     if (body.disable_tasks !== undefined) patch.disable_tasks = body.disable_tasks ? 1 : 0
     if (body.disable_revisions !== undefined) patch.disable_revisions = body.disable_revisions ? 1 : 0
+    if (body.disable_clone !== undefined) patch.disable_clone = body.disable_clone ? 1 : 0
+    if (body.accordion_mode !== undefined) patch.accordion_mode = body.accordion_mode ? 1 : 0
     if (body.tab_mode !== undefined) patch.tab_mode = body.tab_mode
     if (body.validate_before_next !== undefined) patch.validate_before_next = body.validate_before_next ? 1 : 0
     if (body.summary_enabled !== undefined) patch.summary_enabled = body.summary_enabled ? 1 : 0
@@ -301,7 +303,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!layout) return reply.code(404).send({ error: 'Not found' })
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'col_span', 'overrides')
+      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides')
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })
@@ -332,6 +334,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         label_override?: string | null
         is_visible?: boolean
         default_expanded?: boolean
+        show_row_revisions?: boolean
         col_span?: number | null
         overrides?: Record<string, unknown> | null
       }>
@@ -350,6 +353,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
             label_override: a.label_override ?? null,
             is_visible: a.is_visible === false ? 0 : 1,
             default_expanded: a.default_expanded === false ? 0 : 1,
+            show_row_revisions: a.show_row_revisions === true ? 1 : 0,
             col_span: a.col_span ?? null,
             overrides: a.overrides != null ? JSON.stringify(a.overrides) : null
           }))
@@ -359,7 +363,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'col_span', 'overrides')
+      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides')
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })

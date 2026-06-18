@@ -4462,6 +4462,10 @@ const SLOT_META: Record<SlotKey, { name: string; defaultLabel: string; editable:
   __comments__: { name: 'Comments', defaultLabel: 'Comments', editable: true },
   __tasks__: { name: 'Tasks', defaultLabel: 'Tasks', editable: true }
 }
+// Owners is a special draggable field chip (not a top-level slot card): it can be
+// dropped into any group or the ungrouped zone like a normal field, persisted as a
+// field-assignment row with field = '__owners__'.
+const OWNERS_FIELD = '__owners__'
 
 interface FieldGroup {
   id: number
@@ -4474,6 +4478,9 @@ interface FieldGroup {
   is_collapsed: boolean
   container_id?: number | null
   tab_mode?: 'tabs' | 'steps' | null
+  hide_when_empty?: boolean | number
+  visibility_mode?: 'always' | 'new_only' | 'existing_only'
+  summary_fields?: string | null
 }
 
 // ── Width options ──────────────────────────────────────────────────────────────
@@ -4510,6 +4517,7 @@ const FRIENDLY_TYPE_STYLES: Record<string, string> = {
   M2O: 'bg-nvr-cyan/10 text-nvr-cyan',
   M2M: 'bg-nvr-cyan/15 text-nvr-cyan',
   O2M: 'bg-nvr-cyan/10 text-nvr-cyan',
+  panel: 'bg-indigo-50 text-indigo-600',
 }
 
 // ── FieldSettingsPopover ──────────────────────────────────────────────────────
@@ -4996,6 +5004,8 @@ function FieldSettingsPopover({
   dependencyConfig,
   relatedCollection,
   onSave,
+  showRowRevisions,
+  onRowRevisionsChange,
 }: {
   fieldName: string
   abstractType?: string
@@ -5006,6 +5016,8 @@ function FieldSettingsPopover({
   dependencyConfig?: Record<string, unknown> | null
   relatedCollection?: string | null
   onSave: (patch: Partial<FieldSettings> & { dependency_config?: string }) => void
+  showRowRevisions?: boolean
+  onRowRevisionsChange?: (v: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
   const [label, setLabel] = useState(settings.label ?? '')
@@ -5351,6 +5363,12 @@ function FieldSettingsPopover({
                   <span className='text-[11px] text-slate-600'>Show column totals</span>
                 </div>
               )}
+              {iface === 'inline-table' && onRowRevisionsChange && (
+                <div className='flex items-center gap-2'>
+                  <Switch checked={!!showRowRevisions} onCheckedChange={onRowRevisionsChange} className='scale-75' />
+                  <span className='text-[11px] text-slate-600'>Show row revision history</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -5388,6 +5406,8 @@ function FieldChip({
   style = {},
   isDragging = false,
   onUnassign,
+  rowRevisions,
+  onRowRevisionsChange,
 }: {
   fieldName: string
   displayName?: string
@@ -5406,6 +5426,8 @@ function FieldChip({
   style?: React.CSSProperties
   isDragging?: boolean
   onUnassign?: () => void
+  rowRevisions?: boolean
+  onRowRevisionsChange?: (v: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
   const widthLabel = WIDTH_OPTIONS.find(w => w.span === colSpan)?.label ?? 'Full'
@@ -5453,6 +5475,8 @@ function FieldChip({
           dependencyConfig={dependencyConfig}
           relatedCollection={relatedCollection}
           onSave={onSettings}
+          showRowRevisions={rowRevisions}
+          onRowRevisionsChange={onRowRevisionsChange}
         />
       )}
 
@@ -5534,6 +5558,8 @@ function SortableFieldChip({
   onUnassign,
   inGrid = false,
   sortableId,
+  rowRevisions,
+  onRowRevisionsChange,
 }: {
   fieldName: string
   displayName?: string
@@ -5551,6 +5577,8 @@ function SortableFieldChip({
   onUnassign?: () => void
   inGrid?: boolean
   sortableId?: string
+  rowRevisions?: boolean
+  onRowRevisionsChange?: (v: boolean) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId ?? fieldName,
@@ -5583,6 +5611,8 @@ function SortableFieldChip({
           relatedCollection={relatedCollection}
         onUnassign={onUnassign}
         dragHandleProps={listeners ?? {}}
+        rowRevisions={rowRevisions}
+        onRowRevisionsChange={onRowRevisionsChange}
       />
     </div>
   )
@@ -5646,6 +5676,20 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
             {fields.length === 0 ? (
               <p className='text-[11px] text-slate-300'>{isTableMode ? 'Add fields to define table columns' : 'Drop fields here to leave them ungrouped'}</p>
             ) : fields.map(f => {
+              if (f === OWNERS_FIELD) {
+                return (
+                  <SortableFieldChip
+                    key={toSortableId('__unassigned__', f)}
+                    sortableId={toSortableId('__unassigned__', f)}
+                    fieldName={f}
+                    displayName='Owners'
+                    fieldType='panel'
+                    colSpan={getColSpan(f)}
+                    onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
+                    inGrid
+                  />
+                )
+              }
               const ft = allFields.find(af => af.field === f)
               const settings = getFieldSettings(f)
               const kind = relKind(f)
@@ -5702,6 +5746,9 @@ function SortableGroupCard({
   containerGroups,
   onSetContainer,
   onToggleCollapsed,
+  onGroupSettings,
+  getRowRevisions,
+  onRowRevisions,
 }: {
   group: FieldGroup
   fieldNames: string[]
@@ -5724,6 +5771,9 @@ function SortableGroupCard({
   containerGroups?: FieldGroup[]
   onSetContainer?: (id: number, container_id: number | null) => void
   onToggleCollapsed?: (id: number) => void
+  onGroupSettings?: (id: number, patch: Partial<Pick<FieldGroup, 'hide_when_empty' | 'visibility_mode' | 'summary_fields'>>) => void
+  getRowRevisions?: (f: string) => boolean
+  onRowRevisions?: (f: string, v: boolean) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [labelDraft, setLabelDraft] = useState(group.label)
@@ -5817,9 +5867,73 @@ function SortableGroupCard({
             {containerGroups.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
         )}
+        {group.type === 'section' && onGroupSettings && (
+          <div onPointerDown={e => e.stopPropagation()}>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button type='button' title='Section settings' className='shrink-0 rounded p-1 text-slate-300 hover:text-slate-500'>
+                  <Settings2 className='h-3.5 w-3.5' />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-[260px] p-3 space-y-3' align='end'>
+                <div>
+                  <Label className='mb-1 block text-[11px]'>Show section</Label>
+                  <Sel
+                    value={group.visibility_mode ?? 'always'}
+                    onChange={v => onGroupSettings(group.id, { visibility_mode: v as 'always' | 'new_only' | 'existing_only' })}
+                    options={[
+                      { value: 'always', label: 'Always' },
+                      { value: 'new_only', label: 'New items only' },
+                      { value: 'existing_only', label: 'Existing items only' }
+                    ]}
+                  />
+                </div>
+                <label className='flex items-center gap-2 text-[12px] text-slate-600'>
+                  <input
+                    type='checkbox'
+                    checked={!!group.hide_when_empty}
+                    onChange={e => onGroupSettings(group.id, { hide_when_empty: e.target.checked })}
+                    className='h-3.5 w-3.5'
+                  />
+                  Hide when all fields are empty
+                </label>
+                <div>
+                  <Label className='mb-1 block text-[11px]'>Collapsed summary fields</Label>
+                  <p className='mb-1.5 text-[10px] text-slate-400'>Up to 3 shown in the collapsed bar</p>
+                  <div className='space-y-1 max-h-[160px] overflow-y-auto'>
+                    {(() => {
+                      let selected: string[] = []
+                      try { const p = JSON.parse(group.summary_fields ?? '[]'); if (Array.isArray(p)) selected = p } catch { /* noop */ }
+                      return fieldNames.map(f => {
+                        const checked = selected.includes(f)
+                        const atMax = selected.length >= 3 && !checked
+                        return (
+                          <label key={f} className={cn('flex items-center gap-2 text-[12px]', atMax ? 'text-slate-300' : 'text-slate-600')}>
+                            <input
+                              type='checkbox'
+                              checked={checked}
+                              disabled={atMax}
+                              onChange={() => {
+                                const next = checked ? selected.filter(x => x !== f) : [...selected, f]
+                                onGroupSettings(group.id, { summary_fields: JSON.stringify(next) })
+                              }}
+                              className='h-3.5 w-3.5'
+                            />
+                            {titleCase(f)}
+                          </label>
+                        )
+                      })
+                    })()}
+                    {fieldNames.length === 0 && <p className='text-[11px] text-slate-300'>No fields assigned</p>}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
+        )}
         <button
           type='button'
-          title='Click to cycle section / tab / metadata / container'
+          title='Click to cycle section / tab / record info / container'
           onClick={onToggleType}
           className={cn(
             'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80',
@@ -5832,7 +5946,7 @@ function SortableGroupCard({
                   : 'bg-slate-100 text-slate-500'
           )}
         >
-          {group.type}
+          {group.type === 'metadata' ? 'record info' : group.type}
         </button>
         {(group.type === 'section' || group.type === 'metadata') && (
           <button
@@ -5869,6 +5983,20 @@ function SortableGroupCard({
             <p className='text-[11px] text-slate-300'>Drop fields here</p>
           ) : (
             fieldNames.map(f => {
+              if (f === OWNERS_FIELD) {
+                return (
+                  <SortableFieldChip
+                    key={toSortableId(group.key, f)}
+                    sortableId={toSortableId(group.key, f)}
+                    fieldName={f}
+                    displayName='Owners'
+                    fieldType='panel'
+                    colSpan={getColSpan(f)}
+                    onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
+                    inGrid
+                  />
+                )
+              }
               const ft = allFields.find(af => af.field === f)
               const settings = getFieldSettings?.(f)
               const kind = getRelKind?.(f)
@@ -5890,6 +6018,8 @@ function SortableGroupCard({
                   dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
                   relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
                   onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
+                  rowRevisions={getRowRevisions?.(f)}
+                  onRowRevisionsChange={onRowRevisions ? v => onRowRevisions(f, v) : undefined}
                   inGrid
                 />
               )
@@ -5926,6 +6056,8 @@ interface CollectionLayout {
   disable_comments?: boolean | number
   disable_tasks?: boolean | number
   disable_revisions?: boolean | number
+  disable_clone?: boolean | number
+  accordion_mode?: boolean | number
   tab_mode?: string
   validate_before_next?: boolean | number
   summary_enabled?: boolean | number
@@ -6088,7 +6220,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   })
 
   const patchLayoutMut = useMutation({
-    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'slug' | 'disable_comments' | 'disable_tasks' | 'disable_revisions' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field'>>) => {
+    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'slug' | 'disable_comments' | 'disable_tasks' | 'disable_revisions' | 'disable_clone' | 'accordion_mode' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field'>>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
     },
@@ -6356,10 +6488,14 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                     )}
                   </div>
                 )}
-                <div className='border-t border-slate-200 dark:border-border pt-2'>
+                <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
                   <label className='flex cursor-pointer items-center justify-between'>
                     <span className='text-[11px] text-slate-500 dark:text-slate-400'>Enable AI features</span>
                     <input type='checkbox' checked={!!selected.ai_enabled} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, ai_enabled: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                  </label>
+                  <label className='flex cursor-pointer items-center justify-between'>
+                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Accordion mode (one section open)</span>
+                    <input type='checkbox' checked={!!selected.accordion_mode} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, accordion_mode: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
                   </label>
                 </div>
                 <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
@@ -6375,6 +6511,10 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                   <label className='flex cursor-pointer items-center justify-between'>
                     <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide tasks</span>
                     <input type='checkbox' checked={!!selected.disable_tasks} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, disable_tasks: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                  </label>
+                  <label className='flex cursor-pointer items-center justify-between'>
+                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide clone button</span>
+                    <input type='checkbox' checked={!!selected.disable_clone} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, disable_clone: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
                   </label>
                 </div>
                 <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
@@ -6564,7 +6704,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         seenM2m.add(v.field)
         return true
       })
-    return [...base, ...o2mVirtuals, ...m2mVirtuals]
+    const ownersPseudo = { field: OWNERS_FIELD, type: 'owners' as const }
+    return [...base, ...o2mVirtuals, ...m2mVirtuals, ownersPseudo]
   }, [colMeta])
 
   // field → relation kind label
@@ -6614,6 +6755,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const [localGroupOrder, setLocalGroupOrder] = useState<(number | '__ungrouped__' | SlotKey)[]>([])
   const [localAssignments, setLocalAssignments] = useState<Record<string, string | null>>({})
   const [localColSpans, setLocalColSpans] = useState<Record<string, number | null>>({})
+  const [localRowRevisions, setLocalRowRevisions] = useState<Record<string, boolean>>({})
   const [localOverrides, setLocalOverrides] = useState<Record<string, Record<string, unknown>>>({})
   const [localFieldOrder, setLocalFieldOrder] = useState<Record<string, string[]>>({})
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
@@ -6672,7 +6814,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       if (!(fc as Record<string, unknown>).layout_assigned) continue
       const gk = fc.group_key ?? null
       const f = fc.field
-      if (!f || f === '__ungrouped_pos__' || (typeof f === 'string' && f.startsWith('__') && f.endsWith('__') && f !== '__unassigned__')) continue
+      if (!f || f === '__ungrouped_pos__' || (typeof f === 'string' && f.startsWith('__') && f.endsWith('__') && f !== '__unassigned__' && f !== OWNERS_FIELD)) continue
       assignments[f] = gk
       if (gk === '__apply_values__') {
         if (!fieldOrder.__apply_values__.includes(f)) fieldOrder.__apply_values__.push(f)
@@ -6687,18 +6829,21 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     // Build per-layout col_span map from fieldConfig (which has the layout overlay applied)
     const colSpans: Record<string, number | null> = {}
     const overrides: Record<string, Record<string, unknown>> = {}
+    const rowRevisions: Record<string, boolean> = {}
     for (const f of sorted) {
       const fc = fieldConfig.find(fc => fc.field === f.field)
       const opts = fc?.options
       const parsed = (() => { try { return typeof opts === 'string' ? JSON.parse(opts) : opts } catch { return null } })()
       const span = parsed?.col_span
       colSpans[f.field] = typeof span === 'number' ? span : null
+      rowRevisions[f.field] = !!parsed?.show_row_revisions
       const raw = (fc as Record<string, unknown> | undefined)?._overrides
       if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
         overrides[f.field] = raw as Record<string, unknown>
       }
     }
     setLocalColSpans(colSpans)
+    setLocalRowRevisions(rowRevisions)
     setLocalOverrides(overrides)
     setLocalAssignments(assignments)
     setLocalFieldOrder(fieldOrder)
@@ -6736,13 +6881,13 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       const seq = changeSeqRef.current
       const ungroupedPos = localGroupOrder.indexOf('__ungrouped__')
       // Build assignments from localFieldOrder directly — __pool__ is the static Fields List, skip it
-      const fieldAssignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean; col_span?: number | null; overrides?: Record<string, unknown> | null }> = []
+      const fieldAssignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean; col_span?: number | null; overrides?: Record<string, unknown> | null; show_row_revisions?: boolean }> = []
       for (const [container, fields] of Object.entries(localFieldOrder)) {
         if (container === '__pool__') continue
         const gk = container === '__unassigned__' ? null : container
         fields.forEach((f, idx) => {
           const ov = localOverrides[f]
-          fieldAssignments.push({ field: f, group_key: gk, sort: idx, col_span: localColSpans[f] ?? null, overrides: ov && Object.keys(ov).length > 0 ? ov : null })
+          fieldAssignments.push({ field: f, group_key: gk, sort: idx, col_span: localColSpans[f] ?? null, overrides: ov && Object.keys(ov).length > 0 ? ov : null, show_row_revisions: localRowRevisions[f] ?? false })
         })
       }
       const assignments = [
@@ -6774,7 +6919,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         })
     }, 400)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [localAssignments, localColSpans, localOverrides, localFieldOrder, localGroupOrder, slots, layoutId, invalidateFieldConfig])
+  }, [localAssignments, localColSpans, localRowRevisions, localOverrides, localFieldOrder, localGroupOrder, slots, layoutId, invalidateFieldConfig])
 
   const createMut = useMutation({
     mutationFn: (body: { collection: string; key: string; label: string; type: 'section' | 'tab' | 'metadata' | 'container' }) =>
@@ -6806,6 +6951,15 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const patchCollapsedMut = useMutation({
     mutationFn: ({ id, is_collapsed }: { id: number; is_collapsed: boolean }) =>
       api.patch(`/field-groups/${id}`, { is_collapsed }),
+    onSuccess: () => invalidateGroups()
+  })
+
+  const patchGroupSettingsMut = useMutation({
+    mutationFn: ({ id, patch }: { id: number; patch: Record<string, unknown> }) => {
+      const body: Record<string, unknown> = { ...patch }
+      if ('hide_when_empty' in body) body.hide_when_empty = body.hide_when_empty ? 1 : 0
+      return api.patch(`/field-groups/${id}`, body)
+    },
     onSuccess: () => invalidateGroups()
   })
 
@@ -7240,6 +7394,17 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                   const relFields = unassigned.filter(f => relKind(f) !== null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
                   const plainFields = unassigned.filter(f => relKind(f) === null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
                   const renderChip = (f: string) => {
+                    if (f === OWNERS_FIELD) {
+                      return (
+                        <SortableFieldChip
+                          key={f}
+                          fieldName={f}
+                          displayName='Owners'
+                          fieldType='panel'
+                          colSpan={getColSpan(f)}
+                        />
+                      )
+                    }
                     const ft = allFields.find(af => af.field === f)
                     const settings = getFieldSettings(f)
                     const kind = relKind(f)
@@ -7313,7 +7478,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
               </div>
               <div>
                 <Label className='mb-1 block text-[11px]'>Type</Label>
-                <Sel value={newType} onChange={v => setNewType(v as 'section' | 'tab' | 'metadata' | 'container')} options={[{ value: 'section', label: 'Section' }, { value: 'tab', label: 'Tab' }, { value: 'metadata', label: 'Metadata (read-only)' }, { value: 'container', label: 'Container (tabs/steps)' }]} />
+                <Sel value={newType} onChange={v => setNewType(v as 'section' | 'tab' | 'metadata' | 'container')} options={[{ value: 'section', label: 'Section' }, { value: 'tab', label: 'Tab' }, { value: 'metadata', label: 'Record Info (read-only)' }, { value: 'container', label: 'Container (tabs/steps)' }]} />
               </div>
             </div>
             <div className='flex justify-end gap-2'>
@@ -7370,6 +7535,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                     containerGroups={groups.filter(cg => cg.type === 'container')}
                     onSetContainer={(id, container_id) => setContainerMut.mutate({ id, container_id })}
                     onToggleCollapsed={(id) => patchCollapsedMut.mutate({ id, is_collapsed: !groups.find(g => g.id === id)?.is_collapsed })}
+                    onGroupSettings={(id, patch) => patchGroupSettingsMut.mutate({ id, patch })}
+                    getRowRevisions={f => localRowRevisions[f] ?? false}
+                    onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                     />
                     {childTabs.length > 0 && (
                       <div className='ml-6 space-y-1.5'>
@@ -7485,7 +7653,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         {activeFieldId && (
           <FieldChip
             fieldName={activeFieldId}
-            fieldType={activeFieldData?.type}
+            displayName={activeFieldId === OWNERS_FIELD ? 'Owners' : undefined}
+            fieldType={activeFieldId === OWNERS_FIELD ? 'panel' : activeFieldData?.type}
             colSpan={getColSpan(activeFieldId)}
             isDragging
           />

@@ -25,7 +25,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
 
     let q = db('nivaro_field_groups')
       .where({ collection })
-      .select('id', 'collection', 'key', 'label', 'type', 'icon', 'sort', 'is_collapsed', 'layout_id', 'container_id', 'tab_mode')
+      .select('id', 'collection', 'key', 'label', 'type', 'icon', 'sort', 'is_collapsed', 'layout_id', 'container_id', 'tab_mode', 'hide_when_empty', 'visibility_mode', 'summary_fields')
       .orderBy('sort', 'asc')
 
     if (targetLayoutId !== null) {
@@ -98,6 +98,9 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
       icon: string | null
       sort: number
       is_collapsed: boolean
+      hide_when_empty: boolean
+      visibility_mode: string
+      summary_fields: string | null
     }>
 
     const patch: Record<string, unknown> = {}
@@ -107,6 +110,9 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
     if ('icon' in body) patch.icon = body.icon ?? null
     if (body.sort !== undefined) patch.sort = body.sort
     if (body.is_collapsed !== undefined) patch.is_collapsed = body.is_collapsed ? 1 : 0
+    if (body.hide_when_empty !== undefined) patch.hide_when_empty = body.hide_when_empty ? 1 : 0
+    if (body.visibility_mode !== undefined) patch.visibility_mode = body.visibility_mode
+    if ('summary_fields' in body) patch.summary_fields = body.summary_fields ?? null
     if ('container_id' in body) patch.container_id = (body as Record<string,unknown>).container_id ?? null
     if ('tab_mode' in body) patch.tab_mode = (body as Record<string,unknown>).tab_mode ?? null
 

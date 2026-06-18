@@ -1,13 +1,30 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { GripVertical, Loader2, X } from 'lucide-react'
+import { GripVertical, History, Loader2, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
-import { cn, titleCase } from '../../lib/utils'
+import { cn, formatRelative, titleCase } from '../../lib/utils'
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle
+} from '../ui/sheet'
 import { useO2MStaging } from './O2MStagingContext'
 import { FieldRenderer } from './FieldRenderer'
 import { applyDisplayTemplate, SENTINEL_FIELDS } from './helpers'
 import type { CMSField, CMSRelation } from './types'
+
+interface RowRevision {
+  id: number
+  delta: Record<string, unknown> | null
+  data: Record<string, unknown>
+  timestamp?: string
+  action?: string
+  first_name?: string | null
+  last_name?: string | null
+  user_email?: string | null
+}
 
 const NON_DISPLAY_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
 
@@ -15,17 +32,33 @@ export function InlineTableField({
   relatedCollection,
   manyField,
   parentId,
-  layoutId
+  layoutId,
+  showRowRevisions
 }: {
   relatedCollection: string
   manyField: string
   parentId: string
   layoutId?: number | null
+  showRowRevisions?: boolean
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const staging = useO2MStaging()
   const isNew = parentId === 'new'
+
+  // Row revision history sheet — holds the saved row whose history is open
+  const [historyRow, setHistoryRow] = useState<Record<string, unknown> | null>(null)
+  const { data: rowRevisions = [], isLoading: revLoading } = useQuery<RowRevision[]>({
+    queryKey: ['o2m-row-revisions', relatedCollection, historyRow?.id],
+    queryFn: () =>
+      client
+        .request<{ data: RowRevision[] }>(
+          get('/revisions', { collection: relatedCollection, item: String(historyRow?.id) })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!historyRow?.id,
+    staleTime: 15_000
+  })
 
   // { rowId, draft } — null = no row editing, 'new' = adding new row
   const [editState, setEditState] = useState<{ rowId: string; draft: Record<string, unknown> } | null>(null)
@@ -644,10 +677,19 @@ export function InlineTableField({
                       </button>
                     </div>
                   ) : (
-                    <button type='button' onClick={(e) => deleteRow(row.id, e)}
-                      className='rounded p-0.5 text-slate-300 hover:text-red-500'>
-                      <X className='h-3 w-3' />
-                    </button>
+                    <div className='flex items-center justify-end gap-0.5'>
+                      {showRowRevisions && (
+                        <button type='button' title='Row history'
+                          onClick={(e) => { e.stopPropagation(); setHistoryRow(row) }}
+                          className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'>
+                          <History className='h-3 w-3' />
+                        </button>
+                      )}
+                      <button type='button' onClick={(e) => deleteRow(row.id, e)}
+                        className='rounded p-0.5 text-slate-300 hover:text-red-500'>
+                        <X className='h-3 w-3' />
+                      </button>
+                    </div>
                   )}
                 </td>
               </tr>
@@ -753,6 +795,45 @@ export function InlineTableField({
         </div>
       )}
     </div>
+
+    <Sheet open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
+      <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
+        <SheetHeader>
+          <SheetTitle className='text-[14px]'>Row history</SheetTitle>
+        </SheetHeader>
+        <div className='mt-4 space-y-3'>
+          {revLoading ? (
+            <div className='py-6 text-center'><Loader2 className='h-4 w-4 animate-spin inline text-slate-400' /></div>
+          ) : rowRevisions.length === 0 ? (
+            <p className='py-6 text-center text-[12px] text-slate-400'>No history for this row</p>
+          ) : (
+            rowRevisions.map((rev) => {
+              const who = [rev.first_name, rev.last_name].filter(Boolean).join(' ') || rev.user_email || 'System'
+              const changes = rev.delta ?? rev.data ?? {}
+              return (
+                <div key={rev.id} className='rounded-lg border border-slate-200 p-3'>
+                  <div className='flex items-center justify-between gap-2'>
+                    <span className='text-[11px] font-medium text-slate-600'>{who}</span>
+                    <span className='text-[10px] text-slate-400'>{rev.timestamp ? formatRelative(rev.timestamp) : ''}</span>
+                  </div>
+                  {rev.action && <span className='mt-0.5 inline-block text-[10px] font-medium uppercase tracking-wide text-slate-400'>{rev.action}</span>}
+                  <div className='mt-2 space-y-1'>
+                    {Object.entries(changes).map(([k, v]) => (
+                      <div key={k} className='flex items-start gap-2 text-[11px]'>
+                        <span className='shrink-0 font-medium text-slate-500'>{titleCase(k)}:</span>
+                        <span className='break-words text-slate-700'>
+                          {v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
     </div>
   )
 }

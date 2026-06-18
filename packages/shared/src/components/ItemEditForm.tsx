@@ -30,10 +30,21 @@ import type {
   SlotAssignment,
   StepDef
 } from './item-edit/types'
-import { CommentPanel, ItemLockBanner, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
+import { CommentPanel, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
 import type { PendingTask } from './panels/TaskPanel'
 import { Button } from './ui/button'
 import { Skeleton } from './ui/skeleton'
+
+function parseSummaryFields(raw: string[] | string | null | undefined): string[] | undefined {
+  if (!raw) return undefined
+  if (Array.isArray(raw)) return raw.slice(0, 3)
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.slice(0, 3) : undefined
+  } catch {
+    return undefined
+  }
+}
 
 // ─── GridContainer — measures its own width for responsive col spans ──────────
 
@@ -309,8 +320,11 @@ export function ItemEditForm({
     [fieldConfig]
   )
 
+  const [fieldCounts, setFieldCounts] = useState<Record<string, number>>({})
+
   const handleM2MCountChange = useCallback(
     (field: string, count: number) => {
+      setFieldCounts((prev) => (prev[field] === count ? prev : { ...prev, [field]: count }))
       if (count > 0) touchedFields.current.add(field)
       setValidationErrors((prev) => {
         const fieldMeta = (fieldConfig ?? []).find((f) => f.field === field)
@@ -413,7 +427,20 @@ export function ItemEditForm({
   const effectiveShowRevisions = layoutMeta ? !layoutMeta.disable_revisions && showRevisions : showRevisions
   const effectiveShowComments = layoutMeta ? !layoutMeta.disable_comments && showComments : showComments
   const effectiveShowTasks = layoutMeta ? !layoutMeta.disable_tasks && showTasks : showTasks
+  const effectiveShowClone = layoutMeta ? !layoutMeta.disable_clone && showClone : showClone
+  const accordionMode = !!layoutMeta?.accordion_mode
   const [summaryCollapsed, setSummaryCollapsed] = useState(false)
+  // Accordion mode: track the single open section group id (null = none open)
+  const [openSectionId, setOpenSectionId] = useState<number | null>(null)
+  const accordionInitRef = useRef(false)
+  useEffect(() => {
+    if (!accordionMode || accordionInitRef.current) return
+    const first = sectionGroups.find((g) => !g.is_collapsed) ?? sectionGroups[0]
+    if (first) {
+      accordionInitRef.current = true
+      setOpenSectionId(first.id)
+    }
+  }, [accordionMode, sectionGroups])
 
   const bodyRef = useRef<HTMLDivElement>(null)
   // Per-container active tab: Map<containerId, tabKey>
@@ -525,11 +552,25 @@ export function ItemEditForm({
   const pipelineSlot = assignments.find((a) => a.field === '__pipeline__')
   const commentsSlot = assignments.find((a) => a.field === '__comments__')
   const tasksSlot = assignments.find((a) => a.field === '__tasks__')
+  const ownersSlot = assignments.find((a) => a.field === '__owners__')
+  // Owners is a draggable field chip: when assigned to a group it renders inside
+  // that group's card (footer slot); otherwise it renders as a standalone panel at
+  // its own sort position alongside groups/ungrouped.
+  const ownersGroupKey = ownersSlot?.group_key ?? null
+  const ownersInGroup = !!(ownersGroupKey && groups.some((g) => g.key === ownersGroupKey))
+  const renderOwnersPanel = () => (
+    <OwnersSlot
+      collection={collection}
+      item={itemId}
+      title={ownersSlot?.label_override ?? undefined}
+      defaultExpanded={ownersSlot?.default_expanded ?? false}
+    />
+  )
 
   const sectionOrder = useMemo(() => {
     const isVisible = (a: SlotAssignment | undefined) =>
       !(a && (a.is_visible === 0 || a.is_visible === false))
-    type Item = FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__'
+    type Item = FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__'
     const entries: Array<{ item: Item; sort: number; tie: number }> = [
       ...sectionGroups.map((g) => ({ item: g as Item, sort: g.sort, tie: 0 })),
       // Container groups sit alongside section groups in the order
@@ -546,6 +587,8 @@ export function ItemEditForm({
       entries.push({ item: '__tasks__', sort: tasksSlot.sort, tie: 3 })
     if (effectiveShowComments && commentsSlot && isVisible(commentsSlot))
       entries.push({ item: '__comments__', sort: commentsSlot.sort, tie: 4 })
+    if (showPipeline && ownersSlot && isVisible(ownersSlot) && !ownersInGroup)
+      entries.push({ item: '__owners__', sort: ownersSlot.sort, tie: 5 })
     return entries.sort((a, b) => a.sort - b.sort || a.tie - b.tie).map((e) => e.item)
   }, [
     sectionGroups,
@@ -554,6 +597,8 @@ export function ItemEditForm({
     pipelineSlot,
     commentsSlot,
     tasksSlot,
+    ownersSlot,
+    ownersInGroup,
     showPipeline,
     effectiveShowComments,
     effectiveShowTasks
@@ -770,6 +815,9 @@ export function ItemEditForm({
         />
       )
     }
+    if (key === '__owners__' && showPipeline) {
+      return <div key='__owners__'>{renderOwnersPanel()}</div>
+    }
     return null
   }
 
@@ -911,21 +959,24 @@ export function ItemEditForm({
   }
 
   function renderSectionItem(
-    item: FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__'
+    item: FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__'
   ) {
     if (item === '__ungrouped__') return renderUngrouped()
-    if (item === '__pipeline__' || item === '__comments__' || item === '__tasks__')
+    if (item === '__pipeline__' || item === '__comments__' || item === '__tasks__' || item === '__owners__')
       return renderSentinel(item)
     const g = item as FieldGroup
     if (g.type === 'container') return renderContainer(g)
     if (g.type === 'metadata' && isNew) return null
     const groupFields = groupedMap[g.key] ?? []
-    if (groupFields.length === 0) return null
+    const ownersHere = ownersInGroup && ownersGroupKey === g.key && showPipeline
+    if (groupFields.length === 0 && !ownersHere) return null
+    const accordionActive = accordionMode && g.type !== 'metadata'
     return (
       <GroupSection
         key={g.key}
         group={g}
         fields={groupFields}
+        footerSlot={ownersHere ? renderOwnersPanel() : undefined}
         draft={draft}
         onChange={handleFieldChange}
         relations={relations}
@@ -938,6 +989,16 @@ export function ItemEditForm({
         displayOnly={g.type === 'metadata'}
         renderField={renderField}
         onCountChange={handleM2MCountChange}
+        isNew={isNew}
+        fieldValues={groupFields.map((f) => draft[f.field])}
+        isOpen={accordionActive ? openSectionId === g.id : undefined}
+        onToggle={
+          accordionActive
+            ? () => setOpenSectionId((cur) => (cur === g.id ? null : g.id))
+            : undefined
+        }
+        summaryFields={parseSummaryFields(g.summary_fields)}
+        m2mCounts={fieldCounts}
       />
     )
   }
@@ -971,6 +1032,7 @@ export function ItemEditForm({
             : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])])
         : (groupedMap[tabKey] ?? [])
     ).filter((f) => !f.hidden)
+    const ownersHere = ownersInGroup && ownersGroupKey === tabKey && showPipeline
     return (
       <div className='rounded-xl border border-slate-200 bg-white px-5 py-5'>
         <GridContainer>
@@ -993,6 +1055,7 @@ export function ItemEditForm({
             </div>
           ))}
         </GridContainer>
+        {ownersHere && <div className='mt-4'>{renderOwnersPanel()}</div>}
       </div>
     )
   }
@@ -1032,7 +1095,7 @@ export function ItemEditForm({
         {renderTabContent(activeTab)}
         {sectionOrder
           .filter((item) => typeof item === 'string' && item !== '__ungrouped__')
-          .map((item) => renderSentinel(item as '__pipeline__' | '__comments__' | '__tasks__'))}
+          .map((item) => renderSentinel(item as '__pipeline__' | '__comments__' | '__tasks__' | '__owners__'))}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} />
         )}
@@ -1092,7 +1155,7 @@ export function ItemEditForm({
                 className='inline-flex h-9 items-center gap-1.5 rounded-md bg-[#00ceff] px-3 text-[12px] font-medium text-white transition-colors hover:bg-[#00b8e0] disabled:opacity-50'
               >
                 <Save className='h-3.5 w-3.5' />
-                {saveMut.isPending ? 'Saving…' : 'Save'}
+                {saveMut.isPending ? 'Saving…' : 'Save Progress'}
               </button>
             ) : (
               <button
@@ -1131,7 +1194,7 @@ export function ItemEditForm({
       <div className='space-y-4 min-w-0 flex-1'>
         {preTabItems.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
-          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__')}</div>
+          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__')}</div>
         })}
         <div className='rounded-xl border border-slate-200 bg-white px-5 py-3'>
           <StepsBar
@@ -1149,7 +1212,7 @@ export function ItemEditForm({
         {renderTabContent(activeTab, true)}
         {postTabItems.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
-          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__')}</div>
+          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__')}</div>
         })}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel collection={collection} item={itemId} defaultExpanded={false} onBeforeTransition={validateAll} />
@@ -1269,7 +1332,7 @@ export function ItemEditForm({
                   }
                 />
               )}
-              {showClone && !isNew && isAdmin && (
+              {effectiveShowClone && !isNew && isAdmin && (
                 <CloneDialog
                   collection={collection}
                   itemId={itemId}
@@ -1329,7 +1392,7 @@ export function ItemEditForm({
                   ) : (
                     <Save className='h-4 w-4' />
                   )}
-                  {isNew ? 'Create' : 'Save'}
+                  {isNew ? 'Create' : 'Save Progress'}
                 </Button>
               )}
             </div>
@@ -1382,7 +1445,7 @@ export function ItemEditForm({
                     allSteps={allTabGroups.length > 0 ? allTabGroups.map((g) => ({ key: g.key, label: g.label })) : allSteps}
                     groupedMap={groupedMap}
                     ungroupedFields={ungroupedFields}
-                    sectionGroups={sectionGroups}
+                    sectionGroups={sectionGroups.filter((g) => g.type !== 'metadata')}
                     draft={draft}
                     relations={relations}
                     collection={collection}

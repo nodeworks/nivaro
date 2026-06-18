@@ -1,4 +1,5 @@
 export { CommentPanel } from './CommentPanel'
+export { OwnersSlot } from './OwnersSlot'
 export type { LockHolder } from './ItemLockBanner'
 export { ItemLockBanner, useItemLock } from './ItemLockBanner'
 export { PipelinePanel, PipelineTransitionButtons } from './PipelinePanel'

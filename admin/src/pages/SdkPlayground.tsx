@@ -2186,11 +2186,6 @@ function LiveFormTab() {
                   />
                   <CommandList>
                     <CommandEmpty>No items found</CommandEmpty>
-                    {itemsFetching && sortedItems.length === 0 && (
-                      <div className='flex justify-center py-3'>
-                        <Loader2 className='h-4 w-4 animate-spin text-slate-400' />
-                      </div>
-                    )}
                     <CommandGroup>
                       <CommandItem
                         value='__new__'
@@ -2217,6 +2212,11 @@ function LiveFormTab() {
                         )
                       })}
                     </CommandGroup>
+                    {itemsFetching && (
+                      <div className='flex justify-center py-2'>
+                        <Loader2 className='h-4 w-4 animate-spin text-slate-400' />
+                      </div>
+                    )}
                   </CommandList>
                 </Command>
               </PopoverContent>
@@ -2278,7 +2278,7 @@ function LiveFormTab() {
             )}
             {(['375', '768'] as const).map((w) => (
               <button key={w} type='button' onClick={() => setPreviewWidth(Number(w))}
-                className={cn('h-7 rounded border px-2 text-[11px] font-medium transition-colors',
+                className={cn('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                   previewWidth === Number(w)
                     ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-cyan'
                     : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground')}>
@@ -2287,7 +2287,7 @@ function LiveFormTab() {
             ))}
             {previewWidth && (
               <button type='button' onClick={() => setPreviewWidth(null)}
-                className='h-7 rounded border border-slate-200 px-2 text-[11px] font-medium text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'>
+                className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] font-medium text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'>
                 Full
               </button>
             )}

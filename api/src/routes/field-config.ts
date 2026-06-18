@@ -173,18 +173,18 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     }
 
     // Multi-group: a field may have multiple assignments (different group_keys)
-    type Assignment = { group_key: string | null; sort: number; label_override: string | null; is_visible: number | null; default_expanded: number | null; col_span: number | null; overrides: Record<string, unknown> | null }
+    type Assignment = { group_key: string | null; sort: number; label_override: string | null; is_visible: number | null; default_expanded: number | null; show_row_revisions: number | null; col_span: number | null; overrides: Record<string, unknown> | null }
     const assignmentsByField = new Map<string, Assignment[]>()
     let ungrouped_sort: number | null = null
     if (targetLayoutId !== null) {
       const assignments = await db('nivaro_layout_field_assignments')
         .where({ layout_id: targetLayoutId })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'col_span', 'overrides')
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides')
       for (const a of assignments) {
         if (a.field === '__ungrouped_pos__') { ungrouped_sort = a.sort; continue }
         let overrides: Record<string, unknown> | null = null
         try { overrides = a.overrides ? (typeof a.overrides === 'string' ? JSON.parse(a.overrides) : a.overrides) : null } catch { /* noop */ }
-        const entry: Assignment = { group_key: a.group_key, sort: a.sort, label_override: a.label_override ?? null, is_visible: a.is_visible ?? null, default_expanded: a.default_expanded ?? null, col_span: a.col_span ?? null, overrides }
+        const entry: Assignment = { group_key: a.group_key, sort: a.sort, label_override: a.label_override ?? null, is_visible: a.is_visible ?? null, default_expanded: a.default_expanded ?? null, show_row_revisions: a.show_row_revisions ?? null, col_span: a.col_span ?? null, overrides }
         const existing = assignmentsByField.get(a.field)
         if (existing) existing.push(entry)
         else assignmentsByField.set(a.field, [entry])
@@ -208,6 +208,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         const ov = assignment.overrides ?? null
         let options = base.options as Record<string, unknown> | null
         if (assignment.col_span != null) options = { ...(options ?? {}), col_span: assignment.col_span }
+        if (assignment.show_row_revisions) options = { ...(options ?? {}), show_row_revisions: true }
         if (ov?.options && typeof ov.options === 'object') options = { ...(options ?? {}), ...(ov.options as Record<string, unknown>) }
         formatted.push({
           ...base,
@@ -235,9 +236,10 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         formatted.push({
           field,
           label: null, note: null, hidden: false, readonly: false, required: false,
-          interface: 'o2m', options: null,
+          interface: 'o2m', options: a.show_row_revisions ? { show_row_revisions: true } : null,
           group_key: a.group_key, sort: a.sort,
           label_override: a.label_override, is_visible: a.is_visible, default_expanded: a.default_expanded,
+          show_row_revisions: a.show_row_revisions,
           layout_assigned: true, is_virtual: true as unknown, dependency_config: null
         })
       }

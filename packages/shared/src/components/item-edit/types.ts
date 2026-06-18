@@ -39,14 +39,19 @@ export interface FieldGroup {
   is_collapsed: boolean
   container_id?: number | null
   tab_mode?: 'tabs' | 'steps' | null
+  hide_when_empty?: boolean | number
+  visibility_mode?: 'always' | 'new_only' | 'existing_only'
+  summary_fields?: string[] | string | null
 }
 
 export interface SlotAssignment {
   field: string
   sort: number
+  group_key?: string | null
   is_visible: boolean | number
   default_expanded?: boolean
   label_override?: string | null
+  show_row_revisions?: boolean | number
 }
 
 export interface LayoutMeta {
@@ -60,6 +65,8 @@ export interface LayoutMeta {
   disable_comments?: boolean | number
   disable_tasks?: boolean | number
   disable_revisions?: boolean | number
+  disable_clone?: boolean | number
+  accordion_mode?: boolean | number
 }
 
 export interface ActiveLayoutData {
