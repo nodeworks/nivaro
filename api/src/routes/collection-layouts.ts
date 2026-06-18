@@ -104,7 +104,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     let q = db('nivaro_collection_layouts')
       .where({ collection })
       .orderBy('sort', 'asc')
-      .select('id', 'collection', 'name', 'slug', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'disable_revisions', 'disable_clone', 'accordion_mode', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule', 'allow_disable_pickers', 'layout_type', 'row_order_field')
+      .select('id', 'collection', 'name', 'slug', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'disable_revisions', 'disable_clone', 'disable_delete', 'accordion_mode', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule', 'allow_disable_pickers', 'layout_type', 'row_order_field')
     if (active === 'true') q = q.where({ is_active: 1 })
 
     const rows = await q
@@ -149,7 +149,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; disable_comments: boolean; disable_tasks: boolean; disable_revisions: boolean; disable_clone: boolean; accordion_mode: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; row_order_field: string | null }>
+    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; disable_comments: boolean; disable_tasks: boolean; disable_revisions: boolean; disable_clone: boolean; disable_delete: boolean; accordion_mode: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; row_order_field: string | null }>
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
     if (body.slug !== undefined) patch.slug = body.slug ?? null
@@ -158,6 +158,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.disable_tasks !== undefined) patch.disable_tasks = body.disable_tasks ? 1 : 0
     if (body.disable_revisions !== undefined) patch.disable_revisions = body.disable_revisions ? 1 : 0
     if (body.disable_clone !== undefined) patch.disable_clone = body.disable_clone ? 1 : 0
+    if (body.disable_delete !== undefined) patch.disable_delete = body.disable_delete ? 1 : 0
     if (body.accordion_mode !== undefined) patch.accordion_mode = body.accordion_mode ? 1 : 0
     if (body.tab_mode !== undefined) patch.tab_mode = body.tab_mode
     if (body.validate_before_next !== undefined) patch.validate_before_next = body.validate_before_next ? 1 : 0

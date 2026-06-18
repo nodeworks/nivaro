@@ -48,6 +48,7 @@ export interface SlotAssignment {
   field: string
   sort: number
   group_key?: string | null
+  col_span?: number | null
   is_visible: boolean | number
   default_expanded?: boolean
   label_override?: string | null
@@ -66,6 +67,7 @@ export interface LayoutMeta {
   disable_tasks?: boolean | number
   disable_revisions?: boolean | number
   disable_clone?: boolean | number
+  disable_delete?: boolean | number
   accordion_mode?: boolean | number
 }
 

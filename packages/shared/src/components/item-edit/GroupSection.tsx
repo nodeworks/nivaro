@@ -9,7 +9,7 @@ import { get } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { FieldRow } from './FieldRow'
 import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpers'
-import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps } from './types'
+import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps, SlotAssignment } from './types'
 
 function resolveIcon(name: string | null | undefined): React.ElementType | null {
   if (!name) return null
@@ -94,6 +94,67 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
   }
 
   return s
+}
+
+// Inline owners display — renders pipeline state owners as avatar chips, no panel wrapper
+export function OwnersInline({ collection, itemId, label }: { collection: string; itemId: string; label: string }) {
+  const client = useOptionalNivaroClient()
+  const { data: owners = [] } = useQuery<Array<{ id: number; state: string | null; first_name: string | null; last_name: string | null; email: string }>>({
+    queryKey: ['pipeline-instance-owners', collection, itemId],
+    queryFn: () =>
+      client!.request<{ data: Array<{ id: number; state: string | null; first_name: string | null; last_name: string | null; email: string }> }>(
+        get(`/pipelines/instance/${collection}/${itemId}/owners`)
+      ).then((r) => r.data ?? []),
+    enabled: !!client && !!collection && !!itemId && itemId !== 'new',
+    staleTime: 30_000,
+  })
+  const name = (o: { first_name: string | null; last_name: string | null; email: string }) =>
+    [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
+  const initials = (o: { first_name: string | null; last_name: string | null; email: string }) =>
+    name(o).split(' ').map((p) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+  return (
+    <div>
+      <p className='text-[11px] font-medium text-slate-400 mb-1.5'>{label}</p>
+      {owners.length === 0 ? (
+        <p className='text-[13px] text-slate-400'>—</p>
+      ) : (
+        <div className='flex flex-wrap gap-2'>
+          {owners.map((o) => (
+            <div key={o.id} className='flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'>
+              <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+                {initials(o)}
+              </span>
+              <span className='text-[12px] text-slate-700'>{name(o)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Single user chip — fetches user by id, shows initials avatar + name
+function UserChip({ userId }: { userId: string }) {
+  const client = useOptionalNivaroClient()
+  const { data: user } = useQuery<{ id: number; first_name: string | null; last_name: string | null; email: string } | null>({
+    queryKey: ['user-chip', userId],
+    queryFn: () =>
+      client!.request<{ data: { id: number; first_name: string | null; last_name: string | null; email: string } }>(
+        get(`/users/${userId}`)
+      ).then((r) => r.data ?? null),
+    enabled: !!client && !!userId,
+    staleTime: 120_000,
+  })
+  const name = user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId
+  const initials = name.split(' ').map((p: string) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+  return (
+    <div className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'>
+      <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+        {initials}
+      </span>
+      <span className='text-[12px] text-slate-700'>{name}</span>
+    </div>
+  )
 }
 
 // Async M2O display cell — fetches related record + collection display_template
@@ -184,7 +245,8 @@ export function GroupSection({
   summaryFields,
   m2mCounts,
   o2mCounts,
-  footerSlot
+  footerSlot,
+  ownersAssignment
 }: {
   group: FieldGroup
   fields: CMSField[]
@@ -208,6 +270,7 @@ export function GroupSection({
   m2mCounts?: Record<string, number>
   o2mCounts?: Record<string, number>
   footerSlot?: ReactNode
+  ownersAssignment?: SlotAssignment | null
 }) {
   const [localCollapsed, setLocalCollapsed] = useState(group.is_collapsed ?? false)
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
@@ -255,48 +318,88 @@ export function GroupSection({
       </button>
       {!collapsed && (
         <div className='border-t border-slate-100 px-5 py-4'>
-          {displayOnly ? (
-            <div ref={gridRef} className='grid grid-cols-12 gap-x-6 gap-y-3'>
-              {visibleFields_.map((f) => {
-                // Find M2O relation: current collection holds the FK
-                const m2oRel = relations.find(
-                  (r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field
-                )
-                return (
-                  <div key={f.field} className='min-w-0' style={{ gridColumn: `span ${resolveColSpan(f.options, containerWidth)}` }}>
-                    <dt className='text-[11px] font-medium text-slate-400 truncate'>{f.label || titleCase(f.field)}</dt>
-                    <dd className='mt-0.5 break-words'>
-                      {m2oRel?.one_collection
-                        ? <RelationCell relCollection={m2oRel.one_collection} id={draft[f.field]} />
-                        : <span className='text-[13px] text-slate-700'>{formatDisplayValue(draft[f.field], f)}</span>
-                      }
-                    </dd>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div ref={gridRef} className='grid grid-cols-12 gap-4 items-start'>
-              {visibleFields_.map((f) => (
-                <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, containerWidth)}` }}>
-                  <FieldRow
-                    field={f}
-                    draft={draft}
-                    onChange={onChange}
-                    relations={relations}
-                    collection={collection}
-                    itemId={itemId}
-                    error={errors[f.field]}
-                    visible={visibleFields.has(f.field) || !visibleFields.size}
-                    locked={lockedFields.has(f.field)}
-                    layoutAiEnabled={layoutAiEnabled}
-                    renderField={renderField}
-                    onCountChange={onCountChange}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
+          {(() => {
+            // Merge fields + optional inline owners into a sorted render list
+            type RenderItem = { _k: string; sort: number } & (
+              | { _t: 'field'; f: CMSField }
+              | { _t: 'owners'; slot: SlotAssignment }
+            )
+            const items: RenderItem[] = visibleFields_.map((f) => ({ _k: f.field, sort: f.sort ?? 0, _t: 'field' as const, f }))
+            if (ownersAssignment) {
+              items.push({ _k: '__owners__', sort: ownersAssignment.sort, _t: 'owners' as const, slot: ownersAssignment })
+            }
+            items.sort((a, b) => a.sort - b.sort)
+
+            return displayOnly ? (
+              <div ref={gridRef} className='grid grid-cols-12 gap-x-6 gap-y-3'>
+                {items.map((item) => {
+                  if (item._t === 'owners') {
+                    const span = item.slot.col_span ?? 12
+                    return (
+                      <div key='__owners__' className='min-w-0' style={{ gridColumn: `span ${span}` }}>
+                        <OwnersInline collection={collection} itemId={itemId} label={item.slot.label_override || 'Owners'} />
+                      </div>
+                    )
+                  }
+                  const f = item.f
+                  const m2oRel = relations.find(
+                    (r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field
+                  )
+                  return (
+                    <div key={f.field} className='min-w-0' style={{ gridColumn: `span ${resolveColSpan(f.options, containerWidth)}` }}>
+                      <dt className='text-[11px] font-medium text-slate-400 truncate'>{f.label || titleCase(f.field)}</dt>
+                      <dd className='mt-0.5 break-words'>
+                        {m2oRel?.one_collection === 'nivaro_users'
+                          ? (() => {
+                              const v = draft[f.field]
+                              const ids = Array.isArray(v) ? v : (v != null && v !== '' ? [v] : [])
+                              return ids.length === 0
+                                ? <span className='text-[13px] text-slate-400'>—</span>
+                                : <div className='flex flex-wrap gap-1.5'>{ids.map((id) => <UserChip key={String(id)} userId={String(id)} />)}</div>
+                            })()
+                          : m2oRel?.one_collection
+                            ? <RelationCell relCollection={m2oRel.one_collection} id={draft[f.field]} />
+                            : <span className='text-[13px] text-slate-700'>{formatDisplayValue(draft[f.field], f)}</span>
+                        }
+                      </dd>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div ref={gridRef} className='grid grid-cols-12 gap-4 items-start'>
+                {items.map((item) => {
+                  if (item._t === 'owners') {
+                    const span = item.slot.col_span ?? 12
+                    return (
+                      <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
+                        <OwnersInline collection={collection} itemId={itemId} label={item.slot.label_override || 'Owners'} />
+                      </div>
+                    )
+                  }
+                  const f = item.f
+                  return (
+                    <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, containerWidth)}` }}>
+                      <FieldRow
+                        field={f}
+                        draft={draft}
+                        onChange={onChange}
+                        relations={relations}
+                        collection={collection}
+                        itemId={itemId}
+                        error={errors[f.field]}
+                        visible={visibleFields.has(f.field) || !visibleFields.size}
+                        locked={lockedFields.has(f.field)}
+                        layoutAiEnabled={layoutAiEnabled}
+                        renderField={renderField}
+                        onCountChange={onCountChange}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })()}
           {footerSlot && <div className='mt-4'>{footerSlot}</div>}
         </div>
       )}

@@ -4518,6 +4518,7 @@ const FRIENDLY_TYPE_STYLES: Record<string, string> = {
   M2M: 'bg-nvr-cyan/15 text-nvr-cyan',
   O2M: 'bg-nvr-cyan/10 text-nvr-cyan',
   panel: 'bg-indigo-50 text-indigo-600',
+  owners: 'bg-violet-50 text-violet-600',
 }
 
 // ── FieldSettingsPopover ──────────────────────────────────────────────────────
@@ -5683,8 +5684,9 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                     sortableId={toSortableId('__unassigned__', f)}
                     fieldName={f}
                     displayName='Owners'
-                    fieldType='panel'
+                    fieldType='owners'
                     colSpan={getColSpan(f)}
+                    onColSpan={isTableMode ? undefined : (span) => patchField(f, { col_span: span })}
                     onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
                     inGrid
                   />
@@ -5867,7 +5869,7 @@ function SortableGroupCard({
             {containerGroups.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
         )}
-        {group.type === 'section' && onGroupSettings && (
+        {(group.type === 'section' || group.type === 'metadata') && onGroupSettings && (
           <div onPointerDown={e => e.stopPropagation()}>
             <Popover>
               <PopoverTrigger asChild>
@@ -5990,8 +5992,9 @@ function SortableGroupCard({
                     sortableId={toSortableId(group.key, f)}
                     fieldName={f}
                     displayName='Owners'
-                    fieldType='panel'
+                    fieldType='owners'
                     colSpan={getColSpan(f)}
+                    onColSpan={(span) => onColSpan(f, span)}
                     onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
                     inGrid
                   />
@@ -6057,6 +6060,7 @@ interface CollectionLayout {
   disable_tasks?: boolean | number
   disable_revisions?: boolean | number
   disable_clone?: boolean | number
+  disable_delete?: boolean | number
   accordion_mode?: boolean | number
   tab_mode?: string
   validate_before_next?: boolean | number
@@ -6220,7 +6224,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   })
 
   const patchLayoutMut = useMutation({
-    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'slug' | 'disable_comments' | 'disable_tasks' | 'disable_revisions' | 'disable_clone' | 'accordion_mode' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field'>>) => {
+    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'slug' | 'disable_comments' | 'disable_tasks' | 'disable_revisions' | 'disable_clone' | 'disable_delete' | 'accordion_mode' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field'>>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
     },
@@ -6515,6 +6519,10 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                   <label className='flex cursor-pointer items-center justify-between'>
                     <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide clone button</span>
                     <input type='checkbox' checked={!!selected.disable_clone} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, disable_clone: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+                  </label>
+                  <label className='flex cursor-pointer items-center justify-between'>
+                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide delete button</span>
+                    <input type='checkbox' checked={!!selected.disable_delete} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, disable_delete: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
                   </label>
                 </div>
                 <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
@@ -7400,7 +7408,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                           key={f}
                           fieldName={f}
                           displayName='Owners'
-                          fieldType='panel'
+                          fieldType='owners'
                           colSpan={getColSpan(f)}
                         />
                       )
@@ -7654,7 +7662,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
           <FieldChip
             fieldName={activeFieldId}
             displayName={activeFieldId === OWNERS_FIELD ? 'Owners' : undefined}
-            fieldType={activeFieldId === OWNERS_FIELD ? 'panel' : activeFieldData?.type}
+            fieldType={activeFieldId === OWNERS_FIELD ? 'owners' : activeFieldData?.type}
             colSpan={getColSpan(activeFieldId)}
             isDragging
           />

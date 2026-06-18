@@ -2018,7 +2018,7 @@ function LiveFormTab() {
   const [previewWidth, setPreviewWidth] = useState<number | null>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const dragStateRef = useRef<{ startX: number; startW: number } | null>(null)
-  const initialMountRef = useRef(true)
+  const prevCollectionRef = useRef(collection)
 
   function startResize(e: React.MouseEvent) {
     e.preventDefault()
@@ -2083,12 +2083,21 @@ function LiveFormTab() {
   })
 
   useEffect(() => {
-    if (initialMountRef.current) { initialMountRef.current = false; return }
+    if (prevCollectionRef.current === collection) return
+    prevCollectionRef.current = collection
     setItemId('')
     setItemSelectedLabel(null)
   }, [collection])
 
   const tmpl = colMeta?.display_template ?? null
+
+  // Auto-populate label when loading from URL param (user hasn't picked via dropdown)
+  useEffect(() => {
+    if (selectedItemData && !itemSelectedLabel) {
+      setItemSelectedLabel(applyTmpl(tmpl, selectedItemData))
+    }
+  }, [selectedItemData, tmpl])
+
   const sortedItems = useMemo(
     () => [...itemOptions].sort((a, b) => applyTmpl(tmpl, a).localeCompare(applyTmpl(tmpl, b))),
     [itemOptions, tmpl]

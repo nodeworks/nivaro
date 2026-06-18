@@ -15,7 +15,7 @@ import { ItemEditAuthContext, useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { FieldRow } from './item-edit/FieldRow'
-import { GroupSection } from './item-edit/GroupSection'
+import { GroupSection, OwnersInline } from './item-edit/GroupSection'
 import { applyDisplayTemplate, resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import { O2MStagingContext, type O2MStagingCtx } from './item-edit/O2MStagingContext'
@@ -428,17 +428,19 @@ export function ItemEditForm({
   const effectiveShowComments = layoutMeta ? !layoutMeta.disable_comments && showComments : showComments
   const effectiveShowTasks = layoutMeta ? !layoutMeta.disable_tasks && showTasks : showTasks
   const effectiveShowClone = layoutMeta ? !layoutMeta.disable_clone && showClone : showClone
+  const effectiveShowDelete = layoutMeta ? !layoutMeta.disable_delete : true
   const accordionMode = !!layoutMeta?.accordion_mode
   const [summaryCollapsed, setSummaryCollapsed] = useState(false)
   // Accordion mode: track the single open section group id (null = none open)
   const [openSectionId, setOpenSectionId] = useState<number | null>(null)
-  const accordionInitRef = useRef(false)
+  const prevAccordionModeRef = useRef(false)
   useEffect(() => {
-    if (!accordionMode || accordionInitRef.current) return
-    const first = sectionGroups.find((g) => !g.is_collapsed) ?? sectionGroups[0]
-    if (first) {
-      accordionInitRef.current = true
-      setOpenSectionId(first.id)
+    if (!accordionMode) { prevAccordionModeRef.current = false; return }
+    // Re-init whenever accordion turns on (mode changes or groups change)
+    if (accordionMode && !prevAccordionModeRef.current) {
+      prevAccordionModeRef.current = true
+      const first = sectionGroups.find((g) => !g.is_collapsed) ?? sectionGroups[0]
+      if (first) setOpenSectionId(first.id)
     }
   }, [accordionMode, sectionGroups])
 
@@ -970,13 +972,13 @@ export function ItemEditForm({
     const groupFields = groupedMap[g.key] ?? []
     const ownersHere = ownersInGroup && ownersGroupKey === g.key && showPipeline
     if (groupFields.length === 0 && !ownersHere) return null
-    const accordionActive = accordionMode && g.type !== 'metadata'
+    const accordionActive = accordionMode && g.type !== 'tab'
     return (
       <GroupSection
         key={g.key}
         group={g}
         fields={groupFields}
-        footerSlot={ownersHere ? renderOwnersPanel() : undefined}
+        ownersAssignment={ownersHere ? ownersSlot : undefined}
         draft={draft}
         onChange={handleFieldChange}
         relations={relations}
@@ -1033,29 +1035,45 @@ export function ItemEditForm({
         : (groupedMap[tabKey] ?? [])
     ).filter((f) => !f.hidden)
     const ownersHere = ownersInGroup && ownersGroupKey === tabKey && showPipeline
+    type TabItem = { _k: string; sort: number } & ({ _t: 'field'; f: CMSField } | { _t: 'owners'; slot: SlotAssignment })
+    const tabItems: TabItem[] = fields.map((f) => ({ _k: f.field, sort: f.sort ?? 0, _t: 'field' as const, f }))
+    if (ownersHere && ownersSlot) {
+      tabItems.push({ _k: '__owners__', sort: ownersSlot.sort, _t: 'owners' as const, slot: ownersSlot })
+    }
+    tabItems.sort((a, b) => a.sort - b.sort)
     return (
       <div className='rounded-xl border border-slate-200 bg-white px-5 py-5'>
         <GridContainer>
-          {(cw) => fields.map((f) => (
-            <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-              <FieldRow
-                field={f}
-                draft={draft}
-                onChange={handleFieldChange}
-                relations={relations}
-                collection={collection}
-                itemId={itemId}
-                error={validationErrors[f.field]}
-                visible={true}
-                locked={isReadOnly}
-                layoutAiEnabled={layoutAiEnabled}
-                renderField={renderField}
-                onCountChange={handleM2MCountChange}
-              />
-            </div>
-          ))}
+          {(cw) => tabItems.map((item) => {
+            if (item._t === 'owners') {
+              const span = item.slot.col_span ?? 12
+              return (
+                <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
+                  <OwnersInline collection={collection} itemId={itemId} label={item.slot.label_override || 'Owners'} />
+                </div>
+              )
+            }
+            const f = item.f
+            return (
+              <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
+                <FieldRow
+                  field={f}
+                  draft={draft}
+                  onChange={handleFieldChange}
+                  relations={relations}
+                  collection={collection}
+                  itemId={itemId}
+                  error={validationErrors[f.field]}
+                  visible={true}
+                  locked={isReadOnly}
+                  layoutAiEnabled={layoutAiEnabled}
+                  renderField={renderField}
+                  onCountChange={handleM2MCountChange}
+                />
+              </div>
+            )
+          })}
         </GridContainer>
-        {ownersHere && <div className='mt-4'>{renderOwnersPanel()}</div>}
       </div>
     )
   }
@@ -1133,20 +1151,6 @@ export function ItemEditForm({
             Step {activeIdx + 1} of {allSteps.length}
           </span>
           <div className='flex items-center gap-2'>
-            {isLast && !isNew && showPipeline && (
-              <PipelineTransitionButtons
-                collection={collection}
-                item={itemId}
-                onBeforeTransition={() => {
-                  if (!validateAll()) return false
-                  if (isDirty) {
-                    toast.error('Save changes before transitioning')
-                    return false
-                  }
-                  return true
-                }}
-              />
-            )}
             {isLast ? (
               <button
                 type='button'
@@ -1166,6 +1170,20 @@ export function ItemEditForm({
                 Next
                 <ChevronDown className='h-3.5 w-3.5 -rotate-90' />
               </button>
+            )}
+            {isLast && !isNew && showPipeline && (
+              <PipelineTransitionButtons
+                collection={collection}
+                item={itemId}
+                onBeforeTransition={() => {
+                  if (!validateAll()) return false
+                  if (isDirty) {
+                    toast.error('Save changes before transitioning')
+                    return false
+                  }
+                  return true
+                }}
+              />
             )}
           </div>
         </div>
@@ -1283,7 +1301,7 @@ export function ItemEditForm({
   const itemTitle = !isNew && itemData && colMeta?.display_template
     ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
     : title
-  const canDelete = !isNew && isAdmin
+  const canDelete = !isNew && isAdmin && effectiveShowDelete
 
   return (
     <O2MStagingContext.Provider value={o2mStagingCtx}>
@@ -1292,7 +1310,7 @@ export function ItemEditForm({
         {showHeader && (
           <header
             className={cn(
-              'shrink-0 border-b border-slate-200 bg-white px-6 py-3 flex items-center gap-3',
+              'shrink-0 border-b border-slate-200 bg-white px-8 py-3 flex items-center gap-3',
               headerClassName
             )}
           >
@@ -1309,20 +1327,6 @@ export function ItemEditForm({
               {isNew ? `New ${singularTitle}` : itemTitle}
             </h1>
             <div className='ml-auto flex items-center gap-2'>
-              {!isNew && showPipeline && !isStepsMode && (
-                <PipelineTransitionButtons
-                  collection={collection}
-                  item={itemId}
-                  onBeforeTransition={() => {
-                    if (!validateAll()) return false
-                    if (isDirty) {
-                      toast.error('Save changes before transitioning')
-                      return false
-                    }
-                    return true
-                  }}
-                />
-              )}
               {effectiveShowRevisions && !isNew && (
                 <RevisionsPanel
                   collection={collection}
@@ -1394,6 +1398,20 @@ export function ItemEditForm({
                   )}
                   {isNew ? 'Create' : 'Save Progress'}
                 </Button>
+              )}
+              {!isNew && showPipeline && !isStepsMode && (
+                <PipelineTransitionButtons
+                  collection={collection}
+                  item={itemId}
+                  onBeforeTransition={() => {
+                    if (!validateAll()) return false
+                    if (isDirty) {
+                      toast.error('Save changes before transitioning')
+                      return false
+                    }
+                    return true
+                  }}
+                />
               )}
             </div>
           </header>
