@@ -28,7 +28,7 @@ export interface FieldGroup {
     id: number;
     key: string;
     label: string;
-    type: 'section' | 'tab';
+    type: 'section' | 'tab' | 'metadata';
     icon: string | null;
     sort: number;
     is_collapsed: boolean;

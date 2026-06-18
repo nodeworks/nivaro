@@ -5554,7 +5554,7 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
   getM2OFields?: () => CascadeParentField[]
   getDependencyConfig?: (f: string) => Record<string, unknown> | null
   getRelatedCollection?: (f: string) => string | null
-  onUnassign?: (f: string) => void
+  onUnassign?: (f: string, groupKey: string) => void
   onReturnAll?: () => void
   isTableMode?: boolean
 }) {
@@ -5604,7 +5604,7 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                   m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields?.() : undefined}
                   dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
                   relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
-                  onUnassign={onUnassign ? () => onUnassign(f) : undefined}
+                  onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
                   inGrid
                 />
               )
@@ -5653,7 +5653,7 @@ function SortableGroupCard({
   getM2OFields?: () => CascadeParentField[]
   getDependencyConfig?: (f: string) => Record<string, unknown> | null
   getRelatedCollection?: (f: string) => string | null
-  onUnassign?: (f: string) => void
+  onUnassign?: (f: string, groupKey: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [labelDraft, setLabelDraft] = useState(group.label)
@@ -5785,7 +5785,7 @@ function SortableGroupCard({
                   m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields?.() : undefined}
                   dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
                   relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
-                  onUnassign={onUnassign ? () => onUnassign(f) : undefined}
+                  onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
                   inGrid
                 />
               )
@@ -6555,7 +6555,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     }
     setLocalGroupOrder(baseOrder)
     const assignments: Record<string, string | null> = {}
-    // __pool__ = Unassigned sidebar (never explicitly placed); __unassigned__ = Ungrouped zone
+    // __pool__ = Fields List (always contains ALL fields); __unassigned__ = Ungrouped zone
     const fieldOrder: Record<string, string[]> = { __pool__: [], __unassigned__: [] }
     for (const g of groups) fieldOrder[g.key] = []
     const sorted = [...allFields].sort((a, b) => {
@@ -6563,17 +6563,23 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       const bs_ = fieldConfig.find(fc => fc.field === b.field)?.sort ?? 9999
       return as_ - bs_
     })
+    // __pool__ always has every field — it's a static Fields List palette
     for (const f of sorted) {
-      const fc = fieldConfig.find(fc => fc.field === f.field)
-      const gk = fc?.group_key ?? null
-      const placed = (fc as Record<string, unknown> | undefined)?.layout_assigned === true
-      assignments[f.field] = gk
-      if (!placed) {
-        fieldOrder.__pool__.push(f.field)
-      } else if (gk && fieldOrder[gk] !== undefined) {
-        fieldOrder[gk].push(f.field)
-      } else {
-        fieldOrder.__unassigned__.push(f.field)
+      fieldOrder.__pool__.push(f.field)
+      assignments[f.field] = null
+    }
+    // Populate groups from ALL fieldConfig rows (multi-group: same field can appear in multiple groups)
+    const fcSorted = [...fieldConfig].sort((a, b) => (a.sort ?? 9999) - (b.sort ?? 9999))
+    for (const fc of fcSorted) {
+      if (!(fc as Record<string, unknown>).layout_assigned) continue
+      const gk = fc.group_key ?? null
+      const f = fc.field
+      if (!f || f === '__ungrouped_pos__' || (typeof f === 'string' && f.startsWith('__') && f.endsWith('__') && f !== '__unassigned__')) continue
+      assignments[f] = gk
+      if (gk && fieldOrder[gk] !== undefined) {
+        if (!fieldOrder[gk].includes(f)) fieldOrder[gk].push(f)
+      } else if (!gk) {
+        if (!fieldOrder.__unassigned__.includes(f)) fieldOrder.__unassigned__.push(f)
       }
     }
     // Build per-layout col_span map from fieldConfig (which has the layout overlay applied)
@@ -6626,16 +6632,19 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
       const seq = changeSeqRef.current
-      const pool = new Set(localFieldOrder.__pool__ ?? [])
       const ungroupedPos = localGroupOrder.indexOf('__ungrouped__')
-      const assignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean; col_span?: number | null; overrides?: Record<string, unknown> | null }> = [
-        ...Object.entries(localAssignments)
-          .filter(([f]) => !pool.has(f))
-          .map(([f, gk]) => {
-            const order = localFieldOrder[gk ?? '__unassigned__'] ?? []
-            const ov = localOverrides[f]
-            return { field: f, group_key: gk ?? null, sort: order.indexOf(f) >= 0 ? order.indexOf(f) : 0, col_span: localColSpans[f] ?? null, overrides: ov && Object.keys(ov).length > 0 ? ov : null }
-          }),
+      // Build assignments from localFieldOrder directly — __pool__ is the static Fields List, skip it
+      const fieldAssignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean; col_span?: number | null; overrides?: Record<string, unknown> | null }> = []
+      for (const [container, fields] of Object.entries(localFieldOrder)) {
+        if (container === '__pool__') continue
+        const gk = container === '__unassigned__' ? null : container
+        fields.forEach((f, idx) => {
+          const ov = localOverrides[f]
+          fieldAssignments.push({ field: f, group_key: gk, sort: idx, col_span: localColSpans[f] ?? null, overrides: ov && Object.keys(ov).length > 0 ? ov : null })
+        })
+      }
+      const assignments = [
+        ...fieldAssignments,
         { field: '__ungrouped_pos__', group_key: null, sort: ungroupedPos >= 0 ? ungroupedPos : localGroupOrder.length },
         // Page slot sentinels — sort derived from position in localGroupOrder
         ...SLOT_KEYS.map(key => ({
@@ -6889,15 +6898,19 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       return
     }
 
-    // ── Cross-container drop — single state update, no jumping ──
-    // __pool__ = Unassigned sidebar (no layout assignment); __unassigned__ = Ungrouped zone (group_key: null)
+    // ── Cross-container drop ──
+    // __pool__ = Fields List (static palette) — dragging FROM it copies, never removes
     const newGroupKey = (toContainer === '__unassigned__' || toContainer === '__pool__') ? null : toContainer
     setLocalAssignments(prev => ({ ...prev, [activeId]: newGroupKey }))
-    setLocalFieldOrder(prev => ({
-      ...prev,
-      [fromContainer]: (prev[fromContainer] ?? []).filter(f => f !== activeId),
-      [toContainer]: [...(prev[toContainer] ?? []), activeId],
-    }))
+    setLocalFieldOrder(prev => {
+      const fromFields = fromContainer === '__pool__'
+        ? (prev[fromContainer] ?? [])  // copy: leave pool unchanged
+        : (prev[fromContainer] ?? []).filter(f => f !== activeId)  // move: remove from source
+      const toFields = (prev[toContainer] ?? []).includes(activeId)
+        ? (prev[toContainer] ?? [])  // already there (multi-group), skip duplicate
+        : [...(prev[toContainer] ?? []), activeId]
+      return { ...prev, [fromContainer]: fromFields, [toContainer]: toFields }
+    })
     if (layoutId) {
       hasLocalChangeRef.current = true
       changeSeqRef.current++
@@ -6949,18 +6962,16 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     patchField(f, patch)
   }, [patchField])
 
-  const handleUnassign = useCallback((f: string) => {
-    const fromContainer = findContainer(f)
-    if (fromContainer === '__pool__') return
-    setLocalAssignments(prev => ({ ...prev, [f]: null }))
+  const handleUnassign = useCallback((f: string, containerKey: string) => {
+    if (containerKey === '__pool__') return
     setLocalFieldOrder(prev => ({
       ...prev,
-      [fromContainer]: (prev[fromContainer] ?? []).filter(x => x !== f),
-      __pool__: [...(prev.__pool__ ?? []), f],
+      [containerKey]: (prev[containerKey] ?? []).filter(x => x !== f),
+      // __pool__ (Fields List) always keeps all fields — no change needed
     }))
     hasLocalChangeRef.current = true
     changeSeqRef.current++
-  }, [findContainer])
+  }, [])
 
   // Bulk: move every field from the Unassigned pool into the Ungrouped zone
   const handleAddAllToUngrouped = useCallback(() => {
@@ -7093,25 +7104,12 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
           <div className='rounded-lg border border-dashed border-slate-200 bg-slate-50 sticky top-0'>
             <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2'>
               <p className='text-[11px] font-medium text-slate-400'>
-                Unassigned
-                {(localFieldOrder.__pool__ ?? []).length > 0 && (
-                  <span className='ml-1 text-slate-300'>({(localFieldOrder.__pool__ ?? []).length})</span>
-                )}
+                Fields List
+                <span className='ml-1 text-slate-300'>({(localFieldOrder.__pool__ ?? []).length})</span>
               </p>
-              {(localFieldOrder.__pool__ ?? []).length > 0 && (
-                <button
-                  type='button'
-                  onClick={handleAddAllToUngrouped}
-                  className='ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10'
-                >
-                  Add all
-                </button>
-              )}
             </div>
               <div className='overflow-y-auto min-h-[40px] p-2' style={{ maxHeight: 'calc(100vh - 220px)' }}>
-                {(localFieldOrder.__pool__ ?? []).length === 0 ? (
-                  <p className='py-2 text-center text-[10px] text-slate-300'>All fields assigned</p>
-                ) : (() => {
+                {(() => {
                   const unassigned = localFieldOrder.__pool__ ?? []
                   const getLabel = (f: string) => getFieldSettings(f).label ?? titleCase(f)
                   const relFields = unassigned.filter(f => relKind(f) !== null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
@@ -7210,7 +7208,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
             <div className='space-y-3'>
               {orderedItems.map(item => {
                 if (item === '__ungrouped__') return (
-                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} onReturnAll={handleReturnAllToPool} isTableMode={layoutType === 'table'} />
+                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} isTableMode={layoutType === 'table'} />
                 )
                 if (layoutType === 'table') return null
                 if (SLOT_KEYS.includes(item as SlotKey)) return (

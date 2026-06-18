@@ -182,7 +182,7 @@ export function FieldRow({
     ])
   )
 
-  if (!visible || field.hidden || SYSTEM_FIELDS.has(field.field)) return null
+  if (!visible || (!field.layout_assigned && (field.hidden || SYSTEM_FIELDS.has(field.field)))) return null
   const value = draft[field.field] ?? null
   const label = field.label ?? titleCase(field.field)
 

@@ -345,8 +345,16 @@ export function ItemEditForm({
     // Slug requested but layout not yet resolved — suppress stale cache to avoid field flash
     if (layoutSlug && activeLayoutData === undefined) return []
     const sorted = [...fieldConfig].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
-    if (!assignedFieldSet) return sorted
-    return sorted.filter((f) => assignedFieldSet.has(f.field) || SYSTEM_FIELDS.has(f.field) || SENTINEL_FIELDS.has(f.field))
+    // Deduplicate by field name — multi-group fields appear once per group in fieldConfig;
+    // allFields is used for validation/draft and must have one entry per field
+    const seen = new Set<string>()
+    const deduped = sorted.filter((f) => {
+      if (seen.has(f.field)) return false
+      seen.add(f.field)
+      return true
+    })
+    if (!assignedFieldSet) return deduped
+    return deduped.filter((f) => assignedFieldSet.has(f.field) || SYSTEM_FIELDS.has(f.field) || SENTINEL_FIELDS.has(f.field))
   }, [fieldConfig, assignedFieldSet, layoutSlug, activeLayoutData])
 
   const groups = useMemo<FieldGroup[]>(() => {
@@ -354,14 +362,17 @@ export function ItemEditForm({
   }, [activeLayoutData])
 
   const groupedMap = useMemo<Record<string, CMSField[]>>(() => {
+    // Build from raw fieldConfig (not deduped allFields) so multi-group fields appear in each group
+    const raw = fieldConfig ? [...fieldConfig].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0)) : []
     const map: Record<string, CMSField[]> = {}
-    for (const f of allFields) {
+    for (const f of raw) {
       if (!f.group_key || SENTINEL_FIELDS.has(f.field)) continue
       if (!map[f.group_key]) map[f.group_key] = []
-      map[f.group_key].push(f)
+      // Avoid duplicates within the same group (shouldn't happen with the new unique constraint)
+      if (!map[f.group_key].find((e) => e.field === f.field)) map[f.group_key].push(f)
     }
     return map
-  }, [allFields])
+  }, [fieldConfig])
 
   const ungroupedFields = useMemo(
     () =>
@@ -378,7 +389,7 @@ export function ItemEditForm({
   )
 
   const tabGroups = useMemo(() => groups.filter((g) => g.type === 'tab'), [groups])
-  const sectionGroups = useMemo(() => groups.filter((g) => g.type === 'section'), [groups])
+  const sectionGroups = useMemo(() => groups.filter((g) => g.type === 'section' || g.type === 'metadata'), [groups])
   const hasTabs = tabGroups.length > 0
   const layoutMeta = activeLayoutData?.layout
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
@@ -423,10 +434,13 @@ export function ItemEditForm({
   const allSteps = useMemo<StepDef[]>(() => {
     if (!hasTabs) return []
     const steps: StepDef[] = []
-    if (sectionGroups.length > 0) steps.push({ key: '__general__', label: 'General' })
+    // In steps mode, sectionGroups float above/below steps as panels — only add __general__ for ungrouped fields.
+    // In tab mode, sectionGroups belong inside the __general__ tab.
+    if (isStepsMode ? ungroupedFields.length > 0 : sectionGroups.length > 0)
+      steps.push({ key: '__general__', label: 'General' })
     for (const g of tabGroups) steps.push({ key: g.key, label: g.label })
     return steps
-  }, [hasTabs, sectionGroups, tabGroups])
+  }, [hasTabs, sectionGroups, tabGroups, isStepsMode, ungroupedFields])
 
   const completedSteps = useMemo(() => {
     const out = new Set<string>()
@@ -434,7 +448,9 @@ export function ItemEditForm({
       if (isNew && !visitedSteps.has(s.key)) continue
       const stepFields =
         s.key === '__general__'
-          ? [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])]
+          ? (isStepsMode
+              ? ungroupedFields
+              : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])])
           : (groupedMap[s.key] ?? [])
       const allFilled = stepFields
         .filter((f) => f.required && !f.hidden)
@@ -445,13 +461,15 @@ export function ItemEditForm({
       if (allFilled) out.add(s.key)
     }
     return out
-  }, [allSteps, ungroupedFields, sectionGroups, groupedMap, draft, isNew, visitedSteps])
+  }, [allSteps, ungroupedFields, sectionGroups, groupedMap, draft, isNew, visitedSteps, isStepsMode])
 
   function handleNext() {
     if (validateBeforeNext) {
       const stepFields =
         activeTab === '__general__'
-          ? [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])]
+          ? (isStepsMode
+              ? ungroupedFields
+              : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])])
           : (groupedMap[activeTab] ?? [])
       const errs: Record<string, string> = {}
       for (const f of stepFields) {
@@ -754,6 +772,7 @@ export function ItemEditForm({
     if (item === '__pipeline__' || item === '__comments__' || item === '__tasks__')
       return renderSentinel(item)
     const g = item as FieldGroup
+    if (g.type === 'metadata' && isNew) return null
     const groupFields = groupedMap[g.key] ?? []
     if (groupFields.length === 0) return null
     return (
@@ -770,6 +789,7 @@ export function ItemEditForm({
         visibleFields={visibleFields}
         lockedFields={lockedFields}
         layoutAiEnabled={layoutAiEnabled}
+        displayOnly={g.type === 'metadata'}
         renderField={renderField}
         onCountChange={handleM2MCountChange}
       />
@@ -797,10 +817,12 @@ export function ItemEditForm({
   }
 
   // ── Tab mode ───────────────────────────────────────────────────────────────
-  function renderTabContent(tabKey: string) {
+  function renderTabContent(tabKey: string, inStepsMode = false) {
     const fields = (
       tabKey === '__general__'
-        ? [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])]
+        ? (inStepsMode
+            ? ungroupedFields
+            : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])])
         : (groupedMap[tabKey] ?? [])
     ).filter((f) => !f.hidden)
     return (
@@ -941,30 +963,30 @@ export function ItemEditForm({
       </div>
     )
 
-    const allGroupSorts = [...tabGroups, ...sectionGroups].map((g) => g.sort)
-    const minGroupSort = allGroupSorts.length > 0 ? Math.min(...allGroupSorts) : Infinity
-    const preTabSentinels = sectionOrder.filter(
-      (item): item is '__pipeline__' | '__comments__' | '__tasks__' => {
-        if (item === '__pipeline__') return !!(pipelineSlot && pipelineSlot.sort < minGroupSort)
-        if (item === '__comments__') return !!(commentsSlot && commentsSlot.sort < minGroupSort)
-        if (item === '__tasks__') return !!(tasksSlot && tasksSlot.sort < minGroupSort)
-        return false
-      }
-    )
+    // Base minGroupSort on tab groups only — section groups float independently as panels
+    const minGroupSort = tabGroups.length > 0 ? Math.min(...tabGroups.map((g) => g.sort)) : Infinity
+    const preTabItems = sectionOrder.filter((item) => {
+      if (typeof item !== 'string') return (item as FieldGroup).sort < minGroupSort
+      if (item === '__pipeline__') return !!(pipelineSlot && pipelineSlot.sort < minGroupSort)
+      if (item === '__comments__') return !!(commentsSlot && commentsSlot.sort < minGroupSort)
+      if (item === '__tasks__') return !!(tasksSlot && tasksSlot.sort < minGroupSort)
+      return false
+    })
     const postTabItems = sectionOrder.filter((item) => {
-      if (typeof item !== 'string') return false
       if (item === '__ungrouped__') return false
+      if (typeof item !== 'string') return (item as FieldGroup).sort >= minGroupSort
       if (item === '__pipeline__') return !(pipelineSlot && pipelineSlot.sort < minGroupSort)
-      return !(item === '__comments__'
-        ? commentsSlot && commentsSlot.sort < minGroupSort
-        : item === '__tasks__'
-          ? tasksSlot && tasksSlot.sort < minGroupSort
-          : false)
+      if (item === '__comments__') return !(commentsSlot && commentsSlot.sort < minGroupSort)
+      if (item === '__tasks__') return !(tasksSlot && tasksSlot.sort < minGroupSort)
+      return false
     })
 
     return (
       <div className='space-y-4 min-w-0 flex-1'>
-        {preTabSentinels.map((key) => renderSentinel(key))}
+        {preTabItems.map((item, i) => {
+          const key = typeof item === 'string' ? item : (item as FieldGroup).key
+          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__')}</div>
+        })}
         <div className='rounded-xl border border-slate-200 bg-white px-5 py-3'>
           <StepsBar
             steps={allSteps}
@@ -978,12 +1000,11 @@ export function ItemEditForm({
             onStepClick={setActiveTab}
           />
         </div>
-        {renderTabContent(activeTab)}
-        {postTabItems.map((item) =>
-          renderSectionItem(
-            item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__'
-          )
-        )}
+        {renderTabContent(activeTab, true)}
+        {postTabItems.map((item, i) => {
+          const key = typeof item === 'string' ? item : (item as FieldGroup).key
+          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__')}</div>
+        })}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel collection={collection} item={itemId} defaultExpanded={false} onBeforeTransition={validateAll} />
         )}
