@@ -1,8 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import * as LucideIcons from 'lucide-react'
-import type { ReactNode } from 'react'
-import type React from 'react'
+import React, { type ReactNode } from 'react'
 import { useRef, useState } from 'react'
 import { useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -96,6 +95,57 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
   return s
 }
 
+// Tiny inline user pill — used in SummaryStrip only
+function SummaryUserName({ userId }: { userId: string }) {
+  const client = useOptionalNivaroClient()
+  const { data: user } = useQuery<{ first_name: string | null; last_name: string | null; email: string } | null>({
+    queryKey: ['user-chip', userId],
+    queryFn: () =>
+      client!.request<{ data: { first_name: string | null; last_name: string | null; email: string } }>(
+        get(`/users/${userId}`)
+      ).then((r) => r.data ?? null),
+    enabled: !!client && !!userId,
+    staleTime: 120_000,
+  })
+  const name = user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId
+  const initials = name.split(' ').map((p: string) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+  return (
+    <span className='inline-flex items-center gap-1 rounded-full bg-slate-100 py-px pl-0.5 pr-2'>
+      <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
+      <span className='text-[11px] text-slate-600'>{name}</span>
+    </span>
+  )
+}
+
+// Compact owners — no label, tiny inline style, used inside SummaryStrip
+function OwnersInlineCompact({ collection, itemId }: { collection: string; itemId: string }) {
+  const client = useOptionalNivaroClient()
+  const { data: owners = [] } = useQuery<Array<{ id: number; first_name: string | null; last_name: string | null; email: string }>>({
+    queryKey: ['pipeline-instance-owners', collection, itemId],
+    queryFn: () =>
+      client!.request<{ data: Array<{ id: number; first_name: string | null; last_name: string | null; email: string }> }>(
+        get(`/pipelines/instance/${collection}/${itemId}/owners`)
+      ).then((r) => r.data ?? []),
+    enabled: !!client && !!collection && !!itemId && itemId !== 'new',
+    staleTime: 30_000,
+  })
+  const name = (o: { first_name: string | null; last_name: string | null; email: string }) =>
+    [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
+  const initials = (o: { first_name: string | null; last_name: string | null; email: string }) =>
+    name(o).split(' ').map((p) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+  if (owners.length === 0) return <span className='text-[11px] text-slate-400'>—</span>
+  return (
+    <span className='inline-flex flex-wrap gap-x-1.5 gap-y-0.5'>
+      {owners.map((o) => (
+        <span key={o.id} className='inline-flex items-center gap-1 rounded-full bg-slate-100 py-px pl-0.5 pr-2'>
+          <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials(o)}</span>
+          <span className='text-[11px] text-slate-600'>{name(o)}</span>
+        </span>
+      ))}
+    </span>
+  )
+}
+
 // Inline owners display — renders pipeline state owners as avatar chips, no panel wrapper
 export function OwnersInline({ collection, itemId, label }: { collection: string; itemId: string; label: string }) {
   const client = useOptionalNivaroClient()
@@ -184,43 +234,124 @@ function RelationCell({ relCollection, id }: { relCollection: string; id: unknow
   return <span className='text-[13px] text-slate-700'>{label}</span>
 }
 
-function buildSummaryText(
-  summaryFields: string[] | undefined,
-  fields: CMSField[],
-  draft: Record<string, unknown>,
-  m2mCounts?: Record<string, number>,
+function SummaryStrip({
+  summaryFields,
+  fields,
+  draft,
+  relations,
+  collection,
+  itemId,
+  ownersAssignment,
+  m2mCounts,
+  o2mCounts,
+}: {
+  summaryFields: string[]
+  fields: CMSField[]
+  draft: Record<string, unknown>
+  relations: CMSRelation[]
+  collection: string
+  itemId: string
+  ownersAssignment?: SlotAssignment | null
+  m2mCounts?: Record<string, number>
   o2mCounts?: Record<string, number>
-): string {
-  if (!summaryFields || summaryFields.length === 0) return ''
-  const parts: string[] = []
-  for (const key of summaryFields.slice(0, 3)) {
+}) {
+  if (summaryFields.length === 0) return null
+
+  const renderItem = (key: string): React.ReactNode => {
+    if (key === '__owners__') {
+      const ownersLabel = ownersAssignment?.label_override || 'Owners'
+      return (
+        <div className='flex items-center gap-1.5'>
+          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{ownersLabel}</span>
+          <OwnersInlineCompact collection={collection} itemId={itemId} />
+        </div>
+      )
+    }
+
+    const f = fields.find((x) => x.field === key)
+    const label = f?.label || key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
     if (m2mCounts && key in m2mCounts) {
       const n = m2mCounts[key]
-      if (n > 0) parts.push(`${n} items`)
-      continue
+      return (
+        <div className='flex items-center gap-1.5'>
+          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
+          <span className='text-[11px] text-slate-600'>{n} item{n !== 1 ? 's' : ''}</span>
+        </div>
+      )
     }
+
     if (o2mCounts && key in o2mCounts) {
       const n = o2mCounts[key]
-      if (n > 0) parts.push(`${n} rows`)
-      continue
+      return (
+        <div className='flex items-center gap-1.5'>
+          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
+          <span className='text-[11px] text-slate-600'>{n} row{n !== 1 ? 's' : ''}</span>
+        </div>
+      )
     }
+
     const v = draft[key]
-    if (v === null || v === undefined || v === '') continue
+    const m2oRel = relations.find(
+      (r) => r.many_collection === collection && r.many_field === key && !r.junction_field
+    )
+
+    if (m2oRel?.one_collection) {
+      const ids = Array.isArray(v) ? v : (v != null && v !== '' ? [v] : [])
+      return (
+        <div className='flex items-center gap-1.5'>
+          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
+          {ids.length === 0
+            ? <span className='text-[11px] text-slate-400'>—</span>
+            : m2oRel.one_collection === 'nivaro_users'
+              ? <span className='inline-flex flex-wrap gap-x-1.5 gap-y-0.5'>{ids.map((id) => <SummaryUserName key={String(id)} userId={String(id)} />)}</span>
+              : <span className='inline-flex flex-wrap gap-x-1.5'>{ids.map((id) => <RelationCell key={String(id)} relCollection={m2oRel.one_collection!} id={id} />)}</span>
+          }
+        </div>
+      )
+    }
+
     if (Array.isArray(v)) {
-      if (v.length > 0) parts.push(`${v.length} items`)
-      continue
+      const m2mRel = relations.find((r) => r.many_field === key && r.junction_field)
+      const targetCol = m2mRel?.one_collection
+      return (
+        <div className='flex items-center gap-1.5'>
+          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
+          {v.length === 0
+            ? <span className='text-[11px] text-slate-400'>—</span>
+            : targetCol
+              ? <span className='inline-flex flex-wrap gap-x-1.5 gap-y-0.5'>{v.map((id) =>
+                  targetCol === 'nivaro_users'
+                    ? <SummaryUserName key={String(id)} userId={String(id)} />
+                    : <RelationCell key={String(id)} relCollection={targetCol} id={id} />
+                )}</span>
+              : <span className='text-[11px] text-slate-600'>{v.length} item{v.length !== 1 ? 's' : ''}</span>
+          }
+        </div>
+      )
     }
-    if (typeof v === 'boolean') {
-      parts.push(v ? 'Yes' : 'No')
-      continue
-    }
-    if (typeof v === 'object') continue
-    const s = String(v)
-    parts.push(s.length > 30 ? `${s.slice(0, 30)}…` : s)
+
+    return (
+      <div className='flex items-center gap-1.5'>
+        <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
+        {(v === null || v === undefined || v === '')
+          ? <span className='text-[11px] text-slate-400'>—</span>
+          : <span className='text-[11px] text-slate-600'>{formatDisplayValue(v, f)}</span>
+        }
+      </div>
+    )
   }
-  let text = parts.join(' · ')
-  if (text.length > 60) text = `${text.slice(0, 60)}…`
-  return text
+
+  return (
+    <div className='flex flex-wrap items-stretch gap-y-1.5 border-t border-slate-100 px-5 py-2'>
+      {summaryFields.map((key, i) => (
+        <React.Fragment key={key}>
+          {i > 0 && <div className='self-stretch w-px bg-slate-200 mx-3' />}
+          {renderItem(key)}
+        </React.Fragment>
+      ))}
+    </div>
+  )
 }
 
 export function GroupSection({
@@ -294,7 +425,6 @@ export function GroupSection({
   const GroupIcon = resolveIcon(group.icon)
 
   const visibleFields_ = fields.filter((f) => !f.hidden)
-  const summaryText = collapsed ? buildSummaryText(summaryFields, fields, draft, m2mCounts, o2mCounts) : ''
 
   return (
     <div className={cn('rounded-xl border bg-white', displayOnly ? 'border-slate-100' : 'border-slate-200')}>
@@ -305,9 +435,6 @@ export function GroupSection({
       >
         {GroupIcon && <GroupIcon className='h-3.5 w-3.5 shrink-0 text-slate-400' />}
         <span className={cn('font-semibold text-sm shrink-0', displayOnly ? 'text-slate-500' : 'text-slate-700')}>{group.label}</span>
-        {collapsed && summaryText && (
-          <span className='text-[11px] text-slate-400 truncate ml-2'>{summaryText}</span>
-        )}
         <span className='flex-1' />
         {hasErrors && <span className='h-2 w-2 rounded-full bg-destructive shrink-0' />}
         {collapsed ? (
@@ -316,6 +443,19 @@ export function GroupSection({
           <ChevronDown className='h-4 w-4 text-slate-400' />
         )}
       </button>
+      {collapsed && summaryFields && summaryFields.length > 0 && (
+        <SummaryStrip
+          summaryFields={summaryFields}
+          fields={fields}
+          draft={draft}
+          relations={relations}
+          collection={collection}
+          itemId={itemId}
+          ownersAssignment={ownersAssignment}
+          m2mCounts={m2mCounts}
+          o2mCounts={o2mCounts}
+        />
+      )}
       {!collapsed && (
         <div className='border-t border-slate-100 px-5 py-4'>
           {(() => {

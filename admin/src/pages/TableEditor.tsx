@@ -5901,20 +5901,18 @@ function SortableGroupCard({
                 </label>
                 <div>
                   <Label className='mb-1 block text-[11px]'>Collapsed summary fields</Label>
-                  <p className='mb-1.5 text-[10px] text-slate-400'>Up to 3 shown in the collapsed bar</p>
+                  <p className='mb-1.5 text-[10px] text-slate-400'>Shown in the collapsed bar</p>
                   <div className='space-y-1 max-h-[160px] overflow-y-auto'>
                     {(() => {
                       let selected: string[] = []
                       try { const p = JSON.parse(group.summary_fields ?? '[]'); if (Array.isArray(p)) selected = p } catch { /* noop */ }
                       return fieldNames.map(f => {
                         const checked = selected.includes(f)
-                        const atMax = selected.length >= 3 && !checked
                         return (
-                          <label key={f} className={cn('flex items-center gap-2 text-[12px]', atMax ? 'text-slate-300' : 'text-slate-600')}>
+                          <label key={f} className='flex items-center gap-2 text-[12px] text-slate-600'>
                             <input
                               type='checkbox'
                               checked={checked}
-                              disabled={atMax}
                               onChange={() => {
                                 const next = checked ? selected.filter(x => x !== f) : [...selected, f]
                                 onGroupSettings(group.id, { summary_fields: JSON.stringify(next) })

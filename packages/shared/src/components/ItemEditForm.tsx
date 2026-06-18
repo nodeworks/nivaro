@@ -37,10 +37,10 @@ import { Skeleton } from './ui/skeleton'
 
 function parseSummaryFields(raw: string[] | string | null | undefined): string[] | undefined {
   if (!raw) return undefined
-  if (Array.isArray(raw)) return raw.slice(0, 3)
+  if (Array.isArray(raw)) return raw
   try {
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.slice(0, 3) : undefined
+    return Array.isArray(parsed) ? parsed : undefined
   } catch {
     return undefined
   }
@@ -1387,14 +1387,15 @@ export function ItemEditForm({
               {!isStepsMode && (
                 <Button
                   type='button'
+                  size='sm'
                   onClick={() => handleSave()}
                   disabled={saveMut.isPending || isReadOnly}
                   className='gap-1.5'
                 >
                   {saveMut.isPending ? (
-                    <Loader2 className='h-4 w-4 animate-spin' />
+                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
                   ) : (
-                    <Save className='h-4 w-4' />
+                    <Save className='h-3.5 w-3.5' />
                   )}
                   {isNew ? 'Create' : 'Save Progress'}
                 </Button>

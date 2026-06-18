@@ -361,7 +361,7 @@ export function FieldRow({
                 <button
                   type='button'
                   onClick={flashParentFields}
-                  className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff] dark:bg-nvr-cyan/15 dark:text-nvr-cyan max-w-[280px] min-w-0 cursor-pointer hover:bg-[rgba(0,206,255,0.22)] transition-colors'
+                  className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff] dark:bg-nvr-cyan/15 dark:text-nvr-cyan max-w-[160px] min-w-0 cursor-pointer hover:bg-[rgba(0,206,255,0.22)] transition-colors'
                 >
                   <SlidersHorizontal className='h-2.5 w-2.5 shrink-0' />
                   <span className='truncate'>Filtered by {cascadeParentLabels.join(', ')}</span>
