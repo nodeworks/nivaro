@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import {Check, ChevronDown, ChevronsUpDown, Loader2, X} from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, ChevronsUpDown, Loader2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -100,6 +100,28 @@ export function M2MCombobox({
   const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
   const committedItems = junctionItems.filter((i) => !stagedUnlinks.has(i.id))
   const committedIds = new Set(committedItems.map((i) => String(i[junctionField])))
+  const committedIdsList = [...committedIds]
+
+  const multiAvailabilityFilter = extraFilter
+    ? JSON.stringify({ _and: [{ id: { _in: committedIdsList } }, extraFilter] })
+    : JSON.stringify({ id: { _in: committedIdsList } })
+
+  const { data: availableForFilter } = useQuery<Record<string, unknown>[]>({
+    queryKey: ['m2m-avail', relatedCollection, committedIdsList.join(','), filterParam],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${relatedCollection}`, { filter: multiAvailabilityFilter, picker: '1', limit: 200, fields: 'id' })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!relatedCollection && committedIdsList.length > 0,
+    staleTime: 30_000
+  })
+  const availableIdSet = new Set((availableForFilter ?? []).map((i) => String(i.id)))
+  const staleCommittedIds =
+    availableForFilter !== undefined
+      ? new Set(committedIdsList.filter((id) => !availableIdSet.has(id)))
+      : new Set<string>()
   const stagedLinkIds = new Set(stagedLinks.map(String))
   const allSelectedIds = new Set([...committedIds, ...stagedLinkIds])
 
@@ -151,11 +173,19 @@ export function M2MCombobox({
         <div className='flex flex-wrap gap-1.5'>
           {committedItems.map((ji) => {
             const relId = ji[junctionField]
+            const isStaleTag = staleCommittedIds.has(String(relId))
             return (
               <span
                 key={String(ji.id)}
-                className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 pl-2.5 pr-1.5 py-0.5 text-[12px] text-slate-700'
+                title={isStaleTag ? 'This record is no longer an available option' : undefined}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full border pl-2.5 pr-1.5 py-0.5 text-[12px]',
+                  isStaleTag
+                    ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-600 dark:bg-amber-950/30 dark:text-amber-400'
+                    : 'border-slate-200 bg-slate-50 text-slate-700'
+                )}
               >
+                {isStaleTag && <AlertTriangle className='h-3 w-3 shrink-0 text-amber-500' />}
                 {relatedCollection && (
                   <RelatedItemLabel
                     collection={relatedCollection}
@@ -376,6 +406,23 @@ export function M2MSingleSelectCombobox({
     staleTime: 60_000
   })
 
+  const singleAvailabilityFilter = extraFilter
+    ? JSON.stringify({ _and: [{ id: { _eq: currentRelatedId } }, extraFilter] })
+    : JSON.stringify({ id: { _eq: currentRelatedId } })
+
+  const { data: singleAvailabilityData } = useQuery<Record<string, unknown>[]>({
+    queryKey: ['relation-avail', relatedCollection, String(currentRelatedId), filterParam],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${relatedCollection}`, { filter: singleAvailabilityFilter, picker: '1', limit: 1, fields: 'id' })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!relatedCollection && currentRelatedId != null && !!currentItemData,
+    staleTime: 30_000
+  })
+  const isSingleStale = singleAvailabilityData !== undefined && singleAvailabilityData.length === 0
+
   const tmpl = colMeta?.display_template ?? null
   function getLabel(item: Record<string, unknown>) {
     return tmpl
@@ -420,6 +467,7 @@ export function M2MSingleSelectCombobox({
   }
 
   return (
+    <div>
     <Popover
       open={open}
       onOpenChange={(o) => {
@@ -432,7 +480,7 @@ export function M2MSingleSelectCombobox({
           type='button'
           className={cn(
             'w-full h-9 px-3 text-[12px] border rounded-md bg-white text-left flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors',
-            isPendingChange ? 'border-nvr-cyan/50' : 'border-slate-200'
+            isSingleStale ? 'border-amber-300 dark:border-amber-600' : isPendingChange ? 'border-nvr-cyan/50' : 'border-slate-200'
           )}
         >
           {isLoadingLabel ? (
@@ -440,7 +488,7 @@ export function M2MSingleSelectCombobox({
           ) : (
             <span
               className={cn(
-                'truncate',
+                'flex items-center gap-1.5 truncate min-w-0',
                 currentLabel
                   ? isPendingChange
                     ? 'text-nvr-cyan'
@@ -448,7 +496,8 @@ export function M2MSingleSelectCombobox({
                   : 'text-muted-foreground'
               )}
             >
-              {currentLabel ?? 'Select…'}
+              {isSingleStale && <AlertTriangle className='h-3.5 w-3.5 shrink-0 text-amber-500' />}
+              <span className='truncate'>{currentLabel ?? 'Select…'}</span>
             </span>
           )}
           <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
@@ -514,5 +563,12 @@ export function M2MSingleSelectCombobox({
         </Command>
       </PopoverContent>
     </Popover>
+    {isSingleStale && (
+      <p className='mt-0.5 flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400'>
+        <AlertTriangle className='h-3 w-3 shrink-0' />
+        Current value is not an available option — clear to pick another
+      </p>
+    )}
+    </div>
   )
 }

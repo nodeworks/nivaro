@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, ChevronDown, Loader2, Search, X } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, Loader2, Search, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -75,6 +75,7 @@ export function RelationCombobox({
         .request<{ data: Item[] }>(
           get(`/items/${collection}`, {
             limit: 200,
+            picker: '1',
             ...(query ? { search: query } : {}),
             ...(filterStr ? { filter: filterStr } : {}),
             ...(tmplFields ? { fields: tmplFields } : {})
@@ -95,6 +96,24 @@ export function RelationCombobox({
     enabled: !!value,
     staleTime: 60_000
   })
+
+  const availabilityFilter = extraFilter
+    ? JSON.stringify({ _and: [{ id: { _eq: value } }, extraFilter] })
+    : JSON.stringify({ id: { _eq: value } })
+
+  const { data: availabilityData } = useQuery<Item[]>({
+    queryKey: ['relation-avail', collection, String(value), filterStr],
+    queryFn: () =>
+      client
+        .request<{ data: Item[] }>(
+          get(`/items/${collection}`, { filter: availabilityFilter, picker: '1', limit: 1, fields: 'id' })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!value && !!selected,
+    staleTime: 30_000
+  })
+  const isStale = !!value && availabilityData !== undefined && availabilityData.length === 0
+
   const tmpl = colMeta?.display_template
   const selectedLabel = selected ? applyDisplayTemplate(tmpl, selected) : null
   const showLoader = !!value && isLoadingSelected && !selected
@@ -118,17 +137,27 @@ export function RelationCombobox({
         type='button'
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
-        className='flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm text-left hover:bg-slate-50 disabled:opacity-50'
+        className={cn(
+          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-slate-50 disabled:opacity-50',
+          isStale ? 'border-amber-300 dark:border-amber-600' : 'border-input'
+        )}
       >
         {showLoader ? (
           <Loader2 className='h-3.5 w-3.5 animate-spin text-muted-foreground' />
         ) : (
-          <span className={cn('truncate', !selectedLabel && 'text-muted-foreground')}>
-            {selectedLabel ?? placeholder ?? 'Select…'}
+          <span className={cn('flex items-center gap-1.5 truncate min-w-0', !selectedLabel && 'text-muted-foreground')}>
+            {isStale && <AlertTriangle className='h-3.5 w-3.5 shrink-0 text-amber-500' />}
+            <span className='truncate'>{selectedLabel ?? placeholder ?? 'Select…'}</span>
           </span>
         )}
         <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
       </button>
+      {isStale && (
+        <p className='mt-0.5 flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400'>
+          <AlertTriangle className='h-3 w-3 shrink-0' />
+          Current value is not an available option — clear to pick another
+        </p>
+      )}
       {open && (
         <div className='absolute z-50 mt-1 min-w-[240px] w-max max-w-[360px] rounded-md border border-border bg-popover shadow-md'>
           <div className='flex items-center border-b px-3'>
