@@ -4438,10 +4438,12 @@ interface FieldGroup {
   collection: string
   key: string
   label: string
-  type: 'section' | 'tab' | 'metadata'
+  type: 'section' | 'tab' | 'metadata' | 'container'
   icon: string | null
   sort: number
   is_collapsed: boolean
+  container_id?: number | null
+  tab_mode?: 'tabs' | 'steps' | null
 }
 
 // ── Width options ──────────────────────────────────────────────────────────────
@@ -5424,6 +5426,20 @@ function FieldChip({
         />
       )}
 
+      {/* label visibility toggle */}
+      {onSettings && (
+        <div onPointerDown={e => e.stopPropagation()}>
+          <button
+            type='button'
+            title={fieldSettings?.label === '' ? 'Show label' : 'Hide label'}
+            onClick={() => onSettings({ label: fieldSettings?.label === '' ? null : '' })}
+            className={cn('shrink-0 rounded p-0.5 hover:text-slate-600', fieldSettings?.label === '' ? 'text-amber-400' : 'text-slate-300')}
+          >
+            {fieldSettings?.label === '' ? <EyeOff className='h-3 w-3' /> : <Eye className='h-3 w-3' />}
+          </button>
+        </div>
+      )}
+
       {/* unassign — send back to pool */}
       {onUnassign && (
         <div onPointerDown={e => e.stopPropagation()}>
@@ -5487,6 +5503,7 @@ function SortableFieldChip({
   relatedCollection,
   onUnassign,
   inGrid = false,
+  sortableId,
 }: {
   fieldName: string
   displayName?: string
@@ -5503,9 +5520,10 @@ function SortableFieldChip({
   relatedCollection?: string | null
   onUnassign?: () => void
   inGrid?: boolean
+  sortableId?: string
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: fieldName,
+    id: sortableId ?? fieldName,
     data: { type: 'field' },
   })
   return (
@@ -5538,6 +5556,19 @@ function SortableFieldChip({
       />
     </div>
   )
+}
+
+// ── Composite sortable ID helpers ─────────────────────────────────────────────
+// dnd-kit requires unique IDs. When the same field appears in multiple zones
+// (multi-group layout), use "f::container::fieldName" to ensure uniqueness.
+const toSortableId = (container: string, field: string) => `f::${container}::${field}`
+function parseSortableId(id: string): { container: string | null; fieldName: string } {
+  if (id.startsWith('f::')) {
+    const rest = id.slice(3)
+    const sep = rest.indexOf('::')
+    if (sep !== -1) return { container: rest.slice(0, sep), fieldName: rest.slice(sep + 2) }
+  }
+  return { container: null, fieldName: id }
 }
 
 // ── SortableUngroupedZone ─────────────────────────────────────────────────────
@@ -5580,7 +5611,7 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
         )}
       </div>
       <DroppableFieldZone containerId='__unassigned__'>
-        <SortableContext items={fields} strategy={rectSortingStrategy}>
+        <SortableContext items={fields.map(f => toSortableId('__unassigned__', f))} strategy={rectSortingStrategy}>
           <div className={cn('min-h-[52px] p-3', fields.length === 0 ? 'flex items-center justify-center' : 'grid grid-cols-12 gap-2 auto-rows-auto')}>
             {fields.length === 0 ? (
               <p className='text-[11px] text-slate-300'>{isTableMode ? 'Add fields to define table columns' : 'Drop fields here to leave them ungrouped'}</p>
@@ -5590,9 +5621,10 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
               const kind = relKind(f)
               return (
                 <SortableFieldChip
-                  key={f}
+                  key={toSortableId('__unassigned__', f)}
+                  sortableId={toSortableId('__unassigned__', f)}
                   fieldName={f}
-                  displayName={settings.label ?? titleCase(f)}
+                  displayName={settings.label || titleCase(f)}
                   fieldType={kind ?? friendlyType(ft?.type, f)}
                   abstractType={kind ? kind.toLowerCase() : ft?.type}
                   isM2O={kind === 'M2O'}
@@ -5636,6 +5668,10 @@ function SortableGroupCard({
   getDependencyConfig,
   getRelatedCollection,
   onUnassign,
+  onPatchTabMode,
+  containerGroups,
+  onSetContainer,
+  onToggleCollapsed,
 }: {
   group: FieldGroup
   fieldNames: string[]
@@ -5654,6 +5690,10 @@ function SortableGroupCard({
   getDependencyConfig?: (f: string) => Record<string, unknown> | null
   getRelatedCollection?: (f: string) => string | null
   onUnassign?: (f: string, groupKey: string) => void
+  onPatchTabMode?: (id: number, tab_mode: 'tabs' | 'steps') => void
+  containerGroups?: FieldGroup[]
+  onSetContainer?: (id: number, container_id: number | null) => void
+  onToggleCollapsed?: (id: number) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [labelDraft, setLabelDraft] = useState(group.label)
@@ -5726,14 +5766,30 @@ function SortableGroupCard({
           </button>
         )}
         <span className='font-mono text-[10px] text-slate-400'>{group.key}</span>
-        {group.type === 'metadata' && (
-          <span className='rounded bg-slate-600 px-1.5 py-0.5 text-[10px] font-medium text-white' title='Fields in this group are displayed read-only'>
-            meta
-          </span>
+        {group.type === 'container' && onPatchTabMode && (
+          <button
+            type='button'
+            title='Toggle tabs / steps mode'
+            onClick={() => onPatchTabMode(group.id, group.tab_mode === 'steps' ? 'tabs' : 'steps')}
+            className='rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 hover:opacity-80'
+          >
+            {group.tab_mode === 'steps' ? 'steps' : 'tabs'}
+          </button>
+        )}
+        {group.type === 'tab' && containerGroups && containerGroups.length > 0 && onSetContainer && (
+          <select
+            value={group.container_id ?? ''}
+            onChange={e => onSetContainer(group.id, e.target.value ? Number(e.target.value) : null)}
+            onPointerDown={e => e.stopPropagation()}
+            className='rounded border border-slate-200 bg-white px-1 py-0.5 text-[10px] text-slate-500'
+          >
+            <option value=''>No container</option>
+            {containerGroups.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
         )}
         <button
           type='button'
-          title='Click to cycle section / tab / metadata'
+          title='Click to cycle section / tab / metadata / container'
           onClick={onToggleType}
           className={cn(
             'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80',
@@ -5741,19 +5797,36 @@ function SortableGroupCard({
               ? 'bg-nvr-cyan/10 text-nvr-cyan'
               : group.type === 'metadata'
                 ? 'bg-slate-600/10 text-slate-600'
-                : 'bg-slate-100 text-slate-500'
+                : group.type === 'container'
+                  ? 'bg-violet-100 text-violet-600'
+                  : 'bg-slate-100 text-slate-500'
           )}
         >
           {group.type}
         </button>
+        {(group.type === 'section' || group.type === 'metadata') && (
+          <button
+            type='button'
+            title={group.is_collapsed ? 'Default: collapsed — click to start expanded' : 'Default: expanded — click to start collapsed'}
+            onClick={() => onToggleCollapsed?.(group.id)}
+            className='rounded p-1 text-slate-300 hover:text-slate-500'
+          >
+            {group.is_collapsed ? <ChevronRight className='h-3.5 w-3.5' /> : <ChevronDown className='h-3.5 w-3.5' />}
+          </button>
+        )}
         <button type='button' onClick={onDelete} className='rounded p-1 text-slate-300 hover:text-red-500'>
           <Trash2 className='h-3.5 w-3.5' />
         </button>
       </div>
 
-      {/* Field drop zone — useDroppable registers this as a dnd-kit target */}
-      <DroppableFieldZone containerId={group.key}>
-      <SortableContext items={fieldNames} strategy={rectSortingStrategy}>
+      {/* Field drop zone — hidden for container groups (they hold tab children, not fields directly) */}
+      {group.type === 'container' ? (
+        <div className='flex min-h-[44px] items-center justify-center px-3 py-2'>
+          <p className='text-[11px] text-slate-300'>Assign tab groups to this container using the selector on each tab group</p>
+        </div>
+      ) : null}
+      {group.type !== 'container' && <DroppableFieldZone containerId={group.key}>
+      <SortableContext items={fieldNames.map(f => toSortableId(group.key, f))} strategy={rectSortingStrategy}>
         <div
           className={cn(
             'min-h-[52px] p-3',
@@ -5771,9 +5844,10 @@ function SortableGroupCard({
               const kind = getRelKind?.(f)
               return (
                 <SortableFieldChip
-                  key={f}
+                  key={toSortableId(group.key, f)}
+                  sortableId={toSortableId(group.key, f)}
                   fieldName={f}
-                  displayName={settings?.label ?? titleCase(f)}
+                  displayName={settings?.label || titleCase(f)}
                   fieldType={kind ?? getFriendlyType?.(ft?.type, f)}
                   abstractType={kind ? kind.toLowerCase() : ft?.type}
                   isM2O={kind === 'M2O'}
@@ -5793,7 +5867,7 @@ function SortableGroupCard({
           )}
         </div>
       </SortableContext>
-      </DroppableFieldZone>
+      </DroppableFieldZone>}
     </div>
   )
 }
@@ -5808,6 +5882,7 @@ function DroppableFieldZone({ containerId, children }: { containerId: string; ch
     </div>
   )
 }
+
 
 // ─── Layouts tab ─────────────────────────────────────────────────────────────
 
@@ -6142,9 +6217,6 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
             >
               <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>Settings</span>
               <div className='flex flex-1 flex-wrap items-center gap-1.5'>
-                <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium capitalize text-slate-600 dark:bg-muted dark:text-slate-300'>
-                  {selected.tab_mode ?? 'tabs'}
-                </span>
                 {!!selected.summary_enabled && <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>summary</span>}
                 {!!selected.ai_enabled && <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>AI</span>}
                 {(selected.conditions?.role_ids?.length ?? 0) > 0 && (
@@ -6215,26 +6287,6 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                   </div>
                 </div>
                 {(selected.layout_type ?? 'grouped') !== 'table' && (<>
-                  <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
-                    <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Tab mode</span>
-                    <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
-                      {(['tabs', 'steps'] as const).map((mode) => (
-                        <button key={mode} type='button' onClick={() => patchLayoutMut.mutate({ id: selected.id, tab_mode: mode })}
-                          className={cn('px-2.5 py-1 text-[11px] font-medium transition-colors capitalize',
-                            (selected.tab_mode ?? 'tabs') === mode
-                              ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
-                              : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200')}>
-                          {mode}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {(selected.tab_mode ?? 'tabs') === 'steps' && (
-                    <label className='flex cursor-pointer items-center justify-between'>
-                      <span className='text-[11px] text-slate-500 dark:text-slate-400'>Validate before Next</span>
-                      <input type='checkbox' checked={!!selected.validate_before_next} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, validate_before_next: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                    </label>
-                  )}
                   <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
                     <label className='flex cursor-pointer items-center justify-between'>
                       <span className='text-[11px] text-slate-500 dark:text-slate-400'>Summary panel</span>
@@ -6556,7 +6608,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     setLocalGroupOrder(baseOrder)
     const assignments: Record<string, string | null> = {}
     // __pool__ = Fields List (always contains ALL fields); __unassigned__ = Ungrouped zone
-    const fieldOrder: Record<string, string[]> = { __pool__: [], __unassigned__: [] }
+    const fieldOrder: Record<string, string[]> = { __pool__: [], __unassigned__: [], __apply_values__: [], __create_with_defaults__: [] }
     for (const g of groups) fieldOrder[g.key] = []
     const sorted = [...allFields].sort((a, b) => {
       const as_ = fieldConfig.find(fc => fc.field === a.field)?.sort ?? 9999
@@ -6576,7 +6628,11 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       const f = fc.field
       if (!f || f === '__ungrouped_pos__' || (typeof f === 'string' && f.startsWith('__') && f.endsWith('__') && f !== '__unassigned__')) continue
       assignments[f] = gk
-      if (gk && fieldOrder[gk] !== undefined) {
+      if (gk === '__apply_values__') {
+        if (!fieldOrder.__apply_values__.includes(f)) fieldOrder.__apply_values__.push(f)
+      } else if (gk === '__create_with_defaults__') {
+        if (!fieldOrder.__create_with_defaults__.includes(f)) fieldOrder.__create_with_defaults__.push(f)
+      } else if (gk && fieldOrder[gk] !== undefined) {
         if (!fieldOrder[gk].includes(f)) fieldOrder[gk].push(f)
       } else if (!gk) {
         if (!fieldOrder.__unassigned__.includes(f)) fieldOrder.__unassigned__.push(f)
@@ -6675,7 +6731,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   }, [localAssignments, localColSpans, localOverrides, localFieldOrder, localGroupOrder, slots, layoutId, invalidateFieldConfig])
 
   const createMut = useMutation({
-    mutationFn: (body: { collection: string; key: string; label: string; type: 'section' | 'tab' | 'metadata' }) =>
+    mutationFn: (body: { collection: string; key: string; label: string; type: 'section' | 'tab' | 'metadata' | 'container' }) =>
       api.post('/field-groups', { ...body, layout_id: layoutId }),
     onSuccess: () => { invalidateGroups(); setAdding(false); setNewKey(''); setNewLabel(''); toast.success('Group created') },
     onError: () => toast.error('Failed to create group')
@@ -6687,7 +6743,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   })
 
   const patchTypeMut = useMutation({
-    mutationFn: ({ id, type }: { id: number; type: 'section' | 'tab' | 'metadata' }) => api.patch(`/field-groups/${id}`, { type }),
+    mutationFn: ({ id, type, tab_mode }: { id: number; type: 'section' | 'tab' | 'metadata' | 'container'; tab_mode?: 'tabs' | 'steps' | null }) => api.patch(`/field-groups/${id}`, { type, tab_mode }),
     onSuccess: () => invalidateGroups()
   })
 
@@ -6701,9 +6757,27 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     onSuccess: () => invalidateGroups()
   })
 
+  const patchCollapsedMut = useMutation({
+    mutationFn: ({ id, is_collapsed }: { id: number; is_collapsed: boolean }) =>
+      api.patch(`/field-groups/${id}`, { is_collapsed }),
+    onSuccess: () => invalidateGroups()
+  })
+
   const reorderGroupsMut = useMutation({
     mutationFn: (order: Array<{ id: number; sort: number }>) =>
       api.post('/field-groups/reorder', { collection: tableName, order })
+  })
+
+  const patchTabModeMut = useMutation({
+    mutationFn: ({ id, tab_mode }: { id: number; tab_mode: 'tabs' | 'steps' }) =>
+      api.patch(`/field-groups/${id}`, { tab_mode }),
+    onSuccess: () => invalidateGroups()
+  })
+
+  const setContainerMut = useMutation({
+    mutationFn: ({ id, container_id }: { id: number; container_id: number | null }) =>
+      api.patch(`/field-groups/${id}`, { container_id }),
+    onSuccess: () => invalidateGroups()
   })
 
   // Keys that are per-layout overrides (not global field settings)
@@ -6761,7 +6835,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const [adding, setAdding] = useState(false)
   const [newKey, setNewKey] = useState('')
   const [newLabel, setNewLabel] = useState('')
-  const [newType, setNewType] = useState<'section' | 'tab' | 'metadata'>('section')
+  const [newType, setNewType] = useState<'section' | 'tab' | 'metadata' | 'container'>('section')
 
   // ── dnd ──
   const sensors = useSensors(
@@ -6785,8 +6859,10 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
   function findContainer(id: string): string {
     if (id.startsWith('group:')) return '__groups__'
-    for (const [container, fields] of Object.entries(localFieldOrder)) {
-      if (fields.includes(id)) return container
+    const { container, fieldName } = parseSortableId(id)
+    if (container) return container
+    for (const [cont, fields] of Object.entries(localFieldOrder)) {
+      if (fields.includes(fieldName)) return cont
     }
     return '__pool__'
   }
@@ -6794,7 +6870,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   function handleDragStart({ active }: DragStartEvent) {
     const id = String(active.id)
     if (id.startsWith('group:') || id.startsWith('slot:')) setActiveGroupId(id)
-    else setActiveFieldId(id)
+    else setActiveFieldId(parseSortableId(id).fieldName)
   }
 
   function handleDragCancel() {
@@ -6824,8 +6900,10 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     // indices to the already-updated prev state and flip the order back.
     setLocalFieldOrder(prev => {
       const fields = prev[fromContainer] ?? []
-      const fromIdx = fields.indexOf(activeId)
-      const toIdx = fields.indexOf(overId)
+      const af = parseSortableId(activeId).fieldName
+      const of_ = parseSortableId(overId).fieldName
+      const fromIdx = fields.indexOf(af)
+      const toIdx = fields.indexOf(of_)
       if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return prev
       return { ...prev, [fromContainer]: arrayMove(fields, fromIdx, toIdx) }
     })
@@ -6900,22 +6978,23 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
     // ── Cross-container drop ──
     // __pool__ = Fields List (static palette) — dragging FROM it copies, never removes
+    const activeFN = parseSortableId(activeId).fieldName
     const newGroupKey = (toContainer === '__unassigned__' || toContainer === '__pool__') ? null : toContainer
-    setLocalAssignments(prev => ({ ...prev, [activeId]: newGroupKey }))
+    setLocalAssignments(prev => ({ ...prev, [activeFN]: newGroupKey }))
     setLocalFieldOrder(prev => {
       const fromFields = fromContainer === '__pool__'
         ? (prev[fromContainer] ?? [])  // copy: leave pool unchanged
-        : (prev[fromContainer] ?? []).filter(f => f !== activeId)  // move: remove from source
-      const toFields = (prev[toContainer] ?? []).includes(activeId)
+        : (prev[fromContainer] ?? []).filter(f => f !== activeFN)  // move: remove from source
+      const toFields = (prev[toContainer] ?? []).includes(activeFN)
         ? (prev[toContainer] ?? [])  // already there (multi-group), skip duplicate
-        : [...(prev[toContainer] ?? []), activeId]
+        : [...(prev[toContainer] ?? []), activeFN]
       return { ...prev, [fromContainer]: fromFields, [toContainer]: toFields }
     })
     if (layoutId) {
       hasLocalChangeRef.current = true
       changeSeqRef.current++
     } else {
-      patchField(activeId, {
+      patchField(activeFN, {
         group_key: newGroupKey,
         sort: (localFieldOrder[toContainer] ?? []).length,
       })
@@ -7111,7 +7190,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
               <div className='overflow-y-auto min-h-[40px] p-2' style={{ maxHeight: 'calc(100vh - 220px)' }}>
                 {(() => {
                   const unassigned = localFieldOrder.__pool__ ?? []
-                  const getLabel = (f: string) => getFieldSettings(f).label ?? titleCase(f)
+                  const getLabel = (f: string) => getFieldSettings(f).label || titleCase(f)
                   const relFields = unassigned.filter(f => relKind(f) !== null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
                   const plainFields = unassigned.filter(f => relKind(f) === null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
                   const renderChip = (f: string) => {
@@ -7122,7 +7201,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                       <SortableFieldChip
                         key={f}
                         fieldName={f}
-                        displayName={settings.label ?? titleCase(f)}
+                        displayName={settings.label || titleCase(f)}
                         fieldType={kind ?? friendlyType(ft?.type, f)}
                         abstractType={kind ? kind.toLowerCase() : ft?.type}
                         isM2O={kind === 'M2O'}
@@ -7188,7 +7267,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
               </div>
               <div>
                 <Label className='mb-1 block text-[11px]'>Type</Label>
-                <Sel value={newType} onChange={v => setNewType(v as 'section' | 'tab' | 'metadata')} options={[{ value: 'section', label: 'Section' }, { value: 'tab', label: 'Tab' }, { value: 'metadata', label: 'Metadata (read-only)' }]} />
+                <Sel value={newType} onChange={v => setNewType(v as 'section' | 'tab' | 'metadata' | 'container')} options={[{ value: 'section', label: 'Section' }, { value: 'tab', label: 'Tab' }, { value: 'metadata', label: 'Metadata (read-only)' }, { value: 'container', label: 'Container (tabs/steps)' }]} />
               </div>
             </div>
             <div className='flex justify-end gap-2'>
@@ -7216,27 +7295,65 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                     editingSlot={editingSlot} setEditingSlot={setEditingSlot} slotLabelDraft={slotLabelDraft} setSlotLabelDraft={setSlotLabelDraft} />
                 )
                 const g = item as FieldGroup
+                // Skip tabs nested inside a container — container card renders them
+                if (g.type === 'tab' && g.container_id) return null
+                const childTabs = g.type === 'container'
+                  ? groups.filter(ch => ch.container_id === g.id).sort((a, b) => a.sort - b.sort)
+                  : []
                 return (
-                  <SortableGroupCard
-                    key={g.id}
-                    group={g}
-                    fieldNames={localFieldOrder[g.key] ?? []}
-                    allFields={allFields}
-                    getColSpan={getColSpan}
-                    onColSpan={(f, span) => patchField(f, { col_span: span })}
-                    onToggleType={() => patchTypeMut.mutate({ id: g.id, type: g.type === 'section' ? 'tab' : g.type === 'tab' ? 'metadata' : 'section' })}
-                    onDelete={() => { if (confirm(`Delete "${g.label}"? Fields will be unassigned.`)) deleteMut.mutate(g.id) }}
-                    onRename={(label) => renameMut.mutate({ id: g.id, label })}
-                    onIconChange={(icon) => iconMut.mutate({ id: g.id, icon })}
-                    getRelKind={relKind}
-                    getFriendlyType={friendlyType}
-                    getFieldSettings={getFieldSettings}
-                    onFieldSettings={handleFieldSettings}
-                    getM2OFields={getM2OFields}
-                    getDependencyConfig={getDependencyConfig}
-                    getRelatedCollection={getRelatedCollection}
-                    onUnassign={handleUnassign}
-                  />
+                  <div key={g.id} className='space-y-1.5'>
+                    <SortableGroupCard
+                      group={g}
+                      fieldNames={localFieldOrder[g.key] ?? []}
+                      allFields={allFields}
+                      getColSpan={getColSpan}
+                      onColSpan={(f, span) => patchField(f, { col_span: span })}
+                      onToggleType={() => patchTypeMut.mutate({ id: g.id, type: g.type === 'section' ? 'tab' : g.type === 'tab' ? 'metadata' : g.type === 'metadata' ? 'container' : 'section' })}
+                      onDelete={() => { if (confirm(`Delete "${g.label}"? Fields will be unassigned.`)) deleteMut.mutate(g.id) }}
+                      onRename={(label) => renameMut.mutate({ id: g.id, label })}
+                      onIconChange={(icon) => iconMut.mutate({ id: g.id, icon })}
+                      getRelKind={relKind}
+                      getFriendlyType={friendlyType}
+                      getFieldSettings={getFieldSettings}
+                      onFieldSettings={handleFieldSettings}
+                      getM2OFields={getM2OFields}
+                      getDependencyConfig={getDependencyConfig}
+                      getRelatedCollection={getRelatedCollection}
+                      onUnassign={handleUnassign}
+                    onPatchTabMode={(id, tab_mode) => patchTabModeMut.mutate({ id, tab_mode })}
+                    containerGroups={groups.filter(cg => cg.type === 'container')}
+                    onSetContainer={(id, container_id) => setContainerMut.mutate({ id, container_id })}
+                    onToggleCollapsed={(id) => patchCollapsedMut.mutate({ id, is_collapsed: !groups.find(g => g.id === id)?.is_collapsed })}
+                    />
+                    {childTabs.length > 0 && (
+                      <div className='ml-6 space-y-1.5'>
+                        {childTabs.map(ch => (
+                          <SortableGroupCard
+                            key={ch.id}
+                            group={ch}
+                            fieldNames={localFieldOrder[ch.key] ?? []}
+                            allFields={allFields}
+                            getColSpan={getColSpan}
+                            onColSpan={(f, span) => patchField(f, { col_span: span })}
+                            onToggleType={() => {}}
+                            onDelete={() => { if (confirm(`Delete "${ch.label}"?`)) deleteMut.mutate(ch.id) }}
+                            onRename={(label) => renameMut.mutate({ id: ch.id, label })}
+                            onIconChange={(icon) => iconMut.mutate({ id: ch.id, icon })}
+                            getRelKind={relKind}
+                            getFriendlyType={friendlyType}
+                            getFieldSettings={getFieldSettings}
+                            onFieldSettings={handleFieldSettings}
+                            getM2OFields={getM2OFields}
+                            getDependencyConfig={getDependencyConfig}
+                            getRelatedCollection={getRelatedCollection}
+                            onUnassign={handleUnassign}
+                            containerGroups={groups.filter(cg => cg.type === 'container')}
+                            onSetContainer={(id, container_id) => setContainerMut.mutate({ id, container_id })}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 )
               })}
               {orderedItems.length === 0 && !adding && (
@@ -7248,7 +7365,72 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
           </SortableContext>
         )}
 
+        {/* Table-mode special zones */}
+        {layoutType === 'table' && (
+          <div className='space-y-3 mt-3'>
+            <div className='rounded-lg border border-slate-200 bg-white'>
+              <div className='border-b border-slate-100 bg-slate-50 px-3 py-2'>
+                <p className='text-[12px] font-medium text-slate-700'>Apply Values</p>
+                <p className='text-[10px] text-slate-400 mt-0.5'>Fields shown in the "apply to all rows" form</p>
+              </div>
+              <DroppableFieldZone containerId='__apply_values__'>
+                <SortableContext items={(localFieldOrder['__apply_values__'] ?? []).map(f => toSortableId('__apply_values__', f))} strategy={rectSortingStrategy}>
+                  <div className={cn('min-h-[48px] p-3', (localFieldOrder['__apply_values__'] ?? []).length === 0 ? 'flex items-center justify-center' : 'grid grid-cols-12 gap-2 auto-rows-auto')}>
+                    {(localFieldOrder['__apply_values__'] ?? []).length === 0
+                      ? <p className='text-[11px] text-slate-300'>Drop fields here</p>
+                      : (localFieldOrder['__apply_values__'] ?? []).map(f => {
+                          const settings = getFieldSettings(f)
+                          return (
+                            <SortableFieldChip
+                              key={toSortableId('__apply_values__', f)}
+                              sortableId={toSortableId('__apply_values__', f)}
+                              fieldName={f}
+                              displayName={settings.label || titleCase(f)}
+                              colSpan={12}
+                              fieldSettings={settings}
+                              onSettings={patch => handleFieldSettings(f, patch)}
+                              onUnassign={() => handleUnassign(f, '__apply_values__')}
+                              inGrid
+                            />
+                          )
+                        })}
+                  </div>
+                </SortableContext>
+              </DroppableFieldZone>
+            </div>
 
+            <div className='rounded-lg border border-slate-200 bg-white'>
+              <div className='border-b border-slate-100 bg-slate-50 px-3 py-2'>
+                <p className='text-[12px] font-medium text-slate-700'>Create with Defaults</p>
+                <p className='text-[10px] text-slate-400 mt-0.5'>Fields shown in the "with defaults" form when bulk-adding rows</p>
+              </div>
+              <DroppableFieldZone containerId='__create_with_defaults__'>
+                <SortableContext items={(localFieldOrder['__create_with_defaults__'] ?? []).map(f => toSortableId('__create_with_defaults__', f))} strategy={rectSortingStrategy}>
+                  <div className={cn('min-h-[48px] p-3', (localFieldOrder['__create_with_defaults__'] ?? []).length === 0 ? 'flex items-center justify-center' : 'grid grid-cols-12 gap-2 auto-rows-auto')}>
+                    {(localFieldOrder['__create_with_defaults__'] ?? []).length === 0
+                      ? <p className='text-[11px] text-slate-300'>Drop fields here</p>
+                      : (localFieldOrder['__create_with_defaults__'] ?? []).map(f => {
+                          const settings = getFieldSettings(f)
+                          return (
+                            <SortableFieldChip
+                              key={toSortableId('__create_with_defaults__', f)}
+                              sortableId={toSortableId('__create_with_defaults__', f)}
+                              fieldName={f}
+                              displayName={settings.label || titleCase(f)}
+                              colSpan={12}
+                              fieldSettings={settings}
+                              onSettings={patch => handleFieldSettings(f, patch)}
+                              onUnassign={() => handleUnassign(f, '__create_with_defaults__')}
+                              inGrid
+                            />
+                          )
+                        })}
+                  </div>
+                </SortableContext>
+              </DroppableFieldZone>
+            </div>
+          </div>
+        )}
 
         </div>{/* end main area */}
       </div>{/* end flex row */}

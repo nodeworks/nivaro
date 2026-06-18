@@ -10,6 +10,7 @@ import {
   Code2,
   Copy,
   Layers,
+  Loader2,
   Play,
   Terminal,
   X
@@ -1998,6 +1999,11 @@ type RunResult = {
   isError: boolean
 }
 
+function applyTmpl(tmpl: string | null | undefined, item: Record<string, unknown>): string {
+  if (!tmpl) return String(item.name ?? item.title ?? item.label ?? item.id ?? '')
+  return tmpl.replace(/\{\{([^}]+)\}\}/g, (_, k: string) => String(item[k.trim()] ?? ''))
+}
+
 function LiveFormTab() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [collection, setCollection] = useState(searchParams.get('lf_col') ?? '')
@@ -2005,10 +2011,13 @@ function LiveFormTab() {
   const [layoutSlug, setLayoutSlug] = useState(searchParams.get('lf_slug') ?? '')
   const [colOpen, setColOpen] = useState(false)
   const [colSearch, setColSearch] = useState('')
+  const [itemPickerOpen, setItemPickerOpen] = useState(false)
+  const [itemSearch, setItemSearch] = useState('')
   const [layoutOpen, setLayoutOpen] = useState(false)
   const [previewWidth, setPreviewWidth] = useState<number | null>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const dragStateRef = useRef<{ startX: number; startW: number } | null>(null)
+  const initialMountRef = useRef(true)
 
   function startResize(e: React.MouseEvent) {
     e.preventDefault()
@@ -2047,6 +2056,41 @@ function LiveFormTab() {
     enabled: !!collection,
     staleTime: 30_000,
   })
+
+  const { data: colMeta } = useQuery({
+    queryKey: ['lf-col-meta', collection],
+    queryFn: () => api.get<{ data: { display_template?: string | null } }>(`/collections/${collection}`).then((r) => r.data.data),
+    enabled: !!collection,
+    staleTime: 60_000,
+  })
+
+  const { data: itemOptions = [], isFetching: itemsFetching } = useQuery({
+    queryKey: ['lf-items', collection, itemSearch],
+    queryFn: () =>
+      api.get<{ data: Record<string, unknown>[] }>(`/items/${collection}`, {
+        params: { limit: 50, ...(itemSearch ? { search: itemSearch } : {}) },
+      }).then((r) => r.data.data ?? []),
+    enabled: !!collection && itemPickerOpen,
+    staleTime: 10_000,
+  })
+
+  const { data: selectedItemData } = useQuery({
+    queryKey: ['lf-item-single', collection, itemId],
+    queryFn: () => api.get<{ data: Record<string, unknown> }>(`/items/${collection}/${itemId}`).then((r) => r.data.data),
+    enabled: !!collection && !!itemId && itemId !== 'new',
+    staleTime: 60_000,
+  })
+
+  useEffect(() => {
+    if (initialMountRef.current) { initialMountRef.current = false; return }
+    setItemId('')
+  }, [collection])
+
+  const tmpl = colMeta?.display_template ?? null
+  const sortedItems = useMemo(
+    () => [...itemOptions].sort((a, b) => applyTmpl(tmpl, a).localeCompare(applyTmpl(tmpl, b))),
+    [itemOptions, tmpl]
+  )
 
   const lastAutoColRef = useRef('')
   useEffect(() => {
@@ -2109,9 +2153,64 @@ function LiveFormTab() {
             </Popover>
           </div>
           <div className='flex flex-col gap-1'>
-            <label className='text-[11px] text-slate-500'>Item ID (blank = new)</label>
-            <input type='text' value={itemId} onChange={(e) => setItemId(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} placeholder='new'
-              className='h-8 w-36 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-muted' />
+            <label className='text-[11px] text-slate-500'>Item</label>
+            <Popover open={itemPickerOpen} onOpenChange={setItemPickerOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  disabled={!collection}
+                  className='flex h-8 w-52 items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-left outline-none focus:border-nvr-cyan dark:border-border dark:bg-muted disabled:opacity-40'
+                >
+                  <span className={itemId && itemId !== 'new' ? 'text-slate-900 dark:text-foreground truncate flex-1 min-w-0' : 'text-slate-400'}>
+                    {itemId && itemId !== 'new'
+                      ? (selectedItemData ? applyTmpl(tmpl, selectedItemData) : itemId)
+                      : 'New item'}
+                  </span>
+                  {itemsFetching
+                    ? <Loader2 className='h-3 w-3 text-slate-400 shrink-0 animate-spin' />
+                    : <ChevronsUpDown className='h-3 w-3 text-slate-400 shrink-0' />}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-52 p-0' align='start'>
+                <Command>
+                  <CommandInput
+                    placeholder='Search items…'
+                    value={itemSearch}
+                    onValueChange={setItemSearch}
+                    className='text-[13px]'
+                  />
+                  <CommandList>
+                    <CommandEmpty>{itemsFetching ? 'Loading…' : 'No items found'}</CommandEmpty>
+                    <CommandGroup>
+                      <CommandItem
+                        value='__new__'
+                        onSelect={() => { setItemId(''); setItemSearch(''); setItemPickerOpen(false) }}
+                      >
+                        <span className='text-[12px] text-slate-500 italic'>New item</span>
+                        {(!itemId || itemId === 'new') && <Check className='ml-auto h-3 w-3 text-nvr-cyan shrink-0' />}
+                      </CommandItem>
+                      {sortedItems.map((item) => {
+                        const id = String(item.id ?? '')
+                        const label = applyTmpl(tmpl, item)
+                        return (
+                          <CommandItem
+                            key={id}
+                            value={`${label} ${id}`}
+                            onSelect={() => { setItemId(id); setItemSearch(''); setItemPickerOpen(false) }}
+                          >
+                            <div className='flex flex-col min-w-0 flex-1'>
+                              <span className='text-[12px] font-medium truncate'>{label}</span>
+                              {label !== id && <span className='text-[10px] text-slate-400 font-mono truncate'>{id}</span>}
+                            </div>
+                            {itemId === id && <Check className='ml-auto h-3 w-3 text-nvr-cyan shrink-0' />}
+                          </CommandItem>
+                        )
+                      })}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
           <div className='flex flex-col gap-1'>
             <label className='text-[11px] text-slate-500'>Layout</label>

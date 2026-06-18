@@ -76,7 +76,7 @@ export type FormFieldDescriptor = {
 export type FormGroupDescriptor = {
   key: string
   label: string
-  type: 'section' | 'tab' | 'metadata'
+  type: 'section' | 'tab' | 'metadata' | 'container'
   icon: string | null
   sort: number
   isCollapsed: boolean

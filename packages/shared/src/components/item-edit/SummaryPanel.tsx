@@ -1,4 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
+import { Check, Copy } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
@@ -63,33 +65,41 @@ function M2MSummaryCount({
       client
         .request<{ data: { display_template?: string } }>(get(`/collections/${relatedCollection}`))
         .then((r) => r.data),
-    enabled: !!relatedCollection && maxValues === 1,
+    enabled: !!relatedCollection,
     staleTime: 300_000
   })
 
   const stagedLinks = staging?.getStagedLinks(stagingKey) ?? []
   const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
   const committedItems = junctionItems.filter((i) => !stagedUnlinks.has(i.id))
-  const count = committedItems.length + stagedLinks.length
 
-  if (count === 0) return <span className='text-slate-300'>—</span>
+  const allRelatedIds = [
+    ...stagedLinks,
+    ...committedItems.map((i) => i[junctionField]).filter((id) => id != null)
+  ]
 
-  if (maxValues === 1 && relatedCollection) {
-    const relatedId = stagedLinks[0] ?? committedItems[0]?.[junctionField]
-    if (relatedId != null) {
-      return (
-        <RelatedItemLabel
-          collection={relatedCollection}
-          id={relatedId}
-          displayTemplate={colMeta?.display_template}
-        />
-      )
-    }
+  if (allRelatedIds.length === 0) return <span className='text-slate-300'>—</span>
+
+  if (relatedCollection) {
+    const MAX_SHOW = 5
+    const showIds = allRelatedIds.slice(0, MAX_SHOW)
+    const extra = allRelatedIds.length - MAX_SHOW
+    return (
+      <span className='text-[12px] text-slate-800'>
+        {showIds.map((id, i) => (
+          <span key={String(id)}>
+            {i > 0 && ', '}
+            <RelatedItemLabel collection={relatedCollection} id={id} displayTemplate={colMeta?.display_template} />
+          </span>
+        ))}
+        {extra > 0 && <span className='text-slate-400'> +{extra} more</span>}
+      </span>
+    )
   }
 
   return (
     <span className='text-slate-800'>
-      {count} item{count !== 1 ? 's' : ''}
+      {allRelatedIds.length} item{allRelatedIds.length !== 1 ? 's' : ''}
     </span>
   )
 }
@@ -124,7 +134,7 @@ function SummaryFieldValue({
     )
     return companion ? { ...r, junction_field: companion.many_field } : null
   })()
-  if (m2mRel && itemId && itemId !== 'new') {
+  if (m2mRel && itemId) {
     const fieldOpts = parseJson<{ max_values?: number }>(field.options)
     return (
       <M2MSummaryCount
@@ -180,6 +190,18 @@ function SummaryFieldValue({
   return <span className='text-slate-800 truncate'>{String(val)}</span>
 }
 
+// ─── getDisplayText ────────────────────────────────────────────────────────────
+
+function getDisplayText(val: unknown): string {
+  if (val === null || val === undefined || val === '') return '—'
+  if (typeof val === 'boolean') return val ? 'Yes' : 'No'
+  const s = String(val)
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+    try { return new Date(s).toLocaleDateString() } catch { /* noop */ }
+  }
+  return s
+}
+
 // ─── SummaryPanel ──────────────────────────────────────────────────────────────
 
 export function SummaryPanel({
@@ -207,6 +229,9 @@ export function SummaryPanel({
   errors?: Record<string, string>
   onFieldClick: (stepKey: string, fieldKey: string) => void
 }) {
+  const [copiedField, setCopiedField] = useState<string | null>(null)
+  const valueRefs = useRef<Map<string, HTMLSpanElement | null>>(new Map())
+
   const hasGeneralStep = allSteps.some((s) => s.key === '__general__')
   const syntheticSteps: StepDef[] = [
     ...(!hasGeneralStep && ungroupedFields.length > 0
@@ -246,28 +271,52 @@ export function SummaryPanel({
             const label = f.label ?? titleCase(f.field)
             const hasError = !!errors?.[f.field]
             return (
-              <button
+              <div
                 key={f.field}
-                type='button'
-                onClick={() => onFieldClick(step.key, f.field)}
                 className={cn(
-                  'flex w-full flex-col px-4 py-2 text-left hover:bg-slate-50 transition-colors',
+                  'group/row flex items-stretch',
                   fi < fields.length - 1 && 'border-b border-slate-50',
-                  hasError && 'bg-red-50 hover:bg-red-50'
+                  hasError && 'bg-red-50'
                 )}
               >
-                <span className={cn('text-[10px] font-medium truncate', hasError ? 'text-red-500' : 'text-slate-400')}>{label}</span>
-                <span className='mt-0.5 w-full text-[12px] min-w-0 overflow-hidden'>
-                  <SummaryFieldValue
-                    field={f}
-                    val={val}
-                    relations={relations}
-                    collection={collection}
-                    itemId={itemId}
-                    staging={staging}
-                  />
-                </span>
-              </button>
+                <button
+                  type='button'
+                  onClick={() => onFieldClick(step.key, f.field)}
+                  className={cn(
+                    'flex flex-1 flex-col px-4 py-2 text-left hover:bg-slate-50 transition-colors min-w-0',
+                    hasError && 'hover:bg-red-50'
+                  )}
+                >
+                  <span className={cn('text-[10px] font-medium truncate', hasError ? 'text-red-500' : 'text-slate-400')}>{label}</span>
+                  <span
+                    ref={(el) => { valueRefs.current.set(f.field, el) }}
+                    className='mt-0.5 w-full text-[12px] min-w-0 overflow-hidden'
+                  >
+                    <SummaryFieldValue
+                      field={f}
+                      val={val}
+                      relations={relations}
+                      collection={collection}
+                      itemId={itemId}
+                      staging={staging}
+                    />
+                  </span>
+                </button>
+                <button
+                  type='button'
+                  title='Copy value'
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    const text = valueRefs.current.get(f.field)?.textContent?.trim() ?? getDisplayText(val)
+                    navigator.clipboard.writeText(text).catch(() => {})
+                    setCopiedField(f.field)
+                    setTimeout(() => setCopiedField(prev => prev === f.field ? null : prev), 1500)
+                  }}
+                  className={`flex items-center px-2 opacity-0 group-hover/row:opacity-100 transition-opacity ${copiedField === f.field ? 'text-green-500' : 'text-slate-300 hover:text-slate-500'}`}
+                >
+                  {copiedField === f.field ? <Check className='h-3 w-3 text-green-500' /> : <Copy className='h-3 w-3' />}
+                </button>
+              </div>
             )
           })}
         </div>

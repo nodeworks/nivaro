@@ -31,13 +31,30 @@ export function InlineTableField({
   const [editState, setEditState] = useState<{ rowId: string; draft: Record<string, unknown> } | null>(null)
   const [saving, setSaving] = useState(false)
 
-  // Columns ordered by layout assignment when layoutId is provided
+  // Auto-detect table-type layout for the related collection when no explicit layoutId is given.
+  // This lets Apply Values / Create-with-Defaults zones work without manually linking a layout_id
+  // to the O2M field options.
+  const { data: autoTableLayout } = useQuery<{ id: number; layout_type: string } | null>({
+    queryKey: ['auto-table-layout', relatedCollection],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; layout_type: string }> }>(
+          get(`/collection-layouts`, { collection: relatedCollection })
+        )
+        .then((r) => (r.data ?? []).find((l) => l.layout_type === 'table') ?? null),
+    enabled: !layoutId,
+    staleTime: 5 * 60_000
+  })
+
+  const effectiveLayoutId: number | null = layoutId ?? autoTableLayout?.id ?? null
+
+  // Columns ordered by layout assignment when effectiveLayoutId is available
   const { data: cols = [], isLoading: colsLoading } = useQuery<CMSField[]>({
-    queryKey: ['field-config', relatedCollection, layoutId ?? null],
+    queryKey: ['field-config', relatedCollection, effectiveLayoutId],
     queryFn: () =>
       client
         .request<{ data: CMSField[] }>(
-          get(`/field-config/${relatedCollection}`, layoutId ? { layout_id: String(layoutId) } : undefined)
+          get(`/field-config/${relatedCollection}`, effectiveLayoutId ? { layout_id: String(effectiveLayoutId) } : undefined)
         )
         .then((r) => r.data ?? []),
     staleTime: 60_000
@@ -58,12 +75,12 @@ export function InlineTableField({
 
   // Fetch layout metadata to get row_order_field
   const { data: layoutMeta } = useQuery<{ row_order_field?: string | null }>({
-    queryKey: ['layout-meta', layoutId],
+    queryKey: ['layout-meta', effectiveLayoutId],
     queryFn: () =>
       client
-        .request<{ data: { row_order_field?: string | null } }>(get(`/collection-layouts/${layoutId}`))
+        .request<{ data: { row_order_field?: string | null } }>(get(`/collection-layouts/${effectiveLayoutId}`))
         .then((r) => r.data ?? {}),
-    enabled: !!layoutId,
+    enabled: !!effectiveLayoutId,
     staleTime: 5 * 60_000
   })
 
@@ -91,14 +108,29 @@ export function InlineTableField({
 
   const pendingRows = isNew && staging ? staging.getPendingRows(relatedCollection, manyField) : []
 
+  const SPECIAL_GROUP_KEYS = new Set(['__apply_values__', '__create_with_defaults__'])
   const displayCols = cols.filter(
     (c) =>
       !c.hidden &&
       !NON_DISPLAY_TYPES.has(c.type) &&
       c.field !== manyField &&
       c.field !== 'id' &&
-      (!layoutId || c.layout_assigned === true) &&
-      !SENTINEL_FIELDS.has(c.field)
+      (!effectiveLayoutId || c.layout_assigned === true) &&
+      !SENTINEL_FIELDS.has(c.field) &&
+      !SPECIAL_GROUP_KEYS.has(c.group_key ?? '')
+  )
+
+  // Fields configured for the apply values form (group_key === '__apply_values__')
+  const applyValuesCols = useMemo(() =>
+    cols.filter(c => c.group_key === '__apply_values__' && !NON_DISPLAY_TYPES.has(c.type ?? '') && !SENTINEL_FIELDS.has(c.field)),
+    [cols]
+  )
+
+  // Fields configured for the create-with-defaults form (group_key === '__create_with_defaults__')
+  // Falls back to displayCols if none configured
+  const defaultsCols = useMemo(
+    () => cols.filter(c => c.group_key === '__create_with_defaults__' && !NON_DISPLAY_TYPES.has(c.type ?? '') && !SENTINEL_FIELDS.has(c.field)),
+    [cols]
   )
 
   // Map field → M2O relation for display value lookup
@@ -222,9 +254,36 @@ export function InlineTableField({
   const [bulkAdding, setBulkAdding] = useState(false)
   const [defaultsOpen, setDefaultsOpen] = useState(false)
   const [defaultValues, setDefaultValues] = useState<Record<string, unknown>>({})
+  const [applyOpen, setApplyOpen] = useState(false)
+  const [applyValues, setApplyValues] = useState<Record<string, unknown>>({})
+  const [applying, setApplying] = useState(false)
 
   function setDefaultField(k: string, v: unknown) {
     setDefaultValues(prev => ({ ...prev, [k]: v }))
+  }
+
+  async function applyValuesToAllRows() {
+    const hasValues = Object.keys(applyValues).some(k => applyValues[k] !== null && applyValues[k] !== undefined)
+    if (!hasValues) return
+    setApplying(true)
+    try {
+      if (rows.length) {
+        await Promise.all(
+          rows.map(row =>
+            client.request(patch(`/items/${relatedCollection}/${row.id}`, applyValues))
+          )
+        )
+        qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+      }
+      if (pendingRows.length && staging) {
+        pendingRows.forEach((row, i) =>
+          staging.updateRow(relatedCollection, manyField, i, { ...row, ...applyValues })
+        )
+      }
+      setApplyOpen(false)
+      setApplyValues({})
+    } catch { /* ignore */ }
+    finally { setApplying(false) }
   }
 
   async function addBulkRows(useDefaults: boolean) {
@@ -342,21 +401,65 @@ export function InlineTableField({
         >
           blank {bulkCount === 1 ? 'row' : 'rows'}
         </button>
-        <button
-          type='button'
-          onClick={() => setDefaultsOpen(v => !v)}
-          className={cn(
-            'h-6 px-2.5 rounded border transition-colors',
-            defaultsOpen
-              ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
-              : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
-          )}
-        >
-          with defaults…
-        </button>
+        {defaultsCols.length > 0 && (
+          <button
+            type='button'
+            onClick={() => setDefaultsOpen(v => !v)}
+            className={cn(
+              'h-6 px-2.5 rounded border transition-colors',
+              defaultsOpen
+                ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+                : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
+            )}
+          >
+            with defaults…
+          </button>
+        )}
+        {applyValuesCols.length > 0 && (
+          <button
+            type='button'
+            onClick={() => setApplyOpen(v => !v)}
+            className={cn(
+              'h-6 px-2.5 rounded border transition-colors',
+              applyOpen
+                ? 'border-amber-400 bg-amber-50 text-amber-700'
+                : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
+            )}
+          >
+            apply values…
+          </button>
+        )}
         {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
       </div>
 
+      {applyOpen && applyValuesCols.length > 0 && (
+        <div className='rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2'>
+          <p className='text-[11px] font-medium text-amber-700'>Apply values to all {rows.length + pendingRows.length} rows</p>
+          <div className='flex flex-wrap gap-2 items-end'>
+            {applyValuesCols.map(c => (
+              <div key={c.field} className='min-w-[160px]'>
+                <p className='text-[10px] text-slate-500 mb-0.5'>{c.label ?? titleCase(c.field)}</p>
+                <FieldRenderer
+                  field={c}
+                  value={applyValues[c.field] ?? null}
+                  onChange={v => setApplyValues(prev => ({ ...prev, [c.field]: v }))}
+                  relations={childRelations}
+                  collection={relatedCollection}
+                  itemId='new'
+                />
+              </div>
+            ))}
+            <button
+              type='button'
+              disabled={applying || !(rows.length + pendingRows.length)}
+              onClick={applyValuesToAllRows}
+              className='h-9 rounded px-3 bg-amber-500 text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50 whitespace-nowrap'
+            >
+              {applying ? 'Applying…' : `Apply to all ${rows.length + pendingRows.length} rows`}
+            </button>
+          </div>
+        </div>
+      )}
 
     <div className='rounded-lg border border-slate-200 text-[12px]'>
       <table className='w-full table-fixed'>
@@ -380,7 +483,7 @@ export function InlineTableField({
               {isNew && <td className='px-3 py-1 align-middle w-16'>
                 <span className='text-[10px] font-medium text-[#009abe]'>Defaults</span>
               </td>}
-              {displayCols.map(c => (
+              {defaultsCols.map(c => (
                 <td key={c.field} className='px-2 py-1 align-top'>
                   <FieldRenderer
                     field={c}

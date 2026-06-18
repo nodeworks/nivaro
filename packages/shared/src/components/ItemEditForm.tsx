@@ -388,8 +388,14 @@ export function ItemEditForm({
     [allFields]
   )
 
-  const tabGroups = useMemo(() => groups.filter((g) => g.type === 'tab'), [groups])
+  const containerGroups = useMemo(() => groups.filter((g) => g.type === 'container'), [groups])
+  // Legacy orphan tabs (no container) — used for layout-level tabs/steps mode
+  const tabGroups = useMemo(() => groups.filter((g) => g.type === 'tab' && !g.container_id), [groups])
+  // All tabs regardless of container — used for SummaryPanel coverage
+  const allTabGroups = useMemo(() => groups.filter((g) => g.type === 'tab').sort((a, b) => a.sort - b.sort), [groups])
   const sectionGroups = useMemo(() => groups.filter((g) => g.type === 'section' || g.type === 'metadata'), [groups])
+  const hasContainers = containerGroups.length > 0
+  // Legacy mode: tab groups with no container use the layout-level tab_mode
   const hasTabs = tabGroups.length > 0
   const layoutMeta = activeLayoutData?.layout
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
@@ -398,6 +404,22 @@ export function ItemEditForm({
   const summaryEnabled = !!layoutMeta?.summary_enabled
 
   const bodyRef = useRef<HTMLDivElement>(null)
+  // Per-container active tab: Map<containerId, tabKey>
+  const [containerTabs, setContainerTabs] = useState<Map<number, string>>(() => new Map())
+  const [containerVisited, setContainerVisited] = useState<Map<number, Set<string>>>(() => new Map())
+  const getContainerTab = (c: FieldGroup, children: FieldGroup[]) =>
+    containerTabs.get(c.id) ?? children[0]?.key ?? ''
+  const isContainerTabVisited = (c: FieldGroup, key: string) =>
+    containerVisited.get(c.id)?.has(key) ?? false
+  const setContainerTab = (c: FieldGroup, key: string) => {
+    setContainerTabs((prev) => new Map(prev).set(c.id, key))
+    setContainerVisited((prev) => {
+      const existing = prev.get(c.id) ?? new Set<string>()
+      if (existing.has(key)) return prev
+      return new Map(prev).set(c.id, new Set([...existing, key]))
+    })
+  }
+
   const [activeTab, setActiveTabRaw] = useState<string>(() => {
     try {
       return localStorage.getItem(`nvr_tab_${collection}`) ?? tabGroups[0]?.key ?? '__general__'
@@ -498,6 +520,8 @@ export function ItemEditForm({
     type Item = FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__'
     const entries: Array<{ item: Item; sort: number; tie: number }> = [
       ...sectionGroups.map((g) => ({ item: g as Item, sort: g.sort, tie: 0 })),
+      // Container groups sit alongside section groups in the order
+      ...containerGroups.map((g) => ({ item: g as Item, sort: g.sort, tie: 0 })),
       {
         item: '__ungrouped__',
         sort: activeLayoutData?.ungrouped_sort ?? sectionGroups.length,
@@ -513,6 +537,7 @@ export function ItemEditForm({
     return entries.sort((a, b) => a.sort - b.sort || a.tie - b.tie).map((e) => e.item)
   }, [
     sectionGroups,
+    containerGroups,
     activeLayoutData,
     pipelineSlot,
     commentsSlot,
@@ -765,6 +790,114 @@ export function ItemEditForm({
     )
   }
 
+  function renderContainer(c: FieldGroup) {
+    const children = groups
+      .filter((g) => g.type === 'tab' && g.container_id === c.id)
+      .sort((a, b) => a.sort - b.sort)
+    if (children.length === 0) return null
+    const isSteps = c.tab_mode === 'steps'
+    const activeKey = getContainerTab(c, children)
+    const activeChild = children.find((g) => g.key === activeKey) ?? children[0]
+    const activeFields = (groupedMap[activeChild?.key ?? ''] ?? []).filter((f) => !f.hidden)
+
+    const containerCompleted = new Set<string>()
+    const containerErrors = new Set<string>()
+    for (const ch of children) {
+      if (isNew && !isContainerTabVisited(c, ch.key)) continue
+      const chFields = groupedMap[ch.key] ?? []
+      const hasError = chFields.some((f) => validationErrors[f.field])
+      if (hasError) containerErrors.add(ch.key)
+      const requiredFields = chFields.filter((f) => f.required && !f.hidden)
+      const allFilled = requiredFields.length === 0 || requiredFields.every((f) => { const v = draft[f.field]; return v !== null && v !== undefined && v !== '' })
+      if (allFilled) containerCompleted.add(ch.key)
+    }
+
+    return (
+      <div key={c.key} className='rounded-xl border border-slate-200 bg-white'>
+        {isSteps ? (
+          <StepsBar
+            steps={children.map((g) => ({ key: g.key, label: g.label }))}
+            active={activeKey}
+            completed={containerCompleted}
+            errorSteps={containerErrors}
+            onStepClick={(k) => setContainerTab(c, k)}
+          />
+        ) : (
+          <div className='flex border-b border-slate-100'>
+            {children.map((g) => (
+              <button
+                key={g.key}
+                type='button'
+                onClick={() => setContainerTab(c, g.key)}
+                className={cn(
+                  'px-5 py-3 text-sm font-medium transition-colors',
+                  g.key === activeKey
+                    ? 'border-b-2 border-nvr-cyan text-nvr-cyan'
+                    : 'text-slate-500 hover:text-slate-700'
+                )}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className='px-5 py-5'>
+          <GridContainer>
+            {(cw) => activeFields.map((f) => (
+              <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
+                <FieldRow
+                  field={f}
+                  draft={draft}
+                  onChange={handleFieldChange}
+                  relations={relations}
+                  collection={collection}
+                  itemId={itemId}
+                  error={validationErrors[f.field]}
+                  visible={visibleFields.has(f.field) || !visibleFields.size}
+                  locked={lockedFields.has(f.field)}
+                  layoutAiEnabled={layoutAiEnabled}
+                  renderField={renderField}
+                  onCountChange={handleM2MCountChange}
+                />
+              </div>
+            ))}
+          </GridContainer>
+          {c.tab_mode === 'steps' && children.length > 1 && (() => {
+            const idx = children.findIndex((ch) => ch.key === activeKey)
+            const isFirst = idx === 0
+            const isLast = idx === children.length - 1
+            return (
+              <div className='mt-6 border-t border-slate-200 pt-4'>
+                <div className='flex items-center justify-between gap-2'>
+                  <button
+                    type='button'
+                    disabled={isFirst}
+                    onClick={() => setContainerTab(c, children[idx - 1].key)}
+                    className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40'
+                  >
+                    <ChevronDown className='h-3.5 w-3.5 rotate-90' />
+                    Previous
+                  </button>
+                  <span className='text-[11px] text-slate-400'>Step {idx + 1} of {children.length}</span>
+                  {isLast ? null : (
+                    <button
+                      type='button'
+                      onClick={() => setContainerTab(c, children[idx + 1].key)}
+                      className='inline-flex items-center gap-1.5 rounded-md bg-[#00ceff] px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#00b8e0]'
+                    >
+                      Next
+                      <ChevronDown className='h-3.5 w-3.5 -rotate-90' />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
+        </div>
+      </div>
+    )
+  }
+
   function renderSectionItem(
     item: FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__'
   ) {
@@ -772,6 +905,7 @@ export function ItemEditForm({
     if (item === '__pipeline__' || item === '__comments__' || item === '__tasks__')
       return renderSentinel(item)
     const g = item as FieldGroup
+    if (g.type === 'container') return renderContainer(g)
     if (g.type === 'metadata' && isNew) return null
     const groupFields = groupedMap[g.key] ?? []
     if (groupFields.length === 0) return null
@@ -1202,7 +1336,7 @@ export function ItemEditForm({
           {summaryEnabled && (
             <div className='w-64 shrink-0 overflow-y-auto border-l border-slate-200'>
               <SummaryPanel
-                allSteps={allSteps}
+                allSteps={allTabGroups.length > 0 ? allTabGroups.map((g) => ({ key: g.key, label: g.label })) : allSteps}
                 groupedMap={groupedMap}
                 ungroupedFields={ungroupedFields}
                 sectionGroups={sectionGroups}

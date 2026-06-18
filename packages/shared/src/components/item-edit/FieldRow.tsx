@@ -304,7 +304,7 @@ export function FieldRow({
           onClear={handleCascadeClear}
         />
       )}
-      <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
+      {label !== '' && <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
         <Label className='text-sm font-medium'>
           {label}
           {field.required && <span className='ml-0.5 text-destructive'>*</span>}
@@ -341,7 +341,7 @@ export function FieldRow({
           <TooltipProvider delayDuration={100}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff] dark:bg-nvr-cyan/15 dark:text-nvr-cyan max-w-[180px] min-w-0'>
+                <span className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff] dark:bg-nvr-cyan/15 dark:text-nvr-cyan max-w-[280px] min-w-0'>
                   <SlidersHorizontal className='h-2.5 w-2.5 shrink-0' />
                   <span className='truncate'>Filtered by {cascadeParentLabels.join(', ')}</span>
                 </span>
@@ -352,7 +352,7 @@ export function FieldRow({
             </Tooltip>
           </TooltipProvider>
         )}
-      </div>
+      </div>}
       <div className={cn(locked && 'pointer-events-none opacity-60', error && 'ring-1 ring-red-400 rounded-md')}>
         {renderField ? (
           renderField({

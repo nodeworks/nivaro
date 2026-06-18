@@ -33,10 +33,12 @@ export interface FieldGroup {
   id: number
   key: string
   label: string
-  type: 'section' | 'tab' | 'metadata'
+  type: 'section' | 'tab' | 'metadata' | 'container'
   icon: string | null
   sort: number
   is_collapsed: boolean
+  container_id?: number | null
+  tab_mode?: 'tabs' | 'steps' | null
 }
 
 export interface SlotAssignment {

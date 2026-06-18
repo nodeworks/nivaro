@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, ChevronsUpDown, Loader2, X } from 'lucide-react'
+import {Check, ChevronDown, ChevronsUpDown, Loader2, X} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -139,7 +139,7 @@ export function M2MCombobox({
         disabled
         className='flex h-8 w-full items-center gap-1.5 rounded-md border border-input bg-background px-3 text-[13px] text-muted-foreground opacity-50 cursor-not-allowed'
       >
-        <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 opacity-50' />
+        <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
         Select {requiredParent} first
       </button>
     )
@@ -211,7 +211,7 @@ export function M2MCombobox({
             size='sm'
             className='h-8 w-full justify-start gap-1.5 text-[13px] font-normal text-muted-foreground'
           >
-            <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 opacity-50' />
+            <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
             {allSelectedIds.size > 0
               ? `${allSelectedIds.size} selected — click to change`
               : 'Select items…'}
@@ -414,7 +414,7 @@ export function M2MSingleSelectCombobox({
         className='w-full h-9 px-3 text-[13px] border border-input rounded-md bg-background text-left flex items-center justify-between opacity-50 cursor-not-allowed'
       >
         <span className='truncate text-muted-foreground'>Select {requiredParent} first</span>
-        <ChevronsUpDown className='h-3.5 w-3.5 text-slate-400 shrink-0 ml-2' />
+        <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
       </button>
     )
   }
@@ -451,7 +451,7 @@ export function M2MSingleSelectCombobox({
               {currentLabel ?? 'Select…'}
             </span>
           )}
-          <ChevronsUpDown className='h-3.5 w-3.5 text-slate-400 shrink-0 ml-2' />
+          <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
         </button>
       </PopoverTrigger>
       <PopoverContent className='w-[320px] p-0' align='start'>
