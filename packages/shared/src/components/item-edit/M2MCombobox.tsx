@@ -445,7 +445,7 @@ export function M2MSingleSelectCombobox({
                   ? isPendingChange
                     ? 'text-nvr-cyan'
                     : 'text-slate-800'
-                  : 'text-slate-400'
+                  : 'text-muted-foreground'
               )}
             >
               {currentLabel ?? 'Select…'}
