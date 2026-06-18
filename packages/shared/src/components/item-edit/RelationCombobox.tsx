@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronDown, Loader2, Search, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn } from '../../lib/utils'
@@ -58,16 +58,26 @@ export function RelationCombobox({
   })
 
   type Item = Record<string, unknown>
+
+  // Extract template fields for relation expansion (e.g. '{{category.name}}' → 'category.name')
+  const tmplFields = useMemo(() => {
+    if (!colMeta?.display_template) return undefined
+    const matches = [...colMeta.display_template.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1])
+    if (!matches.length) return undefined
+    return ['id', ...matches].join(',')
+  }, [colMeta?.display_template])
+
   const filterStr = extraFilter ? JSON.stringify(extraFilter) : undefined
   const { data, isFetching: isLoadingOptions } = useQuery<Item[]>({
-    queryKey: ['relation-opts', collection, query, filterStr],
+    queryKey: ['relation-opts', collection, query, filterStr, tmplFields],
     queryFn: () =>
       client
         .request<{ data: Item[] }>(
           get(`/items/${collection}`, {
             limit: 200,
             ...(query ? { search: query } : {}),
-            ...(filterStr ? { filter: filterStr } : {})
+            ...(filterStr ? { filter: filterStr } : {}),
+            ...(tmplFields ? { fields: tmplFields } : {})
           })
         )
         .then((r) => (r.data ?? []) as Item[]),
@@ -75,9 +85,13 @@ export function RelationCombobox({
     staleTime: filterStr ? 0 : 30_000
   })
   const { data: selected, isLoading: isLoadingSelected } = useQuery<Item | null>({
-    queryKey: ['relation-single', collection, String(value)],
+    queryKey: ['relation-single', collection, String(value), tmplFields],
     queryFn: () =>
-      client.request<{ data: Item }>(get(`/items/${collection}/${value}`)).then((r) => r.data),
+      client
+        .request<{ data: Item }>(
+          get(`/items/${collection}/${value}`, tmplFields ? { fields: tmplFields } : undefined)
+        )
+        .then((r) => r.data),
     enabled: !!value,
     staleTime: 60_000
   })

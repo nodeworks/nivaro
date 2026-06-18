@@ -9,6 +9,7 @@ import { InlineGridField } from './InlineGridField'
 import { InlineTableField } from './InlineTableField'
 import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
 import { RelationCombobox } from './RelationCombobox'
+import { RelationGroupedCombobox } from './RelationGroupedCombobox'
 import { RichTextEditor } from './RichTextEditor'
 import type { CMSField, CMSRelation } from './types'
 
@@ -51,6 +52,23 @@ export function FieldRenderer({
     if (iface === 'file-image') {
       const fOpts = parseJson<{ allow_upload?: boolean; allow_pick?: boolean }>(field.options)
       return <FilePickerField value={value} onChange={onChange} disabled={field.readonly} allowUpload={fOpts?.allow_upload !== false} allowPick={fOpts?.allow_pick !== false} />
+    }
+    if (iface === 'relation-grouped') {
+      const gOpts = parseJson<{ group_field?: string; option_field?: string }>(field.options)
+      if (gOpts?.group_field && gOpts?.option_field) {
+        return (
+          <RelationGroupedCombobox
+            collection={m2oRel.one_collection}
+            value={value}
+            onChange={onChange}
+            groupField={gOpts.group_field}
+            optionField={gOpts.option_field}
+            disabled={field.readonly}
+            placeholder={field.placeholder ?? undefined}
+            extraFilter={cascadeFilter}
+          />
+        )
+      }
     }
     return (
       <RelationCombobox
@@ -274,8 +292,11 @@ export function FieldRenderer({
         const layoutId = (opts.layout_id as number | null) ?? null
         const showRowRevisions = !!opts.show_row_revisions
         const saveMode = (opts.save_mode as 'immediate' | 'pending') ?? 'immediate'
+        const parentCascades = Array.isArray(opts.parent_cascades)
+          ? (opts.parent_cascades as Array<{ parent_field: string; child_field: string }>)
+          : undefined
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutId={layoutId} showRowRevisions={showRowRevisions} saveMode={saveMode} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutId={layoutId} showRowRevisions={showRowRevisions} saveMode={saveMode} parentCascades={parentCascades} />
         )
       }
     }

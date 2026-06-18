@@ -125,11 +125,11 @@ function SummaryUserName({ userId }: { userId: string }) {
         </span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align='start' className='text-[12px]'>
-        <DropdownMenuItem className='gap-2 text-[12px]' onSelect={() => navigate(`/users/${userId}`)}>
+        <DropdownMenuItem className='gap-2 text-[12px] cursor-pointer' onSelect={() => navigate(`/users/${userId}`)}>
           <User className='h-3.5 w-3.5' /> View profile
         </DropdownMenuItem>
         {user?.email && (
-          <DropdownMenuItem className='gap-2 text-[12px]' onSelect={() => window.open(`mailto:${user.email}`)}>
+          <DropdownMenuItem className='gap-2 text-[12px] cursor-pointer' onSelect={() => window.open(`mailto:${user.email}`)}>
             <Mail className='h-3.5 w-3.5' /> Send email
           </DropdownMenuItem>
         )}
@@ -230,11 +230,11 @@ function UserChip({ userId }: { userId: string }) {
         </div>
       </DropdownMenuTrigger>
       <DropdownMenuContent align='start' className='text-[12px]'>
-        <DropdownMenuItem className='gap-2 text-[12px]' onSelect={() => navigate(`/users/${userId}`)}>
+        <DropdownMenuItem className='gap-2 text-[12px] cursor-pointer' onSelect={() => navigate(`/users/${userId}`)}>
           <User className='h-3.5 w-3.5' /> View profile
         </DropdownMenuItem>
         {user?.email && (
-          <DropdownMenuItem className='gap-2 text-[12px]' onSelect={() => window.open(`mailto:${user.email}`)}>
+          <DropdownMenuItem className='gap-2 text-[12px] cursor-pointer' onSelect={() => window.open(`mailto:${user.email}`)}>
             <Mail className='h-3.5 w-3.5' /> Send email
           </DropdownMenuItem>
         )}

@@ -328,8 +328,10 @@ export async function itemsRoutes(app: FastifyInstance) {
 
   app.get('/:collection/:id', async (req, reply) => {
     const { collection, id } = req.params as { collection: string; id: string }
+    const q = req.query as Record<string, string>
+    const fields = q.fields?.split(',')
     try {
-      const item = await readOne(req.user!, collection, id, req.workspaceId ?? undefined)
+      const item = await readOne(req.user!, collection, id, req.workspaceId ?? undefined, fields)
       if (!item) return reply.code(404).send({ error: 'Not found' })
       return reply.send({ data: item })
     } catch (err) {

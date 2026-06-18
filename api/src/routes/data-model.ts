@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1161,6 +1161,75 @@ export async function dataModelRoutes(app: FastifyInstance) {
       const msg = err instanceof Error ? err.message : String(err)
       return reply.code(500).send({ error: msg })
     }
+  })
+
+  // ─── GET /resolve-cascade — resolve how two collections are related ────────
+  // Returns the join strategy between a parent M2O target and a child M2O target
+  // so InlineTableField can filter child M2O pickers based on parent form values.
+
+  app.get('/resolve-cascade', { preHandler: authenticate }, async (req, reply) => {
+    const { parent_collection, parent_field, child_collection, child_field } =
+      req.query as { parent_collection: string; parent_field: string; child_collection: string; child_field: string }
+
+    if (!parent_collection || !parent_field || !child_collection || !child_field) {
+      return reply.code(400).send({ error: 'parent_collection, parent_field, child_collection, child_field are required' })
+    }
+
+    // Resolve what collection the parent M2O field points to
+    const parentRel = await db('nivaro_relations')
+      .where({ many_collection: parent_collection, many_field: parent_field })
+      .whereNull('junction_field')
+      .first()
+    if (!parentRel) return reply.send({ data: { type: 'none', reason: 'parent_field is not an M2O' } })
+    const parentTargetCollection = parentRel.one_collection as string
+
+    // Resolve what collection the child M2O field points to
+    const childRel = await db('nivaro_relations')
+      .where({ many_collection: child_collection, many_field: child_field })
+      .whereNull('junction_field')
+      .first()
+    if (!childRel) return reply.send({ data: { type: 'none', reason: 'child_field is not an M2O' } })
+    const childTargetCollection = childRel.one_collection as string
+
+    // Check for direct FK from childTargetCollection to parentTargetCollection
+    const directRel = await db('nivaro_relations')
+      .where({ many_collection: childTargetCollection, one_collection: parentTargetCollection })
+      .whereNull('junction_field')
+      .first()
+    if (directRel) {
+      return reply.send({
+        data: {
+          type: 'direct_fk',
+          filter_column: directRel.many_field,
+          child_target_collection: childTargetCollection,
+          parent_target_collection: parentTargetCollection
+        }
+      })
+    }
+
+    // Check for M2M junction between childTargetCollection and parentTargetCollection
+    const junctionCandidates = await db('nivaro_relations')
+      .where({ one_collection: childTargetCollection })
+      .whereNotNull('junction_field')
+    for (const r1 of junctionCandidates) {
+      const r2 = await db('nivaro_relations')
+        .where({ many_collection: r1.many_collection, many_field: r1.junction_field })
+        .first()
+      if (r2?.one_collection === parentTargetCollection) {
+        return reply.send({
+          data: {
+            type: 'm2m_junction',
+            table: r1.many_collection,
+            self_fk: r1.many_field,
+            filter_fk: r1.junction_field,
+            child_target_collection: childTargetCollection,
+            parent_target_collection: parentTargetCollection
+          }
+        })
+      }
+    }
+
+    return reply.send({ data: { type: 'none', reason: 'no relation found between target collections' } })
   })
 
   // ─── DELETE /relations/:id — delete a CMS relation ───────────────────────

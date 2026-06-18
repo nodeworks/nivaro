@@ -73,3 +73,16 @@ export const NavigationContext = createContext<NavigationContextValue>({
 export function useNavigation(): NavigationContextValue {
   return useContext(NavigationContext)
 }
+
+// ─── Parent draft context (parent form values for cascade filters) ─────────
+
+export type ParentDraftContextValue = {
+  draft: Record<string, unknown>
+  collection: string
+}
+
+export const ParentDraftContext = createContext<ParentDraftContextValue | null>(null)
+
+export function useParentDraft(): ParentDraftContextValue | null {
+  return useContext(ParentDraftContext)
+}

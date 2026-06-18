@@ -4996,6 +4996,75 @@ function LayoutPicker({ collection, value, onChange, layoutType }: { collection?
   )
 }
 
+function CascadeRuleRow({
+  rule,
+  parentFields,
+  childFields,
+  onChange,
+  onRemove,
+}: {
+  rule: { parent_field: string; child_field: string }
+  parentFields: Array<{ value: string; label: string }>
+  childFields: Array<{ value: string; label: string }>
+  onChange: (r: { parent_field: string; child_field: string }) => void
+  onRemove: () => void
+}) {
+  const [pfOpen, setPfOpen] = useState(false)
+  const [cfOpen, setCfOpen] = useState(false)
+  return (
+    <div className='flex items-center gap-1.5'>
+      <Popover open={pfOpen} onOpenChange={setPfOpen}>
+        <PopoverTrigger asChild>
+          <button type='button' className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'>
+            {rule.parent_field
+              ? (parentFields.find(f => f.value === rule.parent_field)?.label ?? rule.parent_field)
+              : <span className='text-slate-400'>parent field…</span>}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-52 p-0' align='start'>
+          <Command>
+            <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
+            <CommandList>
+              <CommandGroup>
+                {parentFields.map(f => (
+                  <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, parent_field: f.value }); setPfOpen(false) }} className='text-[12px]'>
+                    {f.label}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+      <span className='text-[10px] text-slate-400 shrink-0'>→</span>
+      <Popover open={cfOpen} onOpenChange={setCfOpen}>
+        <PopoverTrigger asChild>
+          <button type='button' className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'>
+            {rule.child_field
+              ? (childFields.find(f => f.value === rule.child_field)?.label ?? rule.child_field)
+              : <span className='text-slate-400'>child field…</span>}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-52 p-0' align='start'>
+          <Command>
+            <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
+            <CommandList>
+              <CommandGroup>
+                {childFields.map(f => (
+                  <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, child_field: f.value }); setCfOpen(false) }} className='text-[12px]'>
+                    {f.label}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+      <button type='button' onClick={onRemove} className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'>✕</button>
+    </div>
+  )
+}
+
 function FieldSettingsPopover({
   fieldName,
   abstractType,
@@ -5042,8 +5111,34 @@ function FieldSettingsPopover({
   const [numCurrency, setNumCurrency] = useState('USD')
   const [numAggregate, setNumAggregate] = useState<'sum' | 'count' | 'avg' | 'min' | 'max' | ''>('')
   const [saveMode, setSaveMode] = useState<'immediate' | 'pending'>('immediate')
+  const [parentCascades, setParentCascades] = useState<Array<{ parent_field: string; child_field: string }>>([])
+  const [groupedGroupField, setGroupedGroupField] = useState('')
+  const [groupedOptionField, setGroupedOptionField] = useState('')
+  const [groupedGroupFieldOpen, setGroupedGroupFieldOpen] = useState(false)
+  const [groupedOptionFieldOpen, setGroupedOptionFieldOpen] = useState(false)
 
   const isNumericAbstractType = ['integer', 'bigInteger', 'decimal', 'float', 'money', 'smallmoney', 'tinyint', 'smallint', 'bigint'].includes(abstractType ?? '')
+
+  // Child M2O fields for cascade config — fetched from related collection's relations
+  const { data: childCollectionMeta } = useQuery({
+    queryKey: ['collection-meta', relatedCollection],
+    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
+    enabled: !!relatedCollection,
+    staleTime: 10 * 60 * 1000
+  })
+  const childM2OFields = useMemo(() => {
+    const rels = (childCollectionMeta?.relations ?? []) as Array<{
+      many_collection?: string; many_field?: string; one_collection?: string; junction_field?: string | null
+    }>
+    return rels
+      .filter((r) => r.many_collection === relatedCollection && r.many_field && !r.junction_field)
+      .map((r) => ({ value: r.many_field!, label: `${r.many_field} → ${r.one_collection}` }))
+  }, [childCollectionMeta, relatedCollection])
+
+  const parentM2OFields = useMemo(
+    () => (m2oFields ?? []).filter((f) => f.kind === 'M2O').map((f) => ({ value: f.field, label: f.label })),
+    [m2oFields]
+  )
 
   // Reset local state when popover opens
   function handleOpenChange(next: boolean) {
@@ -5073,7 +5168,10 @@ function FieldSettingsPopover({
         setNumCurrency((opts.currency as string) ?? 'USD')
         setNumAggregate((opts.aggregate as 'sum' | 'count' | 'avg' | 'min' | 'max' | '') ?? '')
         setSaveMode((opts.save_mode as 'immediate' | 'pending') ?? 'immediate')
-      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate(''); setSaveMode('immediate') }
+        setParentCascades(Array.isArray(opts.parent_cascades) ? opts.parent_cascades as Array<{ parent_field: string; child_field: string }> : [])
+        setGroupedGroupField((opts.group_field as string) ?? '')
+        setGroupedOptionField((opts.option_field as string) ?? '')
+      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate(''); setSaveMode('immediate'); setParentCascades([]); setGroupedGroupField(''); setGroupedOptionField('') }
     }
     setOpen(next)
   }
@@ -5094,7 +5192,7 @@ function FieldSettingsPopover({
     }
     // Inline-grid / inline-table options for O2M
     let optionsPatch: string | null = null
-    const needsOptionsPatch = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table')) || isNumericAbstractType || iface === 'file-image' || iface === 'files-m2m'
+    const needsOptionsPatch = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table')) || isNumericAbstractType || iface === 'file-image' || iface === 'files-m2m' || iface === 'relation-grouped'
     if (needsOptionsPatch) {
       try {
         const existing = settings.options ? (typeof settings.options === 'string' ? JSON.parse(settings.options) : settings.options) as Record<string, unknown> : {}
@@ -5112,12 +5210,15 @@ function FieldSettingsPopover({
           delete existing.aggregate
         }
         const o2mOpts = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table'))
-          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : { save_mode: saveMode }) }
+          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : { save_mode: saveMode, ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}) }) }
           : {}
         const fileOpts = (iface === 'file-image' || iface === 'files-m2m')
           ? { allow_upload: allowUpload, allow_pick: allowPick }
           : {}
-        optionsPatch = JSON.stringify({ ...existing, ...o2mOpts, ...fileOpts, ...formatOpts })
+        const groupedOpts = iface === 'relation-grouped'
+          ? { group_field: groupedGroupField || undefined, option_field: groupedOptionField || undefined }
+          : {}
+        optionsPatch = JSON.stringify({ ...existing, ...o2mOpts, ...fileOpts, ...formatOpts, ...groupedOpts })
       } catch {
         optionsPatch = JSON.stringify({ ...(isNumericAbstractType && numFormat ? { format: numFormat, ...(numFormat === 'decimal' ? { precision: parseInt(numPrecisionFmt, 10) || 2 } : {}), ...(numFormat === 'currency' ? { currency: numCurrency } : {}) } : {}) })
       }
@@ -5348,6 +5449,58 @@ function FieldSettingsPopover({
             </div>
           )}
 
+          {iface === 'relation-grouped' && (
+            <div className='space-y-2 rounded-md border border-slate-100 bg-slate-50 px-3 py-2'>
+              <p className='text-[11px] font-medium text-slate-600'>Grouped combobox config</p>
+              <div className='space-y-1'>
+                <p className='text-[11px] text-slate-500'>Group by field</p>
+                <Popover open={groupedGroupFieldOpen} onOpenChange={setGroupedGroupFieldOpen}>
+                  <PopoverTrigger asChild>
+                    <button type='button' className='flex h-8 w-full items-center justify-between rounded border border-slate-200 bg-white px-2 text-[12px] hover:bg-slate-50'>
+                      <span className={groupedGroupField ? '' : 'text-slate-400'}>{(childM2OFields.find(f => f.value === groupedGroupField)?.label ?? groupedGroupField) || 'Select field…'}</span>
+                      <ChevronDown className='h-3.5 w-3.5 opacity-50' />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className='w-[260px] p-0' align='start'>
+                    <Command>
+                      <CommandInput placeholder='Search fields…' className='h-8 text-[12px]' />
+                      <CommandList>
+                        {childM2OFields.map(f => (
+                          <CommandItem key={f.value} value={f.value} onSelect={() => { setGroupedGroupField(f.value); setGroupedGroupFieldOpen(false) }} className='text-[12px]'>
+                            {f.label}
+                          </CommandItem>
+                        ))}
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <div className='space-y-1'>
+                <p className='text-[11px] text-slate-500'>Option field (leaf)</p>
+                <Popover open={groupedOptionFieldOpen} onOpenChange={setGroupedOptionFieldOpen}>
+                  <PopoverTrigger asChild>
+                    <button type='button' className='flex h-8 w-full items-center justify-between rounded border border-slate-200 bg-white px-2 text-[12px] hover:bg-slate-50'>
+                      <span className={groupedOptionField ? '' : 'text-slate-400'}>{(childM2OFields.find(f => f.value === groupedOptionField)?.label ?? groupedOptionField) || 'Select field…'}</span>
+                      <ChevronDown className='h-3.5 w-3.5 opacity-50' />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className='w-[260px] p-0' align='start'>
+                    <Command>
+                      <CommandInput placeholder='Search fields…' className='h-8 text-[12px]' />
+                      <CommandList>
+                        {childM2OFields.map(f => (
+                          <CommandItem key={f.value} value={f.value} onSelect={() => { setGroupedOptionField(f.value); setGroupedOptionFieldOpen(false) }} className='text-[12px]'>
+                            {f.label}
+                          </CommandItem>
+                        ))}
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            </div>
+          )}
+
           {(isM2O || isM2M) && (
             <CascadeFiltersEditor
               rules={cascadeRules}
@@ -5371,6 +5524,33 @@ function FieldSettingsPopover({
                 <div className='flex items-center gap-2'>
                   <Switch checked={saveMode === 'pending'} onCheckedChange={v => setSaveMode(v ? 'pending' : 'immediate')} className='scale-75' />
                   <span className='text-[11px] text-slate-600'>Always pending save (save with main form)</span>
+                </div>
+              )}
+              {iface === 'inline-table' && (
+                <div className='space-y-1.5'>
+                  <div className='flex items-center justify-between'>
+                    <p className='text-[11px] font-medium text-slate-500'>Cascade from parent field</p>
+                    <button
+                      type='button'
+                      onClick={() => setParentCascades([...parentCascades, { parent_field: '', child_field: '' }])}
+                      className='text-[10px] text-nvr-cyan hover:underline'
+                    >
+                      + Add rule
+                    </button>
+                  </div>
+                  {parentCascades.map((rule, idx) => (
+                    <CascadeRuleRow
+                      key={idx}
+                      rule={rule}
+                      parentFields={parentM2OFields}
+                      childFields={childM2OFields}
+                      onChange={(updated) => setParentCascades(parentCascades.map((r, i) => i === idx ? updated : r))}
+                      onRemove={() => setParentCascades(parentCascades.filter((_, i) => i !== idx))}
+                    />
+                  ))}
+                  {parentCascades.length > 0 && (
+                    <p className='text-[10px] text-slate-400'>Parent = M2O on this form. Child = M2O on each row.</p>
+                  )}
                 </div>
               )}
               {iface === 'inline-table' && onRowRevisionsChange && (
@@ -5718,7 +5898,7 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                   onColSpan={isTableMode ? undefined : (span) => patchField(f, { col_span: span })}
                   fieldSettings={settings}
                   onSettings={patch => handleFieldSettings(f, patch)}
-                  m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields?.() : undefined}
+                  m2oFields={kind === 'M2O' || kind === 'M2M' || kind === 'O2M' ? getM2OFields?.() : undefined}
                   dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
                   relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
                   onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
@@ -6033,7 +6213,7 @@ function SortableGroupCard({
                   onColSpan={span => onColSpan(f, span)}
                   fieldSettings={settings}
                   onSettings={onFieldSettings ? patch => onFieldSettings(f, patch) : undefined}
-                  m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields?.() : undefined}
+                  m2oFields={kind === 'M2O' || kind === 'M2M' || kind === 'O2M' ? getM2OFields?.() : undefined}
                   dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
                   relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
                   onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}

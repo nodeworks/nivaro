@@ -751,6 +751,151 @@ function clearRelCache() {
 }
 
 /**
+ * Split a fields array into direct column names and a nested expansion map.
+ * e.g. ['id', 'name', 'category.name', 'category.id', 'project.*']
+ *   → { direct: ['id', 'name', 'category', 'project'], nested: { category: ['name', 'id'], project: ['*'] } }
+ * Wildcard parent '*' collects sub-fields for "expand all M2O relations".
+ */
+function parseFieldExpansion(fields: string[]): {
+  direct: string[]
+  nested: Record<string, string[]>
+} {
+  const direct = new Set<string>()
+  const nested: Record<string, string[]> = {}
+  for (const f of fields) {
+    if (f === '*') { direct.add('*'); continue }
+    const dot = f.indexOf('.')
+    if (dot === -1) {
+      direct.add(f)
+    } else {
+      const parent = f.slice(0, dot)
+      const rest = f.slice(dot + 1)
+      if (parent !== '*') direct.add(parent) // keep FK column in SELECT
+      nested[parent] = nested[parent] ?? []
+      nested[parent].push(rest)
+    }
+  }
+  return { direct: [...direct], nested }
+}
+
+/**
+ * Recursively expand M2O relations in-place on an items array.
+ * Depth-capped at 5 to prevent runaway recursion.
+ * Applies full authorization for each expanded collection:
+ *   - collection-level can() check
+ *   - column-level getAllowedFields() filtering
+ *   - SYSTEM_SENSITIVE column stripping
+ *   - workspace scope
+ *   - row-level security (row_filter)
+ */
+async function expandRelations(
+  user: User,
+  items: Record<string, unknown>[],
+  collection: string,
+  nested: Record<string, string[]>,
+  depth: number,
+  workspaceId?: string
+): Promise<void> {
+  if (depth > 4 || items.length === 0 || Object.keys(nested).length === 0) return
+
+  const rels = await getRelsForCollection(collection)
+
+  // Resolve wildcard parent: expand ALL M2O relations for this collection
+  let expandEntries = Object.entries(nested).filter(([k]) => k !== '*')
+  if ('*' in nested) {
+    const wildcardSubs = nested['*']
+    for (const r of rels) {
+      if (r.many_collection === collection && r.many_field && !r.junction_field) {
+        const f = r.many_field
+        if (!expandEntries.find(([k]) => k === f)) {
+          expandEntries.push([f, wildcardSubs])
+        }
+      }
+    }
+  }
+
+  const SYSTEM_SENSITIVE: Record<string, string[]> = {
+    nivaro_users: ['password_hash', 'totp_secret', 'static_token', 'external_id']
+  }
+
+  for (const [fieldName, subFields] of expandEntries) {
+    const rel = rels.find(
+      (r) => r.many_collection === collection && r.many_field === fieldName && !r.junction_field
+    )
+    if (!rel?.one_collection) continue
+
+    const relCollection = rel.one_collection
+
+    // Collection-level permission check
+    const [allowed, relAllowedFields, rowFilter] = await Promise.all([
+      can(user, 'read', relCollection),
+      getAllowedFields(user, 'read', relCollection),
+      getRowFilter(user, 'read', relCollection)
+    ])
+    if (!allowed) continue
+
+    // Collect unique FK values
+    const fkSet = new Set<string>()
+    for (const item of items) {
+      const v = item[fieldName]
+      if (v != null && v !== '') fkSet.add(String(v))
+    }
+    if (fkSet.size === 0) continue
+
+    const { direct: subDirect, nested: subNested } = parseFieldExpansion(subFields)
+
+    // Column-level permission filtering
+    let selectCols: string[] =
+      relAllowedFields === null
+        ? subDirect[0] === '*'
+          ? ['*']
+          : [...new Set(['id', ...subDirect])]
+        : subDirect[0] === '*'
+          ? [...new Set(['id', ...relAllowedFields])]
+          : [...new Set(['id', ...subDirect.filter((f) => relAllowedFields.includes(f))])]
+
+    // Strip system-sensitive columns
+    const sensitiveCols = SYSTEM_SENSITIVE[relCollection]
+    if (sensitiveCols) {
+      if (selectCols[0] === '*') {
+        const allCols = await db(relCollection).columnInfo()
+        selectCols = Object.keys(allCols).filter((c) => !sensitiveCols.includes(c))
+      } else {
+        selectCols = selectCols.filter((f) => !sensitiveCols.includes(f))
+      }
+    }
+
+    // Batch fetch — cap at 1000 unique FKs
+    const batchValues = [...fkSet].slice(0, 1000)
+    const relQ = db(relCollection)
+      .whereIn('id', batchValues)
+      .select(selectCols as string[])
+      .limit(1000)
+
+    // Workspace scope and row-level security
+    await applyWorkspaceScope(relQ, relCollection, workspaceId)
+    if (rowFilter) applyRowFilter(relQ, rowFilter, user)
+
+    let relItems = (await relQ) as Record<string, unknown>[]
+
+    // Decrypt encrypted fields on expanded items
+    relItems = await Promise.all(relItems.map((r) => decryptItemFields(relCollection, r)))
+
+    // Recurse for deeper expansion
+    if (Object.keys(subNested).length > 0) {
+      await expandRelations(user, relItems, relCollection, subNested, depth + 1, workspaceId)
+    }
+
+    // Merge onto parent items — FK stays as-is if related item was filtered out by RLS
+    const byId = new Map(relItems.map((r) => [String(r.id), r]))
+    for (const item of items) {
+      const fk = item[fieldName]
+      if (fk != null) item[fieldName] = byId.get(String(fk)) ?? fk
+    }
+  }
+}
+
+/**
  * Find an M2O relation for a given key in the given collection.
  * Matches by exact many_field name OR by alias (many_field with _id stripped).
  * Returns { rel, fkField } or null.
@@ -1000,6 +1145,30 @@ function applyFilters(
       continue
     }
 
+    // ── Junction existence filter (for cascade parent → O2M child M2O) ─────
+    if (key === '_exists_junction') {
+      const { table, self_fk, filter_fk, value: filterValue } = value as {
+        table: string; self_fk: string; filter_fk: string; value: unknown
+      }
+      // Security: validate table/self_fk/filter_fk against the loaded relation
+      // metadata for this collection. Accepts only identifiers that correspond to
+      // a real M2M junction row in nivaro_relations — prevents table/column injection.
+      const isValidJunction = rels.some(
+        (r) => r.many_collection === table && r.many_field === self_fk && r.junction_field === filter_fk
+      )
+      if (!isValidJunction) {
+        q.whereRaw('1=0') // deny — invalid junction identifier
+        continue
+      }
+      q.whereExists(function (this: QB) {
+        this.select(db.raw('1'))
+          .from(table)
+          .whereRaw('??.?? = ??.??', [table, self_fk, collection, 'id'])
+          .where(db.raw('??', [`${table}.${filter_fk}`]), '=', filterValue as Knex.Value)
+      })
+      continue
+    }
+
     // ── Scalar field ─────────────────────────────────────────────────────────
     if (typeof value === 'object' && value !== null) {
       const ops = value as Record<string, unknown>
@@ -1195,13 +1364,16 @@ export async function readItems(
   const allowedFields = await getAllowedFields(user, 'read', collection)
   const { fields = ['*'], filter = {}, sort = [], limit = 25, offset = 0, page, search } = query
 
+  // Split dotted fields (e.g. 'category.name') into direct FK columns + expansion map
+  const { direct: directFields, nested: nestedFieldMap } = parseFieldExpansion(fields)
+
   const effectiveOffset = page ? (page - 1) * limit : offset
   let selectFields =
     allowedFields === null
-      ? fields[0] === '*'
+      ? directFields[0] === '*'
         ? ['*']
-        : fields
-      : fields.filter((f) => f === '*' || allowedFields.includes(f))
+        : directFields
+      : directFields.filter((f) => f === '*' || allowedFields.includes(f))
 
   // Strip sensitive columns from system tables not backed by nivaro_fields
   const SYSTEM_SENSITIVE: Record<string, string[]> = {
@@ -1316,6 +1488,11 @@ export async function readItems(
   // Apply read-time computed fields
   await applyReadComputedFields(collection, data)
 
+  // Expand M2O relations for dotted fields (e.g. 'category.name', 'category.*')
+  if (Object.keys(nestedFieldMap).length > 0 && data.length > 0) {
+    await expandRelations(user, data, collection, nestedFieldMap, 0, workspaceId)
+  }
+
   const result = { data, total, limit, offset: effectiveOffset }
 
   await hooks.trigger('after', { collection, action: 'read', user, result, database: db, req })
@@ -1395,7 +1572,8 @@ export async function readOne(
   user: User,
   collection: string,
   id: string | number,
-  workspaceId?: string
+  workspaceId?: string,
+  fields?: string[]
 ) {
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
@@ -1414,11 +1592,19 @@ export async function readOne(
   // skip this check to avoid one ancestor walk per row (known limitation).
   if (treeAllow === false) throw new ForbiddenError()
 
-  const fields = allowedFields ?? ['*']
+  const baseFields = allowedFields ?? ['*']
+  const { direct: directFields, nested: nestedFieldMap } = parseFieldExpansion(fields ?? baseFields)
+
+  const selectCols =
+    allowedFields === null
+      ? directFields[0] === '*'
+        ? ['*']
+        : directFields
+      : directFields.filter((f) => f === '*' || allowedFields.includes(f))
 
   const q = db(collection)
     .where({ id })
-    .select(fields as string[])
+    .select(selectCols as string[])
   await applyWorkspaceScope(q, collection, workspaceId)
 
   if (rowFilter) applyRowFilter(q, rowFilter, user)
@@ -1429,6 +1615,9 @@ export async function readOne(
     item = await decryptItemFields(collection, item)
     await applyInheritedFields(collection, [item])
     await applyReadComputedFields(collection, [item])
+    if (Object.keys(nestedFieldMap).length > 0) {
+      await expandRelations(user, [item], collection, nestedFieldMap, 0, workspaceId)
+    }
   }
 
   return item ?? null

@@ -1,7 +1,7 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { GripVertical, History, Loader2, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { useNivaroClient } from '../../context'
+import { useNivaroClient, useParentDraft } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import {
@@ -28,13 +28,20 @@ interface RowRevision {
 
 const NON_DISPLAY_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
 
+type CascadeRule = { parent_field: string; child_field: string }
+type CascadeResolution =
+  | { type: 'none'; reason?: string }
+  | { type: 'direct_fk'; filter_column: string }
+  | { type: 'm2m_junction'; table: string; self_fk: string; filter_fk: string }
+
 export function InlineTableField({
   relatedCollection,
   manyField,
   parentId,
   layoutId,
   showRowRevisions,
-  saveMode = 'immediate'
+  saveMode = 'immediate',
+  parentCascades
 }: {
   relatedCollection: string
   manyField: string
@@ -42,11 +49,13 @@ export function InlineTableField({
   layoutId?: number | null
   showRowRevisions?: boolean
   saveMode?: 'immediate' | 'pending'
+  parentCascades?: CascadeRule[]
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const staging = useO2MStaging()
   const isNew = parentId === 'new'
+  const parentDraftCtx = useParentDraft()
 
   // Row revision history sheet — holds the saved row whose history is open
   const [historyRow, setHistoryRow] = useState<Record<string, unknown> | null>(null)
@@ -140,6 +149,46 @@ export function InlineTableField({
     if (!rowOrderField) return rawRows
     return [...rawRows].sort((a, b) => Number(a[rowOrderField] ?? 0) - Number(b[rowOrderField] ?? 0))
   }, [rawRows, rowOrderField])
+
+  // ── Cascade parent → child field filters ──────────────────────────────────
+  const cascadeRules = parentCascades ?? []
+  const cascadeResolutions = useQueries({
+    queries: cascadeRules.map((rule) => ({
+      queryKey: ['resolve-cascade', parentDraftCtx?.collection, rule.parent_field, relatedCollection, rule.child_field],
+      queryFn: () =>
+        client
+          .request<{ data: CascadeResolution }>(
+            get('/data-model/resolve-cascade', {
+              parent_collection: parentDraftCtx!.collection,
+              parent_field: rule.parent_field,
+              child_collection: relatedCollection,
+              child_field: rule.child_field
+            })
+          )
+          .then((r) => r.data),
+      enabled: !!parentDraftCtx?.collection && !!rule.parent_field && !!rule.child_field,
+      staleTime: 300_000
+    }))
+  })
+
+  const fieldCascadeFilters = useMemo(() => {
+    const filters: Record<string, Record<string, unknown>> = {}
+    if (!parentDraftCtx || !cascadeRules.length) return filters
+    cascadeRules.forEach((rule, i) => {
+      const resolution = cascadeResolutions[i]?.data
+      if (!resolution || resolution.type === 'none') return
+      const parentValue = parentDraftCtx.draft[rule.parent_field]
+      if (parentValue == null || parentValue === '') return
+      if (resolution.type === 'direct_fk') {
+        filters[rule.child_field] = { [resolution.filter_column]: { _eq: parentValue } }
+      } else if (resolution.type === 'm2m_junction') {
+        filters[rule.child_field] = {
+          _exists_junction: { table: resolution.table, self_fk: resolution.self_fk, filter_fk: resolution.filter_fk, value: parentValue }
+        }
+      }
+    })
+    return filters
+  }, [cascadeRules, cascadeResolutions, parentDraftCtx])
 
   const isPendingMode = saveMode === 'pending'
   const pendingRows = (isNew || isPendingMode) && staging ? staging.getPendingRows(relatedCollection, manyField) : []
@@ -602,6 +651,7 @@ export function InlineTableField({
                           relations={childRelations}
                           collection={relatedCollection}
                           itemId='new'
+                          cascadeFilter={fieldCascadeFilters[c.field]}
                         />
                       </div>
                     ) : (
@@ -688,6 +738,7 @@ export function InlineTableField({
                           relations={childRelations}
                           collection={relatedCollection}
                           itemId={id}
+                          cascadeFilter={fieldCascadeFilters[c.field]}
                         />
                       </div>
                     ) : (
@@ -759,6 +810,7 @@ export function InlineTableField({
                       relations={childRelations}
                       collection={relatedCollection}
                       itemId='new'
+                      cascadeFilter={fieldCascadeFilters[c.field]}
                     />
                   </div>
                 </td>

@@ -11,7 +11,7 @@ import {
   useState
 } from 'react'
 import { toast } from 'sonner'
-import { ItemEditAuthContext, useNivaroClient } from '../context'
+import { ItemEditAuthContext, ParentDraftContext, useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { FieldRow } from './item-edit/FieldRow'
@@ -1375,6 +1375,7 @@ export function ItemEditForm({
   const canDelete = !isNew && isAdmin && effectiveShowDelete
 
   return (
+    <ParentDraftContext.Provider value={{ draft, collection }}>
     <O2MStagingContext.Provider value={o2mStagingCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
       <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
@@ -1576,5 +1577,6 @@ export function ItemEditForm({
       </div>
     </M2MStagingContext.Provider>
     </O2MStagingContext.Provider>
+    </ParentDraftContext.Provider>
   )
 }

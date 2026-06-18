@@ -12,7 +12,15 @@ export function applyDisplayTemplate(
     return String(
       item.name ?? item.title ?? item.label ?? item.type ?? item.description ?? item.id ?? ''
     )
-  return template.replace(/\{\{([^}]+)\}\}/g, (_, k: string) => String(item[k.trim()] ?? ''))
+  return template.replace(/\{\{([^}]+)\}\}/g, (_, k: string) => {
+    const parts = k.trim().split('.')
+    let val: unknown = item
+    for (const part of parts) {
+      if (val == null || typeof val !== 'object') { val = null; break }
+      val = (val as Record<string, unknown>)[part]
+    }
+    return String(val ?? '')
+  })
 }
 
 // ─── JSON parsing ──────────────────────────────────────────────────────────────
