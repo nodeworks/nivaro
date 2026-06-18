@@ -475,14 +475,14 @@ export function GroupSection({
   const visibleFields_ = fields.filter((f) => !f.hidden)
 
   return (
-    <div className={cn('rounded-xl border bg-white', displayOnly ? 'border-slate-100' : 'border-slate-200')}>
+    <div className='rounded-xl border border-slate-200 bg-white'>
       <button
         type='button'
         onClick={toggle}
         className='flex w-full items-center gap-2.5 px-5 py-3.5 text-left hover:bg-slate-50/50'
       >
         {GroupIcon && <GroupIcon className='h-3.5 w-3.5 shrink-0 text-slate-400' />}
-        <span className={cn('font-semibold text-sm shrink-0', displayOnly ? 'text-slate-500' : 'text-slate-700')}>{group.label}</span>
+        <span className='font-semibold text-sm shrink-0 text-slate-700'>{group.label}</span>
         <span className='flex-1' />
         {hasErrors && <span className='h-2 w-2 rounded-full bg-destructive shrink-0' />}
         {collapsed ? (

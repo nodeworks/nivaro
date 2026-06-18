@@ -117,10 +117,10 @@ export function CommentPanel({
       <button
         type='button'
         onClick={() => setExpanded((v) => !v)}
-        className='flex w-full items-center gap-2 px-4 py-2.5'
+        className='flex w-full items-center gap-2.5 px-5 py-3.5'
       >
         <MessageSquare className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        <span className='text-[12px] font-semibold text-slate-500'>{title || 'Comments'}</span>
+        <span className='font-semibold text-sm text-slate-700'>{title || 'Comments'}</span>
         {!expanded && (comments.length > 0 || (queuedComments ?? []).length > 0) && (
           <span className='ml-1 text-[11px] text-slate-400'>
             {isNew
