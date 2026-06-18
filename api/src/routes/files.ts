@@ -24,11 +24,12 @@ export async function filesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
   app.get('/', async (req, reply) => {
-    const q = req.query as { folder?: string; limit?: string; offset?: string }
+    const q = req.query as { folder?: string; limit?: string; offset?: string; search?: string }
     const result = await listFiles({
       folder: q.folder,
       limit: Number(q.limit ?? 50),
-      offset: Number(q.offset ?? 0)
+      offset: Number(q.offset ?? 0),
+      search: q.search
     })
     return reply.send(result)
   })

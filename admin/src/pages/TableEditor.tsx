@@ -4851,6 +4851,8 @@ function FieldSettingsPopover({
   const [gridLayoutSlug, setGridLayoutSlug] = useState<string | null>(null)
   const [gridLayoutId, setGridLayoutId] = useState<number | null>(null)
   const [gridShowTotals, setGridShowTotals] = useState(false)
+  const [allowUpload, setAllowUpload] = useState(true)
+  const [allowPick, setAllowPick] = useState(true)
   const [numFormat, setNumFormat] = useState<'int' | 'decimal' | 'currency' | ''>('')
   const [numPrecisionFmt, setNumPrecisionFmt] = useState('2')
   const [numCurrency, setNumCurrency] = useState('USD')
@@ -4879,11 +4881,13 @@ function FieldSettingsPopover({
         setGridLayoutSlug((opts.layout_slug as string | null) ?? null)
         setGridLayoutId((opts.layout_id as number | null) ?? null)
         setGridShowTotals(!!(opts.grid_show_totals))
+        setAllowUpload(opts.allow_upload !== false)
+        setAllowPick(opts.allow_pick !== false)
         setNumFormat((opts.format as 'int' | 'decimal' | 'currency' | '') ?? '')
         setNumPrecisionFmt(opts.precision != null ? String(opts.precision) : '2')
         setNumCurrency((opts.currency as string) ?? 'USD')
         setNumAggregate((opts.aggregate as 'sum' | 'count' | 'avg' | 'min' | 'max' | '') ?? '')
-      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate('') }
+      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate('') }
     }
     setOpen(next)
   }
@@ -4904,7 +4908,7 @@ function FieldSettingsPopover({
     }
     // Inline-grid / inline-table options for O2M
     let optionsPatch: string | null = null
-    const needsOptionsPatch = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table')) || isNumericAbstractType
+    const needsOptionsPatch = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table')) || isNumericAbstractType || iface === 'file-image' || iface === 'files-m2m'
     if (needsOptionsPatch) {
       try {
         const existing = settings.options ? (typeof settings.options === 'string' ? JSON.parse(settings.options) : settings.options) as Record<string, unknown> : {}
@@ -4924,7 +4928,10 @@ function FieldSettingsPopover({
         const o2mOpts = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table'))
           ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : {}) }
           : {}
-        optionsPatch = JSON.stringify({ ...existing, ...o2mOpts, ...formatOpts })
+        const fileOpts = (iface === 'file-image' || iface === 'files-m2m')
+          ? { allow_upload: allowUpload, allow_pick: allowPick }
+          : {}
+        optionsPatch = JSON.stringify({ ...existing, ...o2mOpts, ...fileOpts, ...formatOpts })
       } catch {
         optionsPatch = JSON.stringify({ ...(isNumericAbstractType && numFormat ? { format: numFormat, ...(numFormat === 'decimal' ? { precision: parseInt(numPrecisionFmt, 10) || 2 } : {}), ...(numFormat === 'currency' ? { currency: numCurrency } : {}) } : {}) })
       }
@@ -5137,6 +5144,21 @@ function FieldSettingsPopover({
                   ))}
                 </div>
               </div>
+            </div>
+          )}
+
+          {(iface === 'file-image' || iface === 'files-m2m') && (
+            <div className='space-y-2 rounded-md border border-slate-100 bg-slate-50 px-3 py-2'>
+              <p className='text-[11px] font-medium text-slate-600'>File picker options</p>
+              {[
+                { key: 'allowUpload', label: 'Allow upload', value: allowUpload, set: setAllowUpload },
+                { key: 'allowPick', label: 'Allow picking existing files', value: allowPick, set: setAllowPick },
+              ].map(row => (
+                <div key={row.key} className='flex items-center justify-between'>
+                  <span className='text-[12px] text-slate-600'>{row.label}</span>
+                  <Switch checked={row.value} onCheckedChange={row.set} className='scale-90' />
+                </div>
+              ))}
             </div>
           )}
 

@@ -49,7 +49,8 @@ export function FieldRenderer({
     : null
   if (m2oRel?.one_collection) {
     if (iface === 'file-image') {
-      return <FilePickerField value={value} onChange={onChange} disabled={field.readonly} />
+      const fOpts = parseJson<{ allow_upload?: boolean; allow_pick?: boolean }>(field.options)
+      return <FilePickerField value={value} onChange={onChange} disabled={field.readonly} allowUpload={fOpts?.allow_upload !== false} allowPick={fOpts?.allow_pick !== false} />
     }
     return (
       <RelationCombobox
@@ -81,14 +82,8 @@ export function FieldRenderer({
       : null
   if (m2mRel) {
     if (iface === 'files-m2m') {
-      return (
-        <FileM2MField
-          relation={m2mRel}
-          parentId={itemId}
-          allRelations={relations}
-          disabled={field.readonly}
-        />
-      )
+      const fOpts = parseJson<{ allow_upload?: boolean; allow_pick?: boolean }>(field.options)
+      return <FileM2MField relation={m2mRel} parentId={itemId} allRelations={relations} disabled={field.readonly} allowUpload={fOpts?.allow_upload !== false} allowPick={fOpts?.allow_pick !== false} />
     }
     const fieldOpts = parseJson<{ max_values?: number }>(field.options)
     if (fieldOpts?.max_values === 1) {

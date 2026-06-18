@@ -1703,7 +1703,7 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     if (opts.title) fd.append('title', opts.title)
     if (opts.folder) fd.append('folder', opts.folder)
 
-    const res = await fetcher(`${baseUrl}/api/files`, {
+    const res = await fetcher(`${baseUrl}/api/files/upload`, {
       method: 'POST',
       headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : {},
       credentials: 'include',

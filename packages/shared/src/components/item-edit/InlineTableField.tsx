@@ -220,30 +220,25 @@ export function InlineTableField({
   const [dropIdx, setDropIdx] = useState<number | null>(null)
   const [bulkCount, setBulkCount] = useState(1)
   const [bulkAdding, setBulkAdding] = useState(false)
+  const [defaultsOpen, setDefaultsOpen] = useState(false)
+  const [defaultValues, setDefaultValues] = useState<Record<string, unknown>>({})
 
-  function makeDefaultRow(withDefaults: boolean): Record<string, unknown> {
-    if (!withDefaults) return {}
-    const row: Record<string, unknown> = {}
-    for (const c of displayCols) {
-      if (c.field === manyField || c.field === 'id') continue
-      if (c.type === 'boolean') row[c.field] = false
-      else if (['integer','bigInteger','decimal','float','money','smallmoney','tinyint','smallint','bigint','int','numeric','real','double','number'].includes(c.type)) row[c.field] = 0
-      else row[c.field] = null
-    }
-    return row
+  function setDefaultField(k: string, v: unknown) {
+    setDefaultValues(prev => ({ ...prev, [k]: v }))
   }
 
-  async function addBulkRows(withDefaults: boolean) {
+  async function addBulkRows(useDefaults: boolean) {
     const n = Math.max(1, Math.min(100, bulkCount))
+    const rowData = useDefaults ? { ...defaultValues } : {}
     if (isNew && staging) {
-      for (let i = 0; i < n; i++) staging.queueRow(relatedCollection, manyField, makeDefaultRow(withDefaults))
+      for (let i = 0; i < n; i++) staging.queueRow(relatedCollection, manyField, { ...rowData })
       return
     }
     setBulkAdding(true)
     try {
       await Promise.all(
         Array.from({ length: n }, () =>
-          client.request(post(`/items/${relatedCollection}`, { ...makeDefaultRow(withDefaults), [manyField]: parentId }))
+          client.request(post(`/items/${relatedCollection}`, { ...rowData, [manyField]: parentId }))
         )
       )
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
@@ -349,14 +344,48 @@ export function InlineTableField({
         </button>
         <button
           type='button'
-          disabled={bulkAdding}
-          onClick={() => addBulkRows(true)}
-          className='h-6 px-2.5 rounded border border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800 disabled:opacity-40 transition-colors'
+          onClick={() => setDefaultsOpen(v => !v)}
+          className={cn(
+            'h-6 px-2.5 rounded border transition-colors',
+            defaultsOpen
+              ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+              : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
+          )}
         >
-          with defaults
+          with defaults…
         </button>
         {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
       </div>
+
+      {defaultsOpen && (
+        <div className='rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2'>
+          <p className='text-[11px] font-medium text-slate-500'>Default values</p>
+          <div className='grid gap-x-4 gap-y-2' style={{ gridTemplateColumns: `repeat(${Math.min(displayCols.length, 3)}, 1fr)` }}>
+            {displayCols.map(c => (
+              <div key={c.field} className='space-y-0.5 min-w-0'>
+                <label className='text-[10px] text-slate-400 block truncate'>{c.label ?? titleCase(c.field)}</label>
+                <FieldRenderer
+                  field={c}
+                  value={defaultValues[c.field] ?? null}
+                  onChange={v => setDefaultField(c.field, v)}
+                  relations={childRelations}
+                  collection={relatedCollection}
+                  itemId='new'
+                />
+              </div>
+            ))}
+          </div>
+          <button
+            type='button'
+            disabled={bulkAdding}
+            onClick={() => addBulkRows(true)}
+            className='h-7 px-3 rounded bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-40 transition-colors'
+          >
+            Add {bulkCount} {bulkCount === 1 ? 'row' : 'rows'} with these values
+          </button>
+        </div>
+      )}
+
     <div className='rounded-lg border border-slate-200 text-[12px]'>
       <table className='w-full table-fixed'>
         <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>

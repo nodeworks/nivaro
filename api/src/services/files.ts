@@ -165,8 +165,15 @@ export async function createPresignedFile(
   return { file, uploadUrl }
 }
 
-export async function getFile(id: string): Promise<StoredFile | undefined> {
-  return db<StoredFile>('nivaro_files').where({ id }).first()
+export async function getFile(id: string): Promise<(StoredFile & { uploaded_by_name: string | null }) | undefined> {
+  return db('nivaro_files as f')
+    .select(
+      'f.*',
+      db.raw("COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(u.first_name,'') + ' ' + ISNULL(u.last_name,''))), ''), u.email) as uploaded_by_name")
+    )
+    .leftJoin('nivaro_users as u', 'u.id', 'f.uploaded_by')
+    .where('f.id', id)
+    .first()
 }
 
 /** Read the raw bytes of a file from whichever storage provider holds it. */
@@ -175,14 +182,33 @@ export async function readFileBuffer(file: StoredFile): Promise<Buffer> {
   return getStorage().get(file.filename_disk)
 }
 
-export async function listFiles(opts: { folder?: string; limit?: number; offset?: number } = {}) {
-  const { folder, limit = 50, offset = 0 } = opts
-  const q = db<StoredFile>('nivaro_files')
+export async function listFiles(opts: { folder?: string; limit?: number; offset?: number; search?: string } = {}) {
+  const { folder, limit = 50, offset = 0, search } = opts
+  const q = db('nivaro_files as f')
+    .select(
+      'f.*',
+      db.raw("COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(u.first_name,'') + ' ' + ISNULL(u.last_name,''))), ''), u.email) as uploaded_by_name")
+    )
+    .leftJoin('nivaro_users as u', 'u.id', 'f.uploaded_by')
     .limit(limit)
     .offset(offset)
-    .orderBy('uploaded_on', 'desc')
-  if (folder) q.where({ folder })
-  const [files, [{ count }]] = await Promise.all([q, db('nivaro_files').count('id as count')])
+    .orderBy('f.uploaded_on', 'desc')
+  if (folder) q.where('f.folder', folder)
+  if (search) {
+    const p = `%${search}%`
+    q.where(function () {
+      this.where('f.filename_download', 'like', p).orWhere('f.title', 'like', p)
+    })
+  }
+  const countQ = db('nivaro_files')
+  if (folder) countQ.where({ folder })
+  if (search) {
+    const p = `%${search}%`
+    countQ.where(function () {
+      this.where('filename_download', 'like', p).orWhere('title', 'like', p)
+    })
+  }
+  const [files, [{ count }]] = await Promise.all([q, countQ.count('id as count')])
   return { data: files, total: Number(count) }
 }
 
