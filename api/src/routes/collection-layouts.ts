@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { generatePdfFromLayout } from '../services/pdf-layout.js'
+import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layout-themes.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 
 type LayoutConditions = { role_ids?: string[] } | null
@@ -114,7 +115,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'summary_hide_empty', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule',
         'allow_disable_pickers', 'layout_type', 'row_order_field',
         'pdf_theme', 'pdf_template_id', 'pdf_cover_enabled', 'pdf_cover_title_field',
-        'pdf_cover_subtitle', 'pdf_show_logo', 'pdf_page_size', 'pdf_orientation'
+        'pdf_cover_subtitle', 'pdf_show_logo', 'pdf_page_size', 'pdf_orientation', 'pdf_button_label'
       )
     if (active === 'true') q = q.where({ is_active: 1 })
     if (type) {
@@ -177,6 +178,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       pdf_cover_enabled: boolean; pdf_cover_title_field: string | null
       pdf_cover_subtitle: string | null; pdf_show_logo: boolean
       pdf_page_size: string; pdf_orientation: string
+      pdf_button_label: string | null
       is_active: boolean
     }>
     const patch: Record<string, unknown> = {}
@@ -209,6 +211,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.pdf_show_logo !== undefined) patch.pdf_show_logo = body.pdf_show_logo ? 1 : 0
     if (body.pdf_page_size !== undefined) patch.pdf_page_size = body.pdf_page_size
     if (body.pdf_orientation !== undefined) patch.pdf_orientation = body.pdf_orientation
+    if (body.pdf_button_label !== undefined) patch.pdf_button_label = body.pdf_button_label ?? null
     if (body.is_active !== undefined && existing.layout_type === 'file') patch.is_active = body.is_active ? 1 : 0
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
@@ -269,6 +272,50 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
     await logActivity({ action: 'update', user: req.user?.id, collection: 'nivaro_collection_layouts', item: id, req })
     return reply.send({ data: updated })
+  })
+
+  // GET /collection-layouts/:id/preview-html — returns theme HTML with sample data, no Puppeteer
+  app.get('/:id/preview-html', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const layout = await db('nivaro_collection_layouts').where({ id }).first()
+    if (!layout || layout.layout_type !== 'file') return reply.code(404).send({ error: 'Not found' })
+
+    const sampleData = {
+      coverTitle: layout.pdf_cover_title_field ? `Sample ${layout.pdf_cover_title_field} Value` : 'Document Title',
+      coverSubtitle: layout.pdf_cover_subtitle ?? 'Preview · Sample Data',
+      logoUrl: null,
+      collectionLabel: layout.collection ?? 'Collection',
+      generatedAt: new Date().toLocaleString(),
+      generatedBy: 'Preview',
+      coverEnabled: Boolean(layout.pdf_cover_enabled ?? true),
+      sections: [
+        {
+          label: 'Overview',
+          fields: [
+            { label: 'Status', value: 'Active' },
+            { label: 'Created', value: '2026-06-01' },
+            { label: 'Owner', value: 'Jane Smith' },
+            { label: 'Priority', value: 'High' },
+          ],
+        },
+        {
+          label: 'Details',
+          fields: [
+            { label: 'Description', value: 'This is a sample field value that shows how text content appears in the PDF layout.' },
+            { label: 'Category', value: 'Operations' },
+            { label: 'Tags', value: 'important, review, q4' },
+          ],
+        },
+      ],
+    }
+
+    const theme = layout.pdf_theme ?? 'classic'
+    let html: string
+    if (theme === 'minimal') html = minimalTheme(sampleData)
+    else if (theme === 'executive') html = executiveTheme(sampleData)
+    else html = classicTheme(sampleData)
+
+    return reply.header('Content-Type', 'text/html; charset=utf-8').send(html)
   })
 
   // POST /collection-layouts/:id/generate-pdf

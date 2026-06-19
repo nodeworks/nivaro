@@ -303,7 +303,7 @@ export function ItemEditForm({
     staleTime: 60_000
   })
 
-  const { data: fileLayouts = [] } = useQuery<Array<{ id: number; name: string }>>({
+  const { data: fileLayouts = [] } = useQuery<Array<{ id: number; name: string; pdf_button_label?: string | null }>>({
     queryKey: ['file-layouts', collection],
     queryFn: () =>
       client
@@ -1902,7 +1902,7 @@ export function ItemEditForm({
                   ) : (
                     <FileDown className='h-3.5 w-3.5' />
                   )}
-                  PDF
+                  {fileLayouts[0].pdf_button_label ?? 'Download PDF'}
                 </Button>
               )}
               {fileLayouts.length > 1 && !isNew && (

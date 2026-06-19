@@ -6408,6 +6408,7 @@ interface CollectionLayout {
   pdf_show_logo?: boolean | number | null
   pdf_page_size?: string | null
   pdf_orientation?: string | null
+  pdf_button_label?: string | null
 }
 
 function LayoutVisibilitySection({
@@ -6566,7 +6567,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
       'summary_hide_empty' | 'ai_enabled' | 'conditions' | 'allow_clone' |
       'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field' |
       'pdf_theme' | 'pdf_template_id' | 'pdf_cover_enabled' | 'pdf_cover_title_field' |
-      'pdf_cover_subtitle' | 'pdf_show_logo' | 'pdf_page_size' | 'pdf_orientation' | 'is_active'
+      'pdf_cover_subtitle' | 'pdf_show_logo' | 'pdf_page_size' | 'pdf_orientation' | 'pdf_button_label' | 'is_active'
     >>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
@@ -6618,7 +6619,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
               >
                 <button type='button' onClick={() => setSelectedId(l.id)} className='flex min-w-0 flex-1 items-center gap-1.5'>
                   {l.is_active ? (
-                    <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-nvr-cyan' />
+                    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', l.layout_type === 'file' ? 'bg-amber-400' : 'bg-nvr-cyan')} />
                   ) : (
                     <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-transparent' />
                   )}
@@ -6961,6 +6962,19 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                       )}
                     </div>
 
+                    {/* Button label */}
+                    <div className='space-y-1'>
+                      <label className='block text-[11px] font-medium text-slate-600 dark:text-slate-300'>Button label</label>
+                      <input
+                        type='text'
+                        placeholder='Download PDF'
+                        value={selected.pdf_button_label ?? ''}
+                        onChange={(e) => patchLayoutMut.mutate({ id: selected.id, pdf_button_label: e.target.value || null })}
+                        className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+                      />
+                      <p className='text-[10px] text-slate-400'>Text shown on the download button. Default: "Download PDF"</p>
+                    </div>
+
                     {/* Page settings */}
                     <div className='space-y-1.5'>
                       <label className='flex cursor-pointer items-center justify-between'>
@@ -7015,6 +7029,15 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                         </div>
                       </div>
                     </div>
+
+                    {/* Preview */}
+                    <button
+                      type='button'
+                      onClick={() => window.open(`/api/collection-layouts/${selected.id}/preview-html`, '_blank')}
+                      className='w-full rounded-md border border-dashed border-slate-300 py-1.5 text-[11px] text-slate-500 transition-colors hover:border-nvr-cyan hover:text-nvr-cyan dark:border-border dark:text-slate-400'
+                    >
+                      Preview theme →
+                    </button>
                   </div>
                 )}
                 <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
