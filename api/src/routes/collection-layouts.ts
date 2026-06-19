@@ -330,9 +330,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       req,
     })
 
+    const safeFilename = `${collection}-${item_id}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+
     return reply
       .header('Content-Type', 'application/pdf')
-      .header('Content-Disposition', `attachment; filename="${collection}-${item_id}.pdf"`)
+      .header('Content-Disposition', `attachment; filename="${safeFilename}.pdf"`)
       .send(pdfBuffer)
   })
 

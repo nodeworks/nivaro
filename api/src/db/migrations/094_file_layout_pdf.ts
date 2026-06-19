@@ -4,10 +4,10 @@ export async function up(knex: Knex): Promise<void> {
   await knex.schema.alterTable('nivaro_collection_layouts', (t) => {
     t.string('pdf_theme', 50).defaultTo('classic')
     t.integer('pdf_template_id').nullable()
-    t.boolean('pdf_cover_enabled').defaultTo(true)
+    t.boolean('pdf_cover_enabled').defaultTo(1)
     t.string('pdf_cover_title_field', 255).nullable()
     t.text('pdf_cover_subtitle').nullable()
-    t.boolean('pdf_show_logo').defaultTo(true)
+    t.boolean('pdf_show_logo').defaultTo(1)
     t.string('pdf_page_size', 10).defaultTo('A4')
     t.string('pdf_orientation', 11).defaultTo('portrait')
   })

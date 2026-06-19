@@ -82,6 +82,8 @@ export async function generatePdfFromLayout(params: {
 }): Promise<Buffer> {
   const { layout, collectionLabel, item, groups, assignments, fieldMeta, logoUrl, generatedBy } = params
 
+  const safeLogoUrl = logoUrl && /^https?:\/\//i.test(logoUrl) ? logoUrl : null
+
   const fieldMetaMap = new Map(fieldMeta.map(f => [f.field, f]))
 
   const sections = groups
@@ -118,7 +120,7 @@ export async function generatePdfFromLayout(params: {
   const data: PdfLayoutData = {
     coverTitle,
     coverSubtitle: layout.pdf_cover_subtitle ?? '',
-    logoUrl: Boolean(layout.pdf_show_logo ?? true) ? logoUrl : null,
+    logoUrl: Boolean(layout.pdf_show_logo ?? true) ? safeLogoUrl : null,
     collectionLabel,
     generatedAt,
     generatedBy,
@@ -158,7 +160,7 @@ export async function generatePdfFromLayout(params: {
   try {
     await page.setContent(html, { waitUntil: 'load' })
     const pdfBuf = await page.pdf({
-      format: (layout.pdf_page_size as 'A4' | 'Letter') ?? 'A4',
+      format: (['A4', 'Letter'].includes(layout.pdf_page_size ?? '') ? layout.pdf_page_size : 'A4') as 'A4' | 'Letter',
       landscape: layout.pdf_orientation === 'landscape',
       printBackground: true,
       margin: { top: '0', right: '0', bottom: '0', left: '0' },
