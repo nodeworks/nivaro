@@ -12,6 +12,7 @@ allowBuilds:
   esbuild: true
   msw: false
   protobufjs: true
+  puppeteer: true
   sharp: true
   tree-sitter: true
   tree-sitter-json: true
