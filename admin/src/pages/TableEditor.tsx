@@ -6398,8 +6398,16 @@ interface CollectionLayout {
   allow_schedule?: boolean | number
   allow_disable_pickers?: boolean | number
   conditions?: { role_ids?: string[] } | null
-  layout_type?: 'grouped' | 'table'
+  layout_type?: 'grouped' | 'table' | 'file'
   row_order_field?: string | null
+  pdf_theme?: string | null
+  pdf_template_id?: number | null
+  pdf_cover_enabled?: boolean | number | null
+  pdf_cover_title_field?: string | null
+  pdf_cover_subtitle?: string | null
+  pdf_show_logo?: boolean | number | null
+  pdf_page_size?: string | null
+  pdf_orientation?: string | null
 }
 
 function LayoutVisibilitySection({
@@ -6551,7 +6559,15 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   })
 
   const patchLayoutMut = useMutation({
-    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout, 'slug' | 'disable_comments' | 'disable_tasks' | 'disable_revisions' | 'disable_clone' | 'disable_delete' | 'accordion_mode' | 'tab_mode' | 'validate_before_next' | 'summary_enabled' | 'summary_show_all' | 'summary_hide_empty' | 'ai_enabled' | 'conditions' | 'allow_clone' | 'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field'>>) => {
+    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout,
+      'slug' | 'disable_comments' | 'disable_tasks' | 'disable_revisions' |
+      'disable_clone' | 'disable_delete' | 'accordion_mode' | 'tab_mode' |
+      'validate_before_next' | 'summary_enabled' | 'summary_show_all' |
+      'summary_hide_empty' | 'ai_enabled' | 'conditions' | 'allow_clone' |
+      'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field' |
+      'pdf_theme' | 'pdf_template_id' | 'pdf_cover_enabled' | 'pdf_cover_title_field' |
+      'pdf_cover_subtitle' | 'pdf_show_logo' | 'pdf_page_size' | 'pdf_orientation'
+    >>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
     },
@@ -6713,6 +6729,11 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
               <div className='flex flex-1 flex-wrap items-center gap-1.5'>
                 {!!selected.summary_enabled && <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>summary</span>}
                 {!!selected.ai_enabled && <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>AI</span>}
+                {selected.layout_type === 'file' && (
+                  <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>
+                    PDF · {selected.pdf_theme ?? 'classic'}
+                  </span>
+                )}
                 {(selected.conditions?.role_ids?.length ?? 0) > 0 && (
                   <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>
                     {selected.conditions?.role_ids?.length} {(selected.conditions?.role_ids?.length ?? 0) === 1 ? 'role' : 'roles'}
@@ -6769,12 +6790,18 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                 <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
                   <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Layout type</span>
                   <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
-                    {(['grouped', 'table'] as const).map((lt) => (
-                      <button key={lt} type='button' onClick={() => patchLayoutMut.mutate({ id: selected.id, layout_type: lt })}
-                        className={cn('px-2.5 py-1 text-[11px] font-medium transition-colors capitalize',
+                    {(['grouped', 'table', 'file'] as const).map((lt) => (
+                      <button
+                        key={lt}
+                        type='button'
+                        onClick={() => patchLayoutMut.mutate({ id: selected.id, layout_type: lt })}
+                        className={cn(
+                          'px-2.5 py-1 text-[11px] font-medium transition-colors capitalize',
                           (selected.layout_type ?? 'grouped') === lt
                             ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
-                            : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200')}>
+                            : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                        )}
+                      >
                         {lt}
                       </button>
                     ))}
@@ -6823,6 +6850,158 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                         </select>
                       </div>
                     )}
+                  </div>
+                )}
+                {(selected.layout_type ?? 'grouped') === 'file' && (
+                  <div className='border-t border-slate-200 dark:border-border pt-2 space-y-3'>
+                    <p className='text-[10px] font-semibold text-slate-400 dark:text-slate-500 mb-1'>PDF Settings</p>
+
+                    {/* Theme */}
+                    <div className='space-y-1'>
+                      <label className='block text-[11px] font-medium text-slate-600 dark:text-slate-300'>Theme</label>
+                      <div className='flex gap-1.5'>
+                        {(['classic', 'minimal', 'executive'] as const).map((t) => (
+                          <button
+                            key={t}
+                            type='button'
+                            onClick={() => patchLayoutMut.mutate({ id: selected.id, pdf_theme: t })}
+                            className={cn(
+                              'flex-1 rounded-md border px-2 py-1.5 text-[11px] font-medium transition-colors capitalize',
+                              (selected.pdf_theme ?? 'classic') === t
+                                ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
+                                : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border dark:hover:border-slate-600'
+                            )}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type='button'
+                        onClick={() => patchLayoutMut.mutate({ id: selected.id, pdf_theme: 'custom' })}
+                        className={cn(
+                          'w-full rounded-md border px-2 py-1.5 text-[11px] font-medium transition-colors',
+                          selected.pdf_theme === 'custom'
+                            ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
+                            : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border'
+                        )}
+                      >
+                        Custom template
+                      </button>
+                      {selected.pdf_theme === 'custom' && (
+                        <div className='space-y-1'>
+                          <p className='text-[10px] text-slate-400'>Enter the ID of a template from Settings → PDF Templates</p>
+                          <input
+                            type='number'
+                            placeholder='Template ID'
+                            value={selected.pdf_template_id ?? ''}
+                            onChange={(e) =>
+                              patchLayoutMut.mutate({
+                                id: selected.id,
+                                pdf_template_id: e.target.value ? Number(e.target.value) : null,
+                              })
+                            }
+                            className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Cover page */}
+                    <div className='space-y-1.5'>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Cover page</span>
+                        <input
+                          type='checkbox'
+                          checked={Boolean(selected.pdf_cover_enabled ?? true)}
+                          onChange={(e) => patchLayoutMut.mutate({ id: selected.id, pdf_cover_enabled: e.target.checked })}
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      {Boolean(selected.pdf_cover_enabled ?? true) && (
+                        <>
+                          <div>
+                            <p className='text-[10px] text-slate-400 mb-1'>Title field (collection field key, e.g. "name")</p>
+                            <input
+                              type='text'
+                              placeholder='e.g. name'
+                              value={selected.pdf_cover_title_field ?? ''}
+                              onChange={(e) =>
+                                patchLayoutMut.mutate({ id: selected.id, pdf_cover_title_field: e.target.value || null })
+                              }
+                              className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+                            />
+                          </div>
+                          <div>
+                            <p className='text-[10px] text-slate-400 mb-1'>Subtitle (static text)</p>
+                            <input
+                              type='text'
+                              placeholder='e.g. Procurement Summary Q4 2026'
+                              value={selected.pdf_cover_subtitle ?? ''}
+                              onChange={(e) =>
+                                patchLayoutMut.mutate({ id: selected.id, pdf_cover_subtitle: e.target.value || null })
+                              }
+                              className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Page settings */}
+                    <div className='space-y-1.5'>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Include logo</span>
+                        <input
+                          type='checkbox'
+                          checked={Boolean(selected.pdf_show_logo ?? true)}
+                          onChange={(e) => patchLayoutMut.mutate({ id: selected.id, pdf_show_logo: e.target.checked })}
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <div className='flex gap-2'>
+                        <div className='flex-1'>
+                          <p className='text-[10px] text-slate-400 mb-1'>Page size</p>
+                          <div className='flex rounded-md border border-slate-200 bg-white overflow-hidden dark:border-border dark:bg-background'>
+                            {(['A4', 'Letter'] as const).map((sz) => (
+                              <button
+                                key={sz}
+                                type='button'
+                                onClick={() => patchLayoutMut.mutate({ id: selected.id, pdf_page_size: sz })}
+                                className={cn(
+                                  'flex-1 py-1 text-[11px] font-medium transition-colors',
+                                  (selected.pdf_page_size ?? 'A4') === sz
+                                    ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
+                                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                                )}
+                              >
+                                {sz}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className='flex-1'>
+                          <p className='text-[10px] text-slate-400 mb-1'>Orientation</p>
+                          <div className='flex rounded-md border border-slate-200 bg-white overflow-hidden dark:border-border dark:bg-background'>
+                            {(['portrait', 'landscape'] as const).map((o) => (
+                              <button
+                                key={o}
+                                type='button'
+                                onClick={() => patchLayoutMut.mutate({ id: selected.id, pdf_orientation: o })}
+                                className={cn(
+                                  'flex-1 py-1 text-[11px] font-medium transition-colors capitalize',
+                                  (selected.pdf_orientation ?? 'portrait') === o
+                                    ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
+                                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                                )}
+                              >
+                                {o.slice(0, 4)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
                 <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
@@ -6884,7 +7063,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
             )}
           </div>
         )}
-        <FieldGroupsTab tableName={tableName} dbColumns={dbColumns} layoutId={effectiveId} layoutType={selected?.layout_type ?? 'grouped'} />
+        <FieldGroupsTab tableName={tableName} dbColumns={dbColumns} layoutId={effectiveId} layoutType={selected?.layout_type === 'table' ? 'table' : 'grouped'} />
       </div>
     </div>
   )
