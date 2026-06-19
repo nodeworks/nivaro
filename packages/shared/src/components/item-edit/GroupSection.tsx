@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Mail, User } from 'lucide-react'
+import { ChevronDown, ChevronRight, Loader2, Mail, User } from 'lucide-react'
 import * as LucideIcons from 'lucide-react'
 import React, { type ReactNode } from 'react'
 import { useRef, useState } from 'react'
@@ -14,7 +14,7 @@ import {
 } from '../ui/dropdown-menu'
 import { FieldRow } from './FieldRow'
 import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpers'
-import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps, SlotAssignment } from './types'
+import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps, SlotAssignment, SummaryAggConfig, SummaryEntry } from './types'
 
 function resolveIcon(name: string | null | undefined): React.ElementType | null {
   if (!name) return null
@@ -280,9 +280,12 @@ function SummaryStrip({
   ownersAssignment,
   m2mCounts,
   o2mCounts,
+  o2mAggValues,
+  summaryAggConfigs,
+  o2mLoading,
   hideEmpty,
 }: {
-  summaryFields: string[]
+  summaryFields: SummaryEntry[]
   fields: CMSField[]
   draft: Record<string, unknown>
   relations: CMSRelation[]
@@ -291,17 +294,23 @@ function SummaryStrip({
   ownersAssignment?: SlotAssignment | null
   m2mCounts?: Record<string, number>
   o2mCounts?: Record<string, number>
+  o2mAggValues?: Record<string, number>
+  summaryAggConfigs?: Record<string, SummaryAggConfig>
+  o2mLoading?: Set<string>
   hideEmpty?: boolean
 }) {
+  const summaryKeys = summaryFields.map((e) => (typeof e === 'string' ? e : e.field))
   const visibleFields = hideEmpty
-    ? summaryFields.filter((key) => {
-        if (key === '__owners__') return true // async — always show
+    ? summaryKeys.filter((key) => {
+        if (key === '__owners__') return true
+        if (o2mLoading?.has(key)) return true
+        if (o2mAggValues && key in o2mAggValues) return true
         if (m2mCounts && key in m2mCounts) return (m2mCounts[key] ?? 0) > 0
         if (o2mCounts && key in o2mCounts) return (o2mCounts[key] ?? 0) > 0
         const v = draft[key]
         return v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0)
       })
-    : summaryFields
+    : summaryKeys
   if (visibleFields.length === 0) return null
 
   const renderItem = (key: string): React.ReactNode => {
@@ -317,6 +326,51 @@ function SummaryStrip({
 
     const f = fields.find((x) => x.field === key)
     const label = f?.label || key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
+    if (o2mLoading?.has(key)) {
+      return (
+        <div className='flex items-center gap-1.5'>
+          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
+          <Loader2 className='h-3 w-3 animate-spin text-slate-300' />
+        </div>
+      )
+    }
+
+    if (o2mAggValues && key in o2mAggValues) {
+      const cfg = summaryAggConfigs?.[key]
+      const displayLabel = cfg?.label || label
+      const n = o2mAggValues[key]
+      let formatted: string
+      if (cfg?.agg === 'count') {
+        formatted = String(n)
+      } else {
+        const fieldOpts = cfg?.field_options
+          ? (() => { try { return JSON.parse(cfg.field_options) } catch { return {} } })()
+          : {}
+        const fmt = fieldOpts.format as string | undefined
+        if (fmt === 'currency') {
+          try {
+            formatted = new Intl.NumberFormat(undefined, {
+              style: 'currency',
+              currency: (fieldOpts.currency as string) || 'USD',
+            }).format(n)
+          } catch { formatted = n.toLocaleString(undefined, { maximumFractionDigits: 2 }) }
+        } else if (fmt === 'int') {
+          formatted = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(n)
+        } else if (fmt === 'decimal') {
+          const precision = typeof fieldOpts.precision === 'number' ? fieldOpts.precision : 2
+          formatted = new Intl.NumberFormat(undefined, { minimumFractionDigits: precision, maximumFractionDigits: precision }).format(n)
+        } else {
+          formatted = n.toLocaleString(undefined, { maximumFractionDigits: 2 })
+        }
+      }
+      return (
+        <div className='flex items-center gap-1.5'>
+          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{displayLabel}</span>
+          <span className='text-[11px] text-slate-600'>{formatted}</span>
+        </div>
+      )
+    }
 
     if (m2mCounts && key in m2mCounts) {
       const n = m2mCounts[key]
@@ -422,6 +476,9 @@ export function GroupSection({
   summaryFields,
   m2mCounts,
   o2mCounts,
+  o2mAggValues,
+  summaryAggConfigs,
+  o2mLoading,
   footerSlot,
   ownersAssignment,
   hideEmptySummary
@@ -444,9 +501,12 @@ export function GroupSection({
   fieldValues?: unknown[]
   isOpen?: boolean
   onToggle?: () => void
-  summaryFields?: string[]
+  summaryFields?: SummaryEntry[]
   m2mCounts?: Record<string, number>
   o2mCounts?: Record<string, number>
+  o2mAggValues?: Record<string, number>
+  summaryAggConfigs?: Record<string, SummaryAggConfig>
+  o2mLoading?: Set<string>
   footerSlot?: ReactNode
   ownersAssignment?: SlotAssignment | null
   hideEmptySummary?: boolean
@@ -502,6 +562,9 @@ export function GroupSection({
           ownersAssignment={ownersAssignment}
           m2mCounts={m2mCounts}
           o2mCounts={o2mCounts}
+          o2mAggValues={o2mAggValues}
+          summaryAggConfigs={summaryAggConfigs}
+          o2mLoading={o2mLoading}
           hideEmpty={!!group.summary_hide_empty || !!hideEmptySummary}
         />
       )}

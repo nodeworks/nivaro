@@ -86,6 +86,16 @@ export interface StepDef {
   label: string
 }
 
+export interface SummaryAggConfig {
+  field: string
+  agg: 'sum' | 'count' | 'avg' | 'min' | 'max'
+  agg_field: string
+  label?: string
+  field_options?: string | null
+}
+
+export type SummaryEntry = string | SummaryAggConfig
+
 export type RenderFieldProps = {
   field: any
   value: unknown

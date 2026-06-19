@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, Loader2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -104,6 +104,37 @@ function M2MSummaryCount({
   )
 }
 
+// ─── O2MSummaryCount ──────────────────────────────────────────────────────────
+
+function O2MSummaryCount({
+  relatedCollection,
+  manyField,
+  parentId
+}: {
+  relatedCollection: string
+  manyField: string
+  parentId: string
+}) {
+  const client = useNivaroClient()
+  const { data: rows, isLoading } = useQuery<Record<string, unknown>[]>({
+    queryKey: ['o2m-rows', relatedCollection, manyField, parentId],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${relatedCollection}`, {
+            filter: JSON.stringify({ [manyField]: { _eq: parentId } }),
+            limit: 200
+          })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!parentId && parentId !== 'new',
+    staleTime: 30_000
+  })
+  if (isLoading) return <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
+  if (!rows || rows.length === 0) return <span className='text-slate-400 italic text-[11px]'>No rows</span>
+  return <span className='text-slate-800'>{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
+}
+
 // ─── SummaryFieldValue ─────────────────────────────────────────────────────────
 
 function SummaryFieldValue({
@@ -123,61 +154,54 @@ function SummaryFieldValue({
 }) {
   const iface = field.interface ?? ''
 
-  // O2M first — direct one→many without junction table
-  if (itemId) {
+  const M2M_IFACES = new Set(['select-multiple-m2m', 'files-m2m', 'relation-grouped'])
+
+  // O2M — try relation lookup for any non-M2M field; relation criteria is precise enough
+  if (!M2M_IFACES.has(iface) && itemId) {
     const o2mRel = relations.find(
       (r) =>
-        r.one_collection === collection &&
         !r.junction_field &&
-        (r.one_field === field.field || r.many_collection === field.field)
+        (r.one_field === field.field || r.many_collection === field.field) &&
+        (r.one_collection === collection || r.one_collection == null)
     )
-    // Only treat as O2M if there's no second relation making it a junction (M2M)
-    // A true O2M many_collection is a real data table — any companion would share the same many_field (FK)
     if (o2mRel?.many_collection && o2mRel.many_field) {
-      const isJunction = relations.some(
-        (c) =>
-          c.many_collection === o2mRel.many_collection &&
-          c.id !== o2mRel.id &&
-          c.many_field !== o2mRel.many_field // companion FK is different → real junction table
+      return (
+        <O2MSummaryCount
+          relatedCollection={o2mRel.many_collection}
+          manyField={o2mRel.many_field}
+          parentId={itemId}
+        />
       )
-      if (!isJunction) {
-        return (
-          <O2MSummaryCount
-            relatedCollection={o2mRel.many_collection}
-            manyField={o2mRel.many_field}
-            parentId={itemId}
-          />
-        )
-      }
     }
   }
 
-  // M2M
-  const m2mRel = (() => {
+  // M2M — interface is the authoritative signal
+  if (M2M_IFACES.has(iface) && itemId) {
     const r = relations.find(
       (rel) => rel.one_collection === collection && rel.one_field === field.field
     )
-    if (!r) return null
-    if (r.junction_field) return r
-    const companion = relations.find(
-      (c) =>
-        c.many_collection === r.many_collection &&
-        c.id !== r.id &&
-        c.many_field !== r.many_field // different FK = real junction companion
-    )
-    return companion ? { ...r, junction_field: companion.many_field } : null
-  })()
-  if (m2mRel && itemId) {
-    const fieldOpts = parseJson<{ max_values?: number }>(field.options)
-    return (
-      <M2MSummaryCount
-        relation={m2mRel}
-        parentId={itemId}
-        allRelations={relations}
-        staging={staging}
-        maxValues={fieldOpts?.max_values}
-      />
-    )
+    const m2mRel = r
+      ? r.junction_field
+        ? r
+        : (() => {
+            const companion = relations.find(
+              (c) => c.many_collection === r.many_collection && c.id !== r.id
+            )
+            return companion ? { ...r, junction_field: companion.many_field } : null
+          })()
+      : null
+    if (m2mRel) {
+      const fieldOpts = parseJson<{ max_values?: number }>(field.options)
+      return (
+        <M2MSummaryCount
+          relation={m2mRel}
+          parentId={itemId}
+          allRelations={relations}
+          staging={staging}
+          maxValues={fieldOpts?.max_values}
+        />
+      )
+    }
   }
 
   const isEmpty = val === null || val === undefined || val === ''
@@ -221,37 +245,6 @@ function SummaryFieldValue({
   }
 
   return <span className='text-slate-800 truncate'>{String(val)}</span>
-}
-
-// ─── O2MSummaryCount ──────────────────────────────────────────────────────────
-
-function O2MSummaryCount({
-  relatedCollection,
-  manyField,
-  parentId
-}: {
-  relatedCollection: string
-  manyField: string
-  parentId: string
-}) {
-  const client = useNivaroClient()
-  const { data: rows } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['o2m-rows', relatedCollection, manyField, parentId],
-    queryFn: () =>
-      client
-        .request<{ data: Record<string, unknown>[] }>(
-          get(`/items/${relatedCollection}`, {
-            filter: JSON.stringify({ [manyField]: { _eq: parentId } }),
-            limit: 200
-          })
-        )
-        .then((r) => r.data ?? []),
-    enabled: !!parentId && parentId !== 'new',
-    staleTime: 30_000
-  })
-  if (rows === undefined) return <span className='text-slate-300'>—</span>
-  if (rows.length === 0) return <span className='text-slate-400 italic text-[11px]'>No rows</span>
-  return <span className='text-slate-800'>{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
 }
 
 // ─── getDisplayText ────────────────────────────────────────────────────────────
@@ -315,7 +308,21 @@ export function SummaryPanel({
     })
     .filter((s) => s.fields.length > 0)
 
-  if (stepSections.length === 0) return null
+  // O2M rels whose alias field didn't make it into any step (hidden, unassigned, etc.)
+  const renderedFieldNames = new Set(stepSections.flatMap((s) => s.fields.map((f) => f.field)))
+  const extraO2MRels = itemId && itemId !== 'new'
+    ? relations.filter(
+        (r) =>
+          !r.junction_field &&
+          r.many_field &&
+          r.many_collection &&
+          (r.one_collection === collection || r.one_collection == null) &&
+          r.one_field != null &&
+          !renderedFieldNames.has(r.one_field)
+      )
+    : []
+
+  if (stepSections.length === 0 && extraO2MRels.length === 0) return null
 
   return (
     <div className='bg-white overflow-hidden'>
@@ -324,7 +331,7 @@ export function SummaryPanel({
       </div>
       {stepSections.map(({ step, fields }, si) => (
         <div key={step.key}>
-          {si > 0 && <div className='border-t border-slate-200' />}
+          {(si > 0) && <div className='border-t border-slate-200' />}
           <div className='px-4 py-1.5 bg-slate-50 border-b border-slate-100'>
             <span className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
               {step.label}
@@ -385,6 +392,33 @@ export function SummaryPanel({
           })}
         </div>
       ))}
+      {extraO2MRels.length > 0 && (
+        <div>
+          <div className='border-t border-slate-200' />
+          <div className='px-4 py-1.5 bg-slate-50 border-b border-slate-100'>
+            <span className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>Related</span>
+          </div>
+          {extraO2MRels.map((r, ri) => (
+            <div
+              key={r.id ?? `${r.many_collection}.${r.many_field}`}
+              className={cn('flex items-stretch', ri < extraO2MRels.length - 1 && 'border-b border-slate-50')}
+            >
+              <div className='flex flex-1 flex-col px-4 py-2 min-w-0'>
+                <span className='text-[10px] font-medium truncate text-slate-400'>
+                  {titleCase(r.one_field ?? r.many_collection ?? '')}
+                </span>
+                <span className='mt-0.5 text-[12px]'>
+                  <O2MSummaryCount
+                    relatedCollection={r.many_collection ?? ''}
+                    manyField={r.many_field!}
+                    parentId={itemId}
+                  />
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

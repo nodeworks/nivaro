@@ -338,9 +338,9 @@ export function FieldRow({
             </Tooltip>
           </TooltipProvider>
         )}
-        {NUMERIC_TYPES.has(field.type) && itemId && itemId !== 'new' && (
-          <FieldSparkline collection={collection} itemId={itemId} field={field.field} />
-        )}
+        {/*{NUMERIC_TYPES.has(field.type) && itemId && itemId !== 'new' && (*/}
+        {/*  <FieldSparkline collection={collection} itemId={itemId} field={field.field} />*/}
+        {/*)}*/}
         {isAiEligible(field) && layoutAiEnabled && (
           <button
             type='button'

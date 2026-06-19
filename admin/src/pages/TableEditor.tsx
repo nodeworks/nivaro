@@ -262,6 +262,41 @@ function Combobox({
   )
 }
 
+// ─── O2MAggFieldCombobox ──────────────────────────────────────────────────────
+
+function O2MAggFieldCombobox({
+  relatedCollection,
+  value,
+  onChange
+}: {
+  relatedCollection: string | null
+  value: string
+  onChange: (fieldName: string, fieldOptions: string | null) => void
+}) {
+  const { data } = useQuery<{ data: Array<{ field: string; type: string; options: unknown }> }>({
+    queryKey: ['field-config', relatedCollection],
+    queryFn: () => api.get(`/field-config/${relatedCollection}`).then((r) => r.data),
+    enabled: !!relatedCollection,
+    staleTime: 120_000
+  })
+  const fields = (data?.data ?? []).filter((f) => !f.field.startsWith('_'))
+  const options = fields.map((f) => ({ value: f.field, label: f.field }))
+  return (
+    <Combobox
+      value={value}
+      onChange={(v) => {
+        const field = fields.find((f) => f.field === v)
+        const opts = field?.options
+          ? typeof field.options === 'string' ? field.options : JSON.stringify(field.options)
+          : null
+        onChange(v, opts)
+      }}
+      options={options}
+      placeholder='Select column…'
+    />
+  )
+}
+
 // ─── Rollup computed config ────────────────────────────────────────────────────
 
 type RollupAggregate = 'sum' | 'count' | 'avg' | 'min' | 'max'
@@ -6107,25 +6142,104 @@ function SortableGroupCard({
                 <div>
                   <Label className='mb-1 block text-[11px]'>Collapsed summary fields</Label>
                   <p className='mb-1.5 text-[10px] text-slate-400'>Shown in the collapsed bar</p>
-                  <div className='space-y-1 max-h-[160px] overflow-y-auto'>
+                  <div className='space-y-1.5 max-h-[220px] overflow-y-auto'>
                     {(() => {
-                      let selected: string[] = []
-                      try { const p = JSON.parse(group.summary_fields ?? '[]'); if (Array.isArray(p)) selected = p } catch { /* noop */ }
+                      type SummaryAggConfig = { field: string; agg: 'sum' | 'count' | 'avg' | 'min' | 'max'; agg_field: string }
+                      type SummaryEntry = string | SummaryAggConfig
+
+                      let selected: SummaryEntry[] = []
+                      try {
+                        const p = JSON.parse(group.summary_fields ?? '[]')
+                        if (Array.isArray(p)) selected = p
+                      } catch { /* noop */ }
+
+                      const entryKey = (e: SummaryEntry) => typeof e === 'string' ? e : e.field
+                      const findEntry = (f: string): SummaryEntry | undefined => selected.find(e => entryKey(e) === f)
+
+                      const save = (next: SummaryEntry[]) =>
+                        onGroupSettings(group.id, { summary_fields: JSON.stringify(next) })
+
+                      const AGG_OPTIONS: { value: SummaryAggConfig['agg']; label: string }[] = [
+                        { value: 'count', label: 'Count' },
+                        { value: 'sum', label: 'Sum' },
+                        { value: 'avg', label: 'Average' },
+                        { value: 'min', label: 'Min' },
+                        { value: 'max', label: 'Max' },
+                      ]
+
                       return fieldNames.map(f => {
-                        const checked = selected.includes(f)
+                        const isO2M = getRelKind?.(f) === 'O2M'
+                        const entry = findEntry(f)
+                        const checked = !!entry
+                        const aggEntry = entry && typeof entry !== 'string' ? entry : null
+                        const currentAgg = aggEntry?.agg ?? 'count'
+                        const currentAggField = aggEntry?.agg_field ?? ''
+                        const needsAggField = currentAgg !== 'count'
+
                         return (
-                          <label key={f} className='flex items-center gap-2 text-[12px] text-slate-600'>
-                            <input
-                              type='checkbox'
-                              checked={checked}
-                              onChange={() => {
-                                const next = checked ? selected.filter(x => x !== f) : [...selected, f]
-                                onGroupSettings(group.id, { summary_fields: JSON.stringify(next) })
-                              }}
-                              className='h-3.5 w-3.5'
-                            />
-                            {titleCase(f)}
-                          </label>
+                          <div key={f} className='rounded border border-slate-100 bg-slate-50/60 p-1.5'>
+                            <div className='flex items-center gap-2'>
+                              <label className='flex flex-1 items-center gap-2 text-[12px] text-slate-700 cursor-pointer min-w-0'>
+                                <input
+                                  type='checkbox'
+                                  checked={checked}
+                                  onChange={() => {
+                                    if (checked) {
+                                      save(selected.filter(e => entryKey(e) !== f))
+                                    } else {
+                                      save([...selected, isO2M ? { field: f, agg: 'count', agg_field: '' } : f])
+                                    }
+                                  }}
+                                  className='h-3.5 w-3.5 shrink-0'
+                                />
+                                <span className='font-medium truncate'>{titleCase(f)}</span>
+                              </label>
+                              {isO2M && (
+                                <span className='shrink-0 rounded bg-nvr-cyan/10 px-1 py-px text-[9px] font-medium text-nvr-cyan uppercase tracking-wide'>list</span>
+                              )}
+                            </div>
+                            {checked && isO2M && (
+                              <div className='mt-1.5 ml-5 space-y-1'>
+                                <div className='flex items-center gap-1.5'>
+                                  <span className='text-[10px] text-slate-400 shrink-0'>Show:</span>
+                                  <select
+                                    value={currentAgg}
+                                    onChange={e => {
+                                      const agg = e.target.value as SummaryAggConfig['agg']
+                                      save(selected.map(ent =>
+                                        entryKey(ent) === f
+                                          ? { field: f, agg, agg_field: agg === 'count' ? '' : currentAggField }
+                                          : ent
+                                      ))
+                                    }}
+                                    className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+                                  >
+                                    {AGG_OPTIONS.map(o => (
+                                      <option key={o.value} value={o.value}>{o.label}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                {needsAggField && (
+                                  <div className='flex items-center gap-1.5'>
+                                    <span className='text-[10px] text-slate-400 shrink-0'>of column:</span>
+                                    <div className='flex-1'>
+                                      <O2MAggFieldCombobox
+                                        relatedCollection={getRelatedCollection?.(f) ?? null}
+                                        value={currentAggField}
+                                        onChange={(v, fieldOpts) => {
+                                          save(selected.map(ent =>
+                                            entryKey(ent) === f
+                                              ? { field: f, agg: currentAgg, agg_field: v, field_options: fieldOpts }
+                                              : ent
+                                          ))
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         )
                       })
                     })()}

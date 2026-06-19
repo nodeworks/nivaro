@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, Save, Trash2 } from 'lucide-react'
 import { CloneDialog } from './item-edit/CloneDialog'
 import {
@@ -28,7 +28,9 @@ import type {
   FieldGroup,
   RenderFieldProps,
   SlotAssignment,
-  StepDef
+  StepDef,
+  SummaryAggConfig,
+  SummaryEntry
 } from './item-edit/types'
 import { CommentPanel, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
 import type { PendingTask } from './panels/TaskPanel'
@@ -36,15 +38,19 @@ import { Button } from './ui/button'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 import { Skeleton } from './ui/skeleton'
 
-function parseSummaryFields(raw: string[] | string | null | undefined): string[] | undefined {
+function parseSummaryFields(raw: string[] | string | null | undefined): SummaryEntry[] | undefined {
   if (!raw) return undefined
-  if (Array.isArray(raw)) return raw
+  if (Array.isArray(raw)) return raw as SummaryEntry[]
   try {
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : undefined
+    return Array.isArray(parsed) ? (parsed as SummaryEntry[]) : undefined
   } catch {
     return undefined
   }
+}
+
+function summaryEntryKey(e: SummaryEntry): string {
+  return typeof e === 'string' ? e : e.field
 }
 
 // ─── GridContainer — measures its own width for responsive col spans ──────────
@@ -205,6 +211,22 @@ export interface ItemEditFormProps {
   renderField?: (props: RenderFieldProps) => ReactNode
   extraTopContent?: ReactNode
   extraBottomContent?: ReactNode
+}
+
+// ─── Field diff helper ─────────────────────────────────────────────────────────
+
+function valuesEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a == null && b == null) return true
+  if (a == null || b == null) return false
+  // String/number coercion — server often returns "1" for numeric columns
+  if (
+    (typeof a === 'string' && typeof b === 'number') ||
+    (typeof a === 'number' && typeof b === 'string')
+  ) {
+    return String(a) === String(b)
+  }
+  return JSON.stringify(a) === JSON.stringify(b)
 }
 
 // ─── ItemEditForm ──────────────────────────────────────────────────────────────
@@ -513,6 +535,35 @@ export function ItemEditForm({
 
   const [fieldCounts, setFieldCounts] = useState<Record<string, number>>({})
 
+  const o2mRelations = useMemo(
+    () => relations.filter((r) => !r.junction_field && r.one_collection === collection && r.one_field && r.many_field && r.many_collection),
+    [relations, collection]
+  )
+  const o2mQueryResults = useQueries({
+    queries: o2mRelations.map((r) => ({
+      queryKey: ['o2m-count', r.many_collection, r.many_field, itemId],
+      queryFn: () =>
+        client
+          .request<{ data: Record<string, unknown>[] }>(
+            get(`/items/${r.many_collection}`, {
+              filter: JSON.stringify({ [r.many_field!]: { _eq: itemId } }),
+              limit: 200
+            })
+          )
+          .then((res) => res.data?.length ?? 0),
+      enabled: !!itemId && !isNew,
+      staleTime: 30_000
+    }))
+  })
+  const o2mCounts = useMemo<Record<string, number>>(() => {
+    const map: Record<string, number> = {}
+    o2mRelations.forEach((r, i) => {
+      const count = o2mQueryResults[i]?.data
+      if (r.one_field && count !== undefined) map[r.one_field] = count as number
+    })
+    return map
+  }, [o2mRelations, o2mQueryResults])
+
   const handleM2MCountChange = useCallback(
     (field: string, count: number) => {
       setFieldCounts((prev) => (prev[field] === count ? prev : { ...prev, [field]: count }))
@@ -572,6 +623,116 @@ export function ItemEditForm({
   const groups = useMemo<FieldGroup[]>(() => {
     return (activeLayoutData?.groups ?? []).sort((a, b) => a.sort - b.sort)
   }, [activeLayoutData])
+
+  // Aggregate configs extracted from all groups' summary_fields
+  const summaryAggConfigs = useMemo<Record<string, SummaryAggConfig>>(() => {
+    const map: Record<string, SummaryAggConfig> = {}
+    for (const g of groups) {
+      const entries = parseSummaryFields(g.summary_fields)
+      if (!entries) continue
+      for (const e of entries) {
+        if (typeof e !== 'string' && e.field && e.agg && e.agg_field) map[e.field] = e
+      }
+    }
+    return map
+  }, [groups])
+  const aggRelations = useMemo(
+    () => o2mRelations.filter((r) => r.one_field && r.one_field in summaryAggConfigs),
+    [o2mRelations, summaryAggConfigs]
+  )
+  // Fetch field configs for child collections so we can format agg values correctly
+  // (e.g. currency, decimal) without requiring the user to re-save the agg config.
+  const aggFieldConfigResults = useQueries({
+    queries: aggRelations.map((r) => ({
+      queryKey: ['field-config', r.many_collection],
+      queryFn: () =>
+        client
+          .request<{ data: Array<{ field: string; options: unknown }> }>(get(`/field-config/${r.many_collection}`))
+          .then((res) => res.data ?? []),
+      enabled: !!r.many_collection,
+      staleTime: 120_000
+    }))
+  })
+
+  // Enrich summaryAggConfigs with live field_options from child field configs
+  const enrichedSummaryAggConfigs = useMemo<Record<string, SummaryAggConfig>>(() => {
+    const enriched = { ...summaryAggConfigs }
+    aggRelations.forEach((r, i) => {
+      if (!r.one_field) return
+      const cfg = summaryAggConfigs[r.one_field]
+      if (!cfg || !cfg.agg_field) return
+      const fields: Array<{ field: string; options: unknown }> = (aggFieldConfigResults[i]?.data as Array<{ field: string; options: unknown }> | undefined) ?? []
+      const fieldMeta = fields.find((f) => f.field === cfg.agg_field)
+      if (!fieldMeta) return
+      const opts = fieldMeta.options
+        ? typeof fieldMeta.options === 'string' ? fieldMeta.options : JSON.stringify(fieldMeta.options)
+        : null
+      if (opts) enriched[r.one_field] = { ...cfg, field_options: opts }
+    })
+    return enriched
+  }, [summaryAggConfigs, aggRelations, aggFieldConfigResults])
+
+  const aggQueryResults = useQueries({
+    queries: aggRelations.map((r) => {
+      const cfg = summaryAggConfigs[r.one_field!]
+      return {
+        queryKey: ['o2m-rows', r.many_collection, r.many_field, itemId],
+        queryFn: () =>
+          client
+            .request<{ data: Record<string, unknown>[] }>(
+              get(`/items/${r.many_collection}`, {
+                filter: JSON.stringify({ [r.many_field!]: { _eq: itemId } }),
+                limit: 500
+              })
+            )
+            .then((res) => res.data ?? []),
+        enabled: !!itemId && !isNew,
+        staleTime: 30_000
+      }
+    })
+  })
+  const o2mAggValues = useMemo<Record<string, number>>(() => {
+    const map: Record<string, number> = {}
+    aggRelations.forEach((r, i) => {
+      if (!r.one_field || !r.many_collection || !r.many_field) return
+      const baseRows: Record<string, unknown>[] = (aggQueryResults[i]?.data as Record<string, unknown>[] | undefined) ?? []
+      const cfg = enrichedSummaryAggConfigs[r.one_field]
+      if (!cfg) return
+      const stagingKey = `${r.many_collection}.${r.many_field}`
+      const edits = pendingO2MEdits.get(stagingKey) ?? new Map<string, Record<string, unknown>>()
+      const deletes = pendingO2MDeletes.get(stagingKey) ?? new Set<string>()
+      const newRows = pendingO2MRows.get(stagingKey) ?? []
+      // Merge: base rows with edits applied, minus deletes, plus new rows
+      const effectiveRows: Record<string, unknown>[] = [
+        ...baseRows
+          .filter((row) => !deletes.has(String(row.id)))
+          .map((row) => edits.has(String(row.id)) ? { ...row, ...edits.get(String(row.id)) } : row),
+        ...newRows
+      ]
+      if (cfg.agg === 'count') {
+        map[r.one_field] = effectiveRows.length
+        return
+      }
+      const nums = effectiveRows.map((row) => Number(row[cfg.agg_field])).filter((n) => !Number.isNaN(n))
+      if (!nums.length) { map[r.one_field] = 0; return }
+      if (cfg.agg === 'sum') map[r.one_field] = nums.reduce((a, b) => a + b, 0)
+      else if (cfg.agg === 'avg') map[r.one_field] = nums.reduce((a, b) => a + b, 0) / nums.length
+      else if (cfg.agg === 'min') map[r.one_field] = Math.min(...nums)
+      else if (cfg.agg === 'max') map[r.one_field] = Math.max(...nums)
+    })
+    return map
+  }, [aggRelations, aggQueryResults, summaryAggConfigs, pendingO2MRows, pendingO2MEdits, pendingO2MDeletes])
+
+  const o2mLoading = useMemo<Set<string>>(() => {
+    const s = new Set<string>()
+    o2mRelations.forEach((r, i) => {
+      if (o2mQueryResults[i]?.isLoading && r.one_field) s.add(r.one_field)
+    })
+    aggRelations.forEach((r, i) => {
+      if (aggQueryResults[i]?.isLoading && r.one_field) s.add(r.one_field)
+    })
+    return s
+  }, [o2mRelations, o2mQueryResults, aggRelations, aggQueryResults])
 
   const groupedMap = useMemo<Record<string, CMSField[]>>(() => {
     // Build from raw fieldConfig (not deduped allFields) so multi-group fields appear in each group
@@ -841,11 +1002,18 @@ export function ItemEditForm({
       const editO2MKeys = [...pendingO2MEdits.entries()].filter(([, e]) => e.size > 0).map(([k]) => k)
       const delO2MKeys = [...pendingO2MDeletes.entries()].filter(([, d]) => d.size > 0).map(([k]) => k)
 
-      // Detail strings
-      const draftFieldCount = allFields.filter(f => !SYSTEM_FIELDS.has(f.field) && !f.readonly && f.field in draft).length
+      // Detail strings — count only fields that actually changed
+      const changedCount = isNew
+        ? allFields.filter(f => !SYSTEM_FIELDS.has(f.field) && !f.readonly && f.field in draft).length
+        : allFields.filter(f => {
+            if (SYSTEM_FIELDS.has(f.field) || f.readonly || !(f.field in draft)) return false
+            return !valuesEqual(draft[f.field], initialDataRef.current[f.field])
+          }).length
       const mainDetail = isNew
-        ? `${draftFieldCount} field${draftFieldCount !== 1 ? 's' : ''} set`
-        : `${draftFieldCount} field${draftFieldCount !== 1 ? 's' : ''} updated`
+        ? `${changedCount} field${changedCount !== 1 ? 's' : ''} set`
+        : changedCount === 0
+          ? 'No field changes'
+          : `${changedCount} field${changedCount !== 1 ? 's' : ''} changed`
 
       let m2mAdds = 0, m2mRemoves = 0
       for (const [, ids] of m2mLinks.entries()) m2mAdds += ids.length
@@ -856,19 +1024,19 @@ export function ItemEditForm({
       ].filter(Boolean).join(' · ')
 
       const steps: SaveStepItem[] = [
-        { id: 'main', label: isNew ? `Create ${titleCase(collection)}` : `Save ${titleCase(collection)}`, status: 'pending', detail: mainDetail },
+        { id: 'main', label: isNew ? `Create ${colMeta?.singular || titleCase(collection)}` : `Save ${colMeta?.singular || titleCase(collection)}`, status: 'pending', detail: mainDetail },
         ...(hasM2M ? [{ id: 'm2m', label: 'Update relationships', status: 'pending' as SaveStepStatus, detail: m2mDetail }] : []),
         ...newO2MKeys.map(k => {
           const n = pendingO2MRows.get(k)?.length ?? 0
-          return { id: `o2m:new:${k}`, label: `Add ${getO2MLabel(k)}`, status: 'pending' as SaveStepStatus, detail: `${n} new row${n !== 1 ? 's' : ''}`, progress: { done: 0, total: n } }
+          return { id: `o2m:new:${k}`, label: `Add ${titleCase(k.split('.')[0])}`, status: 'pending' as SaveStepStatus, detail: `${n} new row${n !== 1 ? 's' : ''}`, progress: { done: 0, total: n } }
         }),
         ...editO2MKeys.map(k => {
           const n = pendingO2MEdits.get(k)?.size ?? 0
-          return { id: `o2m:edit:${k}`, label: `Update ${getO2MLabel(k)}`, status: 'pending' as SaveStepStatus, detail: `${n} row${n !== 1 ? 's' : ''} edited`, progress: { done: 0, total: n } }
+          return { id: `o2m:edit:${k}`, label: `Update ${titleCase(k.split('.')[0])}`, status: 'pending' as SaveStepStatus, detail: `${n} row${n !== 1 ? 's' : ''} edited`, progress: { done: 0, total: n } }
         }),
         ...delO2MKeys.map(k => {
           const n = pendingO2MDeletes.get(k)?.size ?? 0
-          return { id: `o2m:del:${k}`, label: `Remove from ${getO2MLabel(k)}`, status: 'pending' as SaveStepStatus, detail: `${n} row${n !== 1 ? 's' : ''} deleted`, progress: { done: 0, total: n } }
+          return { id: `o2m:del:${k}`, label: `Remove from ${titleCase(k.split('.')[0])}`, status: 'pending' as SaveStepStatus, detail: `${n} row${n !== 1 ? 's' : ''} deleted`, progress: { done: 0, total: n } }
         }),
       ]
       setSaveSteps(steps)
@@ -877,17 +1045,27 @@ export function ItemEditForm({
       // ── Main form ──────────────────────────────────────────────────────────
       updateStep('main', { status: 'running' })
       const payload: Record<string, unknown> = {}
+      const initial = initialDataRef.current
       for (const f of allFields) {
         if (SYSTEM_FIELDS.has(f.field) || f.readonly) continue
-        if (f.field in draft) payload[f.field] = draft[f.field]
+        if (!(f.field in draft)) continue
+        const cur = draft[f.field]
+        const orig = initial[f.field]
+        // Always include all fields for new records; for edits, only include changed values
+        if (isNew || !valuesEqual(cur, orig)) {
+          payload[f.field] = cur
+        }
       }
       let savedId: string
       try {
         if (isNew) {
           const r = await client.request<{ data: { id: string | number } }>(post(`/items/${collection}`, payload))
           savedId = String(r.data.id)
-        } else {
+        } else if (Object.keys(payload).length > 0) {
           await client.request(patch(`/items/${collection}/${itemId}`, payload))
+          savedId = itemId
+        } else {
+          // No field changes — skip PATCH to avoid empty update error
           savedId = itemId
         }
         updateStep('main', { status: 'done' })
@@ -1261,6 +1439,10 @@ export function ItemEditForm({
         }
         summaryFields={parseSummaryFields(g.summary_fields)}
         m2mCounts={fieldCounts}
+        o2mCounts={o2mCounts}
+        o2mAggValues={o2mAggValues}
+        summaryAggConfigs={enrichedSummaryAggConfigs}
+        o2mLoading={o2mLoading}
         hideEmptySummary={hideEmptySummary}
       />
     )

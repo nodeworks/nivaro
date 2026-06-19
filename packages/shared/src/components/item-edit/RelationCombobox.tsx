@@ -28,13 +28,19 @@ export function RelationCombobox({
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 30)
-    else setQuery('')
+    else { setQuery(''); setDebouncedQuery('') }
   }, [open])
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query), 300)
+    return () => clearTimeout(t)
+  }, [query])
 
   useEffect(() => {
     if (!open) return
@@ -69,14 +75,14 @@ export function RelationCombobox({
 
   const filterStr = extraFilter ? JSON.stringify(extraFilter) : undefined
   const { data, isFetching: isLoadingOptions } = useQuery<Item[]>({
-    queryKey: ['relation-opts', collection, query, filterStr, tmplFields],
+    queryKey: ['relation-opts', collection, debouncedQuery, filterStr, tmplFields],
     queryFn: () =>
       client
         .request<{ data: Item[] }>(
           get(`/items/${collection}`, {
             limit: 200,
             picker: '1',
-            ...(query ? { search: query } : {}),
+            ...(debouncedQuery ? { search: debouncedQuery } : {}),
             ...(filterStr ? { filter: filterStr } : {}),
             ...(tmplFields ? { fields: tmplFields } : {})
           })
