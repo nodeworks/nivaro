@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, Loader2, Save, Trash2 } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, Save, Trash2 } from 'lucide-react'
 import { CloneDialog } from './item-edit/CloneDialog'
 import {
   type ReactNode,
@@ -33,6 +33,7 @@ import type {
 import { CommentPanel, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
 import type { PendingTask } from './panels/TaskPanel'
 import { Button } from './ui/button'
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 import { Skeleton } from './ui/skeleton'
 
 function parseSummaryFields(raw: string[] | string | null | undefined): string[] | undefined {
@@ -55,6 +56,62 @@ function GridContainer({ children }: { children: (containerWidth: number) => Rea
     <div ref={ref} className='grid grid-cols-12 gap-4 items-start'>
       {children(containerWidth)}
     </div>
+  )
+}
+
+// ─── Save progress dialog ──────────────────────────────────────────────────────
+
+type SaveStepStatus = 'pending' | 'running' | 'done' | 'error'
+interface SaveStepItem { id: string; label: string; status: SaveStepStatus; count?: number; error?: string }
+
+function SaveStepIcon({ status }: { status: SaveStepStatus }) {
+  if (status === 'running') return <Loader2 className='h-4 w-4 animate-spin text-[#00ceff] shrink-0' />
+  if (status === 'done') return <Check className='h-4 w-4 text-green-500 shrink-0' />
+  if (status === 'error') return <AlertCircle className='h-4 w-4 text-red-500 shrink-0' />
+  return <div className='h-4 w-4 rounded-full border-2 border-slate-200 shrink-0' />
+}
+
+function SaveProgressDialog({ open, steps, onClose }: { open: boolean; steps: SaveStepItem[]; onClose: () => void }) {
+  const allSettled = steps.length > 0 && steps.every(s => s.status === 'done' || s.status === 'error')
+  const hasError = steps.some(s => s.status === 'error')
+  return (
+    <Dialog open={open}>
+      <DialogContent onInteractOutside={(e) => e.preventDefault()} className='max-w-sm'>
+        <DialogHeader>
+          <DialogTitle className='flex items-center gap-2'>
+            {!allSettled && <Loader2 className='h-4 w-4 animate-spin text-[#00ceff]' />}
+            {allSettled && hasError && <AlertCircle className='h-4 w-4 text-red-500' />}
+            {allSettled && !hasError && <Check className='h-4 w-4 text-green-500' />}
+            {hasError ? 'Saved with errors' : allSettled ? 'Saved' : 'Saving…'}
+          </DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <div className='space-y-3'>
+            {steps.map(step => (
+              <div key={step.id} className='flex items-start gap-3'>
+                <div className='mt-0.5'><SaveStepIcon status={step.status} /></div>
+                <div className='flex-1 min-w-0'>
+                  <div className='flex items-center gap-1.5 flex-wrap'>
+                    <span className={cn('text-sm', step.status === 'done' ? 'text-slate-400 line-through decoration-slate-300' : 'text-slate-800')}>{step.label}</span>
+                    {step.count !== undefined && step.count > 0 && (
+                      <span className='text-[11px] text-slate-400 bg-slate-100 rounded px-1'>×{step.count}</span>
+                    )}
+                  </div>
+                  {step.error && <p className='text-xs text-red-500 mt-0.5 break-words'>{step.error}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </DialogBody>
+        {allSettled && (
+          <DialogFooter>
+            <button type='button' onClick={onClose} className='text-sm px-3 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors'>
+              {hasError ? 'Close' : 'Done'}
+            </button>
+          </DialogFooter>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -173,6 +230,22 @@ export function ItemEditForm({
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
   const [isDirty, setIsDirty] = useState(false)
+
+  // ── Save progress dialog ───────────────────────────────────────────────────
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false)
+  const [saveSteps, setSaveSteps] = useState<SaveStepItem[]>([])
+  function updateStep(id: string, upd: Partial<SaveStepItem>) {
+    setSaveSteps(prev => prev.map(s => s.id === id ? { ...s, ...upd } : s))
+  }
+  function getO2MLabel(key: string): string {
+    const [rc] = key.split('.')
+    const rel = relations.find(r => r.many_collection === rc && r.one_collection === collection && !r.junction_field)
+    if (rel?.one_field) {
+      const f = allFields.find(af => af.field === rel.one_field)
+      return f?.label ?? titleCase(rel.one_field)
+    }
+    return titleCase(rc)
+  }
   const initialDataRef = useRef<Record<string, unknown>>({})
   const touchedFields = useRef<Set<string>>(new Set())
 
@@ -663,8 +736,12 @@ export function ItemEditForm({
     for (const f of allFields) {
       if (f.hidden || f.readonly || SYSTEM_FIELDS.has(f.field) || SENTINEL_FIELDS.has(f.field)) continue
       if (f.required) {
-        const v = draft[f.field]
-        if (v === null || v === undefined || v === '') errs[f.field] = 'This field is required'
+        if (f.field in fieldCounts) {
+          if (fieldCounts[f.field] === 0) errs[f.field] = 'This field is required'
+        } else {
+          const v = draft[f.field]
+          if (v === null || v === undefined || v === '') errs[f.field] = 'This field is required'
+        }
       }
     }
     if (Object.keys(errs).length > 0) {
@@ -683,132 +760,146 @@ export function ItemEditForm({
   // ── Save / delete ──────────────────────────────────────────────────────────
   const saveMut = useMutation({
     mutationFn: async () => {
+      function errMsg(err: unknown): string {
+        const resp = (err as { response?: { data?: { error?: string } } })?.response
+        return resp?.data?.error ?? (err instanceof Error ? err.message : 'Failed')
+      }
+
+      // Build step list from pending state
+      const hasM2M = [...m2mLinks.entries()].some(([, ids]) => ids.length > 0) ||
+                     [...m2mUnlinks.entries()].some(([, ids]) => ids.size > 0)
+      const newO2MKeys = isNew ? [...pendingO2MRows.entries()].filter(([, r]) => r.length > 0).map(([k]) => k) : []
+      const editO2MKeys = [...pendingO2MEdits.entries()].filter(([, e]) => e.size > 0).map(([k]) => k)
+      const delO2MKeys = [...pendingO2MDeletes.entries()].filter(([, d]) => d.size > 0).map(([k]) => k)
+
+      const steps: SaveStepItem[] = [
+        { id: 'main', label: isNew ? `Create ${titleCase(collection)}` : `Save ${titleCase(collection)}`, status: 'pending' },
+        ...(hasM2M ? [{ id: 'm2m', label: 'Update relationships', status: 'pending' as SaveStepStatus }] : []),
+        ...newO2MKeys.map(k => ({ id: `o2m:new:${k}`, label: getO2MLabel(k), status: 'pending' as SaveStepStatus, count: pendingO2MRows.get(k)?.length })),
+        ...editO2MKeys.map(k => ({ id: `o2m:edit:${k}`, label: `Update ${getO2MLabel(k)}`, status: 'pending' as SaveStepStatus, count: pendingO2MEdits.get(k)?.size })),
+        ...delO2MKeys.map(k => ({ id: `o2m:del:${k}`, label: `Delete from ${getO2MLabel(k)}`, status: 'pending' as SaveStepStatus, count: pendingO2MDeletes.get(k)?.size })),
+      ]
+      setSaveSteps(steps)
+      setSaveDialogOpen(true)
+
+      // ── Main form ──────────────────────────────────────────────────────────
+      updateStep('main', { status: 'running' })
       const payload: Record<string, unknown> = {}
       for (const f of allFields) {
         if (SYSTEM_FIELDS.has(f.field) || f.readonly) continue
         if (f.field in draft) payload[f.field] = draft[f.field]
       }
       let savedId: string
-      if (isNew) {
-        const r = await client.request<{ data: { id: string | number } }>(
-          post(`/items/${collection}`, payload)
-        )
-        savedId = String(r.data.id)
-      } else {
-        await client.request(patch(`/items/${collection}/${itemId}`, payload))
-        savedId = itemId
+      try {
+        if (isNew) {
+          const r = await client.request<{ data: { id: string | number } }>(post(`/items/${collection}`, payload))
+          savedId = String(r.data.id)
+        } else {
+          await client.request(patch(`/items/${collection}/${itemId}`, payload))
+          savedId = itemId
+        }
+        updateStep('main', { status: 'done' })
+      } catch (err) {
+        const msg = errMsg(err)
+        updateStep('main', { status: 'error', error: msg })
+        const resp = (err as { response?: { data?: { error?: string; field?: string } } })?.response
+        if (resp?.data?.field) setValidationErrors({ [resp.data.field]: resp.data.error ?? 'Invalid' })
+        throw err
       }
 
-      const findM2MRel = (
-        stagingKey: string
-      ): (CMSRelation & { junction_field: string }) | null => {
-        const byField = relations.find(
-          (r) => r.one_field === stagingKey && r.one_collection === collection
-        )
+      // ── M2M ───────────────────────────────────────────────────────────────
+      const findM2MRel = (stagingKey: string): (CMSRelation & { junction_field: string }) | null => {
+        const byField = relations.find(r => r.one_field === stagingKey && r.one_collection === collection)
         if (byField) {
-          const jf =
-            byField.junction_field ??
-            relations.find(
-              (c) => c.many_collection === byField.many_collection && c.id !== byField.id
-            )?.many_field ??
-            null
+          const jf = byField.junction_field ?? relations.find(c => c.many_collection === byField.many_collection && c.id !== byField.id)?.many_field ?? null
           return jf ? { ...byField, junction_field: jf } : null
         }
         const parts = stagingKey.split('.')
         if (parts.length === 2) {
           const [mc, jf] = parts
-          const r = relations.find((rel) => rel.many_collection === mc)
+          const r = relations.find(rel => rel.many_collection === mc)
           return r ? { ...r, junction_field: jf } : null
         }
         return null
       }
 
-      for (const [key, ids] of m2mUnlinks.entries()) {
-        if (!ids.size) continue
-        const rel = findM2MRel(key)
-        if (!rel) continue
-        await Promise.all(
-          [...ids].map((jId) =>
-            client.request(del(`/items/${rel.many_collection}/${jId}`)).catch(() => {})
-          )
-        )
+      if (hasM2M) {
+        updateStep('m2m', { status: 'running' })
+        try {
+          const m2mOps: Promise<unknown>[] = []
+          for (const [key, ids] of m2mUnlinks.entries()) {
+            if (!ids.size) continue
+            const rel = findM2MRel(key)
+            if (!rel) continue
+            for (const jId of ids) m2mOps.push(client.request(del(`/items/${rel.many_collection}/${jId}`)).catch(() => {}))
+          }
+          for (const [key, ids] of m2mLinks.entries()) {
+            if (!ids.length) continue
+            const rel = findM2MRel(key)
+            if (!rel) continue
+            for (const relId of ids) m2mOps.push(client.request(post(`/items/${rel.many_collection}`, { [rel.many_field!]: savedId, [rel.junction_field]: relId })).catch(() => {}))
+          }
+          await Promise.all(m2mOps)
+          updateStep('m2m', { status: 'done' })
+        } catch (err) {
+          updateStep('m2m', { status: 'error', error: errMsg(err) })
+        }
       }
 
-      for (const [key, ids] of m2mLinks.entries()) {
-        if (!ids.length) continue
-        const rel = findM2MRel(key)
-        if (!rel) continue
-        await Promise.all(
-          ids.map((relId) =>
-            client
-              .request(
-                post(`/items/${rel.many_collection}`, {
-                  [rel.many_field!]: savedId,
-                  [rel.junction_field]: relId
-                })
-              )
-              .catch(() => {})
-          )
-        )
-      }
-
+      // ── Comments (new only) ────────────────────────────────────────────────
       if (isNew && pendingComments.length > 0) {
-        await Promise.all(
-          pendingComments.map((text) =>
-            client.request(post('/comments', { collection, item: savedId, text })).catch(() => {})
-          )
-        )
+        await Promise.all(pendingComments.map(text => client.request(post('/comments', { collection, item: savedId, text })).catch(() => {})))
       }
 
-      if (isNew && pendingO2MRows.size > 0) {
-        const flushOps: Promise<unknown>[] = []
-        for (const [key, rowList] of pendingO2MRows.entries()) {
-          const [rc, mf] = key.split('.')
-          for (const data of rowList) {
-            flushOps.push(
-              client.request(post(`/items/${rc}`, { ...data, [mf]: savedId })).catch(() => {})
-            )
-          }
+      // ── O2M new rows ───────────────────────────────────────────────────────
+      for (const key of newO2MKeys) {
+        const stepId = `o2m:new:${key}`
+        updateStep(stepId, { status: 'running' })
+        const [rc, mf] = key.split('.')
+        const rowList = pendingO2MRows.get(key) ?? []
+        try {
+          await Promise.all(rowList.map(data => client.request(post(`/items/${rc}`, { ...data, [mf]: savedId }))))
+          updateStep(stepId, { status: 'done' })
+        } catch (err) {
+          updateStep(stepId, { status: 'error', error: errMsg(err) })
         }
-        await Promise.all(flushOps)
       }
 
-      // Flush pending edits/deletes from saveMode='pending' inline tables
-      if (pendingO2MEdits.size > 0 || pendingO2MDeletes.size > 0) {
-        const flushOps: Promise<unknown>[] = []
-        for (const [key, edits] of pendingO2MEdits.entries()) {
-          const [rc] = key.split('.')
-          for (const [rowId, changes] of edits.entries()) {
-            flushOps.push(client.request(patch(`/items/${rc}/${rowId}`, changes)).catch(() => {}))
-          }
-        }
-        for (const [key, deletes] of pendingO2MDeletes.entries()) {
-          const [rc] = key.split('.')
-          for (const rowId of deletes) {
-            flushOps.push(client.request(del(`/items/${rc}/${rowId}`)).catch(() => {}))
-          }
-        }
-        await Promise.all(flushOps)
-        setPendingO2MEdits(new Map())
-        setPendingO2MDeletes(new Map())
+      // ── O2M edits ─────────────────────────────────────────────────────────
+      const nextEdits = new Map(pendingO2MEdits)
+      for (const key of editO2MKeys) {
+        const stepId = `o2m:edit:${key}`
+        updateStep(stepId, { status: 'running' })
+        const [rc] = key.split('.')
+        const edits = pendingO2MEdits.get(key) ?? new Map()
+        let hasErr = false
+        await Promise.all([...edits.entries()].map(([rowId, changes]) =>
+          client.request(patch(`/items/${rc}/${rowId}`, changes)).catch(err => { hasErr = true; updateStep(stepId, { status: 'error', error: errMsg(err) }) })
+        ))
+        if (!hasErr) { updateStep(stepId, { status: 'done' }); nextEdits.delete(key) }
       }
+      setPendingO2MEdits(nextEdits)
 
+      // ── O2M deletes ───────────────────────────────────────────────────────
+      const nextDels = new Map(pendingO2MDeletes)
+      for (const key of delO2MKeys) {
+        const stepId = `o2m:del:${key}`
+        updateStep(stepId, { status: 'running' })
+        const [rc] = key.split('.')
+        const dels = pendingO2MDeletes.get(key) ?? new Set()
+        let hasErr = false
+        await Promise.all([...dels].map(rowId =>
+          client.request(del(`/items/${rc}/${rowId}`)).catch(err => { hasErr = true; updateStep(stepId, { status: 'error', error: errMsg(err) }) })
+        ))
+        if (!hasErr) { updateStep(stepId, { status: 'done' }); nextDels.delete(key) }
+      }
+      setPendingO2MDeletes(nextDels)
+
+      // ── Tasks (new only) ──────────────────────────────────────────────────
       if (isNew && pendingTasks.length > 0) {
-        await Promise.all(
-          pendingTasks.map((t) =>
-            client
-              .request(
-                post('/tasks', {
-                  collection,
-                  item: savedId,
-                  title: t.title,
-                  assignee: t.assignee,
-                  due_date: t.due_date || undefined
-                })
-              )
-              .catch(() => {})
-          )
-        )
+        await Promise.all(pendingTasks.map(t =>
+          client.request(post('/tasks', { collection, item: savedId, title: t.title, assignee: t.assignee, due_date: t.due_date || undefined })).catch(() => {})
+        ))
       }
 
       return savedId
@@ -820,16 +911,17 @@ export function ItemEditForm({
       setPendingComments([])
       setPendingTasks([])
       setPendingO2MRows(new Map())
-      toast.success(isNew ? 'Record created' : 'Changes saved')
       qc.invalidateQueries({ queryKey: ['item', collection] })
       qc.invalidateQueries({ queryKey: ['m2m-items'] })
-      onSaved?.(id)
+      // Auto-close dialog after brief success display
+      setTimeout(() => {
+        setSaveDialogOpen(false)
+        toast.success(isNew ? 'Record created' : 'Changes saved')
+        onSaved?.(id)
+      }, 1200)
     },
-    onError: (err: unknown) => {
-      const resp = (err as { response?: { data?: { error?: string; field?: string } } })?.response
-      if (resp?.data?.field)
-        setValidationErrors({ [resp.data.field]: resp.data.error ?? 'Invalid' })
-      toast.error(resp?.data?.error ?? 'Failed to save')
+    onError: () => {
+      // Dialog stays open showing error steps; user dismisses manually
     }
   })
 
@@ -1379,6 +1471,11 @@ export function ItemEditForm({
     <ParentDraftContext.Provider value={{ draft, collection }}>
     <O2MStagingContext.Provider value={o2mStagingCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
+      <SaveProgressDialog
+        open={saveDialogOpen}
+        steps={saveSteps}
+        onClose={() => setSaveDialogOpen(false)}
+      />
       <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
         {showHeader && (
           <header

@@ -147,6 +147,25 @@ function SummaryFieldValue({
     )
   }
 
+  // O2M: find from the "one" side regardless of interface name
+  if (!m2mRel && itemId) {
+    const o2mRel = relations.find(
+      (r) =>
+        r.one_collection === collection &&
+        !r.junction_field &&
+        (r.one_field === field.field || r.many_collection === field.field)
+    )
+    if (o2mRel?.many_collection && o2mRel.many_field) {
+      return (
+        <O2MSummaryCount
+          relatedCollection={o2mRel.many_collection}
+          manyField={o2mRel.many_field}
+          parentId={itemId}
+        />
+      )
+    }
+  }
+
   const isEmpty = val === null || val === undefined || val === ''
   if (isEmpty) return <span className='text-slate-300'>—</span>
 
@@ -188,6 +207,37 @@ function SummaryFieldValue({
   }
 
   return <span className='text-slate-800 truncate'>{String(val)}</span>
+}
+
+// ─── O2MSummaryCount ──────────────────────────────────────────────────────────
+
+function O2MSummaryCount({
+  relatedCollection,
+  manyField,
+  parentId
+}: {
+  relatedCollection: string
+  manyField: string
+  parentId: string
+}) {
+  const client = useNivaroClient()
+  const { data: rows } = useQuery<Record<string, unknown>[]>({
+    queryKey: ['o2m-rows', relatedCollection, manyField, parentId],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${relatedCollection}`, {
+            filter: JSON.stringify({ [manyField]: { _eq: parentId } }),
+            limit: 200
+          })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!parentId && parentId !== 'new',
+    staleTime: 30_000
+  })
+  if (rows === undefined) return <span className='text-slate-300'>—</span>
+  if (rows.length === 0) return <span className='text-slate-400 italic text-[11px]'>No rows</span>
+  return <span className='text-slate-800'>{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
 }
 
 // ─── getDisplayText ────────────────────────────────────────────────────────────

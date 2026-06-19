@@ -115,7 +115,7 @@ export function RelationCombobox({
   const isStale = !!value && availabilityData !== undefined && availabilityData.length === 0
 
   const tmpl = colMeta?.display_template
-  const selectedLabel = selected ? applyDisplayTemplate(tmpl, selected) : null
+  const selectedLabel = (value && selected) ? applyDisplayTemplate(tmpl, selected) : null
   const showLoader = !!value && isLoadingSelected && !selected
 
   if (requiredParent) {

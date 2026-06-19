@@ -127,9 +127,7 @@ export function M2MCombobox({
 
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
-  const mountedRef = useRef(false)
   useEffect(() => {
-    if (!mountedRef.current) { mountedRef.current = true; return }
     onCountChangeRef.current?.(allSelectedIds.size)
   }, [allSelectedIds.size])
 
@@ -390,9 +388,7 @@ export function M2MSingleSelectCombobox({
 
   const singleOnCountChangeRef = useRef(onCountChange)
   singleOnCountChangeRef.current = onCountChange
-  const singleMountedRef = useRef(false)
   useEffect(() => {
-    if (!singleMountedRef.current) { singleMountedRef.current = true; return }
     singleOnCountChangeRef.current?.(currentRelatedId != null ? 1 : 0)
   }, [currentRelatedId])
 

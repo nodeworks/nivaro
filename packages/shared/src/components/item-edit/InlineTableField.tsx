@@ -12,6 +12,7 @@ import {
 } from '../ui/sheet'
 import { useO2MStaging } from './O2MStagingContext'
 import { FieldRenderer } from './FieldRenderer'
+import { RelationCombobox } from './RelationCombobox'
 import { applyDisplayTemplate, parseJson, SENTINEL_FIELDS } from './helpers'
 import type { CMSField, CMSRelation } from './types'
 
@@ -27,6 +28,25 @@ interface RowRevision {
 }
 
 const NON_DISPLAY_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
+
+function evalClientFormula(formula: string, row: Record<string, unknown>): number | null {
+  // Handles both `item.fieldname` and `{{fieldname}}` token syntax
+  let expr = formula.replace(/item\.(\w+)/g, (_, field) => {
+    const val = Number(row[field])
+    return Number.isNaN(val) ? '0' : String(val)
+  })
+  expr = expr.replace(/\{\{(\w+)\}\}/g, (_, field) => {
+    const val = Number(row[field])
+    return Number.isNaN(val) ? '0' : String(val)
+  })
+  if (!/^[\d\s+\-*/.()]+$/.test(expr)) return null
+  try {
+    // biome-ignore lint/security/noGlobalEval: safe — expr sanitized to digits+operators only
+    return eval(expr) as number
+  } catch {
+    return null
+  }
+}
 
 type CascadeRule = { parent_field: string; child_field: string }
 type CascadeResolution =
@@ -204,9 +224,40 @@ export function InlineTableField({
     return [...rawRows].sort((a, b) => getOrder(a) - getOrder(b))
   }, [rawRows, rowOrderField, isPendingMode, pendingEdits])
 
+  const computedWriteCols = useMemo(
+    () => cols.filter(c => c.computed_type === 'write' && typeof c.computed_formula === 'string' && c.computed_formula.trim()),
+    [cols]
+  )
+
+  function applyComputedFields(draft: Record<string, unknown>): Record<string, unknown> {
+    if (!computedWriteCols.length) return draft
+    const next = { ...draft }
+    for (const cf of computedWriteCols) {
+      const result = evalClientFormula(cf.computed_formula as string, next)
+      if (result !== null) next[cf.field] = result
+    }
+    return next
+  }
+
   const SPECIAL_GROUP_KEYS = new Set(['__apply_values__', '__create_with_defaults__'])
   const isM2MIface = (iface: string | null | undefined) =>
     iface === 'select-multiple-m2m' || (iface ?? '').endsWith('-m2m')
+
+  function resolveM2MTarget(c: CMSField): { targetCollection: string; junctionCollection: string; junctionManyField: string; junctionOtherField: string } | null {
+    const r = childRelations.find(
+      rel => rel.one_collection === relatedCollection &&
+        (rel.one_field === c.field || (rel.junction_field != null && rel.many_collection === c.field))
+    )
+    if (!r) return null
+    const companion = childRelations.find(cr => cr.many_collection === r.many_collection && cr.id !== r.id)
+    if (!companion?.one_collection || !r.many_collection || !r.many_field || !companion.many_field) return null
+    return {
+      targetCollection: companion.one_collection,
+      junctionCollection: r.many_collection,
+      junctionManyField: r.many_field,
+      junctionOtherField: companion.many_field
+    }
+  }
   const displayCols = cols.filter(
     (c) =>
       !c.hidden &&
@@ -336,13 +387,13 @@ export function InlineTableField({
   function startEdit(row: Record<string, unknown>) {
     const id = String(row.id)
     if (editState?.rowId === id) return
-    setEditState({ rowId: id, draft: { ...row } })
+    setEditState({ rowId: id, draft: applyComputedFields({ ...row }) })
   }
 
   function startPendingEdit(row: Record<string, unknown>, ri: number) {
     const rowId = `pending:${ri}`
     if (editState?.rowId === rowId) return
-    setEditState({ rowId, draft: { ...row } })
+    setEditState({ rowId, draft: applyComputedFields({ ...row }) })
   }
 
   function startNew() {
@@ -354,7 +405,11 @@ export function InlineTableField({
   }
 
   function setDraftField(k: string, v: unknown) {
-    setEditState((s) => s ? { ...s, draft: { ...s.draft, [k]: v } } : s)
+    setEditState((s) => {
+      if (!s) return s
+      const draft = applyComputedFields({ ...s.draft, [k]: v })
+      return { ...s, draft }
+    })
   }
 
   async function saveEdit() {
@@ -374,15 +429,31 @@ export function InlineTableField({
           setEditState(null)
           return
         }
-        await client.request(post(`/items/${relatedCollection}`, { ...editState.draft, [manyField]: parentId }))
+        // Strip __m2m_* staging keys before POST — those are handled separately below
+        const m2mEntries = Object.entries(editState.draft).filter(([k]) => k.startsWith('__m2m_'))
+        const cleanDraft = Object.fromEntries(Object.entries(editState.draft).filter(([k]) => !k.startsWith('__m2m_')))
+        const newRowRes = await client.request<{ data: { id: unknown } }>(post(`/items/${relatedCollection}`, { ...cleanDraft, [manyField]: parentId }))
+        const newRowId = newRowRes?.data?.id
+        if (newRowId != null && m2mEntries.length) {
+          await Promise.all(m2mEntries.map(([key, relatedId]) => {
+            if (relatedId == null) return Promise.resolve()
+            const fieldName = key.slice('__m2m_'.length)
+            const target = resolveM2MTarget({ field: fieldName, interface: 'select-multiple-m2m' } as CMSField)
+            if (!target) return Promise.resolve()
+            return client.request(post(`/items/${target.junctionCollection}`, { [target.junctionManyField]: newRowId, [target.junctionOtherField]: relatedId }))
+          }))
+        }
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       } else {
+        // Filter to only configured display columns — draft includes full API row (id, system fields, etc.)
+        const writableKeys = new Set(displayCols.map(c => c.field).filter(k => !k.startsWith('__m2m_')))
+        const rowPayload = Object.fromEntries(Object.entries(editState.draft).filter(([k]) => writableKeys.has(k)))
         if (isPendingMode && staging) {
-          staging.queueEdit(relatedCollection, manyField, editState.rowId, editState.draft)
+          staging.queueEdit(relatedCollection, manyField, editState.rowId, rowPayload)
           setEditState(null)
           return
         }
-        await client.request(patch(`/items/${relatedCollection}/${editState.rowId}`, editState.draft))
+        await client.request(patch(`/items/${relatedCollection}/${editState.rowId}`, rowPayload))
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       }
       setEditState(null)
@@ -435,7 +506,7 @@ export function InlineTableField({
   async function addBulkRows(useDefaults: boolean) {
     const n = Math.max(1, Math.min(100, bulkCount))
     const rowData = useDefaults ? { ...defaultValues } : {}
-    if (isNew && staging) {
+    if ((isNew || isPendingMode) && staging) {
       for (let i = 0; i < n; i++) staging.queueRow(relatedCollection, manyField, { ...rowData })
       return
     }
@@ -644,7 +715,7 @@ export function InlineTableField({
       <table className='w-full table-fixed'>
         <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>
           <tr>
-            {enableReorder && (rowOrderField || isNew) && <th className='w-6' />}
+            {enableReorder && (rowOrderField || isNew || isPendingMode) && <th className='w-6' />}
             {showLineNumbers && <th className='w-8 px-2 py-2 text-left font-medium text-slate-400 text-[11px]'>#</th>}
             {(isNew || isPendingMode) && <th className='px-3 py-2 text-left font-medium text-slate-400 text-[11px] w-20'>Status</th>}
             {displayCols.map((c) => (
@@ -659,7 +730,7 @@ export function InlineTableField({
           {/* Defaults row */}
           {defaultsOpen && (
             <tr className='border-b border-[#00ceff]/20 bg-[#00ceff]/5'>
-              {enableReorder && (rowOrderField || isNew) && <td className='w-6' />}
+              {enableReorder && (rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
               {showLineNumbers && <td className='w-8' />}
               {(isNew || isPendingMode) && <td className='px-3 py-1 align-middle w-20'>
                 <span className='text-[10px] font-medium text-[#009abe]'>Defaults</span>
@@ -689,8 +760,8 @@ export function InlineTableField({
             </tr>
           )}
 
-          {/* Pending rows for new parent */}
-          {isNew && pendingRows.map((row, ri) => {
+          {/* Pending rows (new parent OR pending-save mode) */}
+          {(isNew || isPendingMode) && pendingRows.map((row, ri) => {
             const pendingRowId = `pending:${ri}`
             const isEditing = editState?.rowId === pendingRowId
             const isPDragging = dragIdx === ri
@@ -727,27 +798,47 @@ export function InlineTableField({
                     <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5'>Pending</span>
                   )}
                 </td>
-                {displayCols.map((c) => (
-                  <td key={c.field} className='px-2 py-1 align-top'>
-                    {isM2MIface(c.interface) ? (
-                      <span className='text-slate-300 text-[11px]'>—</span>
-                    ) : isEditing ? (
-                      <div onClick={(e) => e.stopPropagation()}>
-                        <FieldRenderer
-                          field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
-                          value={editState!.draft[c.field] ?? null}
-                          onChange={(v) => setDraftField(c.field, v)}
-                          relations={childRelations}
-                          collection={relatedCollection}
-                          itemId='new'
-                          cascadeFilter={fieldCascadeFilters[c.field]}
-                        />
-                      </div>
-                    ) : (
-                      <div className='py-0.5 overflow-hidden'>{renderCell(c, row[c.field])}</div>
-                    )}
-                  </td>
-                ))}
+                {displayCols.map((c) => {
+                  const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+                  const isMM = isM2MIface(c.interface)
+                  const m2mKey = `__m2m_${c.field}`
+                  const m2mTarget = isMM && isEditing ? resolveM2MTarget(c) : null
+                  const displayVal = isComputedWrite
+                    ? (evalClientFormula(c.computed_formula as string, isEditing ? editState!.draft : row) ?? row[c.field])
+                    : (isEditing ? editState!.draft[c.field] : row[c.field])
+                  return (
+                    <td key={c.field} className='px-2 py-1 align-top'>
+                      {isComputedWrite ? (
+                        <div className='py-0.5 overflow-hidden text-slate-500 italic'>{renderCell(c, displayVal)}</div>
+                      ) : isMM && isEditing && m2mTarget ? (
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <RelationCombobox
+                            collection={m2mTarget.targetCollection}
+                            value={editState!.draft[m2mKey] ?? null}
+                            onChange={(v) => setDraftField(m2mKey, v)}
+                            extraFilter={fieldCascadeFilters[c.field]}
+                          />
+                        </div>
+                      ) : isMM ? (
+                        <span className='text-slate-300 text-[11px]'>—</span>
+                      ) : isEditing ? (
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <FieldRenderer
+                            field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
+                            value={editState!.draft[c.field] ?? null}
+                            onChange={(v) => setDraftField(c.field, v)}
+                            relations={childRelations}
+                            collection={relatedCollection}
+                            itemId='new'
+                            cascadeFilter={fieldCascadeFilters[c.field]}
+                          />
+                        </div>
+                      ) : (
+                        <div className='py-0.5 overflow-hidden'>{renderCell(c, row[c.field])}</div>
+                      )}
+                    </td>
+                  )
+                })}
                 <td className='px-1 py-1 align-middle'>
                   {isEditing ? (
                     <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
@@ -801,9 +892,9 @@ export function InlineTableField({
                       : 'bg-slate-50/50 hover:bg-slate-100/60 cursor-pointer'
                     : ''
                 )}>
-                {enableReorder && rowOrderField && (
+                {enableReorder && (rowOrderField || isPendingMode) && (
                   <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
-                    <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
+                    {rowOrderField && <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />}
                   </td>
                 )}
                 {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{ri + 1}</td>}
@@ -817,26 +908,34 @@ export function InlineTableField({
                     }
                   </td>
                 )}
-                {displayCols.map((c) => (
-                  <td key={c.field} className='px-2 py-1 align-top'>
-                    {(isEditing && !isPendingDelete) || isM2MIface(c.interface) ? (
-                      <div onClick={(e) => e.stopPropagation()}>
-                        <FieldRenderer
-                          field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
-                          value={editState?.draft[c.field] ?? null}
-                          onChange={(v) => setDraftField(c.field, v)}
-                          relations={childRelations}
-                          collection={relatedCollection}
-                          itemId={id}
-                          cascadeFilter={fieldCascadeFilters[c.field]}
-                          displayOnly={!isEditing || isPendingDelete}
-                        />
-                      </div>
-                    ) : (
-                      <div className='py-0.5 overflow-hidden'>{renderCell(c, displayRow[c.field])}</div>
-                    )}
-                  </td>
-                ))}
+                {displayCols.map((c) => {
+                  const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+                  const computedDisplayVal = isComputedWrite
+                    ? (evalClientFormula(c.computed_formula as string, isEditing ? (editState?.draft ?? displayRow) : displayRow) ?? displayRow[c.field])
+                    : null
+                  return (
+                    <td key={c.field} className='px-2 py-1 align-top'>
+                      {isComputedWrite ? (
+                        <div className='py-0.5 overflow-hidden text-slate-500 italic'>{renderCell(c, computedDisplayVal)}</div>
+                      ) : (isEditing && !isPendingDelete) || isM2MIface(c.interface) ? (
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <FieldRenderer
+                            field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
+                            value={editState?.draft[c.field] ?? null}
+                            onChange={(v) => setDraftField(c.field, v)}
+                            relations={childRelations}
+                            collection={relatedCollection}
+                            itemId={id}
+                            cascadeFilter={fieldCascadeFilters[c.field]}
+                            displayOnly={!isEditing || isPendingDelete}
+                          />
+                        </div>
+                      ) : (
+                        <div className='py-0.5 overflow-hidden'>{renderCell(c, displayRow[c.field])}</div>
+                      )}
+                    </td>
+                  )
+                })}
                 <td className='px-1 py-1 align-middle'>
                   {isEditing && !isPendingDelete ? (
                     <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
@@ -889,23 +988,44 @@ export function InlineTableField({
           {/* New row inline */}
           {isEditingNew && (
             <tr className='border-b border-slate-100 bg-[#f0fbff] dark:bg-nvr-cyan/5'>
-              {(rowOrderField || isNew) && <td className='w-6' />}
+              {(rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
               {(isNew || isPendingMode) && <td className='px-3 py-1.5' />}
-              {displayCols.map((c) => (
-                <td key={c.field} className='px-2 py-1 align-top'>
-                  <div onClick={(e) => e.stopPropagation()}>
-                    <FieldRenderer
-                      field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
-                      value={editState!.draft[c.field] ?? null}
-                      onChange={(v) => setDraftField(c.field, v)}
-                      relations={childRelations}
-                      collection={relatedCollection}
-                      itemId='new'
-                      cascadeFilter={fieldCascadeFilters[c.field]}
-                    />
-                  </div>
-                </td>
-              ))}
+              {displayCols.map((c) => {
+                const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+                const isMM = isM2MIface(c.interface)
+                const m2mKey = `__m2m_${c.field}`
+                const m2mTarget = isMM ? resolveM2MTarget(c) : null
+                return (
+                  <td key={c.field} className='px-2 py-1 align-top'>
+                    {isComputedWrite ? (
+                      <div className='py-0.5 overflow-hidden text-slate-500 italic'>
+                        {renderCell(c, evalClientFormula(c.computed_formula as string, editState!.draft) ?? null)}
+                      </div>
+                    ) : isMM && m2mTarget ? (
+                      <div onClick={(e) => e.stopPropagation()}>
+                        <RelationCombobox
+                          collection={m2mTarget.targetCollection}
+                          value={editState!.draft[m2mKey] ?? null}
+                          onChange={(v) => setDraftField(m2mKey, v)}
+                          extraFilter={fieldCascadeFilters[c.field]}
+                        />
+                      </div>
+                    ) : (
+                      <div onClick={(e) => e.stopPropagation()}>
+                        <FieldRenderer
+                          field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
+                          value={editState!.draft[c.field] ?? null}
+                          onChange={(v) => setDraftField(c.field, v)}
+                          relations={childRelations}
+                          collection={relatedCollection}
+                          itemId='new'
+                          cascadeFilter={fieldCascadeFilters[c.field]}
+                        />
+                      </div>
+                    )}
+                  </td>
+                )
+              })}
               <td className='px-1 py-1 align-middle'>
                 <div className='flex items-stretch gap-1'>
                   <button type='button' disabled={saving} onClick={saveEdit}
@@ -923,7 +1043,7 @@ export function InlineTableField({
 
           {(isNew || isPendingMode ? pendingRows : rows).length === 0 && (!isPendingMode || rows.length === 0) && !isEditingNew && (
             <tr>
-              <td colSpan={displayCols.length + ((isNew || isPendingMode) ? 2 : 1) + (rowOrderField || isNew ? 1 : 0)} className='px-3 py-14 text-center text-slate-400'>
+              <td colSpan={displayCols.length + ((isNew || isPendingMode) ? 2 : 1) + (rowOrderField || isNew || isPendingMode ? 1 : 0)} className='px-3 py-14 text-center text-slate-400'>
                 {isNew ? 'No pending rows' : 'No rows yet'}
               </td>
             </tr>
@@ -938,14 +1058,15 @@ export function InlineTableField({
           const allRows = [
             ...(rows ?? []).filter(r => !pendingDeletes.has(String(r.id))).map(r => {
               const rid = String(r.id)
-              return pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
+              const merged = pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
+              return applyComputedFields(merged as Record<string, unknown>)
             }),
-            ...pendingRows
+            ...pendingRows.map(r => applyComputedFields(r as Record<string, unknown>))
           ]
           return (
             <tfoot>
               <tr className='border-t border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600'>
-                {(rowOrderField || isNew) && <td />}
+                {(rowOrderField || isNew || isPendingMode) && <td />}
                 {(isNew || isPendingMode) && <td />}
                 {displayCols.map(c => {
                   const opts = c.options ? (typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown> : {}

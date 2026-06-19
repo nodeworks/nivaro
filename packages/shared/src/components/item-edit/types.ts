@@ -13,6 +13,7 @@ export interface CMSField {
   // API returns pre-parsed objects via formatFieldConfig; accept both
   options: Record<string, unknown> | string | null
   computed_formula: string | null
+  computed_type: string | null
   note: string | null
   placeholder: string | null
   repeater_schema: Record<string, unknown>[] | string | null

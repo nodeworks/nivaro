@@ -29,6 +29,8 @@ interface FieldRow {
   validation_rules: string | null
   lock_condition: string | null
   default_formula: string | null
+  computed_formula: string | null
+  computed_type: string | null
   cross_record_defaults: string | null
   remote_options_config: string | null
   repeater_schema: string | null
@@ -54,6 +56,8 @@ function formatFieldConfig(row: FieldRow) {
     validation_rules: parseJsonSafe(row.validation_rules),
     lock_condition: parseJsonSafe(row.lock_condition),
     default_formula: row.default_formula ?? null,
+    computed_formula: row.computed_formula ?? null,
+    computed_type: row.computed_type ?? null,
     cross_record_defaults: parseJsonSafe(row.cross_record_defaults),
     remote_options_config: parseJsonSafe(row.remote_options_config),
     repeater_schema: parseJsonSafe(row.repeater_schema),
@@ -150,6 +154,8 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         'validation_rules',
         'lock_condition',
         'default_formula',
+        'computed_formula',
+        'computed_type',
         'cross_record_defaults',
         'remote_options_config',
         'repeater_schema',
