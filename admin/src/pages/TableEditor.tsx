@@ -6566,7 +6566,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
       'summary_hide_empty' | 'ai_enabled' | 'conditions' | 'allow_clone' |
       'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field' |
       'pdf_theme' | 'pdf_template_id' | 'pdf_cover_enabled' | 'pdf_cover_title_field' |
-      'pdf_cover_subtitle' | 'pdf_show_logo' | 'pdf_page_size' | 'pdf_orientation'
+      'pdf_cover_subtitle' | 'pdf_show_logo' | 'pdf_page_size' | 'pdf_orientation' | 'is_active'
     >>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
@@ -6668,17 +6668,28 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
         {selected && (
           <div className='mb-3 flex items-center gap-2'>
             <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>{selected.name}</span>
-            {selected.is_active ? (
-              <span className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan'>
-                {selected.layout_type === 'file' ? 'PDF Export Active' : 'Default Layout'}
-              </span>
+            {selected.layout_type === 'file' ? (
+              <button
+                type='button'
+                onClick={() => patchLayoutMut.mutate({ id: selected.id, is_active: !selected.is_active })}
+                className={cn(
+                  'rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
+                  selected.is_active
+                    ? 'bg-nvr-cyan/10 text-nvr-cyan hover:bg-nvr-cyan/20'
+                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-muted dark:text-slate-400 dark:hover:bg-slate-700'
+                )}
+              >
+                {selected.is_active ? 'PDF Export Active' : 'Enable PDF Export'}
+              </button>
+            ) : selected.is_active ? (
+              <span className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan'>Default Layout</span>
             ) : (
               <button
                 type='button'
                 onClick={() => activateMut.mutate(selected.id)}
                 className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/20'
               >
-                {selected.layout_type === 'file' ? 'Enable PDF Export' : 'Set Default Layout'}
+                Set Default Layout
               </button>
             )}
             <div className='ml-auto flex items-center gap-1'>

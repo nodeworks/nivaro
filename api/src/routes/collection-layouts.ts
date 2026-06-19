@@ -177,6 +177,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       pdf_cover_enabled: boolean; pdf_cover_title_field: string | null
       pdf_cover_subtitle: string | null; pdf_show_logo: boolean
       pdf_page_size: string; pdf_orientation: string
+      is_active: boolean
     }>
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
@@ -208,6 +209,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.pdf_show_logo !== undefined) patch.pdf_show_logo = body.pdf_show_logo ? 1 : 0
     if (body.pdf_page_size !== undefined) patch.pdf_page_size = body.pdf_page_size
     if (body.pdf_orientation !== undefined) patch.pdf_orientation = body.pdf_orientation
+    if (body.is_active !== undefined && existing.layout_type === 'file') patch.is_active = body.is_active ? 1 : 0
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 
