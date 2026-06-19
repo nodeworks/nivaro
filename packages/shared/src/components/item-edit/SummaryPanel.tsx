@@ -123,6 +123,36 @@ function SummaryFieldValue({
 }) {
   const iface = field.interface ?? ''
 
+  // O2M first — direct one→many without junction table
+  if (itemId) {
+    const o2mRel = relations.find(
+      (r) =>
+        r.one_collection === collection &&
+        !r.junction_field &&
+        (r.one_field === field.field || r.many_collection === field.field)
+    )
+    // Only treat as O2M if there's no second relation making it a junction (M2M)
+    // A true O2M many_collection is a real data table — any companion would share the same many_field (FK)
+    if (o2mRel?.many_collection && o2mRel.many_field) {
+      const isJunction = relations.some(
+        (c) =>
+          c.many_collection === o2mRel.many_collection &&
+          c.id !== o2mRel.id &&
+          c.many_field !== o2mRel.many_field // companion FK is different → real junction table
+      )
+      if (!isJunction) {
+        return (
+          <O2MSummaryCount
+            relatedCollection={o2mRel.many_collection}
+            manyField={o2mRel.many_field}
+            parentId={itemId}
+          />
+        )
+      }
+    }
+  }
+
+  // M2M
   const m2mRel = (() => {
     const r = relations.find(
       (rel) => rel.one_collection === collection && rel.one_field === field.field
@@ -130,7 +160,10 @@ function SummaryFieldValue({
     if (!r) return null
     if (r.junction_field) return r
     const companion = relations.find(
-      (c) => c.many_collection === r.many_collection && c.id !== r.id
+      (c) =>
+        c.many_collection === r.many_collection &&
+        c.id !== r.id &&
+        c.many_field !== r.many_field // different FK = real junction companion
     )
     return companion ? { ...r, junction_field: companion.many_field } : null
   })()
@@ -145,25 +178,6 @@ function SummaryFieldValue({
         maxValues={fieldOpts?.max_values}
       />
     )
-  }
-
-  // O2M: find from the "one" side regardless of interface name
-  if (!m2mRel && itemId) {
-    const o2mRel = relations.find(
-      (r) =>
-        r.one_collection === collection &&
-        !r.junction_field &&
-        (r.one_field === field.field || r.many_collection === field.field)
-    )
-    if (o2mRel?.many_collection && o2mRel.many_field) {
-      return (
-        <O2MSummaryCount
-          relatedCollection={o2mRel.many_collection}
-          manyField={o2mRel.many_field}
-          parentId={itemId}
-        />
-      )
-    }
   }
 
   const isEmpty = val === null || val === undefined || val === ''

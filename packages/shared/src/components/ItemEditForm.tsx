@@ -62,7 +62,14 @@ function GridContainer({ children }: { children: (containerWidth: number) => Rea
 // ─── Save progress dialog ──────────────────────────────────────────────────────
 
 type SaveStepStatus = 'pending' | 'running' | 'done' | 'error'
-interface SaveStepItem { id: string; label: string; status: SaveStepStatus; count?: number; error?: string }
+interface SaveStepItem {
+  id: string
+  label: string
+  status: SaveStepStatus
+  detail?: string
+  progress?: { done: number; total: number }
+  error?: string
+}
 
 function SaveStepIcon({ status }: { status: SaveStepStatus }) {
   if (status === 'running') return <Loader2 className='h-4 w-4 animate-spin text-[#00ceff] shrink-0' />
@@ -74,38 +81,96 @@ function SaveStepIcon({ status }: { status: SaveStepStatus }) {
 function SaveProgressDialog({ open, steps, onClose }: { open: boolean; steps: SaveStepItem[]; onClose: () => void }) {
   const allSettled = steps.length > 0 && steps.every(s => s.status === 'done' || s.status === 'error')
   const hasError = steps.some(s => s.status === 'error')
+  const doneCount = steps.filter(s => s.status === 'done').length
+  const totalCount = steps.length
+  const overallPct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0
+
   return (
     <Dialog open={open}>
-      <DialogContent onInteractOutside={(e) => e.preventDefault()} className='max-w-sm'>
+      <DialogContent onInteractOutside={(e) => e.preventDefault()} className='max-w-md'>
         <DialogHeader>
-          <DialogTitle className='flex items-center gap-2'>
+          <DialogTitle className='flex items-center gap-2 text-[15px]'>
             {!allSettled && <Loader2 className='h-4 w-4 animate-spin text-[#00ceff]' />}
             {allSettled && hasError && <AlertCircle className='h-4 w-4 text-red-500' />}
             {allSettled && !hasError && <Check className='h-4 w-4 text-green-500' />}
-            {hasError ? 'Saved with errors' : allSettled ? 'Saved' : 'Saving…'}
+            {hasError ? 'Saved with errors' : allSettled ? 'All changes saved' : 'Saving changes…'}
           </DialogTitle>
+          <div className='flex items-center gap-3 pt-1'>
+            <div className='flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden'>
+              <div
+                className='h-full rounded-full bg-[#00ceff] transition-all duration-500'
+                style={{ width: `${overallPct}%` }}
+              />
+            </div>
+            <span className='text-[11px] text-slate-400 tabular-nums shrink-0'>
+              {doneCount}/{totalCount}
+            </span>
+          </div>
         </DialogHeader>
         <DialogBody>
-          <div className='space-y-3'>
-            {steps.map(step => (
-              <div key={step.id} className='flex items-start gap-3'>
-                <div className='mt-0.5'><SaveStepIcon status={step.status} /></div>
-                <div className='flex-1 min-w-0'>
-                  <div className='flex items-center gap-1.5 flex-wrap'>
-                    <span className={cn('text-sm', step.status === 'done' ? 'text-slate-400 line-through decoration-slate-300' : 'text-slate-800')}>{step.label}</span>
-                    {step.count !== undefined && step.count > 0 && (
-                      <span className='text-[11px] text-slate-400 bg-slate-100 rounded px-1'>×{step.count}</span>
-                    )}
+          <div className='space-y-2'>
+            {steps.map(step => {
+              const rowPct = step.progress && step.progress.total > 0
+                ? Math.round((step.progress.done / step.progress.total) * 100)
+                : null
+              return (
+                <div
+                  key={step.id}
+                  className={cn(
+                    'rounded-lg border px-3 py-2.5 transition-colors duration-200',
+                    step.status === 'running' && 'border-[#00ceff]/30 bg-[#00ceff]/5',
+                    step.status === 'done' && 'border-green-100 bg-green-50/40',
+                    step.status === 'error' && 'border-red-200 bg-red-50',
+                    step.status === 'pending' && 'border-slate-100 bg-slate-50/60'
+                  )}
+                >
+                  <div className='flex items-start gap-2.5'>
+                    <div className='mt-0.5 shrink-0'><SaveStepIcon status={step.status} /></div>
+                    <div className='flex-1 min-w-0'>
+                      <div className='flex items-center justify-between gap-2'>
+                        <span className={cn(
+                          'text-[13px] font-medium leading-snug',
+                          step.status === 'done' && 'text-slate-400',
+                          step.status === 'error' && 'text-red-700',
+                          step.status === 'running' && 'text-slate-900',
+                          step.status === 'pending' && 'text-slate-500'
+                        )}>
+                          {step.label}
+                        </span>
+                        {step.progress && (
+                          <span className='text-[11px] text-slate-400 shrink-0 tabular-nums font-mono'>
+                            {step.progress.done}/{step.progress.total}
+                          </span>
+                        )}
+                      </div>
+                      {step.detail && !step.error && (
+                        <p className='text-[11px] text-slate-400 mt-0.5 leading-snug'>{step.detail}</p>
+                      )}
+                      {step.error && (
+                        <p className='text-[11px] text-red-500 mt-0.5 break-words leading-snug'>{step.error}</p>
+                      )}
+                      {step.status === 'running' && rowPct !== null && (
+                        <div className='mt-1.5 h-1 rounded-full bg-slate-200 overflow-hidden'>
+                          <div
+                            className='h-full rounded-full bg-[#00ceff] transition-all duration-200'
+                            style={{ width: `${rowPct}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  {step.error && <p className='text-xs text-red-500 mt-0.5 break-words'>{step.error}</p>}
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </DialogBody>
         {allSettled && (
           <DialogFooter>
-            <button type='button' onClick={onClose} className='text-sm px-3 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors'>
+            <button
+              type='button'
+              onClick={onClose}
+              className='text-sm px-4 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors'
+            >
               {hasError ? 'Close' : 'Done'}
             </button>
           </DialogFooter>
@@ -234,8 +299,12 @@ export function ItemEditForm({
   // ── Save progress dialog ───────────────────────────────────────────────────
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveSteps, setSaveSteps] = useState<SaveStepItem[]>([])
-  function updateStep(id: string, upd: Partial<SaveStepItem>) {
-    setSaveSteps(prev => prev.map(s => s.id === id ? { ...s, ...upd } : s))
+  function updateStep(id: string, upd: Partial<SaveStepItem> | ((prev: SaveStepItem) => Partial<SaveStepItem>)) {
+    setSaveSteps(prev => prev.map(s => {
+      if (s.id !== id) return s
+      const changes = typeof upd === 'function' ? upd(s) : upd
+      return { ...s, ...changes }
+    }))
   }
   function getO2MLabel(key: string): string {
     const [rc] = key.split('.')
@@ -772,12 +841,35 @@ export function ItemEditForm({
       const editO2MKeys = [...pendingO2MEdits.entries()].filter(([, e]) => e.size > 0).map(([k]) => k)
       const delO2MKeys = [...pendingO2MDeletes.entries()].filter(([, d]) => d.size > 0).map(([k]) => k)
 
+      // Detail strings
+      const draftFieldCount = allFields.filter(f => !SYSTEM_FIELDS.has(f.field) && !f.readonly && f.field in draft).length
+      const mainDetail = isNew
+        ? `${draftFieldCount} field${draftFieldCount !== 1 ? 's' : ''} set`
+        : `${draftFieldCount} field${draftFieldCount !== 1 ? 's' : ''} updated`
+
+      let m2mAdds = 0, m2mRemoves = 0
+      for (const [, ids] of m2mLinks.entries()) m2mAdds += ids.length
+      for (const [, ids] of m2mUnlinks.entries()) m2mRemoves += ids.size
+      const m2mDetail = [
+        m2mAdds > 0 ? `+${m2mAdds} linked` : '',
+        m2mRemoves > 0 ? `-${m2mRemoves} unlinked` : ''
+      ].filter(Boolean).join(' · ')
+
       const steps: SaveStepItem[] = [
-        { id: 'main', label: isNew ? `Create ${titleCase(collection)}` : `Save ${titleCase(collection)}`, status: 'pending' },
-        ...(hasM2M ? [{ id: 'm2m', label: 'Update relationships', status: 'pending' as SaveStepStatus }] : []),
-        ...newO2MKeys.map(k => ({ id: `o2m:new:${k}`, label: getO2MLabel(k), status: 'pending' as SaveStepStatus, count: pendingO2MRows.get(k)?.length })),
-        ...editO2MKeys.map(k => ({ id: `o2m:edit:${k}`, label: `Update ${getO2MLabel(k)}`, status: 'pending' as SaveStepStatus, count: pendingO2MEdits.get(k)?.size })),
-        ...delO2MKeys.map(k => ({ id: `o2m:del:${k}`, label: `Delete from ${getO2MLabel(k)}`, status: 'pending' as SaveStepStatus, count: pendingO2MDeletes.get(k)?.size })),
+        { id: 'main', label: isNew ? `Create ${titleCase(collection)}` : `Save ${titleCase(collection)}`, status: 'pending', detail: mainDetail },
+        ...(hasM2M ? [{ id: 'm2m', label: 'Update relationships', status: 'pending' as SaveStepStatus, detail: m2mDetail }] : []),
+        ...newO2MKeys.map(k => {
+          const n = pendingO2MRows.get(k)?.length ?? 0
+          return { id: `o2m:new:${k}`, label: `Add ${getO2MLabel(k)}`, status: 'pending' as SaveStepStatus, detail: `${n} new row${n !== 1 ? 's' : ''}`, progress: { done: 0, total: n } }
+        }),
+        ...editO2MKeys.map(k => {
+          const n = pendingO2MEdits.get(k)?.size ?? 0
+          return { id: `o2m:edit:${k}`, label: `Update ${getO2MLabel(k)}`, status: 'pending' as SaveStepStatus, detail: `${n} row${n !== 1 ? 's' : ''} edited`, progress: { done: 0, total: n } }
+        }),
+        ...delO2MKeys.map(k => {
+          const n = pendingO2MDeletes.get(k)?.size ?? 0
+          return { id: `o2m:del:${k}`, label: `Remove from ${getO2MLabel(k)}`, status: 'pending' as SaveStepStatus, detail: `${n} row${n !== 1 ? 's' : ''} deleted`, progress: { done: 0, total: n } }
+        }),
       ]
       setSaveSteps(steps)
       setSaveDialogOpen(true)
@@ -854,11 +946,14 @@ export function ItemEditForm({
       // ── O2M new rows ───────────────────────────────────────────────────────
       for (const key of newO2MKeys) {
         const stepId = `o2m:new:${key}`
-        updateStep(stepId, { status: 'running' })
         const [rc, mf] = key.split('.')
         const rowList = pendingO2MRows.get(key) ?? []
+        updateStep(stepId, { status: 'running', progress: { done: 0, total: rowList.length } })
         try {
-          await Promise.all(rowList.map(data => client.request(post(`/items/${rc}`, { ...data, [mf]: savedId }))))
+          await Promise.all(rowList.map(async (data) => {
+            await client.request(post(`/items/${rc}`, { ...data, [mf]: savedId }))
+            updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: rowList.length } }))
+          }))
           updateStep(stepId, { status: 'done' })
         } catch (err) {
           updateStep(stepId, { status: 'error', error: errMsg(err) })
@@ -869,13 +964,14 @@ export function ItemEditForm({
       const nextEdits = new Map(pendingO2MEdits)
       for (const key of editO2MKeys) {
         const stepId = `o2m:edit:${key}`
-        updateStep(stepId, { status: 'running' })
         const [rc] = key.split('.')
         const edits = pendingO2MEdits.get(key) ?? new Map()
+        updateStep(stepId, { status: 'running', progress: { done: 0, total: edits.size } })
         let hasErr = false
-        await Promise.all([...edits.entries()].map(([rowId, changes]) =>
-          client.request(patch(`/items/${rc}/${rowId}`, changes)).catch(err => { hasErr = true; updateStep(stepId, { status: 'error', error: errMsg(err) }) })
-        ))
+        await Promise.all([...edits.entries()].map(async ([rowId, changes]) => {
+          await client.request(patch(`/items/${rc}/${rowId}`, changes)).catch(err => { hasErr = true; updateStep(stepId, { status: 'error', error: errMsg(err) }) })
+          updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: edits.size } }))
+        }))
         if (!hasErr) { updateStep(stepId, { status: 'done' }); nextEdits.delete(key) }
       }
       setPendingO2MEdits(nextEdits)
@@ -884,13 +980,14 @@ export function ItemEditForm({
       const nextDels = new Map(pendingO2MDeletes)
       for (const key of delO2MKeys) {
         const stepId = `o2m:del:${key}`
-        updateStep(stepId, { status: 'running' })
         const [rc] = key.split('.')
         const dels = pendingO2MDeletes.get(key) ?? new Set()
+        updateStep(stepId, { status: 'running', progress: { done: 0, total: dels.size } })
         let hasErr = false
-        await Promise.all([...dels].map(rowId =>
-          client.request(del(`/items/${rc}/${rowId}`)).catch(err => { hasErr = true; updateStep(stepId, { status: 'error', error: errMsg(err) }) })
-        ))
+        await Promise.all([...dels].map(async (rowId) => {
+          await client.request(del(`/items/${rc}/${rowId}`)).catch(err => { hasErr = true; updateStep(stepId, { status: 'error', error: errMsg(err) }) })
+          updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: dels.size } }))
+        }))
         if (!hasErr) { updateStep(stepId, { status: 'done' }); nextDels.delete(key) }
       }
       setPendingO2MDeletes(nextDels)
