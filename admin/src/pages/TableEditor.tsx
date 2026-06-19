@@ -6669,14 +6669,16 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
           <div className='mb-3 flex items-center gap-2'>
             <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>{selected.name}</span>
             {selected.is_active ? (
-              <span className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan'>Default Layout</span>
+              <span className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan'>
+                {selected.layout_type === 'file' ? 'PDF Export Active' : 'Default Layout'}
+              </span>
             ) : (
               <button
                 type='button'
                 onClick={() => activateMut.mutate(selected.id)}
                 className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/20'
               >
-                Set Default Layout
+                {selected.layout_type === 'file' ? 'Enable PDF Export' : 'Set Default Layout'}
               </button>
             )}
             <div className='ml-auto flex items-center gap-1'>
