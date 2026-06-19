@@ -26,6 +26,7 @@ function parseConditions(raw: unknown): LayoutConditions {
 async function resolveLayout(collection: string, userRoleId: string | null | undefined) {
   const layouts = await db('nivaro_collection_layouts')
     .where({ collection })
+    .whereNot({ layout_type: 'file' })
     .orderByRaw('is_active desc, sort asc')
 
   if (layouts.length === 0) return null
@@ -98,14 +99,26 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   })
 
   app.get('/', { preHandler: authenticate }, async (req, reply) => {
-    const { collection, active } = req.query as { collection?: string; active?: string }
+    const { collection, active, type } = req.query as { collection?: string; active?: string; type?: string }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
     let q = db('nivaro_collection_layouts')
       .where({ collection })
       .orderBy('sort', 'asc')
-      .select('id', 'collection', 'name', 'slug', 'is_active', 'sort', 'created_at', 'disable_comments', 'disable_tasks', 'disable_revisions', 'disable_clone', 'disable_delete', 'accordion_mode', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all', 'summary_hide_empty', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule', 'allow_disable_pickers', 'layout_type', 'row_order_field')
+      .select(
+        'id', 'collection', 'name', 'slug', 'is_active', 'sort', 'created_at',
+        'disable_comments', 'disable_tasks', 'disable_revisions', 'disable_clone', 'disable_delete',
+        'accordion_mode', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all',
+        'summary_hide_empty', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule',
+        'allow_disable_pickers', 'layout_type', 'row_order_field',
+        'pdf_theme', 'pdf_template_id', 'pdf_cover_enabled', 'pdf_cover_title_field',
+        'pdf_cover_subtitle', 'pdf_show_logo', 'pdf_page_size', 'pdf_orientation'
+      )
     if (active === 'true') q = q.where({ is_active: 1 })
+    if (type) {
+      q = q.where({ layout_type: type })
+      if (type === 'file') q = q.where({ is_active: 1 })
+    }
 
     const rows = await q
     for (const row of rows) row.conditions = parseConditions(row.conditions)
@@ -149,7 +162,20 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; disable_comments: boolean; disable_tasks: boolean; disable_revisions: boolean; disable_clone: boolean; disable_delete: boolean; accordion_mode: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; summary_hide_empty: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; row_order_field: string | null }>
+    const body = req.body as Partial<{
+      name: string; slug: string | null; sort: number
+      disable_comments: boolean; disable_tasks: boolean; disable_revisions: boolean
+      disable_clone: boolean; disable_delete: boolean; accordion_mode: boolean
+      tab_mode: string; validate_before_next: boolean; summary_enabled: boolean
+      summary_show_all: boolean; summary_hide_empty: boolean; ai_enabled: boolean
+      conditions: { role_ids?: string[] } | null
+      allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean
+      layout_type: string; row_order_field: string | null
+      pdf_theme: string; pdf_template_id: number | null
+      pdf_cover_enabled: boolean; pdf_cover_title_field: string | null
+      pdf_cover_subtitle: string | null; pdf_show_logo: boolean
+      pdf_page_size: string; pdf_orientation: string
+    }>
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
     if (body.slug !== undefined) patch.slug = body.slug ?? null
@@ -172,6 +198,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.allow_disable_pickers !== undefined) patch.allow_disable_pickers = body.allow_disable_pickers ? 1 : 0
     if (body.layout_type !== undefined) patch.layout_type = body.layout_type
     if (body.row_order_field !== undefined) patch.row_order_field = body.row_order_field ?? null
+    if (body.pdf_theme !== undefined) patch.pdf_theme = body.pdf_theme
+    if (body.pdf_template_id !== undefined) patch.pdf_template_id = body.pdf_template_id ?? null
+    if (body.pdf_cover_enabled !== undefined) patch.pdf_cover_enabled = body.pdf_cover_enabled ? 1 : 0
+    if (body.pdf_cover_title_field !== undefined) patch.pdf_cover_title_field = body.pdf_cover_title_field ?? null
+    if (body.pdf_cover_subtitle !== undefined) patch.pdf_cover_subtitle = body.pdf_cover_subtitle ?? null
+    if (body.pdf_show_logo !== undefined) patch.pdf_show_logo = body.pdf_show_logo ? 1 : 0
+    if (body.pdf_page_size !== undefined) patch.pdf_page_size = body.pdf_page_size
+    if (body.pdf_orientation !== undefined) patch.pdf_orientation = body.pdf_orientation
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 
