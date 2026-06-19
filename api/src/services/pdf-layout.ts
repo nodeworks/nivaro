@@ -60,7 +60,7 @@ interface LayoutRow {
   pdf_orientation: string | null
 }
 
-interface GroupRow { id: number; label: string; sort: number }
+interface GroupRow { id: number; key: string; label: string; sort: number }
 interface AssignmentRow {
   field: string
   group_key: string | null
@@ -91,7 +91,7 @@ export async function generatePdfFromLayout(params: {
     .map(group => {
       const groupFields = assignments
         .filter(a =>
-          a.group_key === String(group.id) &&
+          a.group_key === group.key &&
           a.is_visible !== 0 &&
           a.is_visible !== false &&
           !a.field.startsWith('__')
