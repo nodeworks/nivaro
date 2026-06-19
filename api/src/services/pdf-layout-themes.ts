@@ -23,8 +23,8 @@ export function escHtml(str: string): string {
 }
 
 // ─── Meridian (Classic) ───────────────────────────────────────────────────────
-// Deep navy cover · amber accent · Georgia serif headings · ruled 2-col fields
-// Tone: authoritative, board-room, annual-report quality
+// Deep navy cover · amber accent · Georgia serif · ruled 2-col field table
+// Authoritative, board-room, annual-report quality
 
 export function classicTheme(data: PdfLayoutData): string {
   const totalFields = data.sections.reduce((n, s) => n + s.fields.length, 0)
@@ -32,9 +32,6 @@ export function classicTheme(data: PdfLayoutData): string {
 
   const coverHtml = data.coverEnabled ? `
 <div class="cover">
-  <div class="cover-ambient-ring cover-ring-outer"></div>
-  <div class="cover-ambient-ring cover-ring-inner"></div>
-
   <div class="cover-header">
     ${data.logoUrl
       ? `<img class="cover-logo" src="${escHtml(data.logoUrl)}" alt="">`
@@ -61,7 +58,7 @@ export function classicTheme(data: PdfLayoutData): string {
     </div>
     <div class="meta-divider"></div>
     <div class="meta-item">
-      <span class="meta-label">Total fields</span>
+      <span class="meta-label">Fields</span>
       <span class="meta-value">${totalFields}</span>
     </div>
   </div>
@@ -84,6 +81,12 @@ export function classicTheme(data: PdfLayoutData): string {
   </table>
 </div>`).join('')
 
+  const contentHeaderHtml = `
+<div class="content-header">
+  <span class="ch-collection">${escHtml(data.collectionLabel)}</span>
+  <span class="ch-meta">${escHtml(data.coverTitle)} &middot; ${escHtml(data.generatedAt)}</span>
+</div>`
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -91,7 +94,6 @@ export function classicTheme(data: PdfLayoutData): string {
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   @page { size: A4; margin: 0; }
-
   html, body {
     font-family: Helvetica, Arial, sans-serif;
     font-size: 11pt;
@@ -101,7 +103,7 @@ export function classicTheme(data: PdfLayoutData): string {
     print-color-adjust: exact;
   }
 
-  /* ── Cover ─────────────────────────────────────────── */
+  /* ── Cover ── */
   .cover {
     width: 210mm;
     height: 297mm;
@@ -110,234 +112,118 @@ export function classicTheme(data: PdfLayoutData): string {
     flex-direction: column;
     padding: 28mm 22mm 18mm;
     page-break-after: always;
-    position: relative;
-    z-index: 2;
     overflow: hidden;
+    position: relative;
   }
-
-  .cover-ambient-ring {
+  .cover::before {
+    content: '';
     position: absolute;
+    top: -140px; right: -140px;
+    width: 480px; height: 480px;
     border-radius: 50%;
-    border: 1px solid rgba(200, 162, 92, 0.13);
+    border: 1px solid rgba(200,162,92,0.13);
     pointer-events: none;
   }
-  .cover-ring-outer { width: 480px; height: 480px; top: -140px; right: -140px; }
-  .cover-ring-inner { width: 300px; height: 300px; top: -50px; right: -50px; }
-
+  .cover::after {
+    content: '';
+    position: absolute;
+    top: -50px; right: -50px;
+    width: 300px; height: 300px;
+    border-radius: 50%;
+    border: 1px solid rgba(200,162,92,0.1);
+    pointer-events: none;
+  }
   .cover-header {
     display: flex;
     align-items: center;
     gap: 14px;
     margin-bottom: auto;
   }
-
   .cover-badge {
-    width: 46px;
-    height: 46px;
+    width: 46px; height: 46px;
     border-radius: 10px;
-    border: 1.5px solid rgba(200, 162, 92, 0.55);
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    border: 1.5px solid rgba(200,162,92,0.55);
+    display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
   }
   .cover-badge span {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 22px;
-    font-weight: 400;
-    color: #c8a25c;
+    font-size: 22px; font-weight: 400; color: #c8a25c;
   }
-
   .cover-logo {
-    height: 38px;
-    width: auto;
-    object-fit: contain;
-    filter: brightness(0) invert(1);
-    flex-shrink: 0;
+    height: 38px; width: auto; object-fit: contain;
+    filter: brightness(0) invert(1); flex-shrink: 0;
   }
-
   .cover-collection-label {
-    font-size: 8.5pt;
-    font-weight: 600;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: #c8a25c;
+    font-size: 8.5pt; font-weight: 600;
+    letter-spacing: 0.2em; text-transform: uppercase; color: #c8a25c;
   }
-
   .cover-body { margin-bottom: 20mm; }
-
   .cover-title {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 46pt;
-    font-weight: 400;
-    line-height: 1.08;
-    letter-spacing: -0.025em;
-    color: #ffffff;
-    margin-bottom: 18px;
-    max-width: 500px;
+    font-size: 46pt; font-weight: 400; line-height: 1.08;
+    letter-spacing: -0.025em; color: #ffffff; margin-bottom: 18px; max-width: 500px;
   }
-
   .cover-subtitle {
-    font-size: 13pt;
-    font-weight: 300;
-    color: rgba(255, 255, 255, 0.5);
-    margin-bottom: 28px;
-    line-height: 1.4;
+    font-size: 13pt; font-weight: 300;
+    color: rgba(255,255,255,0.5); margin-bottom: 28px; line-height: 1.4;
   }
-
-  .cover-rule {
-    width: 52px;
-    height: 3px;
-    background: #c8a25c;
-    border-radius: 2px;
-  }
-
+  .cover-rule { width: 52px; height: 3px; background: #c8a25c; border-radius: 2px; }
   .cover-meta {
-    display: flex;
-    align-items: flex-start;
-    gap: 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-    padding-top: 18px;
+    display: flex; align-items: flex-start;
+    border-top: 1px solid rgba(255,255,255,0.1); padding-top: 18px;
   }
-
   .meta-item {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 0 18px;
+    flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 0 18px;
   }
   .meta-item:first-child { padding-left: 0; }
   .meta-item:last-child { padding-right: 0; }
-
-  .meta-divider {
-    width: 1px;
-    background: rgba(255, 255, 255, 0.1);
-    align-self: stretch;
-  }
-
+  .meta-divider { width: 1px; background: rgba(255,255,255,0.1); align-self: stretch; }
   .meta-label {
-    font-size: 7pt;
-    font-weight: 600;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.3);
+    font-size: 7pt; font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.3);
   }
+  .meta-value { font-size: 9pt; color: rgba(255,255,255,0.72); font-weight: 400; line-height: 1.3; }
 
-  .meta-value {
-    font-size: 9pt;
-    color: rgba(255, 255, 255, 0.72);
-    font-weight: 400;
-    line-height: 1.3;
-  }
-
-  /* ── Page Header / Footer (fixed, show on content pages) ── */
-  .page-header {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    height: 14mm;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 22mm;
+  /* ── Content header (non-repeating, appears once at top of content) ── */
+  .content-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 0 10px; margin-bottom: 12mm;
     border-bottom: 1px solid #e5e7eb;
-    background: #ffffff;
-    z-index: 1;
   }
-
-  .ph-label {
-    font-size: 7.5pt;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: #c8a25c;
+  .ch-collection {
+    font-size: 7.5pt; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; color: #c8a25c;
   }
-
-  .ph-title {
-    font-size: 7.5pt;
-    color: #9ca3af;
-    font-weight: 400;
-    max-width: 200px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .page-footer {
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
-    height: 10mm;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 22mm;
-    border-top: 1px solid #f3f4f6;
-    background: #ffffff;
-    z-index: 1;
-  }
-
-  .pf-date { font-size: 7pt; color: #d1d5db; }
-  .pf-by   { font-size: 7pt; color: #d1d5db; }
+  .ch-meta { font-size: 7.5pt; color: #9ca3af; font-weight: 400; }
 
   /* ── Content ── */
-  .content {
-    padding: 20mm 22mm 18mm;
-  }
+  .content { padding: 14mm 22mm 18mm; }
 
   /* ── Sections ── */
-  .section {
-    margin-bottom: 12mm;
-  }
-
-  .section-header {
-    margin-bottom: 7mm;
-    page-break-inside: avoid;
-    page-break-after: avoid;
-  }
-
+  .section { margin-bottom: 12mm; }
+  .section-header { margin-bottom: 7mm; page-break-inside: avoid; page-break-after: avoid; }
   .section-title {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 17pt;
-    font-weight: 400;
-    color: #0c1829;
-    letter-spacing: -0.015em;
-    margin-bottom: 8px;
+    font-size: 17pt; font-weight: 400; color: #0c1829;
+    letter-spacing: -0.015em; margin-bottom: 8px;
   }
-
   .section-rule {
     height: 2px;
     background: linear-gradient(90deg, #c8a25c 0px, rgba(200,162,92,0.25) 80px, transparent 180px);
   }
 
   /* ── Fields ── */
-  .fields {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  .field-row {
-    border-bottom: 1px solid #f3f4f6;
-    page-break-inside: avoid;
-  }
-
+  .fields { width: 100%; border-collapse: collapse; }
+  .field-row { border-bottom: 1px solid #f3f4f6; page-break-inside: avoid; }
   .field-label {
-    width: 34%;
-    padding: 8px 14px 8px 0;
-    font-size: 8pt;
-    font-weight: 600;
-    color: #6b7280;
-    letter-spacing: 0.02em;
-    vertical-align: top;
-    line-height: 1.5;
+    width: 34%; padding: 8px 14px 8px 0;
+    font-size: 8pt; font-weight: 600; color: #6b7280;
+    letter-spacing: 0.02em; vertical-align: top; line-height: 1.5;
   }
-
   .field-value {
-    padding: 8px 0;
-    font-size: 10pt;
-    color: #111827;
-    vertical-align: top;
-    line-height: 1.55;
-    word-break: break-word;
+    padding: 8px 0; font-size: 10pt; color: #111827;
+    vertical-align: top; line-height: 1.55; word-break: break-word;
   }
 </style>
 </head>
@@ -345,19 +231,9 @@ export function classicTheme(data: PdfLayoutData): string {
 
 ${coverHtml}
 
-${data.coverEnabled ? `
-<div class="page-header">
-  <span class="ph-label">${escHtml(data.collectionLabel)}</span>
-  <span class="ph-title">${escHtml(data.coverTitle)}</span>
-</div>
-<div class="page-footer">
-  <span class="pf-date">${escHtml(data.generatedAt)}</span>
-  <span class="pf-by">Prepared by ${escHtml(data.generatedBy)}</span>
-</div>
-` : ''}
-
 <div class="content">
-${sectionsHtml}
+  ${contentHeaderHtml}
+  ${sectionsHtml}
 </div>
 
 </body>
@@ -366,7 +242,7 @@ ${sectionsHtml}
 
 // ─── Signal (Minimal) ─────────────────────────────────────────────────────────
 // White cover · single cyan stripe · extreme weight contrast · pure typography
-// Tone: confident, architectural, Helvetica-era Swiss design sensibility
+// Confident, architectural, Swiss design sensibility
 
 export function minimalTheme(data: PdfLayoutData): string {
   const initial = data.collectionLabel.charAt(0).toUpperCase()
@@ -374,7 +250,6 @@ export function minimalTheme(data: PdfLayoutData): string {
   const coverHtml = data.coverEnabled ? `
 <div class="cover">
   <div class="cover-stripe"></div>
-
   <div class="cover-inner">
     <div class="cover-top">
       ${data.logoUrl
@@ -383,13 +258,11 @@ export function minimalTheme(data: PdfLayoutData): string {
       }
       <span class="cover-collection">${escHtml(data.collectionLabel)}</span>
     </div>
-
     <div class="cover-body">
       <h1 class="cover-title">${escHtml(data.coverTitle)}</h1>
       <div class="cover-rule"></div>
       ${data.coverSubtitle ? `<p class="cover-subtitle">${escHtml(data.coverSubtitle)}</p>` : ''}
     </div>
-
     <div class="cover-bottom">
       <span class="cover-date">${escHtml(data.generatedAt)}</span>
       <span class="cover-by">${escHtml(data.generatedBy)}</span>
@@ -412,6 +285,15 @@ export function minimalTheme(data: PdfLayoutData): string {
   </div>
 </div>`).join('')
 
+  const contentHeaderHtml = `
+<div class="content-header">
+  <div class="ch-left">
+    <span class="ch-stripe"></span>
+    <span class="ch-label">${escHtml(data.collectionLabel)}</span>
+  </div>
+  <span class="ch-date">${escHtml(data.generatedAt)}</span>
+</div>`
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -419,232 +301,99 @@ export function minimalTheme(data: PdfLayoutData): string {
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   @page { size: A4; margin: 0; }
-
   html, body {
     font-family: Helvetica, Arial, sans-serif;
-    font-size: 11pt;
-    color: #111111;
-    background: #ffffff;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
+    font-size: 11pt; color: #111111; background: #ffffff;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
 
-  /* ── Cover ─────────────────────────────────────────── */
+  /* ── Cover ── */
   .cover {
-    width: 210mm;
-    height: 297mm;
+    width: 210mm; height: 297mm;
     background: #ffffff;
     display: flex;
-    position: relative;
-    z-index: 2;
     page-break-after: always;
-    overflow: hidden;
   }
-
-  .cover-stripe {
-    width: 5px;
-    background: #00ceff;
-    flex-shrink: 0;
-    height: 100%;
-  }
-
+  .cover-stripe { width: 5px; background: #00ceff; flex-shrink: 0; }
   .cover-inner {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
+    flex: 1; display: flex; flex-direction: column;
     padding: 28mm 22mm 18mm 20mm;
   }
-
   .cover-top {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: auto;
+    display: flex; align-items: center; gap: 12px; margin-bottom: auto;
   }
-
   .cover-badge {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: #00ceff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 15px;
-    font-weight: 900;
-    color: #ffffff;
-    flex-shrink: 0;
-    line-height: 1;
+    width: 36px; height: 36px; border-radius: 50%; background: #00ceff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 900; color: #ffffff; flex-shrink: 0;
   }
-
-  .cover-logo {
-    height: 32px;
-    width: auto;
-    object-fit: contain;
-    flex-shrink: 0;
-  }
-
+  .cover-logo { height: 32px; width: auto; object-fit: contain; flex-shrink: 0; }
   .cover-collection {
-    font-size: 9pt;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    color: #6b7280;
-    text-transform: uppercase;
+    font-size: 9pt; font-weight: 500; letter-spacing: 0.08em;
+    color: #6b7280; text-transform: uppercase;
   }
-
   .cover-body { margin-bottom: auto; }
-
   .cover-title {
-    font-size: 58pt;
-    font-weight: 900;
-    line-height: 0.95;
-    letter-spacing: -0.04em;
-    color: #111111;
-    margin-bottom: 20px;
-    word-break: break-word;
-    hyphens: auto;
+    font-size: 58pt; font-weight: 900; line-height: 0.95;
+    letter-spacing: -0.04em; color: #111111;
+    margin-bottom: 20px; word-break: break-word; hyphens: auto;
   }
-
-  .cover-rule {
-    width: 100%;
-    height: 3px;
-    background: #00ceff;
-    margin-bottom: 22px;
-  }
-
+  .cover-rule { width: 100%; height: 3px; background: #00ceff; margin-bottom: 22px; }
   .cover-subtitle {
-    font-size: 12pt;
-    font-weight: 300;
-    color: #6b7280;
-    line-height: 1.45;
-    max-width: 420px;
+    font-size: 12pt; font-weight: 300; color: #6b7280; line-height: 1.45; max-width: 420px;
   }
-
   .cover-bottom {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-    padding-top: 20px;
-    border-top: 1px solid #e5e7eb;
+    display: flex; justify-content: space-between; align-items: flex-end;
+    padding-top: 20px; border-top: 1px solid #e5e7eb;
   }
+  .cover-date { font-size: 8.5pt; color: #9ca3af; }
+  .cover-by   { font-size: 8.5pt; color: #9ca3af; }
 
-  .cover-date {
-    font-size: 8.5pt;
-    color: #9ca3af;
-    font-weight: 400;
-  }
-
-  .cover-by {
-    font-size: 8.5pt;
-    color: #9ca3af;
-    font-weight: 400;
-  }
-
-  /* ── Page Header (fixed) ── */
-  .page-header {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    height: 11mm;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 22mm;
+  /* ── Content header ── */
+  .content-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 10px; margin-bottom: 14mm;
     border-bottom: 1px solid #e5e7eb;
-    background: #ffffff;
-    z-index: 1;
   }
-
-  .ph-left {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  .ch-left { display: flex; align-items: center; gap: 8px; }
+  .ch-stripe { display: inline-block; width: 3px; height: 14px; background: #00ceff; border-radius: 2px; }
+  .ch-label {
+    font-size: 7.5pt; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #374151;
   }
-
-  .ph-stripe {
-    width: 3px;
-    height: 14px;
-    background: #00ceff;
-    border-radius: 2px;
-  }
-
-  .ph-label {
-    font-size: 7.5pt;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: #374151;
-  }
-
-  .ph-date {
-    font-size: 7.5pt;
-    color: #9ca3af;
-    font-weight: 400;
-  }
+  .ch-date { font-size: 7.5pt; color: #9ca3af; }
 
   /* ── Content ── */
-  .content {
-    padding: 17mm 22mm 16mm;
-  }
+  .content { padding: 14mm 22mm 18mm; }
 
   /* ── Sections ── */
-  .section {
-    margin-bottom: 14mm;
-  }
-
+  .section { margin-bottom: 14mm; }
   .section-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8mm;
-    page-break-inside: avoid;
-    page-break-after: avoid;
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 8mm; page-break-inside: avoid; page-break-after: avoid;
   }
-
   .section-marker {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    background: #00ceff;
-    border-radius: 2px;
-    flex-shrink: 0;
+    display: inline-block; width: 8px; height: 8px;
+    background: #00ceff; border-radius: 2px; flex-shrink: 0;
   }
-
   .section-title {
-    font-size: 15pt;
-    font-weight: 700;
-    color: #111111;
-    letter-spacing: -0.02em;
-    line-height: 1;
+    font-size: 15pt; font-weight: 700; color: #111111;
+    letter-spacing: -0.02em; line-height: 1;
   }
 
   /* ── Fields ── */
   .fields { display: flex; flex-direction: column; }
-
   .field-row {
-    display: flex;
-    gap: 0;
-    border-bottom: 1px solid #f3f4f6;
-    padding: 7px 0;
-    page-break-inside: avoid;
+    display: flex; border-bottom: 1px solid #f3f4f6;
+    padding: 7px 0; page-break-inside: avoid;
   }
-
   .field-label {
-    width: 36%;
-    flex-shrink: 0;
-    font-size: 8.5pt;
-    font-weight: 600;
-    color: #6b7280;
-    padding-right: 16px;
-    line-height: 1.55;
+    width: 36%; flex-shrink: 0; font-size: 8.5pt; font-weight: 600;
+    color: #6b7280; padding-right: 16px; line-height: 1.55;
   }
-
   .field-value {
-    flex: 1;
-    font-size: 10.5pt;
-    color: #111111;
-    font-weight: 400;
-    line-height: 1.55;
-    word-break: break-word;
+    flex: 1; font-size: 10.5pt; color: #111111;
+    font-weight: 400; line-height: 1.55; word-break: break-word;
   }
 </style>
 </head>
@@ -652,18 +401,9 @@ export function minimalTheme(data: PdfLayoutData): string {
 
 ${coverHtml}
 
-${data.coverEnabled ? `
-<div class="page-header">
-  <div class="ph-left">
-    <span class="ph-stripe"></span>
-    <span class="ph-label">${escHtml(data.collectionLabel)}</span>
-  </div>
-  <span class="ph-date">${escHtml(data.generatedAt)}</span>
-</div>
-` : ''}
-
 <div class="content">
-${sectionsHtml}
+  ${contentHeaderHtml}
+  ${sectionsHtml}
 </div>
 
 </body>
@@ -672,8 +412,7 @@ ${sectionsHtml}
 
 // ─── Obsidian (Executive) ─────────────────────────────────────────────────────
 // Full dark-mode PDF · near-black pages · cyan accent · Georgia headings
-// Tone: premium, unexpected, Bloomberg-terminal meets boardroom
-// This is the bold choice — dark mode PDFs are rare and immediately striking
+// Premium and unexpected — dark-mode PDFs are rare and immediately striking
 
 export function executiveTheme(data: PdfLayoutData): string {
   const initial = data.collectionLabel.charAt(0).toUpperCase()
@@ -681,7 +420,6 @@ export function executiveTheme(data: PdfLayoutData): string {
   const coverHtml = data.coverEnabled ? `
 <div class="cover">
   <div class="cover-top-bar"></div>
-
   <div class="cover-content">
     <div class="cover-header">
       ${data.logoUrl
@@ -690,7 +428,6 @@ export function executiveTheme(data: PdfLayoutData): string {
       }
       <span class="cover-collection">${escHtml(data.collectionLabel)}</span>
     </div>
-
     <div class="cover-body">
       <div class="cover-eyeline">
         <span class="cover-divider-line"></span>
@@ -699,7 +436,6 @@ export function executiveTheme(data: PdfLayoutData): string {
       <h1 class="cover-title">${escHtml(data.coverTitle)}</h1>
       ${data.coverSubtitle ? `<p class="cover-subtitle">${escHtml(data.coverSubtitle)}</p>` : ''}
     </div>
-
     <div class="cover-meta">
       <div class="meta-block">
         <span class="meta-label">Date</span>
@@ -733,280 +469,131 @@ export function executiveTheme(data: PdfLayoutData): string {
   </table>
 </div>`).join('')
 
+  const contentHeaderHtml = `
+<div class="content-header">
+  <span class="ch-label">${escHtml(data.collectionLabel)}</span>
+  <span class="ch-meta">${escHtml(data.generatedAt)} &middot; ${escHtml(data.generatedBy)}</span>
+</div>`
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  @page { size: A4; margin: 0; }
-
+  @page { size: A4; margin: 0; background: #07090f; }
   html, body {
     font-family: Helvetica, Arial, sans-serif;
-    font-size: 11pt;
-    color: #e2e8f0;
-    background: #07090f;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
+    font-size: 11pt; color: #e2e8f0; background: #07090f;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
 
-  /* ── Cover ─────────────────────────────────────────── */
+  /* ── Cover ── */
   .cover {
-    width: 210mm;
-    height: 297mm;
+    width: 210mm; height: 297mm;
     background: #07090f;
-    display: flex;
-    flex-direction: column;
-    position: relative;
-    z-index: 2;
+    display: flex; flex-direction: column;
     page-break-after: always;
-    overflow: hidden;
   }
-
-  .cover-top-bar {
-    height: 4px;
-    background: #00ceff;
-    flex-shrink: 0;
-  }
-
+  .cover-top-bar { height: 4px; background: #00ceff; flex-shrink: 0; }
   .cover-content {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 26mm 22mm 18mm;
+    flex: 1; display: flex; flex-direction: column; padding: 26mm 22mm 18mm;
   }
-
   .cover-header {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    margin-bottom: auto;
+    display: flex; align-items: center; gap: 14px; margin-bottom: auto;
   }
-
   .cover-badge {
-    width: 48px;
-    height: 48px;
-    background: #0f1623;
-    border: 1px solid #1e2d47;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
+    width: 48px; height: 48px; background: #0f1623;
+    border: 1px solid #1e2d47; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
   .cover-badge span {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 22px;
-    font-weight: 400;
-    color: #00ceff;
+    font-size: 22px; font-weight: 400; color: #00ceff;
   }
-
   .cover-logo {
-    height: 36px;
-    width: auto;
-    object-fit: contain;
-    filter: brightness(0) invert(1);
-    opacity: 0.9;
-    flex-shrink: 0;
+    height: 36px; width: auto; object-fit: contain;
+    filter: brightness(0) invert(1); opacity: 0.9; flex-shrink: 0;
   }
-
   .cover-collection {
-    font-size: 8.5pt;
-    font-weight: 600;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: #00ceff;
+    font-size: 8.5pt; font-weight: 600;
+    letter-spacing: 0.2em; text-transform: uppercase; color: #00ceff;
   }
-
   .cover-body { margin-bottom: 24mm; }
-
   .cover-eyeline {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 24px;
+    display: flex; align-items: center; gap: 12px; margin-bottom: 24px;
   }
-
   .cover-divider-line {
-    display: inline-block;
-    width: 28px;
-    height: 1px;
-    background: rgba(0,206,255,0.4);
-    flex-shrink: 0;
+    display: inline-block; width: 28px; height: 1px;
+    background: rgba(0,206,255,0.4); flex-shrink: 0;
   }
-
   .cover-tag {
-    font-size: 8pt;
-    font-weight: 500;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: rgba(0,206,255,0.6);
+    font-size: 8pt; font-weight: 500;
+    letter-spacing: 0.15em; text-transform: uppercase; color: rgba(0,206,255,0.6);
   }
-
   .cover-title {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 48pt;
-    font-weight: 400;
-    line-height: 1.05;
-    letter-spacing: -0.025em;
-    color: #ffffff;
-    margin-bottom: 20px;
-    max-width: 500px;
+    font-size: 48pt; font-weight: 400; line-height: 1.05;
+    letter-spacing: -0.025em; color: #ffffff;
+    margin-bottom: 20px; max-width: 500px;
   }
-
   .cover-subtitle {
-    font-size: 13pt;
-    font-weight: 300;
-    color: rgba(255,255,255,0.4);
-    line-height: 1.4;
+    font-size: 13pt; font-weight: 300; color: rgba(255,255,255,0.4); line-height: 1.4;
   }
-
   .cover-meta {
-    display: flex;
-    gap: 0;
-    border-top: 1px solid #1a2336;
-    padding-top: 20px;
+    display: flex; border-top: 1px solid #1a2336; padding-top: 20px;
   }
-
   .meta-block {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    padding: 0 20px;
+    flex: 1; display: flex; flex-direction: column; gap: 5px; padding: 0 20px;
   }
   .meta-block:first-child { padding-left: 0; }
-  .meta-block:last-child { padding-right: 0; border-right: none; }
+  .meta-block:last-child { padding-right: 0; }
   .meta-block + .meta-block { border-left: 1px solid #1a2336; }
-
   .meta-label {
-    font-size: 7pt;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: rgba(255,255,255,0.22);
+    font-size: 7pt; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255,255,255,0.22);
   }
+  .meta-val { font-size: 9pt; color: rgba(255,255,255,0.65); line-height: 1.3; }
 
-  .meta-val {
-    font-size: 9pt;
-    color: rgba(255,255,255,0.65);
-    font-weight: 400;
-    line-height: 1.3;
-  }
-
-  /* ── Fixed Page Header ── */
-  .page-header {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    height: 13mm;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 22mm;
-    background: #0b0f1a;
+  /* ── Content header ── */
+  .content-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 0 10px; margin-bottom: 12mm;
+    border-top: 2px solid #00ceff;
     border-bottom: 1px solid #1a2336;
-    z-index: 1;
   }
-
-  .page-header::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 2px;
-    background: #00ceff;
+  .ch-label {
+    font-size: 7.5pt; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: #00ceff;
   }
-
-  .ph-label {
-    font-size: 7.5pt;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: #00ceff;
-  }
-
-  .ph-info {
-    font-size: 7.5pt;
-    color: rgba(255,255,255,0.28);
-    font-weight: 400;
-  }
-
-  /* ── Fixed Footer ── */
-  .page-footer {
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
-    height: 9mm;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 22mm;
-    background: #07090f;
-    border-top: 1px solid #111827;
-    z-index: 1;
-  }
-
-  .pf-left { font-size: 7pt; color: rgba(255,255,255,0.2); }
-  .pf-right { font-size: 7pt; color: rgba(255,255,255,0.2); }
+  .ch-meta { font-size: 7.5pt; color: rgba(255,255,255,0.28); }
 
   /* ── Content ── */
-  .content {
-    padding: 19mm 22mm 15mm;
-  }
+  .content { padding: 14mm 22mm 18mm; }
 
   /* ── Sections ── */
-  .section {
-    margin-bottom: 12mm;
-  }
-
+  .section { margin-bottom: 12mm; }
   .section-header {
-    margin-bottom: 5mm;
-    page-break-inside: avoid;
-    page-break-after: avoid;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #1a2336;
+    margin-bottom: 5mm; page-break-inside: avoid; page-break-after: avoid;
+    padding-bottom: 8px; border-bottom: 1px solid #1a2336;
   }
-
   .section-title {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 14pt;
-    font-weight: 400;
-    color: #00ceff;
-    letter-spacing: -0.01em;
+    font-size: 14pt; font-weight: 400; color: #00ceff; letter-spacing: -0.01em;
   }
 
   /* ── Fields ── */
-  .fields {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  .field-row {
-    border-bottom: 1px solid #0f1623;
-    page-break-inside: avoid;
-  }
-
-  .field-row-alt {
-    background: #0b0f1a;
-  }
-
+  .fields { width: 100%; border-collapse: collapse; }
+  .field-row { border-bottom: 1px solid #0f1623; page-break-inside: avoid; }
+  .field-row-alt { background: #0b0f1a; }
   .field-label {
-    width: 34%;
-    padding: 8px 14px 8px 8px;
-    font-size: 8pt;
-    font-weight: 500;
-    color: #4b6184;
-    letter-spacing: 0.01em;
-    vertical-align: top;
-    line-height: 1.5;
+    width: 34%; padding: 8px 14px 8px 8px;
+    font-size: 8pt; font-weight: 500; color: #4b6184;
+    letter-spacing: 0.01em; vertical-align: top; line-height: 1.5;
   }
-
   .field-value {
-    padding: 8px 8px;
-    font-size: 10pt;
-    color: #c8d6e8;
-    vertical-align: top;
-    line-height: 1.55;
-    word-break: break-word;
-    font-weight: 300;
+    padding: 8px 8px; font-size: 10pt; color: #c8d6e8;
+    vertical-align: top; line-height: 1.55; word-break: break-word; font-weight: 300;
   }
 </style>
 </head>
@@ -1014,19 +601,9 @@ export function executiveTheme(data: PdfLayoutData): string {
 
 ${coverHtml}
 
-${data.coverEnabled ? `
-<div class="page-header">
-  <span class="ph-label">${escHtml(data.collectionLabel)}</span>
-  <span class="ph-info">${escHtml(data.generatedAt)} · ${escHtml(data.generatedBy)}</span>
-</div>
-<div class="page-footer">
-  <span class="pf-left">${escHtml(data.coverTitle)}</span>
-  <span class="pf-right">Confidential</span>
-</div>
-` : ''}
-
 <div class="content">
-${sectionsHtml}
+  ${contentHeaderHtml}
+  ${sectionsHtml}
 </div>
 
 </body>
