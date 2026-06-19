@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, Save, Trash2 } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, FileDown, Loader2, Save, Trash2 } from 'lucide-react'
 import { CloneDialog } from './item-edit/CloneDialog'
 import {
   type ReactNode,
@@ -302,6 +302,61 @@ export function ItemEditForm({
         .then((r) => r.data),
     staleTime: 60_000
   })
+
+  const { data: fileLayouts = [] } = useQuery<Array<{ id: number; name: string }>>({
+    queryKey: ['file-layouts', collection],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; name: string }> }>(
+          get('/collection-layouts', { collection, type: 'file' })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!collection && !isNew,
+    staleTime: 60_000,
+  })
+
+  const [pdfLoading, setPdfLoading] = useState<number | null>(null)
+  const [showPdfDropdown, setShowPdfDropdown] = useState(false)
+
+  const downloadPdf = useCallback(async (layoutId: number) => {
+    if (!itemId || !collection) return
+    setPdfLoading(layoutId)
+    setShowPdfDropdown(false)
+    try {
+      const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
+      const resp = await fetch(`/api/collection-layouts/${layoutId}/generate-pdf`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(workspace ? { 'x-workspace': workspace } : {}),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ collection, item_id: itemId }),
+      })
+      if (!resp.ok) throw new Error(await resp.text())
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${collection}-${itemId}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast.error('Failed to generate PDF')
+    } finally {
+      setPdfLoading(null)
+    }
+  }, [collection, itemId])
+
+  useEffect(() => {
+    if (!showPdfDropdown) return
+    function handleOutside(e: MouseEvent) {
+      const target = e.target as Element
+      if (!target.closest('[data-pdf-dropdown]')) setShowPdfDropdown(false)
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [showPdfDropdown])
 
   const { data: itemData, isLoading: itemLoading } = useQuery<Record<string, unknown>>({
     queryKey: ['item', collection, itemId],
@@ -1833,6 +1888,57 @@ export function ItemEditForm({
                     <Trash2 className='h-3.5 w-3.5' />
                   </Button>
                 ))}
+              {fileLayouts.length === 1 && !isNew && (
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  className='gap-1.5'
+                  onClick={() => downloadPdf(fileLayouts[0].id)}
+                  disabled={pdfLoading !== null}
+                >
+                  {pdfLoading !== null ? (
+                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                  ) : (
+                    <FileDown className='h-3.5 w-3.5' />
+                  )}
+                  PDF
+                </Button>
+              )}
+              {fileLayouts.length > 1 && !isNew && (
+                <div className='relative' data-pdf-dropdown>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    className='gap-1.5'
+                    onClick={() => setShowPdfDropdown(v => !v)}
+                    disabled={pdfLoading !== null}
+                  >
+                    {pdfLoading !== null ? (
+                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                    ) : (
+                      <FileDown className='h-3.5 w-3.5' />
+                    )}
+                    PDF
+                    <ChevronDown className='h-3 w-3' />
+                  </Button>
+                  {showPdfDropdown && (
+                    <div className='absolute right-0 top-full z-50 mt-1 min-w-[160px] rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-border dark:bg-background'>
+                      {fileLayouts.map(l => (
+                        <button
+                          key={l.id}
+                          type='button'
+                          onClick={() => downloadPdf(l.id)}
+                          className='w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'
+                        >
+                          {l.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {!isStepsMode && (
                 <Button
                   type='button'
