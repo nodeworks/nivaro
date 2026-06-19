@@ -206,13 +206,18 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       const base = formatFieldConfig(row)
 
       if (!fieldAssignments || fieldAssignments.length === 0) {
-        formatted.push({ ...base, sort: row.sort ?? rowIdx, layout_assigned: false, _overrides: null })
+        // Strip layout-specific options so unassigned fields don't inherit from global field metadata
+        const unassignedOpts = base.options ? { ...(base.options as Record<string, unknown>) } : null
+        if (unassignedOpts) { delete unassignedOpts.col_span; delete unassignedOpts.show_row_revisions }
+        formatted.push({ ...base, options: unassignedOpts, sort: row.sort ?? rowIdx, layout_assigned: false, _overrides: null })
         continue
       }
 
       for (const assignment of fieldAssignments) {
         const ov = assignment.overrides ?? null
-        let options = base.options as Record<string, unknown> | null
+        // Start from base.options but strip layout-specific keys so the assignment is authoritative
+        let options: Record<string, unknown> | null = base.options ? { ...(base.options as Record<string, unknown>) } : null
+        if (options) { delete options.col_span; delete options.show_row_revisions }
         if (assignment.col_span != null) options = { ...(options ?? {}), col_span: assignment.col_span }
         if (assignment.show_row_revisions) options = { ...(options ?? {}), show_row_revisions: true }
         if (ov?.options && typeof ov.options === 'object') options = { ...(options ?? {}), ...(ov.options as Record<string, unknown>) }
