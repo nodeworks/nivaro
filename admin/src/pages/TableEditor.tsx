@@ -5111,6 +5111,8 @@ function FieldSettingsPopover({
   const [numCurrency, setNumCurrency] = useState('USD')
   const [numAggregate, setNumAggregate] = useState<'sum' | 'count' | 'avg' | 'min' | 'max' | ''>('')
   const [saveMode, setSaveMode] = useState<'immediate' | 'pending'>('immediate')
+  const [showLineNumbers, setShowLineNumbers] = useState(false)
+  const [enableReorder, setEnableReorder] = useState(true)
   const [parentCascades, setParentCascades] = useState<Array<{ parent_field: string; child_field: string }>>([])
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
@@ -5168,10 +5170,12 @@ function FieldSettingsPopover({
         setNumCurrency((opts.currency as string) ?? 'USD')
         setNumAggregate((opts.aggregate as 'sum' | 'count' | 'avg' | 'min' | 'max' | '') ?? '')
         setSaveMode((opts.save_mode as 'immediate' | 'pending') ?? 'immediate')
+        setShowLineNumbers(!!(opts.show_line_numbers))
+        setEnableReorder(opts.enable_reorder !== false)
         setParentCascades(Array.isArray(opts.parent_cascades) ? opts.parent_cascades as Array<{ parent_field: string; child_field: string }> : [])
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
-      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate(''); setSaveMode('immediate'); setParentCascades([]); setGroupedGroupField(''); setGroupedOptionField('') }
+      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate(''); setSaveMode('immediate'); setShowLineNumbers(false); setEnableReorder(true); setParentCascades([]); setGroupedGroupField(''); setGroupedOptionField('') }
     }
     setOpen(next)
   }
@@ -5210,7 +5214,7 @@ function FieldSettingsPopover({
           delete existing.aggregate
         }
         const o2mOpts = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table'))
-          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : { save_mode: saveMode, ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}) }) }
+          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : { save_mode: saveMode, show_line_numbers: showLineNumbers, enable_reorder: enableReorder, ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}) }) }
           : {}
         const fileOpts = (iface === 'file-image' || iface === 'files-m2m')
           ? { allow_upload: allowUpload, allow_pick: allowPick }
@@ -5524,6 +5528,18 @@ function FieldSettingsPopover({
                 <div className='flex items-center gap-2'>
                   <Switch checked={saveMode === 'pending'} onCheckedChange={v => setSaveMode(v ? 'pending' : 'immediate')} className='scale-75' />
                   <span className='text-[11px] text-slate-600'>Always pending save (save with main form)</span>
+                </div>
+              )}
+              {iface === 'inline-table' && (
+                <div className='flex items-center gap-2'>
+                  <Switch checked={showLineNumbers} onCheckedChange={setShowLineNumbers} className='scale-75' />
+                  <span className='text-[11px] text-slate-600'>Show line numbers</span>
+                </div>
+              )}
+              {iface === 'inline-table' && (
+                <div className='flex items-center gap-2'>
+                  <Switch checked={enableReorder} onCheckedChange={setEnableReorder} className='scale-75' />
+                  <span className='text-[11px] text-slate-600'>Enable drag-to-reorder</span>
                 </div>
               )}
               {iface === 'inline-table' && (
@@ -7774,6 +7790,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                             onUnassign={handleUnassign}
                             containerGroups={groups.filter(cg => cg.type === 'container')}
                             onSetContainer={(id, container_id) => setContainerMut.mutate({ id, container_id })}
+                            getRowRevisions={f => localRowRevisions[f] ?? false}
+                            onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                           />
                         ))}
                       </div>

@@ -22,7 +22,8 @@ export function FieldRenderer({
   itemId,
   cascadeFilter,
   requiredParentLabel,
-  onCountChange
+  onCountChange,
+  displayOnly
 }: {
   field: CMSField
   value: unknown
@@ -33,6 +34,7 @@ export function FieldRenderer({
   cascadeFilter?: Record<string, unknown>
   requiredParentLabel?: string | null
   onCountChange?: (count: number) => void
+  displayOnly?: boolean
 }) {
   const iface = field.interface ?? ''
   const isRelIface =
@@ -116,6 +118,7 @@ export function FieldRenderer({
           extraFilter={cascadeFilter}
           requiredParent={requiredParentLabel ?? undefined}
           onCountChange={onCountChange}
+          readOnly={displayOnly}
         />
       )
     }
@@ -292,11 +295,13 @@ export function FieldRenderer({
         const layoutId = (opts.layout_id as number | null) ?? null
         const showRowRevisions = !!opts.show_row_revisions
         const saveMode = (opts.save_mode as 'immediate' | 'pending') ?? 'immediate'
+        const showLineNumbers = !!(opts.show_line_numbers)
+        const enableReorder = opts.enable_reorder !== false
         const parentCascades = Array.isArray(opts.parent_cascades)
           ? (opts.parent_cascades as Array<{ parent_field: string; child_field: string }>)
           : undefined
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutId={layoutId} showRowRevisions={showRowRevisions} saveMode={saveMode} parentCascades={parentCascades} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutId={layoutId} showRowRevisions={showRowRevisions} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} />
         )
       }
     }

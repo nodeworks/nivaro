@@ -448,9 +448,10 @@ export function ItemEditForm({
     () =>
       allFields.filter(
         (f) =>
-          !f.group_key && !f.hidden && !SYSTEM_FIELDS.has(f.field) && !SENTINEL_FIELDS.has(f.field)
+          !f.group_key && !f.hidden && !SYSTEM_FIELDS.has(f.field) && !SENTINEL_FIELDS.has(f.field) &&
+          (layoutId === null || f.layout_assigned !== false)
       ),
-    [allFields]
+    [allFields, layoutId]
   )
 
   const systemFields = useMemo(

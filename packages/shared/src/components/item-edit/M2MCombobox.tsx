@@ -307,7 +307,8 @@ export function M2MSingleSelectCombobox({
   allRelations,
   extraFilter,
   requiredParent,
-  onCountChange
+  onCountChange,
+  readOnly
 }: {
   relation: CMSRelation
   parentId: string
@@ -315,6 +316,7 @@ export function M2MSingleSelectCombobox({
   extraFilter?: Record<string, unknown>
   requiredParent?: string
   onCountChange?: (count: number) => void
+  readOnly?: boolean
 }) {
   const client = useNivaroClient()
   const staging = useM2MStaging()
@@ -433,6 +435,14 @@ export function M2MSingleSelectCombobox({
     options.find((o) => String(o.id) === String(currentRelatedId)) ?? currentItemData
   const isLoadingLabel = currentRelatedId != null && !currentItemData && !currentOpt
   const currentLabel = currentOpt ? getLabel(currentOpt) : null
+
+  if (readOnly) {
+    return (
+      <span className='block truncate text-[12px] text-slate-700'>
+        {isLoadingLabel ? '…' : (currentLabel ?? '—')}
+      </span>
+    )
+  }
 
   function handleSelect(optId: unknown) {
     for (const id of stagedLinks) staging?.unstageLink(stagingKey, id)

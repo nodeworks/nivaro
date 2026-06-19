@@ -41,6 +41,8 @@ export function InlineTableField({
   layoutId,
   showRowRevisions,
   saveMode = 'immediate',
+  showLineNumbers = false,
+  enableReorder = true,
   parentCascades
 }: {
   relatedCollection: string
@@ -49,6 +51,8 @@ export function InlineTableField({
   layoutId?: number | null
   showRowRevisions?: boolean
   saveMode?: 'immediate' | 'pending'
+  showLineNumbers?: boolean
+  enableReorder?: boolean
   parentCascades?: CascadeRule[]
 }) {
   const client = useNivaroClient()
@@ -145,11 +149,6 @@ export function InlineTableField({
     staleTime: 30_000
   })
 
-  const rows = useMemo(() => {
-    if (!rowOrderField) return rawRows
-    return [...rawRows].sort((a, b) => Number(a[rowOrderField] ?? 0) - Number(b[rowOrderField] ?? 0))
-  }, [rawRows, rowOrderField])
-
   // ── Cascade parent → child field filters ──────────────────────────────────
   const cascadeRules = parentCascades ?? []
   const cascadeResolutions = useQueries({
@@ -195,11 +194,23 @@ export function InlineTableField({
   const pendingEdits = isPendingMode && staging ? staging.getPendingEdits(relatedCollection, manyField) : new Map<string, Record<string, unknown>>()
   const pendingDeletes = isPendingMode && staging ? staging.getPendingDeletes(relatedCollection, manyField) : new Set<string>()
 
+  const rows = useMemo(() => {
+    if (!rowOrderField) return rawRows
+    const getOrder = (r: Record<string, unknown>): number => {
+      const pe = isPendingMode ? pendingEdits.get(String(r.id)) : undefined
+      const val = pe?.[rowOrderField] ?? r[rowOrderField]
+      return Number(val ?? -1)
+    }
+    return [...rawRows].sort((a, b) => getOrder(a) - getOrder(b))
+  }, [rawRows, rowOrderField, isPendingMode, pendingEdits])
+
   const SPECIAL_GROUP_KEYS = new Set(['__apply_values__', '__create_with_defaults__'])
+  const isM2MIface = (iface: string | null | undefined) =>
+    iface === 'select-multiple-m2m' || (iface ?? '').endsWith('-m2m')
   const displayCols = cols.filter(
     (c) =>
       !c.hidden &&
-      !NON_DISPLAY_TYPES.has(c.type) &&
+      (!NON_DISPLAY_TYPES.has(c.type) || isM2MIface(c.interface)) &&
       c.field !== manyField &&
       c.field !== 'id' &&
       (!effectiveLayoutId || c.layout_assigned === true) &&
@@ -384,6 +395,7 @@ export function InlineTableField({
 
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [dropIdx, setDropIdx] = useState<number | null>(null)
+  const [reordering, setReordering] = useState(false)
   const [bulkCount, setBulkCount] = useState(1)
   const [bulkAdding, setBulkAdding] = useState(false)
   const [defaultsOpen, setDefaultsOpen] = useState(false)
@@ -454,12 +466,32 @@ export function InlineTableField({
     reordered.splice(dropIdx, 0, moved)
     const changed = reordered
       .map((row, i) => ({ row, newOrder: i }))
-      .filter(({ row, newOrder }) => Number(row[rowOrderField!] ?? 0) !== newOrder)
-    await Promise.all(changed.map(({ row, newOrder }) =>
-      client.request(patch(`/items/${relatedCollection}/${row.id}`, { [rowOrderField!]: newOrder }))
-    ))
-    qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
-    handleDragEnd()
+      .filter(({ row, newOrder }) => {
+        const pe = isPendingMode ? pendingEdits.get(String(row.id)) : undefined
+        const current = pe?.[rowOrderField!] ?? row[rowOrderField!]
+        return Number(current ?? -1) !== newOrder
+      })
+
+    if (isPendingMode && staging) {
+      changed.forEach(({ row, newOrder }) =>
+        staging.queueEdit(relatedCollection, manyField, String(row.id), { [rowOrderField!]: newOrder })
+      )
+      handleDragEnd()
+      return
+    }
+
+    setReordering(true)
+    try {
+      await Promise.all(changed.map(({ row, newOrder }) =>
+        client.request(patch(`/items/${relatedCollection}/${row.id}`, { [rowOrderField!]: newOrder }))
+      ))
+      qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+    } catch {
+      /* reorder failed; rows stay unchanged */
+    } finally {
+      setReordering(false)
+      handleDragEnd()
+    }
   }
 
   async function deleteRow(id: unknown, e: React.MouseEvent) {
@@ -600,11 +632,20 @@ export function InlineTableField({
         </div>
       )}
 
-    <div className='rounded-lg border border-slate-200 text-[12px]'>
+    <div className='relative rounded-lg border border-slate-200 text-[12px]'>
+      {reordering && (
+        <div className='absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px]'>
+          <div className='flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 shadow-sm text-[12px] text-slate-500'>
+            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+            Saving order…
+          </div>
+        </div>
+      )}
       <table className='w-full table-fixed'>
         <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>
           <tr>
-            {(rowOrderField || isNew) && <th className='w-6' />}
+            {enableReorder && (rowOrderField || isNew) && <th className='w-6' />}
+            {showLineNumbers && <th className='w-8 px-2 py-2 text-left font-medium text-slate-400 text-[11px]'>#</th>}
             {(isNew || isPendingMode) && <th className='px-3 py-2 text-left font-medium text-slate-400 text-[11px] w-20'>Status</th>}
             {displayCols.map((c) => (
               <th key={c.field} className='px-3 py-2 text-left font-medium text-slate-500 text-[11px]'>
@@ -618,7 +659,8 @@ export function InlineTableField({
           {/* Defaults row */}
           {defaultsOpen && (
             <tr className='border-b border-[#00ceff]/20 bg-[#00ceff]/5'>
-              {(rowOrderField || isNew) && <td className='w-6' />}
+              {enableReorder && (rowOrderField || isNew) && <td className='w-6' />}
+              {showLineNumbers && <td className='w-8' />}
               {(isNew || isPendingMode) && <td className='px-3 py-1 align-middle w-20'>
                 <span className='text-[10px] font-medium text-[#009abe]'>Defaults</span>
               </td>}
@@ -655,7 +697,7 @@ export function InlineTableField({
             const isPDropTarget = dropIdx === ri && dragIdx !== ri
             return (
               <tr key={ri}
-                draggable={!isEditing}
+                draggable={enableReorder && !isEditing}
                 onDragStart={() => handleDragStart(ri)}
                 onDragOver={(e) => handleDragOver(e, ri)}
                 onDrop={(e) => {
@@ -674,9 +716,12 @@ export function InlineTableField({
                     ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
                     : 'bg-amber-50/40 hover:bg-amber-50/70 cursor-pointer'
                 )}>
-                <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
-                  <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
-                </td>
+                {enableReorder && (
+                  <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
+                    <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
+                  </td>
+                )}
+                {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{ri + 1}</td>}
                 <td className='px-3 py-1 align-middle w-16'>
                   {!isEditing && (
                     <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5'>Pending</span>
@@ -684,7 +729,9 @@ export function InlineTableField({
                 </td>
                 {displayCols.map((c) => (
                   <td key={c.field} className='px-2 py-1 align-top'>
-                    {isEditing ? (
+                    {isM2MIface(c.interface) ? (
+                      <span className='text-slate-300 text-[11px]'>—</span>
+                    ) : isEditing ? (
                       <div onClick={(e) => e.stopPropagation()}>
                         <FieldRenderer
                           field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
@@ -737,12 +784,12 @@ export function InlineTableField({
             const displayRow = isPendingEdit ? { ...row, ...pendingEdits.get(id) } : row
             return (
               <tr key={id}
-                draggable={!!rowOrderField && !isEditing && !isPendingDelete}
+                draggable={enableReorder && !!rowOrderField && !isEditing && !isPendingDelete}
                 onDragStart={() => handleDragStart(ri)}
                 onDragOver={(e) => handleDragOver(e, ri)}
                 onDrop={handleDrop}
                 onDragEnd={handleDragEnd}
-                onClick={() => !isEditing && !isPendingDelete && startEdit(row)}
+                onClick={() => !isEditing && !isPendingDelete && startEdit(displayRow)}
                 className={cn('border-b border-slate-100 transition-colors',
                   isDragging ? 'opacity-40' : '',
                   isDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
@@ -754,11 +801,12 @@ export function InlineTableField({
                       : 'bg-slate-50/50 hover:bg-slate-100/60 cursor-pointer'
                     : ''
                 )}>
-                {rowOrderField && (
+                {enableReorder && rowOrderField && (
                   <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
                     <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
                   </td>
                 )}
+                {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{ri + 1}</td>}
                 {isPendingMode && (
                   <td className='px-3 py-1 align-middle w-20'>
                     {isPendingDelete
@@ -771,16 +819,17 @@ export function InlineTableField({
                 )}
                 {displayCols.map((c) => (
                   <td key={c.field} className='px-2 py-1 align-top'>
-                    {isEditing && !isPendingDelete ? (
+                    {(isEditing && !isPendingDelete) || isM2MIface(c.interface) ? (
                       <div onClick={(e) => e.stopPropagation()}>
                         <FieldRenderer
                           field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
-                          value={editState!.draft[c.field] ?? null}
+                          value={editState?.draft[c.field] ?? null}
                           onChange={(v) => setDraftField(c.field, v)}
                           relations={childRelations}
                           collection={relatedCollection}
                           itemId={id}
                           cascadeFilter={fieldCascadeFilters[c.field]}
+                          displayOnly={!isEditing || isPendingDelete}
                         />
                       </div>
                     ) : (
@@ -886,7 +935,13 @@ export function InlineTableField({
             return !!opts.aggregate
           })
           if (aggCols.length === 0) return null
-          const allRows = [...(rows ?? []), ...pendingRows]
+          const allRows = [
+            ...(rows ?? []).filter(r => !pendingDeletes.has(String(r.id))).map(r => {
+              const rid = String(r.id)
+              return pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
+            }),
+            ...pendingRows
+          ]
           return (
             <tfoot>
               <tr className='border-t border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600'>
