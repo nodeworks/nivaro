@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { generatePdfFromLayout } from '../services/pdf-layout.js'
+import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 
 type LayoutConditions = { role_ids?: string[] } | null
 
@@ -265,6 +267,73 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
     await logActivity({ action: 'update', user: req.user?.id, collection: 'nivaro_collection_layouts', item: id, req })
     return reply.send({ data: updated })
+  })
+
+  // POST /collection-layouts/:id/generate-pdf
+  app.post('/:id/generate-pdf', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { collection, item_id } = req.body as { collection: string; item_id: string | number }
+
+    if (!collection || item_id == null) {
+      return reply.code(400).send({ error: 'collection and item_id are required' })
+    }
+
+    const layout = await db('nivaro_collection_layouts').where({ id }).first()
+    if (!layout) return reply.code(404).send({ error: 'Layout not found' })
+    if (layout.layout_type !== 'file') return reply.code(400).send({ error: 'Layout is not a file layout' })
+
+    let item: Record<string, unknown>
+    try {
+      item = await readOne(req.user!, collection, String(item_id), req.workspaceId ?? undefined) as Record<string, unknown>
+    } catch (err) {
+      if (err instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
+      if (err instanceof ItemNotFoundError) return reply.code(404).send({ error: 'Item not found' })
+      throw err
+    }
+
+    const [groups, assignments, fieldMeta, colMeta, settings] = await Promise.all([
+      db('nivaro_field_groups')
+        .where({ layout_id: Number(id) })
+        .select('id', 'label', 'sort')
+        .orderBy('sort', 'asc'),
+      db('nivaro_layout_field_assignments')
+        .where({ layout_id: Number(id) })
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible')
+        .orderBy('sort', 'asc'),
+      db('nivaro_fields').where({ collection }).select('field', 'label', 'type'),
+      db('nivaro_collections').where({ collection }).first('display_name'),
+      db('nivaro_settings').where({ id: 1 }).first('logo_url').catch(() => null),
+    ])
+
+    const collectionLabel = (colMeta?.display_name as string | null) ?? collection
+    const logoUrl = (settings?.logo_url as string | null) ?? null
+    const generatedBy = req.user?.first_name
+      ? `${req.user.first_name} ${req.user.last_name ?? ''}`.trim()
+      : (req.user?.email ?? 'System')
+
+    const pdfBuffer = await generatePdfFromLayout({
+      layout,
+      collectionLabel,
+      item,
+      groups,
+      assignments,
+      fieldMeta,
+      logoUrl,
+      generatedBy,
+    })
+
+    await logActivity({
+      action: 'pdf-generate',
+      user: req.user?.id,
+      collection,
+      item: String(item_id),
+      req,
+    })
+
+    return reply
+      .header('Content-Type', 'application/pdf')
+      .header('Content-Disposition', `attachment; filename="${collection}-${item_id}.pdf"`)
+      .send(pdfBuffer)
   })
 
   // POST /collection-layouts/:id/clone
