@@ -7760,7 +7760,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const getColSpan = useCallback((f: string) => {
     if (layoutId) {
       const span = localColSpans[f]
-      if (span != null) return span
+      return span != null ? span : 12
     }
     const field = allFields.find(af => af.field === f)
     return parseColSpan(field?.options)
