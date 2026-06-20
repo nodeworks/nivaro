@@ -2381,8 +2381,8 @@ export function MyForm() {
   )
 }
 
-export function SdkPlaygroundPage() {
-  const [activeTab, setActiveTab] = usePersistedTab<'sdk' | 'react' | 'live'>('nvr_sdk_playground_tab', 'sdk')
+export function PlaygroundPage() {
+  const [activeTab, setActiveTab] = usePersistedTab<'sdk' | 'react' | 'live'>('nvr_playground_tab', 'sdk')
   const [selectedName, setSelectedName] = useState<string>(COMMANDS[0].name)
   const [values, setValues] = useState<Record<string, string>>({})
   const [result, setResult] = useState<RunResult | null>(null)
@@ -2454,7 +2454,7 @@ export function SdkPlaygroundPage() {
         <div className='flex items-center gap-2.5'>
           <Terminal className='h-4 w-4 text-nvr-cyan' />
           <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-            SDK Playground
+            Playground
           </h1>
           <span className='text-[12px] text-slate-400 hidden sm:block'>
             Explore @nivaro/sdk commands and @nivaro/react hooks

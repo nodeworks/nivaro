@@ -1276,27 +1276,27 @@ EXTENSION_REGISTRY_URL=https://registry.nivaro.io/extensions.json`
   ]
 }
 
-export const devexSdkPlayground: DocSection = {
-  id: 'sdk-playground',
-  label: 'SDK Playground',
+export const devexPlayground: DocSection = {
+  id: 'playground',
+  label: 'Playground',
   content: [
-    { type: 'h1', id: 'sdk-playground', text: 'SDK Playground' },
+    { type: 'h1', id: 'playground', text: 'Playground' },
     {
       type: 'p',
       text: 'An in-browser REPL for @nivaro/sdk. Write and test SDK code against the live instance using your current session permissions. Inspect results in real-time without leaving the admin UI — great for prototyping queries before code commit.'
     },
     {
       type: 'h3',
-      id: 'sdk-playground-access',
+      id: 'playground-access',
       text: 'Accessing the Playground'
     },
     {
       type: 'p',
-      text: 'Navigate to /sdk-playground in the admin UI. The playground is available to all authenticated users (runs with their permissions).'
+      text: 'Navigate to /playground in the admin UI. The playground is available to all authenticated users (runs with their permissions).'
     },
     {
       type: 'h3',
-      id: 'sdk-playground-example',
+      id: 'playground-example',
       text: 'Example Snippet'
     },
     {
@@ -1315,7 +1315,7 @@ return articles;`
     },
     {
       type: 'h3',
-      id: 'sdk-playground-features',
+      id: 'playground-features',
       text: 'Features'
     },
     {
@@ -1331,7 +1331,7 @@ return articles;`
     },
     {
       type: 'h3',
-      id: 'sdk-playground-security',
+      id: 'playground-security',
       text: 'Security'
     },
     {
@@ -1345,7 +1345,7 @@ return articles;`
     },
     {
       type: 'h3',
-      id: 'sdk-playground-use-cases',
+      id: 'playground-use-cases',
       text: 'Use Cases'
     },
     {

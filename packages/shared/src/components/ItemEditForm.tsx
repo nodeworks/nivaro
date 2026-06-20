@@ -317,6 +317,7 @@ export function ItemEditForm({
 
   const [pdfLoading, setPdfLoading] = useState<number | null>(null)
   const [showPdfDropdown, setShowPdfDropdown] = useState(false)
+  const [pdfAttaching, setPdfAttaching] = useState(false)
 
   const downloadPdf = useCallback(async (layoutId: number) => {
     if (!itemId || !collection) return
@@ -964,6 +965,37 @@ export function ItemEditForm({
   const commentsSlot = assignments.find((a) => a.field === '__comments__')
   const tasksSlot = assignments.find((a) => a.field === '__tasks__')
   const ownersSlot = assignments.find((a) => a.field === '__owners__')
+  const pdfSlot = assignments.find((a) => a.field === '__pdf__')
+  const pdfSlotOverrides = pdfSlot
+    ? (() => { try { return typeof pdfSlot.overrides === 'string' ? JSON.parse(pdfSlot.overrides) : (pdfSlot.overrides ?? {}) } catch { return {} } })()
+    : null
+  const pdfAttachField = pdfSlotOverrides?.attach_to_field as string | null ?? null
+  const pdfGroupKey = pdfSlot?.group_key ?? null
+  const pdfInGroup = !!(pdfGroupKey && groups.some((g) => g.key === pdfGroupKey))
+  const handleGenerateAndAttach = async () => {
+    if (pdfAttaching || !pdfAttachField || !layoutId) return
+    setPdfAttaching(true)
+    try {
+      const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
+      const resp = await fetch(`/api/collection-layouts/${layoutId}/generate-and-attach`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(workspace ? { 'x-workspace': workspace } : {}),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ collection, item_id: itemId, attach_field: pdfAttachField }),
+      })
+      if (!resp.ok) throw new Error(await resp.text())
+      toast.success('PDF generated and attached')
+      qc.invalidateQueries({ queryKey: ['m2m-items'] })
+      qc.invalidateQueries({ queryKey: ['items', collection, itemId] })
+    } catch {
+      toast.error('Failed to generate and attach PDF')
+    } finally {
+      setPdfAttaching(false)
+    }
+  }
   // Owners is a draggable field chip: when assigned to a group it renders inside
   // that group's card (footer slot); otherwise it renders as a standalone panel at
   // its own sort position alongside groups/ungrouped.
@@ -981,7 +1013,7 @@ export function ItemEditForm({
   const sectionOrder = useMemo(() => {
     const isVisible = (a: SlotAssignment | undefined) =>
       !(a && (a.is_visible === 0 || a.is_visible === false))
-    type Item = FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__'
+    type Item = FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__' | '__pdf__'
     const entries: Array<{ item: Item; sort: number; tie: number }> = [
       ...sectionGroups.map((g) => ({ item: g as Item, sort: g.sort, tie: 0 })),
       // Container groups sit alongside section groups in the order
@@ -1000,6 +1032,8 @@ export function ItemEditForm({
       entries.push({ item: '__comments__', sort: commentsSlot.sort, tie: 4 })
     if (showPipeline && ownersSlot && isVisible(ownersSlot) && !ownersInGroup)
       entries.push({ item: '__owners__', sort: ownersSlot.sort, tie: 5 })
+    if (pdfSlot && isVisible(pdfSlot) && !isNew && !pdfInGroup)
+      entries.push({ item: '__pdf__', sort: pdfSlot.sort, tie: 6 })
     return entries.sort((a, b) => a.sort - b.sort || a.tie - b.tie).map((e) => e.item)
   }, [
     sectionGroups,
@@ -1012,7 +1046,10 @@ export function ItemEditForm({
     ownersInGroup,
     showPipeline,
     effectiveShowComments,
-    effectiveShowTasks
+    effectiveShowTasks,
+    pdfSlot,
+    pdfInGroup,
+    isNew
   ])
 
   // ── Client-side validation ─────────────────────────────────────────────────
@@ -1313,6 +1350,31 @@ export function ItemEditForm({
     if (key === '__owners__' && showPipeline) {
       return <div key='__owners__'>{renderOwnersPanel()}</div>
     }
+    if (key === '__pdf__') {
+      const layoutId = activeLayoutData?.layout?.id
+      if (!layoutId) return null
+      const label = pdfSlot?.label_override?.trim() || 'Generate PDF'
+      const notConfigured = !pdfAttachField
+      return (
+        <div key='__pdf__' className='flex items-center gap-2 px-1'>
+          <button
+            type='button'
+            onClick={handleGenerateAndAttach}
+            disabled={pdfAttaching || notConfigured}
+            title={notConfigured ? 'Configure PDF field in Data Model → Layouts' : undefined}
+            className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
+          >
+            <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' className='h-3.5 w-3.5'>
+              <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
+              <polyline points='14 2 14 8 20 8' />
+              <line x1='9' y1='13' x2='15' y2='13' />
+              <line x1='9' y1='17' x2='13' y2='17' />
+            </svg>
+            {pdfAttaching ? 'Generating…' : label}
+          </button>
+        </div>
+      )
+    }
     return null
   }
 
@@ -1454,17 +1516,18 @@ export function ItemEditForm({
   }
 
   function renderSectionItem(
-    item: FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__'
+    item: FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__' | '__pdf__'
   ) {
     if (item === '__ungrouped__') return renderUngrouped()
-    if (item === '__pipeline__' || item === '__comments__' || item === '__tasks__' || item === '__owners__')
+    if (item === '__pipeline__' || item === '__comments__' || item === '__tasks__' || item === '__owners__' || item === '__pdf__')
       return renderSentinel(item)
     const g = item as FieldGroup
     if (g.type === 'container') return renderContainer(g)
     if (g.type === 'metadata' && isNew) return null
     const groupFields = groupedMap[g.key] ?? []
     const ownersHere = ownersInGroup && ownersGroupKey === g.key && showPipeline
-    if (groupFields.length === 0 && !ownersHere) return null
+    const pdfHere = pdfInGroup && pdfGroupKey === g.key && !isNew
+    if (groupFields.length === 0 && !ownersHere && !pdfHere) return null
     const accordionActive = accordionMode && g.type !== 'tab'
     return (
       <GroupSection
@@ -1472,6 +1535,9 @@ export function ItemEditForm({
         group={g}
         fields={groupFields}
         ownersAssignment={ownersHere ? ownersSlot : undefined}
+        pdfAssignment={pdfHere ? pdfSlot : undefined}
+        pdfAttachField={pdfHere ? pdfAttachField : undefined}
+        layoutId={activeLayoutData?.layout?.id ?? null}
         draft={draft}
         onChange={handleFieldChange}
         relations={relations}
@@ -1533,10 +1599,18 @@ export function ItemEditForm({
         : (groupedMap[tabKey] ?? [])
     ).filter((f) => !f.hidden)
     const ownersHere = ownersInGroup && ownersGroupKey === tabKey && showPipeline
-    type TabItem = { _k: string; sort: number } & ({ _t: 'field'; f: CMSField } | { _t: 'owners'; slot: SlotAssignment })
+    const pdfHere = pdfInGroup && pdfGroupKey === tabKey && !isNew
+    type TabItem = { _k: string; sort: number } & (
+      | { _t: 'field'; f: CMSField }
+      | { _t: 'owners'; slot: SlotAssignment }
+      | { _t: 'pdf'; slot: SlotAssignment }
+    )
     const tabItems: TabItem[] = fields.map((f) => ({ _k: f.field, sort: f.sort ?? 0, _t: 'field' as const, f }))
     if (ownersHere && ownersSlot) {
       tabItems.push({ _k: '__owners__', sort: ownersSlot.sort, _t: 'owners' as const, slot: ownersSlot })
+    }
+    if (pdfHere && pdfSlot) {
+      tabItems.push({ _k: '__pdf__', sort: pdfSlot.sort, _t: 'pdf' as const, slot: pdfSlot })
     }
     tabItems.sort((a, b) => a.sort - b.sort)
     return (
@@ -1548,6 +1622,29 @@ export function ItemEditForm({
               return (
                 <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
                   <OwnersInline collection={collection} itemId={itemId} label={item.slot.label_override || 'Owners'} />
+                </div>
+              )
+            }
+            if (item._t === 'pdf') {
+              if (!layoutId) return null
+              const span = item.slot.col_span ?? 12
+              const label = item.slot.label_override?.trim() || 'Generate PDF'
+              const notConfigured = !pdfAttachField
+              return (
+                <div key='__pdf__' style={{ gridColumn: `span ${span}` }}>
+                  <button
+                    type='button'
+                    onClick={handleGenerateAndAttach}
+                    disabled={pdfAttaching || notConfigured}
+                    title={notConfigured ? 'Configure PDF field in Data Model → Layouts' : undefined}
+                    className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
+                  >
+                    <svg xmlns='http://www.w3.org/2000/svg' className='h-3.5 w-3.5' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+                      <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
+                      <polyline points='14 2 14 8 20 8' />
+                    </svg>
+                    {pdfAttaching ? 'Generating…' : label}
+                  </button>
                 </div>
               )
             }
@@ -1611,7 +1708,7 @@ export function ItemEditForm({
         {renderTabContent(activeTab)}
         {sectionOrder
           .filter((item) => typeof item === 'string' && item !== '__ungrouped__')
-          .map((item) => renderSentinel(item as '__pipeline__' | '__comments__' | '__tasks__' | '__owners__'))}
+          .map((item) => renderSentinel(item as '__pipeline__' | '__comments__' | '__tasks__' | '__owners__' | '__pdf__'))}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} />
         )}

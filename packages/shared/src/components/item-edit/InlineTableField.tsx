@@ -485,12 +485,18 @@ export function InlineTableField({
     setApplying(true)
     try {
       if (rows.length) {
-        await Promise.all(
-          rows.map(row =>
-            client.request(patch(`/items/${relatedCollection}/${row.id}`, applyValues))
+        if (isPendingMode && staging) {
+          rows
+            .filter(r => !pendingDeletes.has(String(r.id)))
+            .forEach(row => staging.queueEdit(relatedCollection, manyField, String(row.id), applyValues))
+        } else {
+          await Promise.all(
+            rows.map(row =>
+              client.request(patch(`/items/${relatedCollection}/${row.id}`, applyValues))
+            )
           )
-        )
-        qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+          qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+        }
       }
       if (pendingRows.length && staging) {
         pendingRows.forEach((row, i) =>

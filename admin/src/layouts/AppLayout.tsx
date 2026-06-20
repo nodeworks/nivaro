@@ -163,7 +163,7 @@ export const navCategories: NavCategory[] = [
       { icon: BarChart2, label: 'Analytics', to: '/analytics' },
       { icon: Wifi, label: 'Presence', to: '/presence' },
       { icon: KeyRound, label: 'API Keys', to: '/api-keys' },
-      { icon: Terminal, label: 'SDK Playground', to: '/sdk-playground' },
+      { icon: Terminal, label: 'Playground', to: '/playground' },
       { icon: Braces, label: 'Persisted Queries', to: '/persisted-queries' },
       { icon: LayoutGrid, label: 'Widgets', to: '/widgets' },
       { icon: BookOpen, label: 'Docs', to: '/docs' },

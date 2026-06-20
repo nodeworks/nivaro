@@ -10,8 +10,19 @@ export interface PdfLayoutData {
   coverEnabled: boolean
   sections: Array<{
     label: string
-    fields: Array<{ label: string; value: string }>
+    fields: Array<{ label: string; value: string; colSpan?: number; rawHtml?: boolean; hideLabel?: boolean }>
   }>
+}
+
+function renderFieldsGrid(fields: Array<{ label: string; value: string; colSpan?: number; rawHtml?: boolean; hideLabel?: boolean }>): string {
+  return `<div class="fields-grid">${fields.map(f => {
+    const full = !f.colSpan || f.colSpan > 6
+    const valueHtml = f.rawHtml ? f.value : escHtml(f.value)
+    // field-rel = O2M table cell; allow page breaks so tall tables don't leave white gaps
+    const relClass = f.rawHtml ? ' field-rel' : ''
+    const labelHtml = f.hideLabel ? '' : `<div class="fcell-label">${escHtml(f.label)}</div>`
+    return `<div class="field-cell${full ? ' field-full' : ''}${relClass}">${labelHtml}<div class="fcell-value">${valueHtml}</div></div>`
+  }).join('')}</div>`
 }
 
 export function escHtml(str: string): string {
@@ -23,8 +34,8 @@ export function escHtml(str: string): string {
 }
 
 // ─── Meridian (Classic) ───────────────────────────────────────────────────────
-// Deep navy cover · amber accent · Georgia serif · ruled 2-col field table
-// Authoritative, board-room, annual-report quality
+// Deep navy cover · amber-gold accent · Georgia serif headings
+// Board-room quality — authoritative and refined
 
 export function classicTheme(data: PdfLayoutData): string {
   const totalFields = data.sections.reduce((n, s) => n + s.fields.length, 0)
@@ -32,6 +43,10 @@ export function classicTheme(data: PdfLayoutData): string {
 
   const coverHtml = data.coverEnabled ? `
 <div class="cover">
+  <div class="cover-bg-circle cover-bg-circle-1"></div>
+  <div class="cover-bg-circle cover-bg-circle-2"></div>
+  <div class="cover-bg-circle cover-bg-circle-3"></div>
+
   <div class="cover-header">
     ${data.logoUrl
       ? `<img class="cover-logo" src="${escHtml(data.logoUrl)}" alt="">`
@@ -41,25 +56,31 @@ export function classicTheme(data: PdfLayoutData): string {
   </div>
 
   <div class="cover-body">
+    <div class="cover-eyebrow">
+      <span class="cover-eyebrow-line"></span>
+      <span class="cover-eyebrow-text">Document Record</span>
+    </div>
     <h1 class="cover-title">${escHtml(data.coverTitle)}</h1>
     ${data.coverSubtitle ? `<p class="cover-subtitle">${escHtml(data.coverSubtitle)}</p>` : ''}
-    <div class="cover-rule"></div>
   </div>
 
-  <div class="cover-meta">
-    <div class="meta-item">
-      <span class="meta-label">Generated</span>
-      <span class="meta-value">${escHtml(data.generatedAt)}</span>
-    </div>
-    <div class="meta-divider"></div>
-    <div class="meta-item">
-      <span class="meta-label">Prepared by</span>
-      <span class="meta-value">${escHtml(data.generatedBy)}</span>
-    </div>
-    <div class="meta-divider"></div>
-    <div class="meta-item">
-      <span class="meta-label">Fields</span>
-      <span class="meta-value">${totalFields}</span>
+  <div class="cover-footer">
+    <div class="cover-footer-rule"></div>
+    <div class="cover-meta">
+      <div class="meta-item">
+        <span class="meta-label">Generated</span>
+        <span class="meta-value">${escHtml(data.generatedAt)}</span>
+      </div>
+      <div class="meta-sep"></div>
+      <div class="meta-item">
+        <span class="meta-label">Prepared by</span>
+        <span class="meta-value">${escHtml(data.generatedBy)}</span>
+      </div>
+      <div class="meta-sep"></div>
+      <div class="meta-item">
+        <span class="meta-label">Total fields</span>
+        <span class="meta-value">${totalFields}</span>
+      </div>
     </div>
   </div>
 </div>` : ''
@@ -70,21 +91,16 @@ export function classicTheme(data: PdfLayoutData): string {
     <h2 class="section-title">${escHtml(s.label)}</h2>
     <div class="section-rule"></div>
   </div>
-  <table class="fields">
-    <tbody>
-      ${s.fields.map(f => `
-      <tr class="field-row">
-        <td class="field-label">${escHtml(f.label)}</td>
-        <td class="field-value">${escHtml(f.value)}</td>
-      </tr>`).join('')}
-    </tbody>
-  </table>
+  ${renderFieldsGrid(s.fields)}
 </div>`).join('')
 
   const contentHeaderHtml = `
 <div class="content-header">
-  <span class="ch-collection">${escHtml(data.collectionLabel)}</span>
-  <span class="ch-meta">${escHtml(data.coverTitle)} &middot; ${escHtml(data.generatedAt)}</span>
+  <div class="ch-left">
+    <span class="ch-dot"></span>
+    <span class="ch-collection">${escHtml(data.collectionLabel)}</span>
+  </div>
+  <span class="ch-meta">${escHtml(data.coverTitle)}&ensp;&middot;&ensp;${escHtml(data.generatedAt)}</span>
 </div>`
 
   return `<!DOCTYPE html>
@@ -95,10 +111,10 @@ export function classicTheme(data: PdfLayoutData): string {
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   @page { size: A4; margin: 0; }
   html, body {
-    font-family: Helvetica, Arial, sans-serif;
-    font-size: 11pt;
-    color: #1a1f36;
-    background: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 10pt;
+    color: #1a2133;
+    background: #ffffff;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
@@ -110,121 +126,182 @@ export function classicTheme(data: PdfLayoutData): string {
     background: #0c1829;
     display: flex;
     flex-direction: column;
-    padding: 28mm 22mm 18mm;
+    padding: 26mm 24mm 20mm;
     page-break-after: always;
     overflow: hidden;
     position: relative;
   }
-  .cover::before {
-    content: '';
+  .cover-bg-circle {
     position: absolute;
-    top: -140px; right: -140px;
-    width: 480px; height: 480px;
     border-radius: 50%;
-    border: 1px solid rgba(200,162,92,0.13);
+    border: 1px solid rgba(196,160,82,0.12);
     pointer-events: none;
   }
-  .cover::after {
-    content: '';
-    position: absolute;
-    top: -50px; right: -50px;
-    width: 300px; height: 300px;
-    border-radius: 50%;
-    border: 1px solid rgba(200,162,92,0.1);
-    pointer-events: none;
-  }
+  .cover-bg-circle-1 { top: -180px; right: -180px; width: 580px; height: 580px; }
+  .cover-bg-circle-2 { top: -80px; right: -80px; width: 360px; height: 360px; border-color: rgba(196,160,82,0.08); }
+  .cover-bg-circle-3 { bottom: -120px; left: -120px; width: 400px; height: 400px; border-color: rgba(196,160,82,0.06); }
+
   .cover-header {
     display: flex;
     align-items: center;
     gap: 14px;
     margin-bottom: auto;
+    position: relative;
   }
   .cover-badge {
-    width: 46px; height: 46px;
-    border-radius: 10px;
-    border: 1.5px solid rgba(200,162,92,0.55);
+    width: 44px; height: 44px;
+    border-radius: 9px;
+    border: 1.5px solid rgba(196,160,82,0.5);
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
   }
   .cover-badge span {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 22px; font-weight: 400; color: #c8a25c;
+    font-size: 20px; font-weight: 400; color: #c4a052;
   }
   .cover-logo {
-    height: 38px; width: auto; object-fit: contain;
+    height: 36px; width: auto; object-fit: contain;
     filter: brightness(0) invert(1); flex-shrink: 0;
   }
   .cover-collection-label {
-    font-size: 8.5pt; font-weight: 600;
-    letter-spacing: 0.2em; text-transform: uppercase; color: #c8a25c;
+    font-size: 8pt; font-weight: 600;
+    letter-spacing: 0.22em; text-transform: uppercase; color: #c4a052;
   }
-  .cover-body { margin-bottom: 20mm; }
+
+  .cover-body { margin-bottom: 22mm; position: relative; }
+  .cover-eyebrow {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 20px;
+  }
+  .cover-eyebrow-line {
+    display: inline-block; width: 24px; height: 1px;
+    background: rgba(196,160,82,0.5); flex-shrink: 0;
+  }
+  .cover-eyebrow-text {
+    font-size: 7.5pt; font-weight: 500;
+    letter-spacing: 0.2em; text-transform: uppercase;
+    color: rgba(196,160,82,0.7);
+  }
   .cover-title {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 46pt; font-weight: 400; line-height: 1.08;
-    letter-spacing: -0.025em; color: #ffffff; margin-bottom: 18px; max-width: 500px;
+    font-size: 44pt; font-weight: 400; line-height: 1.07;
+    letter-spacing: -0.02em; color: #ffffff;
+    margin-bottom: 20px; max-width: 480px;
   }
   .cover-subtitle {
-    font-size: 13pt; font-weight: 300;
-    color: rgba(255,255,255,0.5); margin-bottom: 28px; line-height: 1.4;
+    font-size: 11.5pt; font-weight: 300;
+    color: rgba(255,255,255,0.45); line-height: 1.5; max-width: 380px;
   }
-  .cover-rule { width: 52px; height: 3px; background: #c8a25c; border-radius: 2px; }
-  .cover-meta {
-    display: flex; align-items: flex-start;
-    border-top: 1px solid rgba(255,255,255,0.1); padding-top: 18px;
+
+  .cover-footer { position: relative; }
+  .cover-footer-rule {
+    height: 1px;
+    background: linear-gradient(90deg, rgba(196,160,82,0.4), rgba(196,160,82,0.1) 60%, transparent);
+    margin-bottom: 18px;
   }
+  .cover-meta { display: flex; align-items: flex-start; }
   .meta-item {
-    flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 0 18px;
+    flex: 1; display: flex; flex-direction: column; gap: 5px;
+    padding: 0 20px;
   }
   .meta-item:first-child { padding-left: 0; }
   .meta-item:last-child { padding-right: 0; }
-  .meta-divider { width: 1px; background: rgba(255,255,255,0.1); align-self: stretch; }
+  .meta-sep { width: 1px; background: rgba(255,255,255,0.08); align-self: stretch; }
   .meta-label {
-    font-size: 7pt; font-weight: 600;
-    letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.3);
+    font-size: 6.5pt; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: rgba(255,255,255,0.28);
   }
-  .meta-value { font-size: 9pt; color: rgba(255,255,255,0.72); font-weight: 400; line-height: 1.3; }
+  .meta-value {
+    font-size: 8.5pt; color: rgba(255,255,255,0.65);
+    font-weight: 400; line-height: 1.35;
+  }
 
-  /* ── Content header (non-repeating, appears once at top of content) ── */
+  /* ── Content header ── */
   .content-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 0 0 10px; margin-bottom: 12mm;
-    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 9px; margin-bottom: 10mm;
+    border-bottom: 1px solid #e8e8ee;
+  }
+  .ch-left { display: flex; align-items: center; gap: 8px; }
+  .ch-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #c4a052; flex-shrink: 0;
   }
   .ch-collection {
-    font-size: 7.5pt; font-weight: 700;
-    letter-spacing: 0.14em; text-transform: uppercase; color: #c8a25c;
+    font-size: 7pt; font-weight: 700;
+    letter-spacing: 0.16em; text-transform: uppercase; color: #c4a052;
   }
-  .ch-meta { font-size: 7.5pt; color: #9ca3af; font-weight: 400; }
+  .ch-meta { font-size: 7pt; color: #a0a8b4; font-weight: 400; }
 
   /* ── Content ── */
-  .content { padding: 14mm 22mm 18mm; }
+  .content { padding: 12mm 8mm 18mm; }
 
   /* ── Sections ── */
-  .section { margin-bottom: 12mm; }
-  .section-header { margin-bottom: 7mm; page-break-inside: avoid; page-break-after: avoid; }
+  .section { margin-bottom: 10mm; }
+  .section-header {
+    margin-bottom: 5mm;
+    page-break-after: avoid;
+    display: flex; align-items: baseline; gap: 12px;
+  }
   .section-title {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 17pt; font-weight: 400; color: #0c1829;
-    letter-spacing: -0.015em; margin-bottom: 8px;
+    font-size: 15pt; font-weight: 400; color: #0c1829;
+    letter-spacing: -0.015em; white-space: nowrap;
+    flex-shrink: 0;
   }
   .section-rule {
-    height: 2px;
-    background: linear-gradient(90deg, #c8a25c 0px, rgba(200,162,92,0.25) 80px, transparent 180px);
+    flex: 1; height: 1px; align-self: center;
+    background: linear-gradient(90deg, #c4a052 0px, rgba(196,160,82,0.2) 60px, #e8e8ee 120px);
   }
 
   /* ── Fields ── */
-  .fields { width: 100%; border-collapse: collapse; }
-  .field-row { border-bottom: 1px solid #f3f4f6; page-break-inside: avoid; }
-  .field-label {
-    width: 34%; padding: 8px 14px 8px 0;
-    font-size: 8pt; font-weight: 600; color: #6b7280;
-    letter-spacing: 0.02em; vertical-align: top; line-height: 1.5;
+  .fields-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    border: 1px solid #ebebf0; border-radius: 5px; overflow: hidden;
+    break-before: avoid;
   }
-  .field-value {
-    padding: 8px 0; font-size: 10pt; color: #111827;
-    vertical-align: top; line-height: 1.55; word-break: break-word;
+  .field-cell {
+    padding: 8px 12px;
+    border-bottom: 1px solid #ebebf0; border-right: 1px solid #ebebf0;
+    page-break-inside: avoid; min-height: 36px;
   }
+  .field-cell.field-full { grid-column: span 2; border-right: none; }
+  .field-cell.field-rel { page-break-inside: auto; }
+  .fcell-label {
+    font-size: 6.5pt; font-weight: 700; color: #9198a8;
+    text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 3px;
+  }
+  .fcell-value {
+    font-size: 9.5pt; color: #1a2133; line-height: 1.5; overflow-wrap: anywhere;
+  }
+  .richtext-value { font-size: 9.5pt; color: #1a2133; line-height: 1.6; }
+  .richtext-value p { margin: 0 0 4px; }
+  .richtext-value strong, .richtext-value b { font-weight: 700; }
+  .richtext-value em, .richtext-value i { font-style: italic; }
+  .richtext-value ul, .richtext-value ol { margin: 0 0 4px 16px; padding: 0; }
+  .richtext-value li { margin-bottom: 2px; }
+  .richtext-value h1, .richtext-value h2, .richtext-value h3 { font-weight: 700; margin: 6px 0 2px; }
+
+  /* ── Relation tables (O2M) ── */
+  .rel-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 6.5pt; line-height: 1.3; margin-top: 4px;
+    table-layout: auto;
+  }
+  .rel-table th {
+    text-align: left; font-size: 6pt; font-weight: 700;
+    color: #9198a8; text-transform: uppercase; letter-spacing: 0.07em;
+    padding: 3px 6px 3px 0; border-bottom: 1.5px solid #c4a052;
+    white-space: nowrap;
+  }
+  .rel-table th:first-child { padding-left: 0; }
+  .rel-table td {
+    padding: 3px 6px 3px 0; border-bottom: 1px solid #ebebf0;
+    color: #1a2133; vertical-align: top; overflow-wrap: anywhere;
+  }
+  .rel-table td:first-child { padding-left: 0; }
+  .rel-table tr:last-child td { border-bottom: none; }
+  .rel-table tbody tr:nth-child(even) td { background: #f9f9fb; }
 </style>
 </head>
 <body>
@@ -241,8 +318,8 @@ ${coverHtml}
 }
 
 // ─── Signal (Minimal) ─────────────────────────────────────────────────────────
-// White cover · single cyan stripe · extreme weight contrast · pure typography
-// Confident, architectural, Swiss design sensibility
+// White · massive weight contrast · single cyan stripe · Swiss precision
+// Confident and architectural — the design IS the content
 
 export function minimalTheme(data: PdfLayoutData): string {
   const initial = data.collectionLabel.charAt(0).toUpperCase()
@@ -256,16 +333,28 @@ export function minimalTheme(data: PdfLayoutData): string {
         ? `<img class="cover-logo" src="${escHtml(data.logoUrl)}" alt="">`
         : `<div class="cover-badge">${escHtml(initial)}</div>`
       }
-      <span class="cover-collection">${escHtml(data.collectionLabel)}</span>
+      <div class="cover-top-meta">
+        <span class="cover-collection">${escHtml(data.collectionLabel)}</span>
+        <span class="cover-date">${escHtml(data.generatedAt)}</span>
+      </div>
     </div>
+
     <div class="cover-body">
       <h1 class="cover-title">${escHtml(data.coverTitle)}</h1>
       <div class="cover-rule"></div>
       ${data.coverSubtitle ? `<p class="cover-subtitle">${escHtml(data.coverSubtitle)}</p>` : ''}
     </div>
+
     <div class="cover-bottom">
-      <span class="cover-date">${escHtml(data.generatedAt)}</span>
-      <span class="cover-by">${escHtml(data.generatedBy)}</span>
+      <div class="cover-bottom-item">
+        <span class="cover-bottom-label">Prepared by</span>
+        <span class="cover-bottom-value">${escHtml(data.generatedBy)}</span>
+      </div>
+      <div class="cover-bottom-divider"></div>
+      <div class="cover-bottom-item">
+        <span class="cover-bottom-label">Collection</span>
+        <span class="cover-bottom-value">${escHtml(data.collectionLabel)}</span>
+      </div>
     </div>
   </div>
 </div>` : ''
@@ -273,23 +362,19 @@ export function minimalTheme(data: PdfLayoutData): string {
   const sectionsHtml = data.sections.map(s => `
 <div class="section">
   <div class="section-header">
-    <span class="section-marker"></span>
+    <div class="section-marker"></div>
     <h2 class="section-title">${escHtml(s.label)}</h2>
   </div>
-  <div class="fields">
-    ${s.fields.map(f => `
-    <div class="field-row">
-      <div class="field-label">${escHtml(f.label)}</div>
-      <div class="field-value">${escHtml(f.value)}</div>
-    </div>`).join('')}
-  </div>
+  ${renderFieldsGrid(s.fields)}
 </div>`).join('')
 
   const contentHeaderHtml = `
 <div class="content-header">
   <div class="ch-left">
-    <span class="ch-stripe"></span>
+    <span class="ch-bar"></span>
     <span class="ch-label">${escHtml(data.collectionLabel)}</span>
+    <span class="ch-sep">/</span>
+    <span class="ch-title">${escHtml(data.coverTitle)}</span>
   </div>
   <span class="ch-date">${escHtml(data.generatedAt)}</span>
 </div>`
@@ -302,8 +387,8 @@ export function minimalTheme(data: PdfLayoutData): string {
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   @page { size: A4; margin: 0; }
   html, body {
-    font-family: Helvetica, Arial, sans-serif;
-    font-size: 11pt; color: #111111; background: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 10pt; color: #111111; background: #ffffff;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
 
@@ -313,88 +398,148 @@ export function minimalTheme(data: PdfLayoutData): string {
     background: #ffffff;
     display: flex;
     page-break-after: always;
+    overflow: hidden;
   }
-  .cover-stripe { width: 5px; background: #00ceff; flex-shrink: 0; }
+  .cover-stripe { width: 8px; background: #00ceff; flex-shrink: 0; }
   .cover-inner {
     flex: 1; display: flex; flex-direction: column;
-    padding: 28mm 22mm 18mm 20mm;
+    padding: 26mm 24mm 20mm 22mm;
   }
+
   .cover-top {
-    display: flex; align-items: center; gap: 12px; margin-bottom: auto;
+    display: flex; align-items: flex-start; gap: 14px;
+    margin-bottom: auto;
   }
   .cover-badge {
-    width: 36px; height: 36px; border-radius: 50%; background: #00ceff;
+    width: 40px; height: 40px; border-radius: 50%;
+    background: #00ceff;
     display: flex; align-items: center; justify-content: center;
-    font-size: 15px; font-weight: 900; color: #ffffff; flex-shrink: 0;
+    font-size: 16px; font-weight: 900; color: #ffffff; flex-shrink: 0;
   }
-  .cover-logo { height: 32px; width: auto; object-fit: contain; flex-shrink: 0; }
+  .cover-logo { height: 30px; width: auto; object-fit: contain; flex-shrink: 0; }
+  .cover-top-meta {
+    display: flex; flex-direction: column; gap: 3px; padding-top: 4px;
+  }
   .cover-collection {
-    font-size: 9pt; font-weight: 500; letter-spacing: 0.08em;
-    color: #6b7280; text-transform: uppercase;
+    font-size: 8.5pt; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #111111;
   }
+  .cover-date { font-size: 7.5pt; color: #888888; }
+
   .cover-body { margin-bottom: auto; }
   .cover-title {
-    font-size: 58pt; font-weight: 900; line-height: 0.95;
+    font-size: 54pt; font-weight: 900; line-height: 0.93;
     letter-spacing: -0.04em; color: #111111;
-    margin-bottom: 20px; word-break: break-word; hyphens: auto;
+    margin-bottom: 18px; word-break: break-word; hyphens: auto;
   }
-  .cover-rule { width: 100%; height: 3px; background: #00ceff; margin-bottom: 22px; }
+  .cover-rule { width: 56px; height: 4px; background: #00ceff; margin-bottom: 20px; }
   .cover-subtitle {
-    font-size: 12pt; font-weight: 300; color: #6b7280; line-height: 1.45; max-width: 420px;
+    font-size: 11.5pt; font-weight: 300; color: #555555;
+    line-height: 1.5; max-width: 400px;
   }
+
   .cover-bottom {
-    display: flex; justify-content: space-between; align-items: flex-end;
-    padding-top: 20px; border-top: 1px solid #e5e7eb;
+    display: flex; align-items: center;
+    padding-top: 18px; border-top: 1.5px solid #111111;
   }
-  .cover-date { font-size: 8.5pt; color: #9ca3af; }
-  .cover-by   { font-size: 8.5pt; color: #9ca3af; }
+  .cover-bottom-item {
+    display: flex; flex-direction: column; gap: 4px; flex: 1;
+    padding-right: 24px;
+  }
+  .cover-bottom-item + .cover-bottom-item { padding-left: 24px; padding-right: 0; }
+  .cover-bottom-divider { width: 1px; height: 36px; background: #e0e0e0; flex-shrink: 0; }
+  .cover-bottom-label {
+    font-size: 6.5pt; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #bbbbbb;
+  }
+  .cover-bottom-value { font-size: 9pt; font-weight: 500; color: #111111; }
 
   /* ── Content header ── */
   .content-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding-bottom: 10px; margin-bottom: 14mm;
-    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 9px; margin-bottom: 10mm;
+    border-bottom: 2px solid #111111;
   }
   .ch-left { display: flex; align-items: center; gap: 8px; }
-  .ch-stripe { display: inline-block; width: 3px; height: 14px; background: #00ceff; border-radius: 2px; }
-  .ch-label {
-    font-size: 7.5pt; font-weight: 700;
-    letter-spacing: 0.1em; text-transform: uppercase; color: #374151;
+  .ch-bar {
+    display: inline-block; width: 3px; height: 13px;
+    background: #00ceff; border-radius: 1.5px; flex-shrink: 0;
   }
-  .ch-date { font-size: 7.5pt; color: #9ca3af; }
+  .ch-label {
+    font-size: 7pt; font-weight: 800;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #111111;
+  }
+  .ch-sep { font-size: 7pt; color: #cccccc; }
+  .ch-title { font-size: 7pt; color: #777777; font-weight: 400; }
+  .ch-date { font-size: 7pt; color: #999999; }
 
   /* ── Content ── */
-  .content { padding: 14mm 22mm 18mm; }
+  .content { padding: 12mm 8mm 18mm; }
 
   /* ── Sections ── */
-  .section { margin-bottom: 14mm; }
+  .section { margin-bottom: 10mm; }
   .section-header {
-    display: flex; align-items: center; gap: 10px;
-    margin-bottom: 8mm; page-break-inside: avoid; page-break-after: avoid;
+    display: flex; align-items: center; gap: 9px;
+    margin-bottom: 5mm; page-break-after: avoid;
   }
   .section-marker {
-    display: inline-block; width: 8px; height: 8px;
-    background: #00ceff; border-radius: 2px; flex-shrink: 0;
+    width: 10px; height: 10px; background: #00ceff;
+    border-radius: 2px; flex-shrink: 0;
   }
   .section-title {
-    font-size: 15pt; font-weight: 700; color: #111111;
-    letter-spacing: -0.02em; line-height: 1;
+    font-size: 13pt; font-weight: 800; color: #111111;
+    letter-spacing: -0.025em; line-height: 1;
   }
 
   /* ── Fields ── */
-  .fields { display: flex; flex-direction: column; }
-  .field-row {
-    display: flex; border-bottom: 1px solid #f3f4f6;
-    padding: 7px 0; page-break-inside: avoid;
+  .fields-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    border: 1.5px solid #111111; overflow: hidden;
+    break-before: avoid;
   }
-  .field-label {
-    width: 36%; flex-shrink: 0; font-size: 8.5pt; font-weight: 600;
-    color: #6b7280; padding-right: 16px; line-height: 1.55;
+  .field-cell {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e8e8e8; border-right: 1px solid #e8e8e8;
+    page-break-inside: avoid;
   }
-  .field-value {
-    flex: 1; font-size: 10.5pt; color: #111111;
-    font-weight: 400; line-height: 1.55; word-break: break-word;
+  .field-cell.field-full { grid-column: span 2; border-right: none; }
+  .field-cell.field-rel { page-break-inside: auto; }
+  .fcell-label {
+    font-size: 6pt; font-weight: 700; color: #aaaaaa;
+    text-transform: uppercase; letter-spacing: 0.09em; margin-bottom: 3px;
   }
+  .fcell-value {
+    font-size: 9.5pt; color: #111111; line-height: 1.5; word-break: break-word;
+    font-weight: 400;
+  }
+  .richtext-value { font-size: 9.5pt; color: #111111; line-height: 1.6; }
+  .richtext-value p { margin: 0 0 4px; }
+  .richtext-value strong, .richtext-value b { font-weight: 700; }
+  .richtext-value em, .richtext-value i { font-style: italic; }
+  .richtext-value ul, .richtext-value ol { margin: 0 0 4px 16px; padding: 0; }
+  .richtext-value li { margin-bottom: 2px; }
+  .richtext-value h1, .richtext-value h2, .richtext-value h3 { font-weight: 700; margin: 6px 0 2px; }
+
+  /* ── Relation tables (O2M) ── */
+  .rel-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 6.5pt; line-height: 1.3; margin-top: 4px;
+    table-layout: auto;
+  }
+  .rel-table th {
+    text-align: left; font-size: 6pt; font-weight: 800;
+    color: #111111; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 3px 6px 3px 0; border-bottom: 1.5px solid #00ceff;
+    white-space: nowrap;
+  }
+  .rel-table th:first-child { padding-left: 0; }
+  .rel-table td {
+    padding: 3px 6px 3px 0; border-bottom: 1px solid #eeeeee;
+    color: #111111; vertical-align: top; word-break: break-word;
+  }
+  .rel-table td:first-child { padding-left: 0; }
+  .rel-table tr:last-child td { border-bottom: none; }
+  .rel-table tbody tr:nth-child(even) td { background: #f8f8f8; }
 </style>
 </head>
 <body>
@@ -411,15 +556,15 @@ ${coverHtml}
 }
 
 // ─── Obsidian (Executive) ─────────────────────────────────────────────────────
-// Full dark-mode PDF · near-black pages · cyan accent · Georgia headings
-// Premium and unexpected — dark-mode PDFs are rare and immediately striking
+// Full dark-mode PDF · near-black surface · cyan accent · Georgia headings
+// Premium and unexpected — dark PDFs are rare and immediately striking
 
 export function executiveTheme(data: PdfLayoutData): string {
   const initial = data.collectionLabel.charAt(0).toUpperCase()
 
   const coverHtml = data.coverEnabled ? `
 <div class="cover">
-  <div class="cover-top-bar"></div>
+  <div class="cover-accent-bar"></div>
   <div class="cover-content">
     <div class="cover-header">
       ${data.logoUrl
@@ -428,26 +573,31 @@ export function executiveTheme(data: PdfLayoutData): string {
       }
       <span class="cover-collection">${escHtml(data.collectionLabel)}</span>
     </div>
+
     <div class="cover-body">
-      <div class="cover-eyeline">
-        <span class="cover-divider-line"></span>
-        <span class="cover-tag">Confidential document</span>
+      <div class="cover-tag-row">
+        <span class="cover-tag-line"></span>
+        <span class="cover-tag">Confidential Record</span>
       </div>
       <h1 class="cover-title">${escHtml(data.coverTitle)}</h1>
       ${data.coverSubtitle ? `<p class="cover-subtitle">${escHtml(data.coverSubtitle)}</p>` : ''}
     </div>
-    <div class="cover-meta">
-      <div class="meta-block">
-        <span class="meta-label">Date</span>
-        <span class="meta-val">${escHtml(data.generatedAt)}</span>
-      </div>
-      <div class="meta-block">
-        <span class="meta-label">Author</span>
-        <span class="meta-val">${escHtml(data.generatedBy)}</span>
-      </div>
-      <div class="meta-block">
-        <span class="meta-label">Collection</span>
-        <span class="meta-val">${escHtml(data.collectionLabel)}</span>
+
+    <div class="cover-footer">
+      <div class="cover-footer-rule"></div>
+      <div class="cover-meta">
+        <div class="meta-col">
+          <span class="meta-label">Date issued</span>
+          <span class="meta-val">${escHtml(data.generatedAt)}</span>
+        </div>
+        <div class="meta-col">
+          <span class="meta-label">Prepared by</span>
+          <span class="meta-val">${escHtml(data.generatedBy)}</span>
+        </div>
+        <div class="meta-col">
+          <span class="meta-label">Data source</span>
+          <span class="meta-val">${escHtml(data.collectionLabel)}</span>
+        </div>
       </div>
     </div>
   </div>
@@ -457,22 +607,18 @@ export function executiveTheme(data: PdfLayoutData): string {
 <div class="section">
   <div class="section-header">
     <h2 class="section-title">${escHtml(s.label)}</h2>
+    <div class="section-rule"></div>
   </div>
-  <table class="fields">
-    <tbody>
-      ${s.fields.map((f, i) => `
-      <tr class="field-row${i % 2 === 1 ? ' field-row-alt' : ''}">
-        <td class="field-label">${escHtml(f.label)}</td>
-        <td class="field-value">${escHtml(f.value)}</td>
-      </tr>`).join('')}
-    </tbody>
-  </table>
+  ${renderFieldsGrid(s.fields)}
 </div>`).join('')
 
   const contentHeaderHtml = `
 <div class="content-header">
-  <span class="ch-label">${escHtml(data.collectionLabel)}</span>
-  <span class="ch-meta">${escHtml(data.generatedAt)} &middot; ${escHtml(data.generatedBy)}</span>
+  <div class="ch-left">
+    <span class="ch-pip"></span>
+    <span class="ch-label">${escHtml(data.collectionLabel)}</span>
+  </div>
+  <span class="ch-meta">${escHtml(data.coverTitle)}&ensp;&middot;&ensp;${escHtml(data.generatedAt)}</span>
 </div>`
 
   return `<!DOCTYPE html>
@@ -481,120 +627,186 @@ export function executiveTheme(data: PdfLayoutData): string {
 <meta charset="UTF-8">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  @page { size: A4; margin: 0; background: #07090f; }
+  @page { size: A4; margin: 0; background: #07090e; }
   html, body {
-    font-family: Helvetica, Arial, sans-serif;
-    font-size: 11pt; color: #e2e8f0; background: #07090f;
+    font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 10pt; color: #d4dce8; background: #07090e;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
 
   /* ── Cover ── */
   .cover {
     width: 210mm; height: 297mm;
-    background: #07090f;
+    background: #07090e;
     display: flex; flex-direction: column;
     page-break-after: always;
+    overflow: hidden;
   }
-  .cover-top-bar { height: 4px; background: #00ceff; flex-shrink: 0; }
+  .cover-accent-bar { height: 5px; background: #00ceff; flex-shrink: 0; }
   .cover-content {
-    flex: 1; display: flex; flex-direction: column; padding: 26mm 22mm 18mm;
+    flex: 1; display: flex; flex-direction: column;
+    padding: 24mm 24mm 20mm;
   }
+
   .cover-header {
-    display: flex; align-items: center; gap: 14px; margin-bottom: auto;
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: auto;
   }
   .cover-badge {
-    width: 48px; height: 48px; background: #0f1623;
-    border: 1px solid #1e2d47; border-radius: 10px;
+    width: 46px; height: 46px;
+    background: #0f1623;
+    border: 1px solid rgba(0,206,255,0.2);
+    border-radius: 9px;
     display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
   .cover-badge span {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 22px; font-weight: 400; color: #00ceff;
+    font-size: 21px; font-weight: 400; color: #00ceff;
   }
   .cover-logo {
-    height: 36px; width: auto; object-fit: contain;
-    filter: brightness(0) invert(1); opacity: 0.9; flex-shrink: 0;
+    height: 34px; width: auto; object-fit: contain;
+    filter: brightness(0) invert(1); opacity: 0.85; flex-shrink: 0;
   }
   .cover-collection {
-    font-size: 8.5pt; font-weight: 600;
-    letter-spacing: 0.2em; text-transform: uppercase; color: #00ceff;
+    font-size: 8pt; font-weight: 600;
+    letter-spacing: 0.22em; text-transform: uppercase; color: #00ceff;
   }
-  .cover-body { margin-bottom: 24mm; }
-  .cover-eyeline {
-    display: flex; align-items: center; gap: 12px; margin-bottom: 24px;
+
+  .cover-body { margin-bottom: 22mm; }
+  .cover-tag-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 22px;
   }
-  .cover-divider-line {
-    display: inline-block; width: 28px; height: 1px;
-    background: rgba(0,206,255,0.4); flex-shrink: 0;
+  .cover-tag-line {
+    display: inline-block; width: 22px; height: 1px;
+    background: rgba(0,206,255,0.35); flex-shrink: 0;
   }
   .cover-tag {
-    font-size: 8pt; font-weight: 500;
-    letter-spacing: 0.15em; text-transform: uppercase; color: rgba(0,206,255,0.6);
+    font-size: 7.5pt; font-weight: 500;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: rgba(0,206,255,0.55);
   }
   .cover-title {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 48pt; font-weight: 400; line-height: 1.05;
+    font-size: 46pt; font-weight: 400; line-height: 1.06;
     letter-spacing: -0.025em; color: #ffffff;
-    margin-bottom: 20px; max-width: 500px;
+    margin-bottom: 22px; max-width: 490px;
   }
   .cover-subtitle {
-    font-size: 13pt; font-weight: 300; color: rgba(255,255,255,0.4); line-height: 1.4;
+    font-size: 11.5pt; font-weight: 300;
+    color: rgba(255,255,255,0.38); line-height: 1.5; max-width: 380px;
   }
-  .cover-meta {
-    display: flex; border-top: 1px solid #1a2336; padding-top: 20px;
+
+  .cover-footer {}
+  .cover-footer-rule {
+    height: 1px;
+    background: linear-gradient(90deg, rgba(0,206,255,0.35), rgba(0,206,255,0.08) 50%, transparent);
+    margin-bottom: 18px;
   }
-  .meta-block {
-    flex: 1; display: flex; flex-direction: column; gap: 5px; padding: 0 20px;
+  .cover-meta { display: flex; }
+  .meta-col {
+    flex: 1; display: flex; flex-direction: column; gap: 5px;
+    padding: 0 22px;
   }
-  .meta-block:first-child { padding-left: 0; }
-  .meta-block:last-child { padding-right: 0; }
-  .meta-block + .meta-block { border-left: 1px solid #1a2336; }
+  .meta-col:first-child { padding-left: 0; }
+  .meta-col:last-child { padding-right: 0; }
+  .meta-col + .meta-col { border-left: 1px solid rgba(255,255,255,0.07); }
   .meta-label {
-    font-size: 7pt; font-weight: 600;
-    letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255,255,255,0.22);
+    font-size: 6.5pt; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: rgba(255,255,255,0.2);
   }
-  .meta-val { font-size: 9pt; color: rgba(255,255,255,0.65); line-height: 1.3; }
+  .meta-val {
+    font-size: 8.5pt; color: rgba(255,255,255,0.6);
+    font-weight: 400; line-height: 1.35;
+  }
 
   /* ── Content header ── */
   .content-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 0 10px; margin-bottom: 12mm;
+    padding: 9px 0; margin-bottom: 10mm;
     border-top: 2px solid #00ceff;
     border-bottom: 1px solid #1a2336;
   }
-  .ch-label {
-    font-size: 7.5pt; font-weight: 600;
-    letter-spacing: 0.14em; text-transform: uppercase; color: #00ceff;
+  .ch-left { display: flex; align-items: center; gap: 9px; }
+  .ch-pip {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #00ceff; flex-shrink: 0;
   }
-  .ch-meta { font-size: 7.5pt; color: rgba(255,255,255,0.28); }
+  .ch-label {
+    font-size: 7pt; font-weight: 700;
+    letter-spacing: 0.16em; text-transform: uppercase; color: #00ceff;
+  }
+  .ch-meta { font-size: 7pt; color: rgba(255,255,255,0.22); }
 
   /* ── Content ── */
-  .content { padding: 14mm 22mm 18mm; }
+  .content { padding: 12mm 8mm 18mm; }
 
   /* ── Sections ── */
-  .section { margin-bottom: 12mm; }
+  .section { margin-bottom: 10mm; }
   .section-header {
-    margin-bottom: 5mm; page-break-inside: avoid; page-break-after: avoid;
-    padding-bottom: 8px; border-bottom: 1px solid #1a2336;
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 5mm;
+    page-break-after: avoid;
   }
   .section-title {
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 14pt; font-weight: 400; color: #00ceff; letter-spacing: -0.01em;
+    font-size: 14pt; font-weight: 400; color: #00ceff;
+    letter-spacing: -0.01em; white-space: nowrap; flex-shrink: 0;
+  }
+  .section-rule {
+    flex: 1; height: 1px; align-self: center;
+    background: linear-gradient(90deg, rgba(0,206,255,0.3), rgba(0,206,255,0.05) 80px, rgba(26,35,54,0.5) 160px);
   }
 
   /* ── Fields ── */
-  .fields { width: 100%; border-collapse: collapse; }
-  .field-row { border-bottom: 1px solid #0f1623; page-break-inside: avoid; }
-  .field-row-alt { background: #0b0f1a; }
-  .field-label {
-    width: 34%; padding: 8px 14px 8px 8px;
-    font-size: 8pt; font-weight: 500; color: #4b6184;
-    letter-spacing: 0.01em; vertical-align: top; line-height: 1.5;
+  .fields-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    border: 1px solid #1a2336; border-radius: 5px; overflow: hidden;
+    break-before: avoid;
   }
-  .field-value {
-    padding: 8px 8px; font-size: 10pt; color: #c8d6e8;
-    vertical-align: top; line-height: 1.55; word-break: break-word; font-weight: 300;
+  .field-cell {
+    padding: 8px 12px;
+    border-bottom: 1px solid #1a2336; border-right: 1px solid #1a2336;
+    page-break-inside: avoid;
   }
+  .field-cell.field-full { grid-column: span 2; border-right: none; }
+  .field-cell.field-rel { page-break-inside: auto; }
+  .fcell-label {
+    font-size: 6.5pt; font-weight: 600; color: #3a5070;
+    text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 3px;
+  }
+  .fcell-value {
+    font-size: 9.5pt; color: #b8cce0; line-height: 1.5;
+    word-break: break-word; font-weight: 300;
+  }
+  .richtext-value { font-size: 9.5pt; color: #b8cce0; line-height: 1.6; font-weight: 300; }
+  .richtext-value p { margin: 0 0 4px; }
+  .richtext-value strong, .richtext-value b { font-weight: 600; color: #d0e4f5; }
+  .richtext-value em, .richtext-value i { font-style: italic; }
+  .richtext-value ul, .richtext-value ol { margin: 0 0 4px 16px; padding: 0; }
+  .richtext-value li { margin-bottom: 2px; }
+  .richtext-value h1, .richtext-value h2, .richtext-value h3 { font-weight: 600; color: #d0e4f5; margin: 6px 0 2px; }
+
+  /* ── Relation tables (O2M) ── */
+  .rel-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 6.5pt; line-height: 1.3; margin-top: 4px;
+    table-layout: auto;
+  }
+  .rel-table th {
+    text-align: left; font-size: 6pt; font-weight: 600;
+    color: #00ceff; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 3px 6px 3px 0; border-bottom: 1px solid rgba(0,206,255,0.3);
+    white-space: nowrap;
+  }
+  .rel-table th:first-child { padding-left: 0; }
+  .rel-table td {
+    padding: 3px 6px 3px 0; border-bottom: 1px solid #1a2336;
+    color: #b8cce0; vertical-align: top; word-break: break-word; font-weight: 300;
+  }
+  .rel-table td:first-child { padding-left: 0; }
+  .rel-table tr:last-child td { border-bottom: none; }
+  .rel-table tbody tr:nth-child(even) td { background: rgba(0,206,255,0.03); }
 </style>
 </head>
 <body>

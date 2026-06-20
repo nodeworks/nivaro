@@ -408,7 +408,7 @@
           <a class="docs-nav-item" data-section="environment-sync" href="#environment-sync">Environment Sync</a>
           <a class="docs-nav-item" data-section="live-schema-migrations" href="#live-schema-migrations">Live Schema Migrations</a>
           <a class="docs-nav-item" data-section="extension-marketplace" href="#extension-marketplace">Extension Marketplace</a>
-          <a class="docs-nav-item" data-section="sdk-playground" href="#sdk-playground">SDK Playground</a>
+          <a class="docs-nav-item" data-section="playground" href="#playground">Playground</a>
           <a class="docs-nav-item" data-section="revision-diff" href="#revision-diff">Side-by-Side Revision Diff</a>
           <a class="docs-nav-item" data-section="public-api-docs" href="#public-api-docs">Public API Docs Site</a>
         </div>
@@ -5231,7 +5231,7 @@ const { data: rev } = await nivaro.request(readRevision('rev-uuid'))
           <h3 class="doc-h3">Discovering commands</h3>
           <ul class="doc-ul">
             <li>Everything is exported from the package root — editor autocomplete on <code class="doc-code">import { … } from "@nivaro/sdk"</code> is the fastest index.</li>
-            <li>The SDK Playground at /sdk-playground runs snippets against the live instance with your session's permissions, with collection and field comboboxes to scaffold calls.</li>
+            <li>The Playground at /playground runs snippets against the live instance with your session's permissions, with collection and field comboboxes to scaffold calls.</li>
             <li>All commands flow through <code class="doc-code">nivaro.request(command)</code>, so auth, workspace headers, and error handling are uniform.</li>
           </ul>
           <pre class="doc-pre"><code>import { createNivaro, readItems, aiValidate, listWidgetFeeds } from '@nivaro/sdk';
@@ -11062,13 +11062,13 @@ EXTENSION_REGISTRY_URL=https://registry.nivaro.io/extensions.json</code></pre>
         </div>
 
         <!-- SDK PLAYGROUND -->
-        <div class="doc-section" id="s-sdk-playground" data-toc='[{"id":"sdk-playground","label":"SDK Playground"},{"id":"sdk-playground-access","label":"Accessing the Playground"},{"id":"sdk-playground-example","label":"Example Snippet"},{"id":"sdk-playground-features","label":"Features"},{"id":"sdk-playground-security","label":"Security"},{"id":"sdk-playground-use-cases","label":"Use Cases"}]'>
-          <!-- SYNC:sdk-playground -->
-          <h1 class="doc-h1" id="sdk-playground">SDK Playground</h1>
+        <div class="doc-section" id="s-playground" data-toc='[{"id":"playground","label":"Playground"},{"id":"playground-access","label":"Accessing the Playground"},{"id":"playground-example","label":"Example Snippet"},{"id":"playground-features","label":"Features"},{"id":"playground-security","label":"Security"},{"id":"playground-use-cases","label":"Use Cases"}]'>
+          <!-- SYNC:playground -->
+          <h1 class="doc-h1" id="playground">Playground</h1>
           <p class="doc-p">An in-browser REPL for @nivaro/sdk. Write and test SDK code against the live instance using your current session permissions. Inspect results in real-time without leaving the admin UI — great for prototyping queries before code commit.</p>
-          <h3 class="doc-h3" id="sdk-playground-access">Accessing the Playground</h3>
-          <p class="doc-p">Navigate to /sdk-playground in the admin UI. The playground is available to all authenticated users (runs with their permissions).</p>
-          <h3 class="doc-h3" id="sdk-playground-example">Example Snippet</h3>
+          <h3 class="doc-h3" id="playground-access">Accessing the Playground</h3>
+          <p class="doc-p">Navigate to /playground in the admin UI. The playground is available to all authenticated users (runs with their permissions).</p>
+          <h3 class="doc-h3" id="playground-example">Example Snippet</h3>
           <pre class="doc-pre"><code>// Get published articles
 const articles = await nivaro.request(
   readItems('articles', {
@@ -11080,7 +11080,7 @@ const articles = await nivaro.request(
 
 console.log(`Found ${articles.length} articles`);
 return articles;</code></pre>
-          <h3 class="doc-h3" id="sdk-playground-features">Features</h3>
+          <h3 class="doc-h3" id="playground-features">Features</h3>
           <ul class="doc-ul">
             <li>Full SDK API available: readItems, createOne, updateOne, deleteOne, etc.</li>
             <li>TypeScript autocomplete if using TS mode</li>
@@ -11089,14 +11089,14 @@ return articles;</code></pre>
             <li>Permissions enforced: code executes with your role/access level</li>
             <li>No persistence: snippets not saved (reload clears)</li>
           </ul>
-          <h3 class="doc-h3" id="sdk-playground-security">Security</h3>
+          <h3 class="doc-h3" id="playground-security">Security</h3>
           <ul class="doc-ul">
             <li>Runs in browser only — code does not execute server-side</li>
             <li>Auth context inherited from your session — respects your permissions</li>
             <li>No file system access or environment variable access</li>
             <li>Use your session token (no need to create special test tokens)</li>
           </ul>
-          <h3 class="doc-h3" id="sdk-playground-use-cases">Use Cases</h3>
+          <h3 class="doc-h3" id="playground-use-cases">Use Cases</h3>
           <ul class="doc-ul">
             <li>Test filter DSL before using in app code</li>
             <li>Prototype GraphQL queries and mutations</li>
@@ -11105,7 +11105,7 @@ return articles;</code></pre>
             <li>Debug computed field formulas</li>
           </ul>
           <div class="doc-note">Code runs in the browser with your current session token. Only API calls to the backend execute — all other code runs in-browser JavaScript.</div>
-          <!-- /SYNC:sdk-playground -->
+          <!-- /SYNC:playground -->
         </div>
 
         <!-- SIDE-BY-SIDE REVISION DIFF -->

@@ -244,14 +244,21 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     for (const [field, fieldAssignments] of assignmentsByField.entries()) {
       if (knownFields.has(field)) continue
       for (const a of fieldAssignments) {
+        const ov = a.overrides ?? null
+        let virtualOpts: Record<string, unknown> | null = a.show_row_revisions ? { show_row_revisions: true } : null
+        if (ov?.options && typeof ov.options === 'object') {
+          virtualOpts = { ...(virtualOpts ?? {}), ...(ov.options as Record<string, unknown>) }
+        }
         formatted.push({
           field,
           label: null, note: null, hidden: false, readonly: false, required: false,
-          interface: 'o2m', options: a.show_row_revisions ? { show_row_revisions: true } : null,
+          interface: ov?.interface !== undefined ? (ov.interface as string | null) : 'o2m',
+          options: virtualOpts,
           group_key: a.group_key, sort: a.sort,
           label_override: a.label_override, is_visible: a.is_visible, default_expanded: a.default_expanded,
           show_row_revisions: a.show_row_revisions,
-          layout_assigned: true, is_virtual: true as unknown, dependency_config: null
+          layout_assigned: true, is_virtual: true as unknown, dependency_config: null,
+          _overrides: ov
         })
       }
     }

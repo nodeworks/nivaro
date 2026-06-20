@@ -587,7 +587,7 @@ export const sdkCoverage: DocSection = {
       type: 'ul',
       items: [
         'Everything is exported from the package root — editor autocomplete on `import { … } from "@nivaro/sdk"` is the fastest index.',
-        "The SDK Playground at /sdk-playground runs snippets against the live instance with your session's permissions, with collection and field comboboxes to scaffold calls.",
+        "The Playground at /playground runs snippets against the live instance with your session's permissions, with collection and field comboboxes to scaffold calls.",
         'All commands flow through `nivaro.request(command)`, so auth, workspace headers, and error handling are uniform.'
       ]
     },

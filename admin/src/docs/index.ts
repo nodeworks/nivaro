@@ -89,7 +89,7 @@ import {
   devexRequestSigning,
   devexRevisionDiff,
   devexSchemaMigrations,
-  devexSdkPlayground,
+  devexPlayground,
   devexWebhookDeliveries,
   devexWebhookSigning
 } from './sections/devex.js'
@@ -581,7 +581,7 @@ export const navSections: NavGroup[] = [
       devexEnvSync,
       devexSchemaMigrations,
       devexMarketplace,
-      devexSdkPlayground,
+      devexPlayground,
       devexRevisionDiff,
       publicApiDocs
     ]

@@ -163,4 +163,4 @@ export const SYSTEM_FIELDS = new Set([
   'user_updated'
 ])
 
-export const SENTINEL_FIELDS = new Set(['__pipeline__', '__comments__', '__tasks__', '__owners__'])
+export const SENTINEL_FIELDS = new Set(['__pipeline__', '__comments__', '__tasks__', '__owners__', '__pdf__'])

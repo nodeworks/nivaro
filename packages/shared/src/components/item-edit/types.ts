@@ -55,6 +55,7 @@ export interface SlotAssignment {
   default_expanded?: boolean
   label_override?: string | null
   show_row_revisions?: boolean | number
+  overrides?: Record<string, unknown> | string | null
 }
 
 export interface LayoutMeta {

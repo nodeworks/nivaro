@@ -1,10 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Loader2, Mail, User } from 'lucide-react'
 import * as LucideIcons from 'lucide-react'
 import React, { type ReactNode } from 'react'
 import { useRef, useState } from 'react'
 import { useNavigation, useOptionalNivaroClient } from '../../context'
-import { get } from '../../lib/commands'
+import { get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import {
   DropdownMenu,
@@ -244,6 +244,51 @@ function UserChip({ userId }: { userId: string }) {
 }
 
 // Async M2O display cell — fetches related record + collection display_template
+function PdfGenerateButton({ collection, itemId, layoutId, attachField, label }: {
+  collection: string
+  itemId: string
+  layoutId: number
+  attachField: string | null
+  label: string
+}) {
+  const client = useOptionalNivaroClient()
+  const qc = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const handleGenerate = async () => {
+    if (!client || busy || !attachField) return
+    setBusy(true)
+    try {
+      await client.request(post(`/collection-layouts/${layoutId}/generate-and-attach`, {
+        collection,
+        item_id: itemId,
+        attach_field: attachField,
+      }))
+      qc.invalidateQueries({ queryKey: ['m2m-items'] })
+      qc.invalidateQueries({ queryKey: ['items', collection, itemId] })
+    } catch {
+      // silent — API errors surface via existing error handling
+    } finally {
+      setBusy(false)
+    }
+  }
+  const notConfigured = !attachField
+  return (
+    <button
+      type='button'
+      onClick={handleGenerate}
+      disabled={busy || notConfigured}
+      title={notConfigured ? 'Configure PDF field in Data Model → Layouts' : undefined}
+      className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
+    >
+      <svg xmlns='http://www.w3.org/2000/svg' className='h-3.5 w-3.5' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+        <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
+        <polyline points='14 2 14 8 20 8' />
+      </svg>
+      {busy ? 'Generating…' : label}
+    </button>
+  )
+}
+
 function RelationCell({ relCollection, id }: { relCollection: string; id: unknown }) {
   const client = useOptionalNivaroClient()
   const idStr = id != null && id !== '' ? String(id) : null
@@ -481,6 +526,9 @@ export function GroupSection({
   o2mLoading,
   footerSlot,
   ownersAssignment,
+  pdfAssignment,
+  pdfAttachField,
+  layoutId,
   hideEmptySummary
 }: {
   group: FieldGroup
@@ -509,6 +557,9 @@ export function GroupSection({
   o2mLoading?: Set<string>
   footerSlot?: ReactNode
   ownersAssignment?: SlotAssignment | null
+  pdfAssignment?: SlotAssignment | null
+  pdfAttachField?: string | null
+  layoutId?: number | null
   hideEmptySummary?: boolean
 }) {
   const [localCollapsed, setLocalCollapsed] = useState(group.is_collapsed ?? false)
@@ -575,10 +626,14 @@ export function GroupSection({
             type RenderItem = { _k: string; sort: number } & (
               | { _t: 'field'; f: CMSField }
               | { _t: 'owners'; slot: SlotAssignment }
+              | { _t: 'pdf'; slot: SlotAssignment }
             )
             const items: RenderItem[] = visibleFields_.map((f) => ({ _k: f.field, sort: f.sort ?? 0, _t: 'field' as const, f }))
             if (ownersAssignment) {
               items.push({ _k: '__owners__', sort: ownersAssignment.sort, _t: 'owners' as const, slot: ownersAssignment })
+            }
+            if (pdfAssignment) {
+              items.push({ _k: '__pdf__', sort: pdfAssignment.sort, _t: 'pdf' as const, slot: pdfAssignment })
             }
             items.sort((a, b) => a.sort - b.sort)
 
@@ -593,6 +648,7 @@ export function GroupSection({
                       </div>
                     )
                   }
+                  if (item._t === 'pdf') return null
                   const f = item.f
                   const m2oRel = relations.find(
                     (r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field
@@ -626,6 +682,22 @@ export function GroupSection({
                     return (
                       <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
                         <OwnersInline collection={collection} itemId={itemId} label={item.slot.label_override || 'Owners'} />
+                      </div>
+                    )
+                  }
+                  if (item._t === 'pdf') {
+                    if (!layoutId) return null
+                    const span = item.slot.col_span ?? 12
+                    const label = item.slot.label_override?.trim() || 'Generate PDF'
+                    return (
+                      <div key='__pdf__' style={{ gridColumn: `span ${span}` }}>
+                        <PdfGenerateButton
+                          collection={collection}
+                          itemId={itemId}
+                          layoutId={layoutId}
+                          attachField={pdfAttachField ?? null}
+                          label={label}
+                        />
                       </div>
                     )
                   }

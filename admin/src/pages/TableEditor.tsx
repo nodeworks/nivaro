@@ -4495,8 +4495,11 @@ const SLOT_KEYS: SlotKey[] = ['__pipeline__', '__comments__', '__tasks__']
 const SLOT_META: Record<SlotKey, { name: string; defaultLabel: string; editable: boolean }> = {
   __pipeline__: { name: 'Pipeline', defaultLabel: 'Pipeline', editable: true },
   __comments__: { name: 'Comments', defaultLabel: 'Comments', editable: true },
-  __tasks__: { name: 'Tasks', defaultLabel: 'Tasks', editable: true }
+  __tasks__: { name: 'Tasks', defaultLabel: 'Tasks', editable: true },
 }
+// PDF Button is a special draggable field chip (not a top-level slot card): placed in groups
+// like __owners__, persisted as a field-assignment row with field = '__pdf__'.
+const PDF_FIELD = '__pdf__'
 // Owners is a special draggable field chip (not a top-level slot card): it can be
 // dropped into any group or the ungrouped zone like a normal field, persisted as a
 // field-assignment row with field = '__owners__'.
@@ -5649,6 +5652,7 @@ function FieldChip({
   onUnassign,
   rowRevisions,
   onRowRevisionsChange,
+  extraControls,
 }: {
   fieldName: string
   displayName?: string
@@ -5669,6 +5673,7 @@ function FieldChip({
   onUnassign?: () => void
   rowRevisions?: boolean
   onRowRevisionsChange?: (v: boolean) => void
+  extraControls?: React.ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const widthLabel = WIDTH_OPTIONS.find(w => w.span === colSpan)?.label ?? 'Full'
@@ -5734,6 +5739,8 @@ function FieldChip({
           </button>
         </div>
       )}
+
+      {extraControls}
 
       {/* unassign — send back to pool */}
       {onUnassign && (
@@ -5801,6 +5808,7 @@ function SortableFieldChip({
   sortableId,
   rowRevisions,
   onRowRevisionsChange,
+  extraControls,
 }: {
   fieldName: string
   displayName?: string
@@ -5820,6 +5828,7 @@ function SortableFieldChip({
   sortableId?: string
   rowRevisions?: boolean
   onRowRevisionsChange?: (v: boolean) => void
+  extraControls?: React.ReactNode
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId ?? fieldName,
@@ -5849,11 +5858,12 @@ function SortableFieldChip({
         onSettings={onSettings}
         m2oFields={m2oFields}
         dependencyConfig={dependencyConfig}
-          relatedCollection={relatedCollection}
+        relatedCollection={relatedCollection}
         onUnassign={onUnassign}
         dragHandleProps={listeners ?? {}}
         rowRevisions={rowRevisions}
         onRowRevisionsChange={onRowRevisionsChange}
+        extraControls={extraControls}
       />
     </div>
   )
@@ -5874,7 +5884,7 @@ function parseSortableId(id: string): { container: string | null; fieldName: str
 
 // ── SortableUngroupedZone ─────────────────────────────────────────────────────
 
-function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll, isTableMode }: {
+function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll, isTableMode, getExtraControls }: {
   localFieldOrder: Record<string, string[]>
   allFields: Array<{ field: string; type?: string; options?: string | null }>
   getColSpan: (f: string) => number
@@ -5889,6 +5899,7 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
   onUnassign?: (f: string, groupKey: string) => void
   onReturnAll?: () => void
   isTableMode?: boolean
+  getExtraControls?: (f: string) => React.ReactNode
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'group:__ungrouped__' })
   const style = { transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0 : 1 }
@@ -5928,6 +5939,22 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                     colSpan={getColSpan(f)}
                     onColSpan={isTableMode ? undefined : (span) => patchField(f, { col_span: span })}
                     onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
+                    inGrid
+                  />
+                )
+              }
+              if (f === PDF_FIELD) {
+                return (
+                  <SortableFieldChip
+                    key={toSortableId('__unassigned__', f)}
+                    sortableId={toSortableId('__unassigned__', f)}
+                    fieldName={f}
+                    displayName='PDF Button'
+                    fieldType='pdf'
+                    colSpan={getColSpan(f)}
+                    onColSpan={isTableMode ? undefined : (span) => patchField(f, { col_span: span })}
+                    onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
+                    extraControls={getExtraControls?.(f)}
                     inGrid
                   />
                 )
@@ -5991,6 +6018,7 @@ function SortableGroupCard({
   onGroupSettings,
   getRowRevisions,
   onRowRevisions,
+  getExtraControls,
 }: {
   group: FieldGroup
   fieldNames: string[]
@@ -6016,6 +6044,7 @@ function SortableGroupCard({
   onGroupSettings?: (id: number, patch: Partial<Pick<FieldGroup, 'hide_when_empty' | 'visibility_mode' | 'summary_fields' | 'summary_hide_empty'>>) => void
   getRowRevisions?: (f: string) => boolean
   onRowRevisions?: (f: string, v: boolean) => void
+  getExtraControls?: (f: string) => React.ReactNode
 }) {
   const [editing, setEditing] = useState(false)
   const [labelDraft, setLabelDraft] = useState(group.label)
@@ -6322,6 +6351,22 @@ function SortableGroupCard({
                     colSpan={getColSpan(f)}
                     onColSpan={(span) => onColSpan(f, span)}
                     onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
+                    inGrid
+                  />
+                )
+              }
+              if (f === PDF_FIELD) {
+                return (
+                  <SortableFieldChip
+                    key={toSortableId(group.key, f)}
+                    sortableId={toSortableId(group.key, f)}
+                    fieldName={f}
+                    displayName='PDF Button'
+                    fieldType='pdf'
+                    colSpan={getColSpan(f)}
+                    onColSpan={(span) => onColSpan(f, span)}
+                    onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
+                    extraControls={getExtraControls?.(f)}
                     inGrid
                   />
                 )
@@ -7107,8 +7152,107 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
 
 // ── LayoutTab ─────────────────────────────────────────────────────────────────
 
+function PdfFieldConfig({ tableName, value, onChange }: {
+  tableName: string
+  value: string | null | undefined
+  onChange: (v: string | null) => void
+}) {
+  const { data: relData } = useQuery({
+    queryKey: ['relations-for', tableName],
+    queryFn: () => api.get<{ data: Array<{ id: number; many_collection: string; many_field: string; one_collection: string | null; one_field: string | null; junction_field: string | null }> }>(`/data-model/relations/for/${tableName}`).then(r => r.data.data ?? []),
+    enabled: !!tableName,
+    staleTime: 30_000,
+  })
+
+  // Find M2M fields on this collection that point to nivaro_files
+  const fileFields = useMemo(() => {
+    if (!relData) return []
+    const junctions = relData.filter(r => r.one_collection === tableName && r.junction_field != null)
+    const results: Array<{ field: string; junction: string }> = []
+    const seen = new Set<string>()
+    for (const jr of junctions) {
+      if (seen.has(jr.many_collection)) continue
+      // Primary: companion row explicitly points to nivaro_files
+      const companion = relData.find(r => r.many_collection === jr.many_collection && r.one_collection === 'nivaro_files')
+      // Fallback: single-row M2M where junction_field or junction table name hints at files
+      const jf = jr.junction_field ?? ''
+      const looksLikeFiles = !!companion || /file/i.test(jf) || /file/i.test(jr.many_collection)
+      if (!looksLikeFiles) continue
+      seen.add(jr.many_collection)
+      // Derive display name: skip 'id' (it's the PK ref, not a useful alias)
+      const fieldName = (jr.one_field && jr.one_field !== 'id')
+        ? jr.one_field
+        : jr.many_collection
+            .replace(new RegExp(`^${tableName}_?|_?${tableName}$`, 'i'), '')
+            .replace(/^_|_$/g, '') || jr.many_collection
+      results.push({ field: fieldName, junction: jr.many_collection })
+    }
+    return results
+  }, [relData, tableName])
+
+  const [open, setOpen] = useState(false)
+  const selected = fileFields.find(f => f.field === value) ?? null
+
+  return (
+    <div className='mt-1.5 space-y-1'>
+      <p className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>Attach PDF to field</p>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button type='button' className='flex w-full items-center justify-between rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 hover:border-nvr-cyan/50 dark:border-border dark:bg-card dark:text-slate-200'>
+            <span>{selected ? selected.field : <span className='text-slate-400'>Select file field…</span>}</span>
+            <ChevronDown className='h-3 w-3 text-slate-400' />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-56 p-0' align='start'>
+          <Command>
+            <CommandInput placeholder='Search fields…' className='text-[12px]' />
+            <CommandList>
+              <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>
+                {fileFields.length === 0 ? 'No file M2M fields found' : 'No match'}
+              </CommandEmpty>
+              {value && (
+                <CommandItem value='__clear__' onSelect={() => { onChange(null); setOpen(false) }} className='text-[11px] text-slate-400'>
+                  Clear
+                </CommandItem>
+              )}
+              {fileFields.map(f => (
+                <CommandItem key={f.field} value={f.field} onSelect={() => { onChange(f.field); setOpen(false) }} className='text-[11px]'>
+                  {f.field}
+                  <span className='ml-auto text-[10px] text-slate-400 truncate'>{f.junction}</span>
+                </CommandItem>
+              ))}
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+}
+
+function PdfFieldConfigButton({ tableName, value, onChange }: {
+  tableName: string
+  value: string | null | undefined
+  onChange: (v: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div onPointerDown={e => e.stopPropagation()}>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button type='button' title='PDF settings' className='shrink-0 rounded p-0.5 text-slate-300 hover:text-nvr-cyan'>
+            <Settings2 className='h-3 w-3' />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-64 p-3' align='end'>
+          <PdfFieldConfig tableName={tableName} value={value} onChange={v => { onChange(v); setOpen(false) }} />
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+}
+
 function SortableSlotCard({
-  slotKey, slots, updateSlot, editingSlot, setEditingSlot, slotLabelDraft, setSlotLabelDraft
+  slotKey, slots, updateSlot, editingSlot, setEditingSlot, slotLabelDraft, setSlotLabelDraft, tableName
 }: {
   slotKey: SlotKey
   slots: Record<SlotKey, SlotState>
@@ -7117,6 +7261,7 @@ function SortableSlotCard({
   setEditingSlot: (k: SlotKey | null) => void
   slotLabelDraft: string
   setSlotLabelDraft: (v: string) => void
+  tableName: string
 }) {
   const meta = SLOT_META[slotKey]
   const s = slots[slotKey]
@@ -7130,46 +7275,48 @@ function SortableSlotCard({
     <div
       ref={setNodeRef}
       style={{ transform: DndCSS.Transform.toString(transform), transition }}
-      className={cn('flex items-center gap-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2', isDragging && 'opacity-0')}
+      className={cn('rounded-lg border border-dashed border-slate-200 bg-slate-50', isDragging && 'opacity-0')}
     >
-      <button type='button' {...attributes} {...listeners} className='cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing'>
-        <GripVertical className='h-3.5 w-3.5' />
-      </button>
-      <span className='shrink-0 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>{meta.name}</span>
-      {meta.editable && isEditing ? (
-        <input autoFocus value={slotLabelDraft}
-          onChange={e => setSlotLabelDraft(e.target.value)}
-          onBlur={() => {
-            const v = slotLabelDraft.trim()
-            updateSlot(slotKey, { label_override: v && v !== meta.defaultLabel ? v : null })
-            setEditingSlot(null)
-          }}
-          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditingSlot(null) }}
-          placeholder={meta.defaultLabel}
-          className='flex-1 rounded border border-nvr-cyan/50 bg-white px-1.5 py-0.5 text-[12px] font-medium text-slate-800 outline-none ring-1 ring-nvr-cyan/30'
-        />
-      ) : meta.editable ? (
-        <button type='button' onClick={() => { setSlotLabelDraft(label); setEditingSlot(slotKey) }}
-          className='group/slot flex flex-1 items-center gap-1 truncate text-left text-[12px] font-medium text-slate-700 hover:text-nvr-cyan'>
-          <span className='truncate'>{label}</span>
-          <Pencil className='h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/slot:opacity-50' />
+      <div className='flex items-center gap-2 px-3 py-2'>
+        <button type='button' {...attributes} {...listeners} className='cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing'>
+          <GripVertical className='h-3.5 w-3.5' />
         </button>
-      ) : (
-        <span className='flex-1 truncate text-[12px] font-medium text-slate-700'>{label}</span>
-      )}
-      {!s.is_visible && <span className='shrink-0 rounded bg-slate-500 px-1.5 py-0.5 text-[10px] font-medium text-white'>hidden</span>}
-      <button type='button' title={s.default_expanded ? 'Start collapsed' : 'Start expanded'}
-        onClick={() => updateSlot(slotKey, { default_expanded: !s.default_expanded })}
-        className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'
-      >
-        {s.default_expanded
-          ? <ChevronDown className='h-3.5 w-3.5' />
-          : <ChevronRight className='h-3.5 w-3.5' />}
-      </button>
-      <button type='button' title={s.is_visible ? 'Hide' : 'Show'} onClick={() => updateSlot(slotKey, { is_visible: !s.is_visible })}
-        className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'>
-        {s.is_visible ? <Eye className='h-3.5 w-3.5' /> : <EyeOff className='h-3.5 w-3.5' />}
-      </button>
+        <span className='shrink-0 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>{meta.name}</span>
+        {meta.editable && isEditing ? (
+          <input autoFocus value={slotLabelDraft}
+            onChange={e => setSlotLabelDraft(e.target.value)}
+            onBlur={() => {
+              const v = slotLabelDraft.trim()
+              updateSlot(slotKey, { label_override: v && v !== meta.defaultLabel ? v : null })
+              setEditingSlot(null)
+            }}
+            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditingSlot(null) }}
+            placeholder={meta.defaultLabel}
+            className='flex-1 rounded border border-nvr-cyan/50 bg-white px-1.5 py-0.5 text-[12px] font-medium text-slate-800 outline-none ring-1 ring-nvr-cyan/30'
+          />
+        ) : meta.editable ? (
+          <button type='button' onClick={() => { setSlotLabelDraft(label); setEditingSlot(slotKey) }}
+            className='group/slot flex flex-1 items-center gap-1 truncate text-left text-[12px] font-medium text-slate-700 hover:text-nvr-cyan'>
+            <span className='truncate'>{label}</span>
+            <Pencil className='h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/slot:opacity-50' />
+          </button>
+        ) : (
+          <span className='flex-1 truncate text-[12px] font-medium text-slate-700'>{label}</span>
+        )}
+        {!s.is_visible && <span className='shrink-0 rounded bg-slate-500 px-1.5 py-0.5 text-[10px] font-medium text-white'>hidden</span>}
+        <button type='button' title={s.default_expanded ? 'Start collapsed' : 'Start expanded'}
+          onClick={() => updateSlot(slotKey, { default_expanded: !s.default_expanded })}
+          className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'
+        >
+          {s.default_expanded
+            ? <ChevronDown className='h-3.5 w-3.5' />
+            : <ChevronRight className='h-3.5 w-3.5' />}
+        </button>
+        <button type='button' title={s.is_visible ? 'Hide' : 'Show'} onClick={() => updateSlot(slotKey, { is_visible: !s.is_visible })}
+          className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'>
+          {s.is_visible ? <Eye className='h-3.5 w-3.5' /> : <EyeOff className='h-3.5 w-3.5' />}
+        </button>
+      </div>
     </div>
   )
 }
@@ -7261,7 +7408,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         return true
       })
     const ownersPseudo = { field: OWNERS_FIELD, type: 'owners' as const }
-    return [...base, ...o2mVirtuals, ...m2mVirtuals, ownersPseudo]
+    const pdfPseudo = { field: PDF_FIELD, type: 'pdf' as const }
+    return [...base, ...o2mVirtuals, ...m2mVirtuals, ownersPseudo, pdfPseudo]
   }, [colMeta])
 
   // field → relation kind label
@@ -7323,7 +7471,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const [slots, setSlots] = useState<Record<SlotKey, SlotState>>(() => ({
     __pipeline__: { sort: 0, label_override: null, is_visible: true, default_expanded: true },
     __comments__: { sort: 0, label_override: null, is_visible: true, default_expanded: true },
-    __tasks__: { sort: 0, label_override: null, is_visible: true, default_expanded: true }
+    __tasks__: { sort: 0, label_override: null, is_visible: true, default_expanded: true },
   }))
   const [editingSlot, setEditingSlot] = useState<SlotKey | null>(null)
   const [slotLabelDraft, setSlotLabelDraft] = useState('')
@@ -7333,6 +7481,12 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const hasLocalChangeRef = useRef(false)
   // Bumped on every local change — lets the save know whether newer edits arrived while in flight
   const changeSeqRef = useRef(0)
+
+  // Reset dirty flag when layout changes so the init effect re-initialises with fresh server data
+  useEffect(() => {
+    hasLocalChangeRef.current = false
+    changeSeqRef.current++
+  }, [layoutId])
 
   useEffect(() => {
     if (!groups.length && !allFields.length) return
@@ -7370,7 +7524,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       if (!(fc as Record<string, unknown>).layout_assigned) continue
       const gk = fc.group_key ?? null
       const f = fc.field
-      if (!f || f === '__ungrouped_pos__' || (typeof f === 'string' && f.startsWith('__') && f.endsWith('__') && f !== '__unassigned__' && f !== OWNERS_FIELD)) continue
+      if (!f || f === '__ungrouped_pos__' || (typeof f === 'string' && f.startsWith('__') && f.endsWith('__') && f !== '__unassigned__' && f !== OWNERS_FIELD && f !== PDF_FIELD)) continue
       assignments[f] = gk
       if (gk === '__apply_values__') {
         if (!fieldOrder.__apply_values__.includes(f)) fieldOrder.__apply_values__.push(f)
@@ -7408,7 +7562,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     const nextSlots: Record<SlotKey, SlotState> = {
       __pipeline__: { sort: groups.length + 1, label_override: null, is_visible: true, default_expanded: true },
       __comments__: { sort: groups.length + 2, label_override: null, is_visible: true, default_expanded: true },
-      __tasks__: { sort: groups.length + 3, label_override: null, is_visible: true, default_expanded: true }
+      __tasks__: { sort: groups.length + 3, label_override: null, is_visible: true, default_expanded: true },
     }
     for (const key of SLOT_KEYS) {
       const row = fieldConfig.find(fc => fc.field === key) as Record<string, unknown> | undefined
@@ -7417,7 +7571,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         sort: typeof row.sort === 'number' ? row.sort : nextSlots[key].sort,
         label_override: (row.label_override as string | null | undefined) ?? null,
         is_visible: row.is_visible === undefined || row.is_visible === null ? true : !!row.is_visible,
-        default_expanded: row.default_expanded === undefined || row.default_expanded === null ? true : !!row.default_expanded
+        default_expanded: row.default_expanded === undefined || row.default_expanded === null ? true : !!row.default_expanded,
       }
     }
     setSlots(nextSlots)
@@ -7456,7 +7610,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
           sort: localGroupOrder.indexOf(key as SlotKey) >= 0 ? localGroupOrder.indexOf(key as SlotKey) : localGroupOrder.length,
           label_override: slots[key].label_override,
           is_visible: slots[key].is_visible,
-          default_expanded: slots[key].default_expanded
+          default_expanded: slots[key].default_expanded,
         }))
       ]
       api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
@@ -7539,6 +7693,10 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   // Keys that are per-layout overrides (not global field settings)
   const LAYOUT_OVERRIDE_KEYS = ['label', 'interface', 'note', 'placeholder', 'required', 'hidden', 'readonly', 'options', 'inline_relation', 'max_values']
 
+  // Option keys inside `options` JSON that are scoped to a specific layout and must NOT
+  // be written to nivaro_fields (global). They live in layout_field_assignments.overrides.options.
+  const LAYOUT_LOCAL_OPTION_KEYS = ['layout_id', 'layout_slug', 'save_mode', 'show_line_numbers', 'enable_reorder', 'parent_cascades']
+
   const patchField = useCallback((field: string, patch: Record<string, unknown>) => {
     if (layoutId && ('group_key' in patch || 'sort' in patch)) {
       // State update triggers the debounced save effect — just mark dirty
@@ -7551,24 +7709,51 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       hasLocalChangeRef.current = true
       changeSeqRef.current++
     } else if (layoutId && Object.keys(patch).some(k => LAYOUT_OVERRIDE_KEYS.includes(k))) {
-      // options / dependency_config live on nivaro_fields — always send directly, never via layout assignments
       const { options: rawOptions, dependency_config: rawDepConfig, ...layoutPatch } = patch
-      if (rawOptions !== undefined || rawDepConfig !== undefined) {
+
+      // Split options: layout-local keys (layout_id, save_mode, etc.) go into localOverrides;
+      // global keys (format, currency, etc.) go to nivaro_fields.options.
+      let globalOptions: Record<string, unknown> | null = null
+      let localOptionsMerge: Record<string, unknown> | null = null
+      if (rawOptions !== undefined) {
+        let parsed: Record<string, unknown> = {}
+        try { parsed = typeof rawOptions === 'string' ? JSON.parse(rawOptions) : (rawOptions as Record<string, unknown>) ?? {} } catch { /* noop */ }
+        for (const [k, v] of Object.entries(parsed)) {
+          if (LAYOUT_LOCAL_OPTION_KEYS.includes(k)) {
+            localOptionsMerge = localOptionsMerge ?? {}
+            localOptionsMerge[k] = v
+          } else {
+            globalOptions = globalOptions ?? {}
+            globalOptions[k] = v
+          }
+        }
+      }
+
+      // Send only global options + dependency_config to nivaro_fields
+      if (globalOptions !== null || rawDepConfig !== undefined) {
         const directPatch: Record<string, unknown> = {}
-        if (rawOptions !== undefined) directPatch.options = rawOptions
+        if (globalOptions !== null) directPatch.options = JSON.stringify(globalOptions)
         if (rawDepConfig !== undefined) directPatch.dependency_config = rawDepConfig
         api.patch(`/field-config/${tableName}/${field}`, directPatch)
           .then(() => { invalidateFieldConfig(); invalidateMeta() })
           .catch(() => { toast.error(`Failed to save settings for field "${field}"`) })
       }
-      if (Object.keys(layoutPatch).some(k => LAYOUT_OVERRIDE_KEYS.includes(k))) {
-        // All other field settings are per-layout overrides when a layout is active
+
+      // Merge layout-local option keys + other override fields into localOverrides
+      const hasLayoutLocalOpts = localOptionsMerge !== null
+      const hasLayoutPatchKeys = Object.keys(layoutPatch).some(k => LAYOUT_OVERRIDE_KEYS.includes(k))
+      if (hasLayoutLocalOpts || hasLayoutPatchKeys) {
         setLocalOverrides(prev => {
           const existing = prev[field] ?? {}
-          // Flatten inline_relation / max_values into the options sub-object
           const patched = { ...existing }
+          // Layout-local option keys go into overrides.options
+          if (localOptionsMerge) {
+            patched.options = { ...(typeof patched.options === 'object' && patched.options ? patched.options : {}), ...localOptionsMerge } as Record<string, unknown>
+          }
+          // Flatten inline_relation / max_values into the options sub-object; all other keys are top-level overrides
           const optionKeys = ['inline_relation', 'max_values']
           for (const [k, v] of Object.entries(layoutPatch)) {
+            if (!LAYOUT_OVERRIDE_KEYS.includes(k)) continue
             if (optionKeys.includes(k)) {
               patched.options = { ...(typeof patched.options === 'object' && patched.options ? patched.options : {}), [k]: v } as Record<string, unknown>
             } else {
@@ -7793,6 +7978,27 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     }
   }, [fieldConfig, localOverrides])
 
+  // Base settings for pool chips — reads raw nivaro_fields data, never applies layout overrides
+  const getBaseFieldSettings = useCallback((f: string): FieldSettings => {
+    // colMeta.fields = raw nivaro_fields rows; label here is never overridden by a layout
+    const raw = (colMeta?.fields as Array<Record<string, unknown>> | undefined)?.find(r => r.field === f)
+    const rawOpts = raw?.options
+    let opts: Record<string, unknown> = {}
+    try { opts = typeof rawOpts === 'string' ? JSON.parse(rawOpts as string) : ((rawOpts as Record<string, unknown>) ?? {}) } catch { /* noop */ }
+    return {
+      label: (raw?.label as string | null) ?? null,
+      interface: (raw?.interface as string | null) ?? null,
+      note: (raw?.note as string | null) ?? null,
+      placeholder: (raw?.placeholder as string | null) ?? null,
+      required: !!(raw?.required),
+      hidden: !!(raw?.hidden),
+      readonly: !!(raw?.readonly),
+      inline_relation: opts.inline_relation === true,
+      max_values: typeof opts.max_values === 'number' ? opts.max_values : null,
+      options: typeof rawOpts === 'string' ? rawOpts as string : (rawOpts ? JSON.stringify(rawOpts) : null),
+    }
+  }, [colMeta])
+
   const handleFieldSettings = useCallback((f: string, patch: Partial<FieldSettings> & { dependency_config?: string }) => {
     patchField(f, patch)
   }, [patchField])
@@ -7854,6 +8060,22 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     hasLocalChangeRef.current = true
     changeSeqRef.current++
   }, [layoutId])
+
+  const getExtraControls = useCallback((f: string): React.ReactNode => {
+    if (f !== PDF_FIELD) return undefined
+    const attachField = (localOverrides[f]?.attach_to_field as string | null) ?? null
+    return (
+      <PdfFieldConfigButton
+        tableName={tableName}
+        value={attachField}
+        onChange={v => {
+          setLocalOverrides(prev => ({ ...prev, [f]: { ...prev[f], attach_to_field: v } }))
+          hasLocalChangeRef.current = true
+          changeSeqRef.current++
+        }}
+      />
+    )
+  }, [tableName, localOverrides])
 
   const updateSlot = useCallback((key: SlotKey, patch: Partial<SlotState>) => {
     setSlots(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }))
@@ -7946,7 +8168,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
               <div className='overflow-y-auto min-h-[40px] p-2' style={{ maxHeight: 'calc(100vh - 220px)' }}>
                 {(() => {
                   const unassigned = localFieldOrder.__pool__ ?? []
-                  const getLabel = (f: string) => getFieldSettings(f).label || titleCase(f)
+                  // Pool always shows raw field name — no global or layout labels
+                  const getLabel = (f: string) => titleCase(f)
                   const relFields = unassigned.filter(f => relKind(f) !== null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
                   const plainFields = unassigned.filter(f => relKind(f) === null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
                   const renderChip = (f: string) => {
@@ -7957,25 +8180,35 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                           fieldName={f}
                           displayName='Owners'
                           fieldType='owners'
-                          colSpan={getColSpan(f)}
+                          colSpan={12}
+                        />
+                      )
+                    }
+                    if (f === PDF_FIELD) {
+                      return (
+                        <SortableFieldChip
+                          key={f}
+                          fieldName={f}
+                          displayName='PDF Button'
+                          fieldType='pdf'
+                          colSpan={12}
                         />
                       )
                     }
                     const ft = allFields.find(af => af.field === f)
-                    const settings = getFieldSettings(f)
+                    const settings = getBaseFieldSettings(f)
                     const kind = relKind(f)
                     return (
                       <SortableFieldChip
                         key={f}
                         fieldName={f}
-                        displayName={settings.label || titleCase(f)}
+                        displayName={titleCase(f)}
                         fieldType={kind ?? friendlyType(ft?.type, f)}
                         abstractType={kind ? kind.toLowerCase() : ft?.type}
                         isM2O={kind === 'M2O'}
                         isM2M={kind === 'M2M'}
-                        colSpan={getColSpan(f)}
+                        colSpan={12}
                         fieldSettings={settings}
-                        onSettings={patch => handleFieldSettings(f, patch)}
                         m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields() : undefined}
                         dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig(f) : undefined}
                         relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection(f) : undefined}
@@ -8054,12 +8287,12 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
             <div className='space-y-3'>
               {orderedItems.map(item => {
                 if (item === '__ungrouped__') return (
-                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} isTableMode={layoutType === 'table'} />
+                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} isTableMode={layoutType === 'table'} getExtraControls={getExtraControls} />
                 )
                 if (layoutType === 'table') return null
                 if (SLOT_KEYS.includes(item as SlotKey)) return (
                   <SortableSlotCard key={item as SlotKey} slotKey={item as SlotKey} slots={slots} updateSlot={updateSlot}
-                    editingSlot={editingSlot} setEditingSlot={setEditingSlot} slotLabelDraft={slotLabelDraft} setSlotLabelDraft={setSlotLabelDraft} />
+                    editingSlot={editingSlot} setEditingSlot={setEditingSlot} slotLabelDraft={slotLabelDraft} setSlotLabelDraft={setSlotLabelDraft} tableName={tableName} />
                 )
                 const g = item as FieldGroup
                 // Skip tabs nested inside a container — container card renders them
@@ -8094,6 +8327,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                     onGroupSettings={(id, patch) => patchGroupSettingsMut.mutate({ id, patch })}
                     getRowRevisions={f => localRowRevisions[f] ?? false}
                     onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
+                    getExtraControls={getExtraControls}
                     />
                     {childTabs.length > 0 && (
                       <div className='ml-6 space-y-1.5'>
@@ -8121,6 +8355,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                             onSetContainer={(id, container_id) => setContainerMut.mutate({ id, container_id })}
                             getRowRevisions={f => localRowRevisions[f] ?? false}
                             onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
+                            getExtraControls={getExtraControls}
                           />
                         ))}
                       </div>
@@ -8211,8 +8446,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         {activeFieldId && (
           <FieldChip
             fieldName={activeFieldId}
-            displayName={activeFieldId === OWNERS_FIELD ? 'Owners' : undefined}
-            fieldType={activeFieldId === OWNERS_FIELD ? 'owners' : activeFieldData?.type}
+            displayName={activeFieldId === OWNERS_FIELD ? 'Owners' : activeFieldId === PDF_FIELD ? 'PDF Button' : undefined}
+            fieldType={activeFieldId === OWNERS_FIELD ? 'owners' : activeFieldId === PDF_FIELD ? 'pdf' : activeFieldData?.type}
             colSpan={getColSpan(activeFieldId)}
             isDragging
           />

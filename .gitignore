@@ -16,3 +16,4 @@ CLAUDE.md
 .impeccable
 test-results/*
 tests/e2e/reports/*api/cloud-extensions/
+.superpowers/

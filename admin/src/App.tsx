@@ -162,8 +162,8 @@ const SyncJobsPage = lazy(() =>
 const PdfTemplatesPage = lazy(() =>
   import('@/pages/PdfTemplates').then((m) => ({ default: m.PdfTemplatesPage }))
 )
-const SdkPlaygroundPage = lazy(() =>
-  import('@/pages/SdkPlayground').then((m) => ({ default: m.SdkPlaygroundPage }))
+const PlaygroundPage = lazy(() =>
+  import('@/pages/Playground').then((m) => ({ default: m.PlaygroundPage }))
 )
 const DeadLetterQueuePage = lazy(() =>
   import('@/pages/DeadLetterQueue').then((m) => ({ default: m.DeadLetterQueuePage }))
@@ -369,7 +369,7 @@ export default function App() {
                 <Route path='notifications' element={<NotificationsCenterPage />} />
                 <Route path='sync-jobs' element={<SyncJobsPage />} />
                 <Route path='pdf-templates' element={<PdfTemplatesPage />} />
-                <Route path='sdk-playground' element={<SdkPlaygroundPage />} />
+                <Route path='playground' element={<PlaygroundPage />} />
                 <Route path='dead-letters' element={<DeadLetterQueuePage />} />
                 <Route path='pages-admin' element={<PagesAdminPage />} />
                 <Route path='pages-admin/:id/edit' element={<PageEditPage />} />
