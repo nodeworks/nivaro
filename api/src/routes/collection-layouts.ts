@@ -6,6 +6,7 @@ import { logActivity } from '../services/activity.js'
 import { generatePdfFromLayout } from '../services/pdf-layout.js'
 import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layout-themes.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
+import { can } from '../services/permissions.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
 
 type LayoutConditions = { role_ids?: string[] } | null
@@ -437,6 +438,15 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const layout = await db('nivaro_collection_layouts').where({ id }).first()
     if (!layout) return reply.code(404).send({ error: 'Layout not found' })
 
+    // Check read AND update permission before generating/attaching
+    if (!req.isAdmin) {
+      const [canRead, canUpdate] = await Promise.all([
+        can(req.user!, 'read', collection),
+        can(req.user!, 'update', collection),
+      ])
+      if (!canRead || !canUpdate) return reply.code(403).send({ error: 'Forbidden' })
+    }
+
     let item: Record<string, unknown>
     try {
       item = await readOne(req.user!, collection, String(item_id), req.workspaceId ?? undefined) as Record<string, unknown>
@@ -498,50 +508,32 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     })
 
     // Attach file to the item via the relation for attach_field
-    // Try M2M (junction_field IS NOT NULL, other side is nivaro_files)
+    // Require exact match using the same alias derivation as the config picker
     const junctionRels = (directRelations as Array<{ many_collection: string; many_field: string; one_collection: string | null; one_field: string | null; junction_field: string | null }>)
       .filter(r => r.one_collection === collection && r.junction_field != null)
+    const getFieldAlias = (jr: { one_field: string | null; many_collection: string }) => {
+      if (jr.one_field && jr.one_field !== 'id') return jr.one_field
+      return jr.many_collection
+        .replace(new RegExp(`^${collection}_?|_?${collection}$`, 'i'), '')
+        .replace(/^_|_$/g, '') || jr.many_collection
+    }
     let attached = false
-    for (const jr of junctionRels) {
-      // Check if this junction connects to nivaro_files
-      const filesRel = (junctionRelations as Array<{ many_collection: string; many_field: string; one_collection: string | null }>)
-        .find(r => r.many_collection === jr.many_collection && r.one_collection === 'nivaro_files')
-      if (!filesRel) continue
-      // Check if attach_field matches this junction (by junction table name or field name convention)
-      const jtName = jr.many_collection.toLowerCase()
-      const afLower = attach_field.toLowerCase()
-      if (!jtName.includes(afLower) && !jtName.includes(collection.toLowerCase().replace(/_/g, '')) ) {
-        // Try matching by one_field on the collection side
-        if (jr.one_field && jr.one_field !== 'id') {
-          if (!jr.one_field.toLowerCase().includes(afLower)) continue
-        }
-      }
-      try {
-        await db(jr.many_collection).insert({
-          [jr.junction_field!]: item_id,
-          [filesRel.many_field]: fileId,
-        })
-        attached = true
-        break
-      } catch { /* skip duplicate/constraint errors */ }
+    const targetJr = junctionRels.find(jr => getFieldAlias(jr) === attach_field)
+    if (!targetJr) {
+      return reply.code(400).send({ error: `No M2M relation found for field '${attach_field}' on collection '${collection}'` })
     }
-
-    // If no M2M matched, try matching by field name convention more broadly
-    if (!attached) {
-      for (const jr of junctionRels) {
-        const filesRel = (junctionRelations as Array<{ many_collection: string; many_field: string; one_collection: string | null }>)
-          .find(r => r.many_collection === jr.many_collection && r.one_collection === 'nivaro_files')
-        if (!filesRel) continue
-        try {
-          await db(jr.many_collection).insert({
-            [jr.junction_field!]: item_id,
-            [filesRel.many_field]: fileId,
-          })
-          attached = true
-          break
-        } catch { /* skip */ }
-      }
+    const filesRel = (junctionRelations as Array<{ many_collection: string; many_field: string; one_collection: string | null }>)
+      .find(r => r.many_collection === targetJr.many_collection && r.one_collection === 'nivaro_files')
+    if (!filesRel) {
+      return reply.code(400).send({ error: `Relation '${attach_field}' does not link to nivaro_files` })
     }
+    try {
+      await db(targetJr.many_collection).insert({
+        [targetJr.junction_field!]: item_id,
+        [filesRel.many_field]: fileId,
+      })
+      attached = true
+    } catch { /* duplicate/constraint — file already attached */ }
 
     await logActivity({ action: 'pdf-generate-attach', user: req.user?.id, collection, item: String(item_id), req })
 
