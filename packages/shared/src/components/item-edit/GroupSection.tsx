@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, ExternalLink, Loader2, Mail, Phone, User } from 'lucide-react'
+import { Building2, ChevronDown, ChevronRight, Clock, ExternalLink, Loader2, Mail, Phone, User, UserCheck } from 'lucide-react'
 import * as LucideIcons from 'lucide-react'
 import React, { type ReactNode } from 'react'
 import { useRef, useState } from 'react'

@@ -42,6 +42,34 @@ export async function usersRoutes(app: FastifyInstance) {
     return reply.send({ data: user })
   })
 
+  // GET /users/:id/card — authenticated (not admin-only); returns safe public fields for the
+  // UserChip contact card including denormalised role_name and manager_name.
+  app.get('/:id/card', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const row = await db('nivaro_users as u')
+      .leftJoin('nivaro_roles as r', 'u.role', 'r.id')
+      .leftJoin('nivaro_users as m', 'u.manager_id', 'm.id')
+      .where('u.id', id)
+      .select(
+        'u.id',
+        'u.first_name',
+        'u.last_name',
+        'u.email',
+        'u.title',
+        'u.phone',
+        'u.department',
+        'u.status',
+        'u.last_access',
+        'u.is_out_of_office',
+        'r.name as role_name',
+        db.raw(`CONCAT(m.first_name, ' ', m.last_name) as manager_name`),
+        'u.manager_id'
+      )
+      .first() as Record<string, unknown> | undefined
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({ data: row })
+  })
+
   app.patch('/:id', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
     if (id !== req.user!.id && !req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
@@ -62,6 +90,9 @@ export async function usersRoutes(app: FastifyInstance) {
       : [
           'first_name',
           'last_name',
+          'title',
+          'phone',
+          'department',
           'last_page',
           'preferences',
           'delegate_id',
