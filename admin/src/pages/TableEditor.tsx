@@ -8111,6 +8111,17 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
           input_bindings: [{ key: '__subtitle_config__', binding_type: 'static', binding_value: JSON.stringify({ fields: subtitleConfig.fields, separator: subtitleConfig.separator }) }],
         }] : []),
       ]
+      // Keep group sorts in sync with slot sorts: slot sort = position in localGroupOrder,
+      // so group sort must also = position in localGroupOrder; otherwise a group.sort from
+      // a prior DnD session can exceed newly-saved slot sorts and the group renders
+      // below Notes/Tasks in ItemEditForm.
+      const groupSortUpdates = (localGroupOrder as Array<number | string>)
+        .map((id, pos) => ({ id, pos }))
+        .filter((x): x is { id: number; pos: number } => typeof x.id === 'number')
+        .map(({ id, pos }) => ({ id, sort: pos }))
+      if (groupSortUpdates.length > 0) {
+        api.post('/field-groups/reorder', { collection: tableName, order: groupSortUpdates }).catch(() => {})
+      }
       api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
         .then(() => {
           // Clear the dirty flag only if no newer local change arrived while this PUT was
