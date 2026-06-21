@@ -1154,7 +1154,7 @@ export function ItemEditForm({
       } catch { /* noop */ }
       return {
         field: a.field,
-        label: a.label_override ?? meta?.label ?? titleCase(a.field),
+        label: a.label_override ?? titleCase(meta?.label ?? a.field),
         sort: a.sort ?? 0,
         displayFormat,
         color,

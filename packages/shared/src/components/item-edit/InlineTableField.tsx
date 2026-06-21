@@ -27,6 +27,16 @@ interface RowRevision {
   user_email?: string | null
 }
 
+interface O2MRevisionEntry {
+  item_id: string
+  action: string
+  timestamp: string
+  first_name?: string | null
+  last_name?: string | null
+  user_email?: string | null
+  data: Record<string, unknown>
+}
+
 const NON_DISPLAY_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
 
 function evalClientFormula(formula: string, row: Record<string, unknown>): number | null {
@@ -143,6 +153,9 @@ export function InlineTableField({
 
   // Row revision history sheet — holds the saved row whose history is open
   const [historyRow, setHistoryRow] = useState<Record<string, unknown> | null>(null)
+  // Field-level restore sheet
+  const [fieldRestoreOpen, setFieldRestoreOpen] = useState(false)
+  const [fieldRestoring, setFieldRestoring] = useState(false)
   // Rows deleted this session not yet in server query (pending-mode race condition buffer)
   const [deletedRows, setDeletedRows] = useState<Array<Record<string, unknown>>>([])
 
@@ -170,6 +183,50 @@ export function InlineTableField({
     enabled: !!historyRow?.id,
     staleTime: 15_000
   })
+
+  const { data: fieldSnapshots = [], isLoading: fieldSnapshotsLoading } = useQuery<O2MRevisionEntry[]>({
+    queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId],
+    queryFn: () =>
+      client
+        .request<{ data: O2MRevisionEntry[] }>(
+          get('/revisions/o2m-snapshots', { collection: relatedCollection, many_field: manyField, parent_id: parentId })
+        )
+        .then((r) => r.data ?? []),
+    enabled: fieldRestoreOpen && !isNew,
+    staleTime: 15_000
+  })
+
+  // Group flat revision list into time-window batches (entries within 5s = one snapshot)
+  const fieldSnapshotGroups = (() => {
+    if (!fieldSnapshots.length) return []
+    const groups: Array<{ timestamp: string; user: string; entries: O2MRevisionEntry[] }> = []
+    let cur: (typeof groups)[0] | null = null
+    for (const entry of fieldSnapshots) {
+      const ts = new Date(entry.timestamp).getTime()
+      if (!cur || ts - new Date(cur.timestamp).getTime() > 5_000) {
+        const user = [entry.first_name, entry.last_name].filter(Boolean).join(' ') || entry.user_email || 'System'
+        cur = { timestamp: entry.timestamp, user, entries: [entry] }
+        groups.push(cur)
+      } else {
+        cur.entries.push(entry)
+      }
+    }
+    return groups
+  })()
+
+  async function restoreFieldAt(timestamp: string) {
+    setFieldRestoring(true)
+    try {
+      await client.request(
+        post('/revisions/o2m-restore', { collection: relatedCollection, many_field: manyField, parent_id: parentId, target_timestamp: timestamp })
+      )
+      qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+      qc.invalidateQueries({ queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId] })
+      setFieldRestoreOpen(false)
+    } finally {
+      setFieldRestoring(false)
+    }
+  }
 
   // { rowId, draft } — null = no row editing, 'new' = adding new row
   const [editState, setEditState] = useState<{ rowId: string; draft: Record<string, unknown> } | null>(null)
@@ -804,6 +861,16 @@ export function InlineTableField({
           </button>
         )}
         {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
+        {showRowRevisions && allowRevisionRestore && !isNew && (
+          <button
+            type='button'
+            title='Restore field from history'
+            onClick={() => setFieldRestoreOpen(true)}
+            className='ml-auto rounded p-1 text-slate-300 hover:text-[#00ceff]'
+          >
+            <History className='h-3.5 w-3.5' />
+          </button>
+        )}
       </div>
 
       {applyOpen && applyValuesCols.length > 0 && (
@@ -1284,6 +1351,50 @@ export function InlineTableField({
         )
       })()}
     </div>
+
+    <Sheet open={fieldRestoreOpen} onOpenChange={setFieldRestoreOpen}>
+      <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
+        <SheetHeader>
+          <SheetTitle className='text-[14px]'>Field history</SheetTitle>
+        </SheetHeader>
+        <div className='mt-4 space-y-3'>
+          {fieldSnapshotsLoading ? (
+            <div className='py-6 text-center'><Loader2 className='h-4 w-4 animate-spin inline text-slate-400' /></div>
+          ) : fieldSnapshotGroups.length === 0 ? (
+            <p className='py-6 text-center text-[12px] text-slate-400'>No history for this field</p>
+          ) : (
+            fieldSnapshotGroups.map((group, i) => {
+              const creates = group.entries.filter(e => e.action === 'create').length
+              const updates = group.entries.filter(e => e.action === 'update').length
+              const deletes = group.entries.filter(e => e.action === 'delete').length
+              const parts: string[] = []
+              if (creates) parts.push(`${creates} added`)
+              if (updates) parts.push(`${updates} updated`)
+              if (deletes) parts.push(`${deletes} removed`)
+              return (
+                <div key={i} className='rounded-lg border border-slate-200 p-3'>
+                  <div className='flex items-center justify-between gap-2'>
+                    <span className='text-[11px] font-medium text-slate-600'>{group.user}</span>
+                    <span className='text-[10px] text-slate-400'>{formatRelative(group.timestamp)}</span>
+                  </div>
+                  {parts.length > 0 && (
+                    <p className='mt-1 text-[10px] text-slate-500'>{parts.join(', ')}</p>
+                  )}
+                  <button
+                    type='button'
+                    disabled={fieldRestoring}
+                    onClick={() => restoreFieldAt(group.timestamp)}
+                    className='mt-2 rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10 disabled:opacity-40'
+                  >
+                    {fieldRestoring ? 'Restoring…' : 'Restore to this state'}
+                  </button>
+                </div>
+              )
+            })
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
 
     <Sheet open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
       <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>

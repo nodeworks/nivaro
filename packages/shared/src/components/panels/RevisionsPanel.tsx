@@ -10,6 +10,14 @@ import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
 
+export interface O2MFieldInfo {
+  field: string
+  label: string
+  relatedCollection: string
+  manyField: string
+  parentId: string
+}
+
 interface Revision {
   id: string
   collection: string
@@ -205,16 +213,19 @@ function SnapshotDataView({ data }: { data: Record<string, unknown> }) {
 function RevisionRow({
   revision,
   previousData,
-  onRollback
+  onRollback,
+  inlineTableFields
 }: {
   revision: Revision
   previousData: Record<string, unknown> | null
   onRollback?: () => void
+  inlineTableFields?: O2MFieldInfo[]
 }) {
   const client = useNivaroClient()
   const [expanded, setExpanded] = useState(false)
   const [confirmRollback, setConfirmRollback] = useState(false)
   const [view, setView] = useState<'delta' | 'side'>('delta')
+  const [o2mRestoring, setO2MRestoring] = useState<string | null>(null)
   const isUpdate = revision.action === 'update'
   const isCreate = revision.action === 'create'
   const isDelete = revision.action === 'delete'
@@ -227,15 +238,36 @@ function RevisionRow({
   const deltaCount = revision.delta ? Object.keys(revision.delta).length : 0
   const canRollback = isUpdate || isCreate
 
+  const [rolledBackAt, setRolledBackAt] = useState<string | null>(null)
+
   const rollbackMut = useMutation({
     mutationFn: () => client.request(post(`/revisions/${revision.id}/rollback`, {})),
     onSuccess: () => {
       setConfirmRollback(false)
       toast.success('Rolled back to this revision')
+      if (inlineTableFields?.length && revision.timestamp) setRolledBackAt(revision.timestamp)
       onRollback?.()
     },
     onError: () => toast.error('Failed to rollback')
   })
+
+  async function restoreO2MField(f: O2MFieldInfo) {
+    if (!rolledBackAt) return
+    setO2MRestoring(f.field)
+    try {
+      await client.request(post('/revisions/o2m-restore', {
+        collection: f.relatedCollection,
+        many_field: f.manyField,
+        parent_id: f.parentId,
+        target_timestamp: rolledBackAt
+      }))
+      toast.success(`Restored ${f.label}`)
+    } catch {
+      toast.error(`Failed to restore ${f.label}`)
+    } finally {
+      setO2MRestoring(null)
+    }
+  }
 
   return (
     <div className='border-b last:border-0 border-slate-100'>
@@ -340,6 +372,24 @@ function RevisionRow({
               )}
             </div>
           )}
+          {rolledBackAt && inlineTableFields && inlineTableFields.length > 0 && (
+            <div className='mt-2 rounded border border-slate-100 bg-slate-50 p-2 space-y-1.5'>
+              <p className='text-[10px] font-medium text-slate-500'>Also restore related rows?</p>
+              {inlineTableFields.map(f => (
+                <div key={f.field} className='flex items-center justify-between gap-2'>
+                  <span className='text-[11px] text-slate-600'>{f.label}</span>
+                  <button
+                    type='button'
+                    disabled={o2mRestoring === f.field}
+                    onClick={() => restoreO2MField(f)}
+                    className='rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10 disabled:opacity-40'
+                  >
+                    {o2mRestoring === f.field ? 'Restoring…' : 'Restore'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -349,11 +399,13 @@ function RevisionRow({
 function RevisionsList({
   collection,
   item,
-  onRollback
+  onRollback,
+  inlineTableFields
 }: {
   collection: string
   item: string
   onRollback?: () => void
+  inlineTableFields?: O2MFieldInfo[]
 }) {
   const client = useNivaroClient()
   const { data, isLoading } = useQuery({
@@ -383,6 +435,7 @@ function RevisionsList({
           revision={rev}
           previousData={data?.[i + 1]?.data ?? null}
           onRollback={onRollback}
+          inlineTableFields={inlineTableFields}
         />
       ))}
     </div>
@@ -393,12 +446,14 @@ export function RevisionsPanel({
   collection,
   item,
   onRollback,
-  triggerClassName
+  triggerClassName,
+  inlineTableFields
 }: {
   collection: string
   item: string
   onRollback?: () => void
   triggerClassName?: string
+  inlineTableFields?: O2MFieldInfo[]
 }) {
   return (
     <Sheet>
@@ -415,7 +470,7 @@ export function RevisionsPanel({
             Revision History
           </SheetTitle>
         </SheetHeader>
-        <RevisionsList collection={collection} item={item} onRollback={onRollback} />
+        <RevisionsList collection={collection} item={item} onRollback={onRollback} inlineTableFields={inlineTableFields} />
       </SheetContent>
     </Sheet>
   )

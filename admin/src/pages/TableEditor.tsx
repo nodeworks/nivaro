@@ -5109,6 +5109,108 @@ function CascadeRuleRow({
   )
 }
 
+function RoleConditionRow({
+  roleIds,
+  onRoleIdsChange,
+}: {
+  roleIds: string[]
+  onRoleIdsChange: (ids: string[]) => void
+}) {
+  const { data: rolesData } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['roles-list-for-lock'],
+    queryFn: () => api.get('/roles').then(r => r.data.data),
+    staleTime: 60_000,
+  })
+  const roles = rolesData ?? []
+  return (
+    <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1'>
+      {roles.length === 0 && (
+        <p className='text-[10px] text-slate-400'>No roles found.</p>
+      )}
+      {roles.map(r => (
+        <label key={r.id} className='flex items-center gap-1.5 text-[10px] cursor-pointer select-none'>
+          <input
+            type='checkbox'
+            checked={roleIds.includes(r.id)}
+            onChange={e => {
+              if (e.target.checked) onRoleIdsChange([...roleIds, r.id])
+              else onRoleIdsChange(roleIds.filter(id => id !== r.id))
+            }}
+            className='rounded'
+          />
+          <span className='text-slate-700'>{r.name}</span>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+function PipelineStateConditionRow({
+  collection,
+  pipelineId,
+  stateKeys,
+  onPipelineChange,
+  onStateKeysChange,
+}: {
+  collection?: string
+  pipelineId?: string
+  stateKeys: string[]
+  onPipelineChange: (id: string | undefined) => void
+  onStateKeysChange: (keys: string[]) => void
+}) {
+  const { data: pipelinesData } = useQuery<Array<{ id: string; name: string; collections: string[] }>>({
+    queryKey: ['pipelines-list-for-lock'],
+    queryFn: () => api.get('/pipelines').then(r => r.data.data),
+    staleTime: 60_000,
+  })
+  const bound = (pipelinesData ?? []).filter(p => !collection || p.collections.includes(collection))
+
+  const { data: pipelineDetail } = useQuery<{ states: Array<{ id: string; key: string; label: string; color?: string }> }>({
+    queryKey: ['pipeline-detail-lock', pipelineId],
+    queryFn: () => api.get(`/pipelines/${pipelineId}`).then(r => r.data.data),
+    staleTime: 60_000,
+    enabled: !!pipelineId,
+  })
+  const states = pipelineDetail?.states ?? []
+
+  return (
+    <div className='space-y-1.5'>
+      <select
+        value={pipelineId ?? ''}
+        onChange={e => onPipelineChange(e.target.value || undefined)}
+        className='w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px]'
+      >
+        <option value=''>— Select pipeline —</option>
+        {bound.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+      {bound.length === 0 && (
+        <p className='text-[10px] text-slate-400'>No pipelines bound to this collection.</p>
+      )}
+      {pipelineId && states.length > 0 && (
+        <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1'>
+          {states.map(s => (
+            <label key={s.key} className='flex items-center gap-1.5 text-[10px] cursor-pointer select-none'>
+              <input
+                type='checkbox'
+                checked={stateKeys.includes(s.key)}
+                onChange={e => {
+                  if (e.target.checked) onStateKeysChange([...stateKeys, s.key])
+                  else onStateKeysChange(stateKeys.filter(k => k !== s.key))
+                }}
+                className='rounded'
+              />
+              <span className='text-slate-700'>{s.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      {pipelineId && states.length === 0 && (
+        <p className='text-[10px] text-slate-400'>No states defined for this pipeline.</p>
+      )}
+    </div>
+  )
+}
+
 function FieldSettingsPopover({
   fieldName,
   abstractType,
@@ -5127,6 +5229,7 @@ function FieldSettingsPopover({
   onLockConditionsChange,
   inlineDisplayConfig,
   onInlineDisplayChange,
+  collection,
 }: {
   fieldName: string
   abstractType?: string
@@ -5141,10 +5244,11 @@ function FieldSettingsPopover({
   onRowRevisionsChange?: (v: boolean) => void
   allowRevisionRestore?: boolean
   onAllowRevisionRestoreChange?: (v: boolean) => void
-  lockConditions?: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>
-  onLockConditionsChange?: (v: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>) => void
+  lockConditions?: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  onLockConditionsChange?: (v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
+  collection?: string
 }) {
   const [open, setOpen] = useState(false)
   const [localInlineEntries, setLocalInlineEntries] = useState<InlineDisplayEntry[]>([])
@@ -5759,57 +5863,55 @@ function FieldSettingsPopover({
                   <span className='text-[11px] text-slate-600'>Allow restore from revision</span>
                 </div>
               )}
-              {onLockConditionsChange && (
-                <div className='space-y-1.5 border-t border-slate-100 pt-3'>
-                  <div className='flex items-center justify-between'>
-                    <span className='text-[11px] font-medium text-slate-600'>Lock conditions</span>
-                    <button type='button'
-                      onClick={() => onLockConditionsChange([...lockConditions, { type: 'pipeline_state', state_keys: [] }])}
-                      className='text-[10px] font-medium text-[#00ceff] hover:underline'>
-                      + Add
+            </div>
+          )}
+
+          {onLockConditionsChange && (
+            <div className='space-y-1.5 border-t border-slate-100 pt-3'>
+              <div className='flex items-center justify-between'>
+                <span className='text-[11px] font-medium text-slate-600'>Lock conditions</span>
+                <button type='button'
+                  onClick={() => onLockConditionsChange([...lockConditions, { type: 'pipeline_state', state_keys: [] }])}
+                  className='text-[10px] font-medium text-[#00ceff] hover:underline'>
+                  + Add
+                </button>
+              </div>
+              {lockConditions.length === 0 && (
+                <p className='text-[10px] text-slate-400'>No conditions — field is always editable.</p>
+              )}
+              {lockConditions.map((cond, i) => (
+                <div key={i} className='rounded border border-slate-200 bg-slate-50 p-2 space-y-1.5'>
+                  <div className='flex items-center gap-1.5'>
+                    <select
+                      value={cond.type}
+                      onChange={(e) => { const next = [...lockConditions]; next[i] = { ...next[i], type: e.target.value }; onLockConditionsChange(next) }}
+                      className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px]'
+                    >
+                      <option value='pipeline_state'>Pipeline state</option>
+                      <option value='role'>User role</option>
+                    </select>
+                    <button type='button' onClick={() => onLockConditionsChange(lockConditions.filter((_, j) => j !== i))}
+                      className='text-slate-400 hover:text-red-500'>
+                      <X className='h-3 w-3' />
                     </button>
                   </div>
-                  {lockConditions.length === 0 && (
-                    <p className='text-[10px] text-slate-400'>No conditions — field is always editable.</p>
+                  {cond.type === 'pipeline_state' && (
+                    <PipelineStateConditionRow
+                      collection={collection}
+                      pipelineId={cond.pipeline_id}
+                      stateKeys={cond.state_keys ?? []}
+                      onPipelineChange={(pid) => { const next = [...lockConditions]; next[i] = { ...next[i], pipeline_id: pid, state_keys: [] }; onLockConditionsChange(next) }}
+                      onStateKeysChange={(keys) => { const next = [...lockConditions]; next[i] = { ...next[i], state_keys: keys }; onLockConditionsChange(next) }}
+                    />
                   )}
-                  {lockConditions.map((cond, i) => (
-                    <div key={i} className='rounded border border-slate-200 bg-slate-50 p-2 space-y-1.5'>
-                      <div className='flex items-center gap-1.5'>
-                        <select
-                          value={cond.type}
-                          onChange={(e) => { const next = [...lockConditions]; next[i] = { ...next[i], type: e.target.value }; onLockConditionsChange(next) }}
-                          className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px]'
-                        >
-                          <option value='pipeline_state'>Pipeline state</option>
-                          <option value='role'>User role</option>
-                        </select>
-                        <button type='button' onClick={() => onLockConditionsChange(lockConditions.filter((_, j) => j !== i))}
-                          className='text-slate-400 hover:text-red-500'>
-                          <X className='h-3 w-3' />
-                        </button>
-                      </div>
-                      {cond.type === 'pipeline_state' && (
-                        <input
-                          type='text'
-                          placeholder='state keys, comma-separated'
-                          value={(cond.state_keys ?? []).join(', ')}
-                          onChange={(e) => { const next = [...lockConditions]; next[i] = { ...next[i], state_keys: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }; onLockConditionsChange(next) }}
-                          className='w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] placeholder:text-slate-300'
-                        />
-                      )}
-                      {cond.type === 'role' && (
-                        <input
-                          type='text'
-                          placeholder='role UUIDs, comma-separated'
-                          value={(cond.role_ids ?? []).join(', ')}
-                          onChange={(e) => { const next = [...lockConditions]; next[i] = { ...next[i], role_ids: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }; onLockConditionsChange(next) }}
-                          className='w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] placeholder:text-slate-300'
-                        />
-                      )}
-                    </div>
-                  ))}
+                  {cond.type === 'role' && (
+                    <RoleConditionRow
+                      roleIds={cond.role_ids ?? []}
+                      onRoleIdsChange={(ids) => { const next = [...lockConditions]; next[i] = { ...next[i], role_ids: ids }; onLockConditionsChange(next) }}
+                    />
+                  )}
                 </div>
-              )}
+              ))}
             </div>
           )}
 
@@ -5868,6 +5970,7 @@ function FieldChip({
   extraControls,
   inlineDisplayConfig,
   onInlineDisplayChange,
+  collection,
 }: {
   fieldName: string
   displayName?: string
@@ -5890,11 +5993,12 @@ function FieldChip({
   onRowRevisionsChange?: (v: boolean) => void
   allowRevisionRestore?: boolean
   onAllowRevisionRestoreChange?: (v: boolean) => void
-  lockConditions?: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>
-  onLockConditionsChange?: (v: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>) => void
+  lockConditions?: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  onLockConditionsChange?: (v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
   extraControls?: React.ReactNode
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
+  collection?: string
 }) {
   const [open, setOpen] = useState(false)
   const widthLabel = WIDTH_OPTIONS.find(w => w.span === colSpan)?.label ?? 'Full'
@@ -5950,6 +6054,7 @@ function FieldChip({
           onLockConditionsChange={onLockConditionsChange}
           inlineDisplayConfig={inlineDisplayConfig}
           onInlineDisplayChange={onInlineDisplayChange}
+          collection={collection}
         />
       )}
 
@@ -6035,9 +6140,14 @@ function SortableFieldChip({
   sortableId,
   rowRevisions,
   onRowRevisionsChange,
+  allowRevisionRestore = true,
+  onAllowRevisionRestoreChange,
+  lockConditions = [],
+  onLockConditionsChange,
   extraControls,
   inlineDisplayConfig,
   onInlineDisplayChange,
+  collection,
 }: {
   fieldName: string
   displayName?: string
@@ -6057,9 +6167,14 @@ function SortableFieldChip({
   sortableId?: string
   rowRevisions?: boolean
   onRowRevisionsChange?: (v: boolean) => void
+  allowRevisionRestore?: boolean
+  onAllowRevisionRestoreChange?: (v: boolean) => void
+  lockConditions?: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  onLockConditionsChange?: (v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
   extraControls?: React.ReactNode
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
+  collection?: string
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId ?? fieldName,
@@ -6094,9 +6209,14 @@ function SortableFieldChip({
         dragHandleProps={listeners ?? {}}
         rowRevisions={rowRevisions}
         onRowRevisionsChange={onRowRevisionsChange}
+        allowRevisionRestore={allowRevisionRestore}
+        onAllowRevisionRestoreChange={onAllowRevisionRestoreChange}
+        lockConditions={lockConditions}
+        onLockConditionsChange={onLockConditionsChange}
         extraControls={extraControls}
         inlineDisplayConfig={inlineDisplayConfig}
         onInlineDisplayChange={onInlineDisplayChange}
+        collection={collection}
       />
     </div>
   )
@@ -6117,7 +6237,7 @@ function parseSortableId(id: string): { container: string | null; fieldName: str
 
 // ── SortableUngroupedZone ─────────────────────────────────────────────────────
 
-function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll, isTableMode, getExtraControls, widgetSlotMeta, getInlineDisplay, onInlineDisplayChange }: {
+function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll, isTableMode, getExtraControls, widgetSlotMeta, getInlineDisplay, onInlineDisplayChange, getLockConditions, onLockConditions, collection }: {
   localFieldOrder: Record<string, string[]>
   allFields: Array<{ field: string; type?: string; options?: string | null }>
   getColSpan: (f: string) => number
@@ -6136,6 +6256,9 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
   widgetSlotMeta?: Record<string, { widget_id: number; name: string; label_override: string | null }>
   getInlineDisplay?: (f: string) => InlineDisplayConfig | undefined
   onInlineDisplayChange?: (f: string, config: InlineDisplayConfig) => void
+  getLockConditions?: (f: string) => Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  onLockConditions?: (f: string, v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
+  collection?: string
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'group:__ungrouped__' })
   const style = { transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0 : 1 }
@@ -6233,9 +6356,12 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                   dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
                   relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
                   onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
+                  lockConditions={getLockConditions?.(f) ?? []}
+                  onLockConditionsChange={onLockConditions ? v => onLockConditions(f, v) : undefined}
                   extraControls={getExtraControls?.(f, { isM2O: kind === 'M2O', relatedCollection: getRelatedCollection?.(f) })}
                   inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
                   onInlineDisplayChange={kind === 'M2O' && onInlineDisplayChange ? (config) => onInlineDisplayChange(f, config) : undefined}
+                  collection={collection}
                   inGrid
                 />
               )
@@ -6451,6 +6577,7 @@ function SortableGroupCard({
   widgetSlotMeta,
   getInlineDisplay,
   onInlineDisplayChange,
+  collection,
 }: {
   group: FieldGroup
   fieldNames: string[]
@@ -6478,12 +6605,13 @@ function SortableGroupCard({
   onRowRevisions?: (f: string, v: boolean) => void
   getAllowRevisionRestore?: (f: string) => boolean
   onAllowRevisionRestore?: (f: string, v: boolean) => void
-  getLockConditions?: (f: string) => Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>
-  onLockConditions?: (f: string, v: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>) => void
+  getLockConditions?: (f: string) => Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  onLockConditions?: (f: string, v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
   getExtraControls?: (f: string, opts?: { isM2O?: boolean; relatedCollection?: string | null }) => React.ReactNode
   widgetSlotMeta?: Record<string, { widget_id: number; name: string; label_override: string | null }>
   getInlineDisplay?: (f: string) => InlineDisplayConfig | undefined
   onInlineDisplayChange?: (f: string, config: InlineDisplayConfig) => void
+  collection?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [labelDraft, setLabelDraft] = useState(group.label)
@@ -6882,6 +7010,7 @@ function SortableGroupCard({
                   extraControls={getExtraControls?.(f, { isM2O: kind === 'M2O', relatedCollection: getRelatedCollection?.(f) })}
                   inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
                   onInlineDisplayChange={kind === 'M2O' && onInlineDisplayChange ? (config) => onInlineDisplayChange(f, config) : undefined}
+                  collection={collection}
                   inGrid
                 />
               )
@@ -8131,7 +8260,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const [localColSpans, setLocalColSpans] = useState<Record<string, number | null>>({})
   const [localRowRevisions, setLocalRowRevisions] = useState<Record<string, boolean>>({})
   const [localAllowRevisionRestore, setLocalAllowRevisionRestore] = useState<Record<string, boolean>>({})
-  const [localLockConditions, setLocalLockConditions] = useState<Record<string, Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>>>({})
+  const [localLockConditions, setLocalLockConditions] = useState<Record<string, Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>>>({})
   const [inlineDisplayMeta, setInlineDisplayMeta] = useState<Record<string, InlineDisplayConfig>>({})
   const [subtitleConfig, setSubtitleConfig] = useState<{ fields: SubtitleField[]; separator: string } | null>(null)
   const [subtitlePickerOpen, setSubtitlePickerOpen] = useState(false)
@@ -8266,7 +8395,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     const overrides: Record<string, Record<string, unknown>> = {}
     const rowRevisions: Record<string, boolean> = {}
     const allowRevisionRestore: Record<string, boolean> = {}
-    const lockConditions: Record<string, Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>> = {}
+    const lockConditions: Record<string, Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>> = {}
     for (const f of sorted) {
       const fc = fieldConfig.find(fc => fc.field === f.field)
       const opts = fc?.options
@@ -9552,8 +9681,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                               ? (meta?.label_override || meta?.name || 'Widget')
                               : (headerFieldDisplayMeta[f]?.label_override
                                 || (f === '__owners__' ? 'Owners' : f === '__pdf__' ? 'PDF' : null)
-                                || fieldConfig.find(fc => fc.field === f)?.label
-                                || f)
+                                || titleCase(fieldConfig.find(fc => fc.field === f)?.label ?? f))
                             }
                             fieldType={isWidget ? 'widget' : (fieldMeta?.interface ?? fieldMeta?.type ?? 'text')}
                             colSpan={12}
@@ -9609,7 +9737,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
             <div className='space-y-3'>
               {orderedItems.map(item => {
                 if (item === '__ungrouped__') return (
-                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} isTableMode={layoutType === 'table'} getExtraControls={getExtraControls} widgetSlotMeta={widgetSlotMeta} getInlineDisplay={(f) => inlineDisplayMeta[f]} onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }} />
+                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} isTableMode={layoutType === 'table'} getExtraControls={getExtraControls} widgetSlotMeta={widgetSlotMeta} getInlineDisplay={(f) => inlineDisplayMeta[f]} onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }} getLockConditions={f => localLockConditions[f] ?? []} onLockConditions={(f, v) => { setLocalLockConditions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }} collection={tableName} />
                 )
                 if (layoutType === 'table') return null
                 if (SLOT_KEYS.includes(item as SlotKey)) return (
@@ -9657,6 +9785,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                     widgetSlotMeta={widgetSlotMeta}
                     getInlineDisplay={(f) => inlineDisplayMeta[f]}
                     onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
+                    collection={tableName}
                     />
                     {childTabs.length > 0 && (
                       <div className='ml-6 space-y-1.5'>
@@ -9686,10 +9815,15 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                             onGroupSettings={(id, patch) => patchGroupSettingsMut.mutate({ id, patch })}
                             getRowRevisions={f => localRowRevisions[f] ?? false}
                             onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
+                            getAllowRevisionRestore={f => localAllowRevisionRestore[f] ?? true}
+                            onAllowRevisionRestore={(f, v) => { setLocalAllowRevisionRestore(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
+                            getLockConditions={f => localLockConditions[f] ?? []}
+                            onLockConditions={(f, v) => { setLocalLockConditions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                             getExtraControls={getExtraControls}
                             widgetSlotMeta={widgetSlotMeta}
                             getInlineDisplay={(f) => inlineDisplayMeta[f]}
                             onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
+                            collection={tableName}
                           />
                         ))}
                       </div>
