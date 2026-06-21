@@ -1,6 +1,6 @@
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
-import { GripVertical, History, Loader2, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { ChevronRight, GripVertical, History, Loader2, X } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
 import { useNivaroClient, useParentDraft } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
@@ -54,35 +54,109 @@ type CascadeResolution =
   | { type: 'direct_fk'; filter_column: string }
   | { type: 'm2m_junction'; table: string; self_fk: string; filter_fk: string }
 
+function getUniqueKey(row: Record<string, unknown>, fields: string[]): string {
+  return fields.map(f => {
+    const staged = row[`__m2m_${f}`]
+    return String(staged !== undefined ? staged ?? '' : row[f] ?? '')
+  }).join('\x00')
+}
+
+function DeletedRowsSection({
+  deletedRows,
+  displayCols,
+  onOpenHistory,
+}: {
+  deletedRows: Array<{ id: string; data: Record<string, unknown> }>
+  displayCols: CMSField[]
+  onOpenHistory: (id: string, data: Record<string, unknown>) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className='border-t border-slate-100 mt-1'>
+      <button
+        type='button'
+        onClick={() => setOpen(o => !o)}
+        className='flex w-full items-center gap-1.5 px-3 py-1.5 text-left hover:bg-slate-50'
+      >
+        <ChevronRight className={cn('h-3 w-3 shrink-0 text-slate-400 transition-transform', open && 'rotate-90')} />
+        <span className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>Deleted rows</span>
+        <span className='ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>{deletedRows.length}</span>
+      </button>
+      {open && deletedRows.map((dr) => {
+        const firstCol = displayCols[0]
+        const label = firstCol ? String(dr.data[firstCol.field] ?? dr.id) : dr.id
+        return (
+          <div key={dr.id} className='flex items-center gap-2 px-3 py-1 text-[11px] text-slate-400'>
+            <span className='flex-1 truncate line-through'>{label}</span>
+            <button type='button' title='Row history'
+              onClick={() => onOpenHistory(dr.id, dr.data)}
+              className='shrink-0 rounded p-0.5 text-slate-300 hover:text-[#00ceff]'>
+              <History className='h-3 w-3' />
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export function InlineTableField({
   relatedCollection,
   manyField,
   parentId,
+  parentCollection,
   layoutId,
   showRowRevisions,
   saveMode = 'immediate',
   showLineNumbers = false,
   enableReorder = true,
-  parentCascades
+  parentCascades,
+  uniqueBy,
+  sortField,
+  sortDir = 'asc'
 }: {
   relatedCollection: string
   manyField: string
   parentId: string
+  parentCollection?: string
   layoutId?: number | null
   showRowRevisions?: boolean
   saveMode?: 'immediate' | 'pending'
   showLineNumbers?: boolean
   enableReorder?: boolean
   parentCascades?: CascadeRule[]
+  uniqueBy?: string[]
+  sortField?: string
+  sortDir?: 'asc' | 'desc'
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const staging = useO2MStaging()
   const isNew = parentId === 'new'
   const parentDraftCtx = useParentDraft()
+  // appended to mutation URLs so the API can log activity on the parent record
+  const pCtx = parentCollection && !isNew
+    ? `?parent_collection=${encodeURIComponent(parentCollection)}&parent_id=${encodeURIComponent(parentId)}`
+    : ''
 
   // Row revision history sheet — holds the saved row whose history is open
   const [historyRow, setHistoryRow] = useState<Record<string, unknown> | null>(null)
+  // Rows deleted this session not yet in server query (pending-mode race condition buffer)
+  const [deletedRows, setDeletedRows] = useState<Array<Record<string, unknown>>>([])
+
+  // Persistent deleted-row query — survives page reload
+  const { data: serverDeletedRows = [], refetch: refetchDeleted } = useQuery<Array<{ item: string; data: Record<string, unknown>; timestamp: string; first_name?: string | null; last_name?: string | null }>>({
+    queryKey: ['o2m-deleted-rows', relatedCollection, manyField, parentId],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ item: string; data: Record<string, unknown>; timestamp: string; first_name?: string | null; last_name?: string | null }> }>(
+          get('/revisions/deleted-o2m', { collection: relatedCollection, many_field: manyField, parent_id: parentId })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!showRowRevisions && !isNew,
+    staleTime: 30_000
+  })
+
   const { data: rowRevisions = [], isLoading: revLoading } = useQuery<RowRevision[]>({
     queryKey: ['o2m-row-revisions', relatedCollection, historyRow?.id],
     queryFn: () =>
@@ -98,6 +172,8 @@ export function InlineTableField({
   // { rowId, draft } — null = no row editing, 'new' = adding new row
   const [editState, setEditState] = useState<{ rowId: string; draft: Record<string, unknown> } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [uniqueError, setUniqueError] = useState<string | null>(null)
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Auto-detect table-type layout for the related collection when no explicit layoutId is given.
   // This lets Apply Values / Create-with-Defaults zones work without manually linking a layout_id
@@ -215,14 +291,32 @@ export function InlineTableField({
   const pendingDeletes = isPendingMode && staging ? staging.getPendingDeletes(relatedCollection, manyField) : new Set<string>()
 
   const rows = useMemo(() => {
-    if (!rowOrderField) return rawRows
-    const getOrder = (r: Record<string, unknown>): number => {
-      const pe = isPendingMode ? pendingEdits.get(String(r.id)) : undefined
-      const val = pe?.[rowOrderField] ?? r[rowOrderField]
-      return Number(val ?? -1)
+    let sorted = rawRows
+    if (rowOrderField) {
+      const getOrder = (r: Record<string, unknown>): number => {
+        const pe = isPendingMode ? pendingEdits.get(String(r.id)) : undefined
+        const val = pe?.[rowOrderField] ?? r[rowOrderField]
+        return Number(val ?? -1)
+      }
+      sorted = [...rawRows].sort((a, b) => getOrder(a) - getOrder(b))
     }
-    return [...rawRows].sort((a, b) => getOrder(a) - getOrder(b))
-  }, [rawRows, rowOrderField, isPendingMode, pendingEdits])
+    if (sortField) {
+      sorted = [...sorted].sort((a, b) => {
+        const pe_a = isPendingMode ? pendingEdits.get(String(a.id)) : undefined
+        const pe_b = isPendingMode ? pendingEdits.get(String(b.id)) : undefined
+        const va = pe_a?.[sortField] ?? a[sortField]
+        const vb = pe_b?.[sortField] ?? b[sortField]
+        let cmp = 0
+        if (va == null && vb == null) cmp = 0
+        else if (va == null) cmp = 1
+        else if (vb == null) cmp = -1
+        else if (typeof va === 'number' && typeof vb === 'number') cmp = va - vb
+        else cmp = String(va).localeCompare(String(vb), undefined, { sensitivity: 'base' })
+        return sortDir === 'desc' ? -cmp : cmp
+      })
+    }
+    return sorted
+  }, [rawRows, rowOrderField, isPendingMode, pendingEdits, sortField, sortDir])
 
   const computedWriteCols = useMemo(
     () => cols.filter(c => c.computed_type === 'write' && typeof c.computed_formula === 'string' && c.computed_formula.trim()),
@@ -402,6 +496,7 @@ export function InlineTableField({
 
   function cancelEdit() {
     setEditState(null)
+    setUniqueError(null)
   }
 
   function setDraftField(k: string, v: unknown) {
@@ -414,6 +509,28 @@ export function InlineTableField({
 
   async function saveEdit() {
     if (!editState) return
+
+    if (uniqueBy?.length) {
+      const isPendingIdx = editState.rowId.startsWith('pending:')
+      const pendingIdx = isPendingIdx ? parseInt(editState.rowId.split(':')[1], 10) : null
+      const editingId = editState.rowId === 'new' || isPendingIdx ? null : editState.rowId
+      const draftKey = getUniqueKey(editState.draft, uniqueBy)
+
+      const conflict =
+        rows.some((r) => {
+          if (String(r.id) === editingId) return false
+          if (pendingDeletes.has(String(r.id))) return false
+          const merged = pendingEdits.has(String(r.id)) ? { ...r, ...pendingEdits.get(String(r.id)) } : r
+          return getUniqueKey(merged, uniqueBy) === draftKey
+        }) ||
+        pendingRows.some((r, i) => i !== pendingIdx && getUniqueKey(r, uniqueBy) === draftKey)
+
+      if (conflict) {
+        setUniqueError(`A row with the same ${uniqueBy.join(' + ')} already exists.`)
+        return
+      }
+    }
+    setUniqueError(null)
     setSaving(true)
     try {
       if (editState.rowId.startsWith('pending:')) {
@@ -432,7 +549,7 @@ export function InlineTableField({
         // Strip __m2m_* staging keys before POST — those are handled separately below
         const m2mEntries = Object.entries(editState.draft).filter(([k]) => k.startsWith('__m2m_'))
         const cleanDraft = Object.fromEntries(Object.entries(editState.draft).filter(([k]) => !k.startsWith('__m2m_')))
-        const newRowRes = await client.request<{ data: { id: unknown } }>(post(`/items/${relatedCollection}`, { ...cleanDraft, [manyField]: parentId }))
+        const newRowRes = await client.request<{ data: { id: unknown } }>(post(`/items/${relatedCollection}${pCtx}`, { ...cleanDraft, [manyField]: parentId }))
         const newRowId = newRowRes?.data?.id
         if (newRowId != null && m2mEntries.length) {
           await Promise.all(m2mEntries.map(([key, relatedId]) => {
@@ -453,7 +570,7 @@ export function InlineTableField({
           setEditState(null)
           return
         }
-        await client.request(patch(`/items/${relatedCollection}/${editState.rowId}`, rowPayload))
+        await client.request(patch(`/items/${relatedCollection}/${editState.rowId}${pCtx}`, rowPayload))
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       }
       setEditState(null)
@@ -492,7 +609,7 @@ export function InlineTableField({
         } else {
           await Promise.all(
             rows.map(row =>
-              client.request(patch(`/items/${relatedCollection}/${row.id}`, applyValues))
+              client.request(patch(`/items/${relatedCollection}/${row.id}${pCtx}`, applyValues))
             )
           )
           qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
@@ -520,7 +637,7 @@ export function InlineTableField({
     try {
       await Promise.all(
         Array.from({ length: n }, () =>
-          client.request(post(`/items/${relatedCollection}`, { ...rowData, [manyField]: parentId }))
+          client.request(post(`/items/${relatedCollection}${pCtx}`, { ...rowData, [manyField]: parentId }))
         )
       )
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
@@ -560,7 +677,7 @@ export function InlineTableField({
     setReordering(true)
     try {
       await Promise.all(changed.map(({ row, newOrder }) =>
-        client.request(patch(`/items/${relatedCollection}/${row.id}`, { [rowOrderField!]: newOrder }))
+        client.request(patch(`/items/${relatedCollection}/${row.id}${pCtx}`, { [rowOrderField!]: newOrder }))
       ))
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
     } catch {
@@ -571,17 +688,24 @@ export function InlineTableField({
     }
   }
 
-  async function deleteRow(id: unknown, e: React.MouseEvent) {
+  async function deleteRow(row: Record<string, unknown>, e: React.MouseEvent) {
     e.stopPropagation()
+    const id = row.id
     if (isPendingMode && staging) {
       staging.queueDelete(relatedCollection, manyField, String(id))
       if (editState?.rowId === String(id)) setEditState(null)
+      // Capture now — hidden while still in pendingDeletes, visible after parent save flushes the delete
+      if (showRowRevisions) setDeletedRows(prev => prev.some(r => r.id === id) ? prev : [...prev, row])
       return
     }
     try {
-      await client.request(del(`/items/${relatedCollection}/${id}`))
+      await client.request(del(`/items/${relatedCollection}/${id}${pCtx}`))
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       if (editState?.rowId === String(id)) setEditState(null)
+      if (showRowRevisions) {
+        setDeletedRows(prev => prev.some(r => r.id === id) ? prev : [...prev, row])
+        void refetchDeleted()
+      }
     } catch {
       /* ignore */
     }
@@ -786,6 +910,14 @@ export function InlineTableField({
                 }}
                 onDragEnd={handleDragEnd}
                 onClick={() => !isEditing && startPendingEdit(row, ri)}
+                onBlur={(e) => {
+                  if (!isEditing || saving) return
+                  if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return
+                  blurTimerRef.current = setTimeout(() => void saveEdit(), 150)
+                }}
+                onFocus={() => {
+                  if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null }
+                }}
                 className={cn('border-b border-slate-100 transition-colors',
                   isPDragging ? 'opacity-40' : '',
                   isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
@@ -887,6 +1019,14 @@ export function InlineTableField({
                 onDrop={handleDrop}
                 onDragEnd={handleDragEnd}
                 onClick={() => !isEditing && !isPendingDelete && startEdit(displayRow)}
+                onBlur={(e) => {
+                  if (!isEditing || saving || isPendingDelete) return
+                  if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return
+                  blurTimerRef.current = setTimeout(() => void saveEdit(), 150)
+                }}
+                onFocus={() => {
+                  if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null }
+                }}
                 className={cn('border-b border-slate-100 transition-colors',
                   isDragging ? 'opacity-40' : '',
                   isDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
@@ -978,7 +1118,7 @@ export function InlineTableField({
                               <History className='h-3 w-3' />
                             </button>
                           )}
-                          <button type='button' onClick={(e) => deleteRow(row.id, e)}
+                          <button type='button' onClick={(e) => deleteRow(row, e)}
                             className='rounded p-0.5 text-slate-300 hover:text-red-500'>
                             <X className='h-3 w-3' />
                           </button>
@@ -1110,6 +1250,11 @@ export function InlineTableField({
         })()}
       </table>
 
+      {uniqueError && (
+        <div className='border-t border-red-100 bg-red-50 px-3 py-1.5 text-[11px] text-red-600'>
+          {uniqueError}
+        </div>
+      )}
       {!isEditingNew && (
         <div className='border-t border-slate-100 px-3 py-1.5'>
           <button type='button' onClick={startNew}
@@ -1118,6 +1263,24 @@ export function InlineTableField({
           </button>
         </div>
       )}
+
+      {showRowRevisions && (() => {
+        // Merge server results + local state; local fills the gap before server catches up
+        const serverIds = new Set(serverDeletedRows.map(r => String(r.item)))
+        const localOnly = deletedRows.filter(dr => !pendingDeletes.has(String(dr.id)) && !serverIds.has(String(dr.id)))
+        const allDeleted: Array<{ id: string; data: Record<string, unknown> }> = [
+          ...serverDeletedRows.map(r => ({ id: r.item, data: r.data })),
+          ...localOnly.map(dr => ({ id: String(dr.id), data: dr }))
+        ]
+        if (allDeleted.length === 0) return null
+        return (
+          <DeletedRowsSection
+            deletedRows={allDeleted}
+            displayCols={displayCols}
+            onOpenHistory={(id, data) => setHistoryRow({ id, ...data })}
+          />
+        )
+      })()}
     </div>
 
     <Sheet open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>

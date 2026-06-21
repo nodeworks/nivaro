@@ -85,6 +85,7 @@ import { usersRoutes } from './users.js'
 import { virtualCollectionsRoutes } from './virtual-collections.js'
 import { webhooksRoutes } from './webhooks.js'
 import { buildWidgetScript, widgetRoutes } from './widget.js'
+import { widgetsInternalRoutes } from './widgets-internal.js'
 import { workflowsRoutes } from './workflows.js'
 import { workspacesRoutes } from './workspaces.js'
 import { zapierRoutes } from './zapier.js'
@@ -192,6 +193,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(aiSettingsRoutes, { prefix: '/ai-settings' })
   await app.register(zapierRoutes, { prefix: '/zapier' })
   await app.register(widgetRoutes, { prefix: '/widget' })
+  await app.register(widgetsInternalRoutes, { prefix: '/widgets-internal' })
   // Root-level alias for clean external embeds: <script src="https://host/api/widget.js">
   app.get('/widget.js', async (_req, reply) => {
     reply

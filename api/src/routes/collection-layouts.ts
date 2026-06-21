@@ -85,7 +85,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       db('nivaro_field_groups').where({ layout_id: layout.id }).select('id','key','label','type','icon','sort','is_collapsed','container_id','tab_mode','hide_when_empty','visibility_mode','summary_fields','summary_hide_empty').orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: layout.id })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides')
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides', 'widget_id', 'input_bindings')
         .orderBy('sort', 'asc')
     ])
 
@@ -285,7 +285,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     const [groups, assignments, fieldMeta] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: Number(id) }).select('id', 'key', 'label', 'sort').orderBy('sort', 'asc'),
-      db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).select('field', 'group_key', 'sort', 'label_override', 'is_visible').orderBy('sort', 'asc'),
+      db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'widget_id', 'input_bindings').orderBy('sort', 'asc'),
       db('nivaro_fields').where({ collection: layout.collection }).select('field', 'label', 'type'),
     ])
 
@@ -427,8 +427,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // Generates PDF for an item and attaches it to a file M2M/O2M field on the item.
   app.post('/:id/generate-and-attach', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const { collection, item_id, attach_field } = req.body as {
-      collection: string; item_id: string | number; attach_field: string
+    const { collection, item_id, attach_field, filename_template } = req.body as {
+      collection: string; item_id: string | number; attach_field: string; filename_template?: string | null
     }
 
     if (!collection || item_id == null || !attach_field) {
@@ -458,7 +458,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     const [groups, assignments, fieldMeta, colMeta, settings, directRelations] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: Number(id) }).select('id','key','label','sort').orderBy('sort','asc'),
-      db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).select('field','group_key','sort','label_override','is_visible','col_span','overrides').orderBy('sort','asc'),
+      db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).select('field','group_key','sort','label_override','is_visible','col_span','overrides','widget_id','input_bindings').orderBy('sort','asc'),
       db('nivaro_fields').where({ collection }).select('field','label','type','interface','options'),
       db('nivaro_collections').where({ collection }).first('display_name'),
       db('nivaro_settings').where({ id: 1 }).first('logo_url').catch(() => null),
@@ -489,11 +489,17 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     // Save PDF to file storage
     const fileId = randomUUID()
-    const safeBase = `${collection}-${item_id}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+    const resolvedName = filename_template
+      ? filename_template.replace(/\{\{(\w+)\}\}/g, (_: string, key: string) => {
+          const v = item[key]
+          return v != null && v !== '' ? String(v).replace(/[^a-zA-Z0-9_-]/g, '_') : key
+        })
+      : null
+    const safeBase = (resolvedName ?? `${collection}-${item_id}`).replace(/[^a-zA-Z0-9_-]/g, '_')
     const diskName = `${fileId}.pdf`
     const provider = getStorageProviderName()
     await getStorage().put(diskName, pdfBuffer, 'application/pdf')
-    await db('nivaro_files').insert({
+    const fileRow = {
       id: fileId,
       storage: provider,
       storage_provider: provider,
@@ -505,7 +511,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       uploaded_by: req.user!.id,
       uploaded_on: new Date(),
       filesize: pdfBuffer.length,
-    })
+    }
+    await db('nivaro_files').insert(fileRow)
+    // Migrated Directus DBs still have directus_files as a physical table with legacy FK constraints.
+    // Insert there too so junction tables with directus_files_id FK can reference this file.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { storage_provider: _sp, ...directusFileRow } = fileRow
+    await db('directus_files').insert({ ...directusFileRow, uploaded_by: null }).catch(() => { /* absent on clean installs */ })
 
     // Attach file to the item via the relation for attach_field
     // Require exact match using the same alias derivation as the config picker
@@ -522,15 +534,16 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!targetJr) {
       return reply.code(400).send({ error: `No M2M relation found for field '${attach_field}' on collection '${collection}'` })
     }
-    const filesRel = (junctionRelations as Array<{ many_collection: string; many_field: string; one_collection: string | null }>)
-      .find(r => r.many_collection === targetJr.many_collection && r.one_collection === 'nivaro_files')
-    if (!filesRel) {
+    // targetJr encodes both FK columns:
+    //   many_field      = junction column pointing to the parent (item_id side)
+    //   junction_field  = junction column pointing to the related files record
+    if (!targetJr.junction_field) {
       return reply.code(400).send({ error: `Relation '${attach_field}' does not link to nivaro_files` })
     }
     try {
       await db(targetJr.many_collection).insert({
-        [targetJr.junction_field!]: item_id,
-        [filesRel.many_field]: fileId,
+        [targetJr.many_field]: item_id,
+        [targetJr.junction_field]: fileId,
       })
       attached = true
     } catch { /* duplicate/constraint — file already attached */ }
@@ -612,7 +625,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!layout) return reply.code(404).send({ error: 'Not found' })
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides')
+      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides', 'widget_id', 'input_bindings')
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })
@@ -646,6 +659,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         show_row_revisions?: boolean
         col_span?: number | null
         overrides?: Record<string, unknown> | null
+        widget_id?: number | null
+        input_bindings?: unknown[] | null
       }>
     }
     if (!Array.isArray(body.assignments)) return reply.code(400).send({ error: 'assignments array required' })
@@ -664,7 +679,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
             default_expanded: a.default_expanded === false ? 0 : 1,
             show_row_revisions: a.show_row_revisions === true ? 1 : 0,
             col_span: a.col_span ?? null,
-            overrides: a.overrides != null ? JSON.stringify(a.overrides) : null
+            overrides: a.overrides != null ? JSON.stringify(a.overrides) : null,
+            widget_id: a.widget_id ?? null,
+            input_bindings: a.input_bindings != null ? JSON.stringify(a.input_bindings) : null
           }))
         )
       }
@@ -672,7 +689,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides')
+      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides', 'widget_id', 'input_bindings')
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })

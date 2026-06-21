@@ -22,6 +22,7 @@ import {
   ChevronRight,
   ChevronsUpDown,
   ChevronUp,
+  CornerDownLeft,
   Eye,
   EyeOff,
   GripVertical,
@@ -71,7 +72,7 @@ import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { CollectionFieldPickerPanel, type PickedField } from '@/components/field-picker'
+import { CollectionFieldPickerPanel, FieldPicker, type PickedField } from '@/components/field-picker'
 import { FormulaBuilder } from '@/components/formula-builder'
 import { IconPicker } from '@/components/icon-picker'
 import { Badge } from '@/components/ui/badge'
@@ -99,7 +100,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
-import { api } from '@/lib/api'
+import { api, type CMSRelation } from '@/lib/api'
 import {
   CHOICE_INTERFACES,
   type Choice,
@@ -5115,6 +5116,8 @@ function FieldSettingsPopover({
   onSave,
   showRowRevisions,
   onRowRevisionsChange,
+  inlineDisplayConfig,
+  onInlineDisplayChange,
 }: {
   fieldName: string
   abstractType?: string
@@ -5127,8 +5130,12 @@ function FieldSettingsPopover({
   onSave: (patch: Partial<FieldSettings> & { dependency_config?: string }) => void
   showRowRevisions?: boolean
   onRowRevisionsChange?: (v: boolean) => void
+  inlineDisplayConfig?: InlineDisplayConfig
+  onInlineDisplayChange?: (config: InlineDisplayConfig) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [localInlineEntries, setLocalInlineEntries] = useState<InlineDisplayEntry[]>([])
+  const [localInlineSeparator, setLocalInlineSeparator] = useState<string | null>(null)
   const [label, setLabel] = useState(settings.label ?? '')
   const [iface, setIface] = useState(settings.interface ?? '')
   const [note, setNote] = useState(settings.note ?? '')
@@ -5144,6 +5151,7 @@ function FieldSettingsPopover({
   const [gridShowTotals, setGridShowTotals] = useState(false)
   const [allowUpload, setAllowUpload] = useState(true)
   const [allowPick, setAllowPick] = useState(true)
+  const [filePendingSave, setFilePendingSave] = useState(false)
   const [numFormat, setNumFormat] = useState<'int' | 'decimal' | 'currency' | ''>('')
   const [numPrecisionFmt, setNumPrecisionFmt] = useState('2')
   const [numCurrency, setNumCurrency] = useState('USD')
@@ -5152,6 +5160,11 @@ function FieldSettingsPopover({
   const [showLineNumbers, setShowLineNumbers] = useState(false)
   const [enableReorder, setEnableReorder] = useState(true)
   const [parentCascades, setParentCascades] = useState<Array<{ parent_field: string; child_field: string }>>([])
+  const [uniqueBy, setUniqueBy] = useState<string[]>([])
+  const [uniqueByOpen, setUniqueByOpen] = useState(false)
+  const [sortField, setSortField] = useState<string>('')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [sortFieldOpen, setSortFieldOpen] = useState(false)
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
   const [groupedGroupFieldOpen, setGroupedGroupFieldOpen] = useState(false)
@@ -5180,9 +5193,24 @@ function FieldSettingsPopover({
     [m2oFields]
   )
 
+  const { data: childAllFields = [] } = useQuery<Array<{ field: string; label?: string | null; type?: string; interface?: string | null; hidden?: boolean }>>({
+    queryKey: ['field-config-all', relatedCollection],
+    queryFn: () => api.get(`/field-config/${relatedCollection}`).then((r) => r.data.data ?? []),
+    enabled: !!relatedCollection && iface === 'inline-table',
+    staleTime: 5 * 60 * 1000
+  })
+
+  const SKIP_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
+  const uniqueByOptions = useMemo(() =>
+    childAllFields.filter((f) => !f.hidden && f.field !== 'id' && !SKIP_TYPES.has(f.type ?? '')),
+    [childAllFields]
+  )
+
   // Reset local state when popover opens
   function handleOpenChange(next: boolean) {
     if (next) {
+      setLocalInlineEntries(inlineDisplayConfig?.entries ?? [])
+      setLocalInlineSeparator(inlineDisplayConfig?.separator ?? null)
       setLabel(settings.label ?? '')
       setIface(settings.interface ?? '')
       setNote(settings.note ?? '')
@@ -5203,6 +5231,7 @@ function FieldSettingsPopover({
         setGridShowTotals(!!(opts.grid_show_totals))
         setAllowUpload(opts.allow_upload !== false)
         setAllowPick(opts.allow_pick !== false)
+        setFilePendingSave(!!(opts.pending_save))
         setNumFormat((opts.format as 'int' | 'decimal' | 'currency' | '') ?? '')
         setNumPrecisionFmt(opts.precision != null ? String(opts.precision) : '2')
         setNumCurrency((opts.currency as string) ?? 'USD')
@@ -5211,9 +5240,12 @@ function FieldSettingsPopover({
         setShowLineNumbers(!!(opts.show_line_numbers))
         setEnableReorder(opts.enable_reorder !== false)
         setParentCascades(Array.isArray(opts.parent_cascades) ? opts.parent_cascades as Array<{ parent_field: string; child_field: string }> : [])
+        setUniqueBy(Array.isArray(opts.unique_by) ? opts.unique_by as string[] : [])
+        setSortField((opts.sort_field as string) ?? '')
+        setSortDir((opts.sort_dir as 'asc' | 'desc') === 'desc' ? 'desc' : 'asc')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
-      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate(''); setSaveMode('immediate'); setShowLineNumbers(false); setEnableReorder(true); setParentCascades([]); setGroupedGroupField(''); setGroupedOptionField('') }
+      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setFilePendingSave(false); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate(''); setSaveMode('immediate'); setShowLineNumbers(false); setEnableReorder(true); setParentCascades([]); setUniqueBy([]); setSortField(''); setSortDir('asc'); setGroupedGroupField(''); setGroupedOptionField('') }
     }
     setOpen(next)
   }
@@ -5252,10 +5284,10 @@ function FieldSettingsPopover({
           delete existing.aggregate
         }
         const o2mOpts = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table'))
-          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : { save_mode: saveMode, show_line_numbers: showLineNumbers, enable_reorder: enableReorder, ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}) }) }
+          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : { save_mode: saveMode, show_line_numbers: showLineNumbers, enable_reorder: enableReorder, ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}), ...(uniqueBy.length > 0 ? { unique_by: uniqueBy } : { unique_by: undefined }), ...(sortField ? { sort_field: sortField, sort_dir: sortDir } : { sort_field: undefined, sort_dir: undefined }) }) }
           : {}
         const fileOpts = (iface === 'file-image' || iface === 'files-m2m')
-          ? { allow_upload: allowUpload, allow_pick: allowPick }
+          ? { allow_upload: allowUpload, allow_pick: allowPick, ...(iface === 'files-m2m' ? { pending_save: filePendingSave } : {}) }
           : {}
         const groupedOpts = iface === 'relation-grouped'
           ? { group_field: groupedGroupField || undefined, option_field: groupedOptionField || undefined }
@@ -5266,7 +5298,7 @@ function FieldSettingsPopover({
       }
     }
     const patch: Partial<FieldSettings> & { dependency_config?: Record<string, unknown> | null; options?: string | null } = {
-      label: label.trim() || null,
+      label: label.trim() !== '' ? label.trim() : (settings.label === '' ? '' : null),
       interface: iface || null,
       note: note.trim() || null,
       placeholder: placeholder.trim() || null,
@@ -5279,6 +5311,7 @@ function FieldSettingsPopover({
     if (isM2O || isM2M) patch.dependency_config = depPatch
     if (optionsPatch !== null || needsOptionsPatch) patch.options = optionsPatch
     onSave(patch as Partial<FieldSettings> & { dependency_config?: string })
+    onInlineDisplayChange?.({ entries: localInlineEntries, separator: localInlineSeparator })
     setOpen(false)
   }
 
@@ -5482,6 +5515,7 @@ function FieldSettingsPopover({
               {[
                 { key: 'allowUpload', label: 'Allow upload', value: allowUpload, set: setAllowUpload },
                 { key: 'allowPick', label: 'Allow picking existing files', value: allowPick, set: setAllowPick },
+                ...(iface === 'files-m2m' ? [{ key: 'pendingSave', label: 'Save on form submit (not immediately)', value: filePendingSave, set: setFilePendingSave }] : []),
               ].map(row => (
                 <div key={row.key} className='flex items-center justify-between'>
                   <span className='text-[12px] text-slate-600'>{row.label}</span>
@@ -5607,12 +5641,117 @@ function FieldSettingsPopover({
                   )}
                 </div>
               )}
+              {iface === 'inline-table' && (
+                <div className='space-y-1'>
+                  <p className='text-[11px] font-medium text-slate-500'>Unique by fields</p>
+                  <Popover open={uniqueByOpen} onOpenChange={setUniqueByOpen}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type='button'
+                        className='w-full flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-left hover:border-slate-400'
+                      >
+                        <span className={uniqueBy.length ? 'text-slate-700' : 'text-slate-400'}>
+                          {uniqueBy.length
+                            ? uniqueBy.map(f => uniqueByOptions.find(o => o.field === f)?.label || f).join(', ')
+                            : 'None (no uniqueness enforced)'}
+                        </span>
+                        <span className='text-slate-400 ml-1'>▾</span>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className='w-56 p-1' align='start'>
+                      {uniqueByOptions.length === 0 ? (
+                        <p className='px-2 py-1 text-[11px] text-slate-400'>No fields available</p>
+                      ) : (
+                        <>
+                          {uniqueByOptions.map((f) => {
+                            const checked = uniqueBy.includes(f.field)
+                            return (
+                              <button
+                                key={f.field}
+                                type='button'
+                                onClick={() => setUniqueBy(checked ? uniqueBy.filter(x => x !== f.field) : [...uniqueBy, f.field])}
+                                className='flex w-full items-center gap-2 rounded px-2 py-1 text-[11px] hover:bg-slate-100'
+                              >
+                                <span className={`h-3.5 w-3.5 rounded border flex items-center justify-center shrink-0 ${checked ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'}`}>
+                                  {checked && <span className='text-white text-[8px] font-bold'>✓</span>}
+                                </span>
+                                <span className='flex-1 truncate text-slate-700'>{f.label || f.field}</span>
+                                <span className='text-slate-400 font-mono text-[10px]'>{f.type}</span>
+                              </button>
+                            )
+                          })}
+                          {uniqueBy.length > 0 && (
+                            <button
+                              type='button'
+                              onClick={() => setUniqueBy([])}
+                              className='mt-1 w-full rounded px-2 py-1 text-[10px] text-slate-400 hover:text-red-500 text-left'
+                            >
+                              Clear all
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </PopoverContent>
+                  </Popover>
+                  {uniqueBy.length > 0 && (
+                    <p className='text-[10px] text-slate-400'>Blocks duplicate rows with matching values in: {uniqueBy.join(', ')}</p>
+                  )}
+                </div>
+              )}
+              {iface === 'inline-table' && uniqueByOptions.length > 0 && (
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-slate-600'>Sort by</Label>
+                  <div className='flex gap-1'>
+                    <Popover open={sortFieldOpen} onOpenChange={setSortFieldOpen}>
+                      <PopoverTrigger asChild>
+                        <button type='button' className='flex flex-1 items-center justify-between rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 hover:border-slate-300'>
+                          <span className='truncate'>{sortField ? (uniqueByOptions.find(f => f.field === sortField)?.label || sortField) : 'None'}</span>
+                          <ChevronDown className='h-3 w-3 text-slate-400 shrink-0' />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent className='w-48 p-1' align='start'>
+                        <button type='button' onClick={() => { setSortField(''); setSortFieldOpen(false) }}
+                          className='flex w-full items-center rounded px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-100'>
+                          — None
+                        </button>
+                        {uniqueByOptions.map(f => (
+                          <button key={f.field} type='button'
+                            onClick={() => { setSortField(f.field); setSortFieldOpen(false) }}
+                            className={`flex w-full items-center justify-between rounded px-2 py-1 text-[11px] hover:bg-slate-100 ${sortField === f.field ? 'text-nvr-cyan font-medium' : 'text-slate-700'}`}>
+                            <span className='truncate'>{f.label || f.field}</span>
+                            <span className='text-slate-400 font-mono text-[10px]'>{f.type}</span>
+                          </button>
+                        ))}
+                      </PopoverContent>
+                    </Popover>
+                    {sortField && (
+                      <button type='button'
+                        onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+                        className='shrink-0 rounded border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:border-slate-300 hover:text-nvr-cyan'>
+                        {sortDir === 'asc' ? '↑ ASC' : '↓ DESC'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
               {iface === 'inline-table' && onRowRevisionsChange && (
                 <div className='flex items-center gap-2'>
                   <Switch checked={!!showRowRevisions} onCheckedChange={onRowRevisionsChange} className='scale-75' />
                   <span className='text-[11px] text-slate-600'>Show row revision history</span>
                 </div>
               )}
+            </div>
+          )}
+
+          {isM2O && relatedCollection && (
+            <div className='border-t border-slate-100 pt-3'>
+              <InlineDisplaySection
+                relatedCollection={relatedCollection}
+                entries={localInlineEntries}
+                separator={localInlineSeparator}
+                onChange={setLocalInlineEntries}
+                onSeparatorChange={setLocalInlineSeparator}
+              />
             </div>
           )}
 
@@ -5653,6 +5792,8 @@ function FieldChip({
   rowRevisions,
   onRowRevisionsChange,
   extraControls,
+  inlineDisplayConfig,
+  onInlineDisplayChange,
 }: {
   fieldName: string
   displayName?: string
@@ -5674,6 +5815,8 @@ function FieldChip({
   rowRevisions?: boolean
   onRowRevisionsChange?: (v: boolean) => void
   extraControls?: React.ReactNode
+  inlineDisplayConfig?: InlineDisplayConfig
+  onInlineDisplayChange?: (config: InlineDisplayConfig) => void
 }) {
   const [open, setOpen] = useState(false)
   const widthLabel = WIDTH_OPTIONS.find(w => w.span === colSpan)?.label ?? 'Full'
@@ -5723,6 +5866,8 @@ function FieldChip({
           onSave={onSettings}
           showRowRevisions={rowRevisions}
           onRowRevisionsChange={onRowRevisionsChange}
+          inlineDisplayConfig={inlineDisplayConfig}
+          onInlineDisplayChange={onInlineDisplayChange}
         />
       )}
 
@@ -5809,6 +5954,8 @@ function SortableFieldChip({
   rowRevisions,
   onRowRevisionsChange,
   extraControls,
+  inlineDisplayConfig,
+  onInlineDisplayChange,
 }: {
   fieldName: string
   displayName?: string
@@ -5829,6 +5976,8 @@ function SortableFieldChip({
   rowRevisions?: boolean
   onRowRevisionsChange?: (v: boolean) => void
   extraControls?: React.ReactNode
+  inlineDisplayConfig?: InlineDisplayConfig
+  onInlineDisplayChange?: (config: InlineDisplayConfig) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId ?? fieldName,
@@ -5864,6 +6013,8 @@ function SortableFieldChip({
         rowRevisions={rowRevisions}
         onRowRevisionsChange={onRowRevisionsChange}
         extraControls={extraControls}
+        inlineDisplayConfig={inlineDisplayConfig}
+        onInlineDisplayChange={onInlineDisplayChange}
       />
     </div>
   )
@@ -5884,7 +6035,7 @@ function parseSortableId(id: string): { container: string | null; fieldName: str
 
 // ── SortableUngroupedZone ─────────────────────────────────────────────────────
 
-function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll, isTableMode, getExtraControls }: {
+function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll, isTableMode, getExtraControls, widgetSlotMeta, getInlineDisplay, onInlineDisplayChange }: {
   localFieldOrder: Record<string, string[]>
   allFields: Array<{ field: string; type?: string; options?: string | null }>
   getColSpan: (f: string) => number
@@ -5899,7 +6050,10 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
   onUnassign?: (f: string, groupKey: string) => void
   onReturnAll?: () => void
   isTableMode?: boolean
-  getExtraControls?: (f: string) => React.ReactNode
+  getExtraControls?: (f: string, opts?: { isM2O?: boolean; relatedCollection?: string | null }) => React.ReactNode
+  widgetSlotMeta?: Record<string, { widget_id: number; name: string; label_override: string | null }>
+  getInlineDisplay?: (f: string) => InlineDisplayConfig | undefined
+  onInlineDisplayChange?: (f: string, config: InlineDisplayConfig) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'group:__ungrouped__' })
   const style = { transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0 : 1 }
@@ -5959,6 +6113,23 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                   />
                 )
               }
+              if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
+                const meta = widgetSlotMeta?.[f]
+                return (
+                  <SortableFieldChip
+                    key={toSortableId('__unassigned__', f)}
+                    sortableId={toSortableId('__unassigned__', f)}
+                    fieldName={f}
+                    displayName={meta?.label_override || meta?.name || 'Widget'}
+                    fieldType='widget'
+                    colSpan={getColSpan(f)}
+                    onColSpan={isTableMode ? undefined : (span) => patchField(f, { col_span: span })}
+                    onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
+                    extraControls={getExtraControls?.(f)}
+                    inGrid
+                  />
+                )
+              }
               const ft = allFields.find(af => af.field === f)
               const settings = getFieldSettings(f)
               const kind = relKind(f)
@@ -5980,6 +6151,9 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                   dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
                   relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
                   onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
+                  extraControls={getExtraControls?.(f, { isM2O: kind === 'M2O', relatedCollection: getRelatedCollection?.(f) })}
+                  inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
+                  onInlineDisplayChange={kind === 'M2O' && onInlineDisplayChange ? (config) => onInlineDisplayChange(f, config) : undefined}
                   inGrid
                 />
               )
@@ -6019,6 +6193,9 @@ function SortableGroupCard({
   getRowRevisions,
   onRowRevisions,
   getExtraControls,
+  widgetSlotMeta,
+  getInlineDisplay,
+  onInlineDisplayChange,
 }: {
   group: FieldGroup
   fieldNames: string[]
@@ -6044,7 +6221,10 @@ function SortableGroupCard({
   onGroupSettings?: (id: number, patch: Partial<Pick<FieldGroup, 'hide_when_empty' | 'visibility_mode' | 'summary_fields' | 'summary_hide_empty'>>) => void
   getRowRevisions?: (f: string) => boolean
   onRowRevisions?: (f: string, v: boolean) => void
-  getExtraControls?: (f: string) => React.ReactNode
+  getExtraControls?: (f: string, opts?: { isM2O?: boolean; relatedCollection?: string | null }) => React.ReactNode
+  widgetSlotMeta?: Record<string, { widget_id: number; name: string; label_override: string | null }>
+  getInlineDisplay?: (f: string) => InlineDisplayConfig | undefined
+  onInlineDisplayChange?: (f: string, config: InlineDisplayConfig) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [labelDraft, setLabelDraft] = useState(group.label)
@@ -6173,8 +6353,9 @@ function SortableGroupCard({
                   <p className='mb-1.5 text-[10px] text-slate-400'>Shown in the collapsed bar</p>
                   <div className='space-y-1.5 max-h-[220px] overflow-y-auto'>
                     {(() => {
-                      type SummaryAggConfig = { field: string; agg: 'sum' | 'count' | 'avg' | 'min' | 'max'; agg_field: string }
-                      type SummaryEntry = string | SummaryAggConfig
+                      type SummaryAggConfig = { field: string; agg: 'sum' | 'count' | 'avg' | 'min' | 'max'; agg_field: string; label?: string }
+                      type SummaryScalarConfig = { field: string; label?: string }
+                      type SummaryEntry = string | SummaryScalarConfig | SummaryAggConfig
 
                       let selected: SummaryEntry[] = []
                       try {
@@ -6184,9 +6365,19 @@ function SortableGroupCard({
 
                       const entryKey = (e: SummaryEntry) => typeof e === 'string' ? e : e.field
                       const findEntry = (f: string): SummaryEntry | undefined => selected.find(e => entryKey(e) === f)
+                      const getEntryLabel = (e: SummaryEntry): string => typeof e === 'string' ? '' : (e.label ?? '')
 
                       const save = (next: SummaryEntry[]) =>
                         onGroupSettings(group.id, { summary_fields: JSON.stringify(next) })
+
+                      const setEntryLabel = (f: string, label: string) => {
+                        const next = selected.map(e => {
+                          if (entryKey(e) !== f) return e
+                          if (typeof e === 'string') return label ? { field: f, label } : f
+                          return { ...e, label: label || undefined }
+                        })
+                        save(next)
+                      }
 
                       const AGG_OPTIONS: { value: SummaryAggConfig['agg']; label: string }[] = [
                         { value: 'count', label: 'Count' },
@@ -6200,7 +6391,7 @@ function SortableGroupCard({
                         const isO2M = getRelKind?.(f) === 'O2M'
                         const entry = findEntry(f)
                         const checked = !!entry
-                        const aggEntry = entry && typeof entry !== 'string' ? entry : null
+                        const aggEntry = entry && typeof entry !== 'string' && 'agg' in entry ? entry : null
                         const currentAgg = aggEntry?.agg ?? 'count'
                         const currentAggField = aggEntry?.agg_field ?? ''
                         const needsAggField = currentAgg !== 'count'
@@ -6266,6 +6457,19 @@ function SortableGroupCard({
                                     </div>
                                   </div>
                                 )}
+                              </div>
+                            )}
+                            {checked && (
+                              <div className='mt-1.5 ml-5 flex items-center gap-1.5'>
+                                <span className='text-[10px] text-slate-400 shrink-0'>Label:</span>
+                                <input
+                                  type='text'
+                                  key={`label-${f}`}
+                                  defaultValue={entry ? getEntryLabel(entry) : ''}
+                                  onBlur={e => setEntryLabel(f, e.target.value)}
+                                  placeholder={titleCase(f)}
+                                  className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+                                />
                               </div>
                             )}
                           </div>
@@ -6371,6 +6575,23 @@ function SortableGroupCard({
                   />
                 )
               }
+              if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
+                const meta = widgetSlotMeta?.[f]
+                return (
+                  <SortableFieldChip
+                    key={toSortableId(group.key, f)}
+                    sortableId={toSortableId(group.key, f)}
+                    fieldName={f}
+                    displayName={meta?.label_override || meta?.name || 'Widget'}
+                    fieldType='widget'
+                    colSpan={getColSpan(f)}
+                    onColSpan={(span) => onColSpan(f, span)}
+                    onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
+                    extraControls={getExtraControls?.(f)}
+                    inGrid
+                  />
+                )
+              }
               const ft = allFields.find(af => af.field === f)
               const settings = getFieldSettings?.(f)
               const kind = getRelKind?.(f)
@@ -6394,6 +6615,9 @@ function SortableGroupCard({
                   onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
                   rowRevisions={getRowRevisions?.(f)}
                   onRowRevisionsChange={onRowRevisions ? v => onRowRevisions(f, v) : undefined}
+                  extraControls={getExtraControls?.(f, { isM2O: kind === 'M2O', relatedCollection: getRelatedCollection?.(f) })}
+                  inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
+                  onInlineDisplayChange={kind === 'M2O' && onInlineDisplayChange ? (config) => onInlineDisplayChange(f, config) : undefined}
                   inGrid
                 />
               )
@@ -7152,10 +7376,12 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
 
 // ── LayoutTab ─────────────────────────────────────────────────────────────────
 
-function PdfFieldConfig({ tableName, value, onChange }: {
+function PdfFieldConfig({ tableName, value, filenameTemplate, onChange, onFilenameChange }: {
   tableName: string
   value: string | null | undefined
+  filenameTemplate: string | null | undefined
   onChange: (v: string | null) => void
+  onFilenameChange: (v: string | null) => void
 }) {
   const { data: relData } = useQuery({
     queryKey: ['relations-for', tableName],
@@ -7225,14 +7451,27 @@ function PdfFieldConfig({ tableName, value, onChange }: {
           </Command>
         </PopoverContent>
       </Popover>
+      <div className='mt-2 space-y-1'>
+        <p className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>Filename template</p>
+        <input
+          type='text'
+          value={filenameTemplate ?? ''}
+          onChange={e => onFilenameChange(e.target.value || null)}
+          placeholder='e.g. {{title}}-report'
+          className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 placeholder:text-slate-300 focus:border-nvr-cyan/50 focus:outline-none dark:border-border dark:bg-card dark:text-slate-200'
+        />
+        <p className='text-[10px] text-slate-400'>Use {'{{field}}'} tokens. Defaults to template name.</p>
+      </div>
     </div>
   )
 }
 
-function PdfFieldConfigButton({ tableName, value, onChange }: {
+function PdfFieldConfigButton({ tableName, value, filenameTemplate, onChange, onFilenameChange }: {
   tableName: string
   value: string | null | undefined
+  filenameTemplate: string | null | undefined
   onChange: (v: string | null) => void
+  onFilenameChange: (v: string | null) => void
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -7243,8 +7482,14 @@ function PdfFieldConfigButton({ tableName, value, onChange }: {
             <Settings2 className='h-3 w-3' />
           </button>
         </PopoverTrigger>
-        <PopoverContent className='w-64 p-3' align='end'>
-          <PdfFieldConfig tableName={tableName} value={value} onChange={v => { onChange(v); setOpen(false) }} />
+        <PopoverContent className='w-72 p-3' align='end'>
+          <PdfFieldConfig
+            tableName={tableName}
+            value={value}
+            filenameTemplate={filenameTemplate}
+            onChange={onChange}
+            onFilenameChange={onFilenameChange}
+          />
         </PopoverContent>
       </Popover>
     </div>
@@ -7321,6 +7566,146 @@ function SortableSlotCard({
   )
 }
 
+type InlineDisplayEntry = { field: string; label: string | null; format: string | null; line_break?: boolean }
+type InlineDisplayConfig = { entries: InlineDisplayEntry[]; separator: string | null }
+type SubtitleField = { field: string; label: string | null }
+
+function InlineDisplaySection({
+  relatedCollection,
+  entries,
+  separator,
+  onChange,
+  onSeparatorChange,
+}: {
+  relatedCollection: string
+  entries: InlineDisplayEntry[]
+  separator: string | null
+  onChange: (entries: InlineDisplayEntry[]) => void
+  onSeparatorChange: (sep: string | null) => void
+}) {
+  const { data: relFields = [] } = useQuery<Array<{ field: string; label?: string }>>({
+    queryKey: ['field-config', relatedCollection],
+    queryFn: () => api.get(`/field-config/${relatedCollection}`).then((r) => r.data?.data ?? r.data ?? []),
+    staleTime: 60_000,
+  })
+  const fieldOptions = (relFields as Array<{ field: string; label?: string }>)
+    .filter((f) => !f.field.startsWith('__'))
+    .map((f) => ({ value: f.field, label: f.label || f.field }))
+  const FORMAT_OPTS = [
+    { value: 'text', label: 'Text' },
+    { value: 'date', label: 'Date' },
+    { value: 'datetime', label: 'Date & Time' },
+    { value: 'boolean', label: 'Yes / No' },
+  ]
+  return (
+    <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5'>
+      <p className='text-[9px] font-semibold uppercase tracking-wider text-slate-400'>Inline display</p>
+      <div className='flex gap-1 mt-1'>
+        <button
+          type='button'
+          onClick={() => onSeparatorChange(null)}
+          className={cn('flex-1 rounded border px-2 py-0.5 text-[10px]', separator === null ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300')}
+        >
+          Stacked
+        </button>
+        <button
+          type='button'
+          onClick={() => onSeparatorChange(separator ?? ', ')}
+          className={cn('flex-1 rounded border px-2 py-0.5 text-[10px]', separator !== null ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300')}
+        >
+          Inline
+        </button>
+      </div>
+      {separator !== null && (
+        <div className='flex items-center gap-1.5 mt-1'>
+          <span className='text-[10px] text-slate-400 shrink-0'>Separator</span>
+          <input
+            type='text'
+            value={separator}
+            onChange={(e) => onSeparatorChange(e.target.value)}
+            className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+            placeholder=', '
+          />
+        </div>
+      )}
+      {entries.map((entry, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: stable config order
+        <div key={i} className='space-y-1'>
+          {separator !== null && i > 0 && (
+            <button
+              type='button'
+              title={entry.line_break ? 'Remove line break' : 'Start new line before this field'}
+              onClick={() => onChange(entries.map((e, j) => j === i ? { ...e, line_break: !e.line_break } : e))}
+              className={cn(
+                'flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border transition-colors',
+                entry.line_break
+                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                  : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'
+              )}
+            >
+              <CornerDownLeft className='h-3 w-3' />
+              New line
+            </button>
+          )}
+          <div className='flex items-center gap-1'>
+            <div className='flex-1 min-w-0'>
+              <Combobox
+                value={entry.field}
+                onChange={(v) => onChange(entries.map((e, j) => (j === i ? { ...e, field: v } : e)))}
+                options={fieldOptions}
+                placeholder='Field…'
+              />
+            </div>
+            <button
+              type='button'
+              onClick={() => onChange(entries.filter((_, j) => j !== i))}
+              className='shrink-0 text-slate-300 hover:text-red-500'
+            >
+              <X className='h-3.5 w-3.5' />
+            </button>
+          </div>
+          <div className='flex gap-1'>
+            <input
+              type='text'
+              value={entry.label ?? ''}
+              placeholder='Label…'
+              onChange={(e) =>
+                onChange(entries.map((en, j) => (j === i ? { ...en, label: e.target.value || null } : en)))
+              }
+              className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+            />
+            <select
+              value={entry.format ?? 'text'}
+              onChange={(e) =>
+                onChange(
+                  entries.map((en, j) =>
+                    j === i ? { ...en, format: e.target.value === 'text' ? null : e.target.value } : en
+                  )
+                )
+              }
+              className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+            >
+              {FORMAT_OPTS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      ))}
+      <button
+        type='button'
+        onClick={() => onChange([...entries, { field: '', label: null, format: null }])}
+        className='flex items-center gap-1 text-[11px] text-slate-400 hover:text-nvr-cyan'
+      >
+        <Plus className='h-3.5 w-3.5' />
+        Add field
+      </button>
+    </div>
+  )
+}
+
 function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'grouped' }: { tableName: string; dbColumns?: Array<{ name: string; data_type: string }>; layoutId: number | null; layoutType?: 'grouped' | 'table' }) {
   const qc = useQueryClient()
 
@@ -7369,6 +7754,12 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
   const fieldConfig = fieldConfigResult?.data ?? []
   const ungroupedSortFromServer: number | null = fieldConfigResult?.ungrouped_sort ?? null
+  const { data: availableWidgets = [] } = useQuery<Array<{ id: number; name: string; widget_type: string; inputs: unknown }>>({
+    queryKey: ['widgets-internal'],
+    queryFn: () => api.get('/widgets-internal').then(r => r.data.data),
+    staleTime: 60_000
+  })
+  const [addingWidget, setAddingWidget] = useState(false)
   const relations: Array<{ many_field: string; many_collection?: string; one_collection: string | null; one_field?: string | null; junction_field: string | null }> = colMeta?.relations ?? []
   // Memoized — new array reference every render would fire the init effect infinitely
   const allFields = useMemo(() => {
@@ -7412,6 +7803,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     return [...base, ...o2mVirtuals, ...m2mVirtuals, ownersPseudo, pdfPseudo]
   }, [colMeta])
 
+  // Grouped + alphabetically sorted field options for widget input binding pickers
   // field → relation kind label
   const relKind = (fieldName: string): string | null => {
     // Virtual M2M field — match by one_field, or by many_collection when one_field='id'
@@ -7456,10 +7848,16 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   }
 
   // ── Local optimistic state ──
-  const [localGroupOrder, setLocalGroupOrder] = useState<(number | '__ungrouped__' | SlotKey)[]>([])
+  const [localGroupOrder, setLocalGroupOrder] = useState<(number | '__ungrouped__' | SlotKey | string)[]>([])
+  type WidgetSlotMeta = { widget_id: number; name: string; label_override: string | null; is_visible: boolean; input_bindings: Array<{ key: string; binding_type: string; binding_value: string }> }
+  const [widgetSlotMeta, setWidgetSlotMeta] = useState<Record<string, WidgetSlotMeta>>({})
+  type HeaderFieldMeta = { label_override: string | null; display_format: string }
+  const [headerFieldDisplayMeta, setHeaderFieldDisplayMeta] = useState<Record<string, HeaderFieldMeta>>({})
   const [localAssignments, setLocalAssignments] = useState<Record<string, string | null>>({})
   const [localColSpans, setLocalColSpans] = useState<Record<string, number | null>>({})
   const [localRowRevisions, setLocalRowRevisions] = useState<Record<string, boolean>>({})
+  const [inlineDisplayMeta, setInlineDisplayMeta] = useState<Record<string, InlineDisplayConfig>>({})
+  const [subtitleConfig, setSubtitleConfig] = useState<{ fields: SubtitleField[]; separator: string } | null>(null)
   const [localOverrides, setLocalOverrides] = useState<Record<string, Record<string, unknown>>>({})
   const [localFieldOrder, setLocalFieldOrder] = useState<Record<string, string[]>>({})
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
@@ -7494,7 +7892,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     // must not clobber them or cancel the pending debounced save
     if (hasLocalChangeRef.current) return
     const ungroupedIdx = ungroupedSortFromServer !== null ? Math.min(ungroupedSortFromServer, groups.length) : groups.length
-    const baseOrder: (number | '__ungrouped__' | SlotKey)[] = groups.map(g => g.id)
+    const baseOrder: (number | '__ungrouped__' | SlotKey | string)[] = groups.map(g => g.id)
     baseOrder.splice(ungroupedIdx, 0, '__ungrouped__')
     // Interleave slot keys at their saved positions (after groups/ungrouped are placed)
     for (const key of SLOT_KEYS) {
@@ -7503,10 +7901,48 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       const insertAt = Math.min(Math.max(0, slotSort), baseOrder.length)
       baseOrder.splice(insertAt, 0, key)
     }
+    // Interleave widget slots at their saved positions
+    const widgetRows = fieldConfig.filter(fc => typeof fc.field === 'string' && (fc.field as string).startsWith('__widget_') && (fc.field as string).endsWith('__') && (fc as Record<string, unknown>).widget_id) as Array<Record<string, unknown>>
+    const nextWidgetMeta: Record<string, { widget_id: number; name: string; label_override: string | null; is_visible: boolean; input_bindings: Array<{ key: string; binding_type: string; binding_value: string }> }> = {}
+    for (const row of widgetRows) {
+      const key = row.field as string
+      const wid = row.widget_id as number
+      const wDef = availableWidgets.find(w => w.id === wid)
+      nextWidgetMeta[key] = {
+        widget_id: wid,
+        name: wDef?.name ?? `Widget ${wid}`,
+        label_override: (row.label_override as string | null) ?? null,
+        is_visible: row.is_visible === undefined || row.is_visible === null ? true : !!row.is_visible,
+        input_bindings: (() => { try { return typeof row.input_bindings === 'string' ? JSON.parse(row.input_bindings as string) : [] } catch { return [] } })(),
+      }
+    }
+    setWidgetSlotMeta(nextWidgetMeta)
+    // Initialize header field display meta from saved assignments
+    const headerFieldRows = fieldConfig.filter(fc => {
+      const f = fc.field as string
+      const gk = (fc as Record<string, unknown>).group_key as string | null
+      return f && !f.startsWith('__') && gk === '__header__'
+    })
+    const nextHeaderFieldMeta: Record<string, HeaderFieldMeta> = {}
+    for (const row of headerFieldRows) {
+      const f = row.field as string
+      let displayFormat = 'text'
+      try {
+        const raw = (row as Record<string, unknown>).input_bindings
+        const parsed: Array<{ key: string; binding_type: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
+        const fmt = parsed.find(b => b.key === '__display_format__')
+        if (fmt?.binding_value) displayFormat = fmt.binding_value
+      } catch { /* noop */ }
+      nextHeaderFieldMeta[f] = {
+        label_override: ((row as Record<string, unknown>).label_override as string | null) ?? null,
+        display_format: displayFormat,
+      }
+    }
+    setHeaderFieldDisplayMeta(nextHeaderFieldMeta)
     setLocalGroupOrder(baseOrder)
     const assignments: Record<string, string | null> = {}
     // __pool__ = Fields List (always contains ALL fields); __unassigned__ = Ungrouped zone
-    const fieldOrder: Record<string, string[]> = { __pool__: [], __unassigned__: [], __apply_values__: [], __create_with_defaults__: [] }
+    const fieldOrder: Record<string, string[]> = { __pool__: [], __unassigned__: [], __apply_values__: [], __create_with_defaults__: [], __header__: [] }
     for (const g of groups) fieldOrder[g.key] = []
     const sorted = [...allFields].sort((a, b) => {
       const as_ = fieldConfig.find(fc => fc.field === a.field)?.sort ?? 9999
@@ -7524,17 +7960,23 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       if (!(fc as Record<string, unknown>).layout_assigned) continue
       const gk = fc.group_key ?? null
       const f = fc.field
-      if (!f || f === '__ungrouped_pos__' || (typeof f === 'string' && f.startsWith('__') && f.endsWith('__') && f !== '__unassigned__' && f !== OWNERS_FIELD && f !== PDF_FIELD)) continue
+      if (!f || f === '__ungrouped_pos__' || (typeof f === 'string' && f.startsWith('__') && f.endsWith('__') && f !== '__unassigned__' && f !== OWNERS_FIELD && f !== PDF_FIELD && !f.startsWith('__widget_'))) continue
       assignments[f] = gk
       if (gk === '__apply_values__') {
         if (!fieldOrder.__apply_values__.includes(f)) fieldOrder.__apply_values__.push(f)
       } else if (gk === '__create_with_defaults__') {
         if (!fieldOrder.__create_with_defaults__.includes(f)) fieldOrder.__create_with_defaults__.push(f)
+      } else if (gk === '__header__') {
+        if (!fieldOrder.__header__.includes(f)) fieldOrder.__header__.push(f)
       } else if (gk && fieldOrder[gk] !== undefined) {
         if (!fieldOrder[gk].includes(f)) fieldOrder[gk].push(f)
       } else if (!gk) {
         if (!fieldOrder.__unassigned__.includes(f)) fieldOrder.__unassigned__.push(f)
       }
+    }
+    // Widgets are synthetic — add their keys to pool so they appear in the left panel
+    for (const key of Object.keys(nextWidgetMeta)) {
+      if (!fieldOrder.__pool__.includes(key)) fieldOrder.__pool__.push(key)
     }
     // Build per-layout col_span map from fieldConfig (which has the layout overlay applied)
     const colSpans: Record<string, number | null> = {}
@@ -7555,6 +7997,25 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     setLocalColSpans(colSpans)
     setLocalRowRevisions(rowRevisions)
     setLocalOverrides(overrides)
+    // Parse __inline_display__ bindings for M2O fields
+    const nextInlineDisplay: Record<string, InlineDisplayConfig> = {}
+    for (const fc of fieldConfig) {
+      const fname = fc.field as string
+      if (!fname || fname.startsWith('__')) continue
+      try {
+        const raw = (fc as Record<string, unknown>).input_bindings
+        const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
+        const entry = parsed.find((b) => b.key === '__inline_display__')
+        if (entry?.binding_value) {
+          const data = JSON.parse(entry.binding_value)
+          const isArr = Array.isArray(data)
+          const entries = isArr ? data : (data.fields ?? [])
+          const separator: string | null = isArr ? null : (data.separator ?? null)
+          if (Array.isArray(entries) && entries.length) nextInlineDisplay[fname] = { entries, separator }
+        }
+      } catch { /* noop */ }
+    }
+    setInlineDisplayMeta(nextInlineDisplay)
     setLocalAssignments(assignments)
     setLocalFieldOrder(fieldOrder)
 
@@ -7575,6 +8036,21 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       }
     }
     setSlots(nextSlots)
+    // ── Parse subtitle sentinel ──
+    const subtitleRow = fieldConfig.find(fc => fc.field === '__subtitle__') as Record<string, unknown> | undefined
+    if (subtitleRow) {
+      try {
+        const raw = subtitleRow.input_bindings
+        const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
+        const entry = parsed.find(b => b.key === '__subtitle_config__')
+        if (entry?.binding_value) {
+          const data = JSON.parse(entry.binding_value)
+          if (data.fields && Array.isArray(data.fields) && data.fields.length > 0) {
+            setSubtitleConfig({ fields: data.fields, separator: data.separator ?? ' | ' })
+          } else { setSubtitleConfig(null) }
+        } else { setSubtitleConfig(null) }
+      } catch { setSubtitleConfig(null) }
+    } else { setSubtitleConfig(null) }
   }, [groups, fieldConfig, allFields, ungroupedSortFromServer])
 
   // ── Mutations ──
@@ -7591,13 +8067,28 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       const seq = changeSeqRef.current
       const ungroupedPos = localGroupOrder.indexOf('__ungrouped__')
       // Build assignments from localFieldOrder directly — __pool__ is the static Fields List, skip it
-      const fieldAssignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean; col_span?: number | null; overrides?: Record<string, unknown> | null; show_row_revisions?: boolean }> = []
+      const fieldAssignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean; col_span?: number | null; overrides?: Record<string, unknown> | null; show_row_revisions?: boolean; widget_id?: number; input_bindings?: Array<{ key: string; binding_type: string; binding_value: string }> | null }> = []
       for (const [container, fields] of Object.entries(localFieldOrder)) {
         if (container === '__pool__') continue
         const gk = container === '__unassigned__' ? null : container
         fields.forEach((f, idx) => {
-          const ov = localOverrides[f]
-          fieldAssignments.push({ field: f, group_key: gk, sort: idx, col_span: localColSpans[f] ?? null, overrides: ov && Object.keys(ov).length > 0 ? ov : null, show_row_revisions: localRowRevisions[f] ?? false })
+          if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
+            const wMeta = widgetSlotMeta[f]
+            if (wMeta) fieldAssignments.push({ field: f, group_key: gk, sort: idx, label_override: wMeta.label_override, is_visible: wMeta.is_visible, widget_id: wMeta.widget_id, input_bindings: wMeta.input_bindings.length > 0 ? wMeta.input_bindings : null })
+          } else if (gk === '__header__') {
+            const hMeta = headerFieldDisplayMeta[f]
+            const fmtBinding = hMeta?.display_format && hMeta.display_format !== 'text'
+              ? [{ key: '__display_format__', binding_type: 'static' as const, binding_value: hMeta.display_format }]
+              : null
+            fieldAssignments.push({ field: f, group_key: gk, sort: idx, label_override: hMeta?.label_override ?? null, input_bindings: fmtBinding })
+          } else {
+            const ov = localOverrides[f]
+            const config = inlineDisplayMeta[f]
+            const inlineBinding = config && config.entries.length > 0
+              ? [{ key: '__inline_display__', binding_type: 'static' as const, binding_value: JSON.stringify({ fields: config.entries, separator: config.separator }) }]
+              : null
+            fieldAssignments.push({ field: f, group_key: gk, sort: idx, col_span: localColSpans[f] ?? null, overrides: ov && Object.keys(ov).length > 0 ? ov : null, show_row_revisions: localRowRevisions[f] ?? false, input_bindings: inlineBinding })
+          }
         })
       }
       const assignments = [
@@ -7611,7 +8102,14 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
           label_override: slots[key].label_override,
           is_visible: slots[key].is_visible,
           default_expanded: slots[key].default_expanded,
-        }))
+        })),
+        // Subtitle sentinel
+        ...(subtitleConfig ? [{
+          field: '__subtitle__',
+          group_key: null,
+          sort: 0,
+          input_bindings: [{ key: '__subtitle_config__', binding_type: 'static', binding_value: JSON.stringify({ fields: subtitleConfig.fields, separator: subtitleConfig.separator }) }],
+        }] : []),
       ]
       api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
         .then(() => {
@@ -7629,7 +8127,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         })
     }, 400)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [localAssignments, localColSpans, localRowRevisions, localOverrides, localFieldOrder, localGroupOrder, slots, layoutId, invalidateFieldConfig])
+  }, [localAssignments, localColSpans, localRowRevisions, localOverrides, localFieldOrder, localGroupOrder, slots, widgetSlotMeta, headerFieldDisplayMeta, inlineDisplayMeta, subtitleConfig, layoutId, invalidateFieldConfig])
 
   const createMut = useMutation({
     mutationFn: (body: { collection: string; key: string; label: string; type: 'section' | 'tab' | 'metadata' | 'container' }) =>
@@ -7695,7 +8193,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
   // Option keys inside `options` JSON that are scoped to a specific layout and must NOT
   // be written to nivaro_fields (global). They live in layout_field_assignments.overrides.options.
-  const LAYOUT_LOCAL_OPTION_KEYS = ['layout_id', 'layout_slug', 'save_mode', 'show_line_numbers', 'enable_reorder', 'parent_cascades']
+  const LAYOUT_LOCAL_OPTION_KEYS = ['layout_id', 'layout_slug', 'save_mode', 'show_line_numbers', 'enable_reorder', 'parent_cascades', 'unique_by', 'sort_field', 'sort_dir']
 
   const patchField = useCallback((field: string, patch: Record<string, unknown>) => {
     if (layoutId && ('group_key' in patch || 'sort' in patch)) {
@@ -7861,9 +8359,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     if (activeId.startsWith('group:') || activeId.startsWith('slot:')) {
       const activeKey = activeId.startsWith('slot:') ? activeId.replace('slot:', '') : activeId.replace('group:', '')
       const overKey = overId.startsWith('slot:') ? overId.replace('slot:', '') : overId.replace('group:', '')
-      const resolveKey = (id: number | '__ungrouped__' | SlotKey): string => {
+      const resolveKey = (id: number | '__ungrouped__' | SlotKey | string): string => {
         if (id === '__ungrouped__') return '__ungrouped__'
-        if (SLOT_KEYS.includes(id as SlotKey)) return id as string
+        if (typeof id === 'string') return id
         return groups.find(g => g.id === id)?.key ?? ''
       }
       const activeIdx = localGroupOrder.findIndex(id => resolveKey(id) === activeKey)
@@ -7974,7 +8472,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       readonly: ov.readonly !== undefined ? !!ov.readonly : !!fc?.readonly,
       inline_relation: mergedOpts.inline_relation === true,
       max_values: typeof mergedOpts.max_values === 'number' ? mergedOpts.max_values : null,
-      options: typeof rawOpts === 'string' ? rawOpts : (rawOpts ? JSON.stringify(rawOpts) : null),
+      options: Object.keys(mergedOpts).length > 0 ? JSON.stringify(mergedOpts) : null,
     }
   }, [fieldConfig, localOverrides])
 
@@ -8061,21 +8559,174 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     changeSeqRef.current++
   }, [layoutId])
 
-  const getExtraControls = useCallback((f: string): React.ReactNode => {
-    if (f !== PDF_FIELD) return undefined
-    const attachField = (localOverrides[f]?.attach_to_field as string | null) ?? null
+  const getExtraControls = useCallback((f: string, opts?: { isM2O?: boolean; relatedCollection?: string | null }): React.ReactNode => {
+    if (f === PDF_FIELD) {
+      const attachField = (localOverrides[f]?.attach_to_field as string | null) ?? null
+      const filenameTemplate = (localOverrides[f]?.filename_template as string | null) ?? null
+      return (
+        <PdfFieldConfigButton
+          tableName={tableName}
+          value={attachField}
+          filenameTemplate={filenameTemplate}
+          onChange={v => {
+            setLocalOverrides(prev => ({ ...prev, [f]: { ...prev[f], attach_to_field: v } }))
+            hasLocalChangeRef.current = true
+            changeSeqRef.current++
+          }}
+          onFilenameChange={v => {
+            setLocalOverrides(prev => ({ ...prev, [f]: { ...prev[f], filename_template: v } }))
+            hasLocalChangeRef.current = true
+            changeSeqRef.current++
+          }}
+        />
+      )
+    }
+    if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
+      const meta = widgetSlotMeta[f]
+      if (!meta) return undefined
+      const wDef = availableWidgets.find(w => w.id === meta.widget_id)
+      const declaredInputs = (wDef?.inputs as Array<{ key: string; label: string; type: string; required?: boolean }> | null) ?? []
+      const derivedInputs: Array<{ key: string; label: string; type: string }> = (() => {
+        if (declaredInputs.length > 0) return []
+        const cfg = ((wDef as unknown as Record<string, unknown>)?.config as Record<string, unknown> | null) ?? {}
+        const pb = (cfg.param_bindings as Array<{ param?: string; input_key?: string }> | null) ?? []
+        const seen = new Set<string>()
+        const out: Array<{ key: string; label: string; type: string }> = []
+        for (const b of pb) {
+          const k = b.input_key
+          if (k && !seen.has(k)) { seen.add(k); out.push({ key: k, label: k, type: 'string' }) }
+        }
+        return out
+      })()
+      const wInputs = declaredInputs.length > 0 ? declaredInputs : derivedInputs
+      const updateBinding = (inputKey: string, patch: Partial<{ binding_type: string; binding_value: string }>) => {
+        setWidgetSlotMeta(prev => {
+          const prevMeta = prev[f]
+          const existing = prevMeta.input_bindings.find(b => b.key === inputKey)
+          const updated = { key: inputKey, binding_type: (patch.binding_type ?? existing?.binding_type ?? 'item_field') as 'item_field' | 'static' | 'url_param', binding_value: patch.binding_value ?? existing?.binding_value ?? '' }
+          const next = prevMeta.input_bindings.filter(b => b.key !== inputKey)
+          next.push(updated)
+          return { ...prev, [f]: { ...prevMeta, input_bindings: next } }
+        })
+        hasLocalChangeRef.current = true
+        changeSeqRef.current++
+      }
+      return (
+        <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5'>
+          <div className='flex items-center gap-1.5'>
+            <input
+              type='text'
+              placeholder='Label override'
+              defaultValue={meta.label_override ?? ''}
+              onBlur={e => {
+                const v = e.target.value.trim() || null
+                setWidgetSlotMeta(prev => ({ ...prev, [f]: { ...prev[f], label_override: v } }))
+                hasLocalChangeRef.current = true
+                changeSeqRef.current++
+              }}
+              className='w-32 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+            />
+            <button
+              type='button'
+              title='Remove widget'
+              onClick={() => {
+                setWidgetSlotMeta(prev => { const n = { ...prev }; delete n[f]; return n })
+                setLocalFieldOrder(prev => {
+                  const next: Record<string, string[]> = {}
+                  for (const [k, v] of Object.entries(prev)) next[k] = v.filter(x => x !== f)
+                  return next
+                })
+                hasLocalChangeRef.current = true
+                changeSeqRef.current++
+              }}
+              className='text-[10px] text-slate-300 hover:text-red-400'
+            >✕ Remove</button>
+          </div>
+          {wInputs.length > 0 && (
+            <div className='space-y-1'>
+              <p className='text-[10px] font-medium text-slate-400'>Bindings</p>
+              {wInputs.map(inp => {
+                const binding = meta.input_bindings.find(b => b.key === inp.key) ?? { key: inp.key, binding_type: 'item_field' as const, binding_value: '' }
+                return (
+                  <div key={inp.key} className='space-y-0.5'>
+                    <div className='flex items-center gap-1'>
+                      <span className='w-16 shrink-0 truncate font-mono text-[9px] text-slate-400'>{inp.label || inp.key}</span>
+                      <select
+                        value={binding.binding_type}
+                        onChange={e => updateBinding(inp.key, { binding_type: e.target.value, binding_value: '' })}
+                        className='w-20 shrink-0 rounded border border-slate-200 bg-white px-1 py-px text-[9px]'
+                      >
+                        <option value='item_field'>Field</option>
+                        <option value='static'>Static</option>
+                        <option value='url_param'>URL Param</option>
+                      </select>
+                    </div>
+                    {binding.binding_type === 'item_field' ? (
+                      <FieldPicker
+                        collection={tableName}
+                        fields={allFields}
+                        relations={relations as CMSRelation[]}
+                        value={binding.binding_value}
+                        onChange={(picked) => updateBinding(inp.key, { binding_value: picked.path.join('.') })}
+                        onClear={() => updateBinding(inp.key, { binding_value: '' })}
+                        placeholder='Select field…'
+                      />
+                    ) : (
+                      <input
+                        type='text'
+                        value={binding.binding_value}
+                        placeholder={binding.binding_type === 'url_param' ? 'param name' : 'value'}
+                        onChange={e => updateBinding(inp.key, { binding_value: e.target.value })}
+                        className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-px text-[9px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+                      />
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )
+    }
+    return undefined
+  }, [tableName, localOverrides, widgetSlotMeta, availableWidgets])
+
+  const FORMAT_OPTIONS = [
+    { value: 'text', label: 'Text (default)' },
+    { value: 'currency', label: 'Currency ($)' },
+    { value: 'integer', label: 'Integer' },
+    { value: 'decimal', label: 'Decimal' },
+    { value: 'percent', label: 'Percent' },
+    { value: 'date', label: 'Date' },
+    { value: 'datetime', label: 'Date & Time' },
+  ]
+
+  const getHeaderFieldExtraControls = useCallback((f: string): React.ReactNode => {
+    const meta = headerFieldDisplayMeta[f] ?? { label_override: null, display_format: 'text' }
+    const update = (patch: Partial<HeaderFieldMeta>) => {
+      setHeaderFieldDisplayMeta(prev => ({ ...prev, [f]: { ...meta, ...patch } }))
+      hasLocalChangeRef.current = true
+      changeSeqRef.current++
+    }
     return (
-      <PdfFieldConfigButton
-        tableName={tableName}
-        value={attachField}
-        onChange={v => {
-          setLocalOverrides(prev => ({ ...prev, [f]: { ...prev[f], attach_to_field: v } }))
-          hasLocalChangeRef.current = true
-          changeSeqRef.current++
-        }}
-      />
+      <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5'>
+        <input
+          type='text'
+          placeholder='Label override'
+          defaultValue={meta.label_override ?? ''}
+          onBlur={e => update({ label_override: e.target.value.trim() || null })}
+          className='w-32 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+        />
+        <select
+          value={meta.display_format}
+          onChange={e => update({ display_format: e.target.value })}
+          className='w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+        >
+          {FORMAT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
     )
-  }, [tableName, localOverrides])
+  }, [headerFieldDisplayMeta])
 
   const updateSlot = useCallback((key: SlotKey, patch: Partial<SlotState>) => {
     setSlots(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }))
@@ -8170,8 +8821,10 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                   const unassigned = localFieldOrder.__pool__ ?? []
                   // Pool always shows raw field name — no global or layout labels
                   const getLabel = (f: string) => titleCase(f)
-                  const relFields = unassigned.filter(f => relKind(f) !== null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
-                  const plainFields = unassigned.filter(f => relKind(f) === null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
+                  const widgetKeys = unassigned.filter(f => typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__'))
+                  const nonWidgets = unassigned.filter(f => !widgetKeys.includes(f))
+                  const relFields = nonWidgets.filter(f => relKind(f) !== null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
+                  const plainFields = nonWidgets.filter(f => relKind(f) === null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
                   const renderChip = (f: string) => {
                     if (f === OWNERS_FIELD) {
                       return (
@@ -8229,6 +8882,25 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                           <div className='space-y-1.5'>{relFields.map(renderChip)}</div>
                         </div>
                       )}
+                      {widgetKeys.length > 0 && (
+                        <div>
+                          <p className='mb-1 px-1 text-[9px] font-semibold uppercase tracking-wider text-slate-300'>Widgets</p>
+                          <div className='space-y-1.5'>
+                            {widgetKeys.map(f => {
+                              const meta = widgetSlotMeta[f]
+                              return (
+                                <SortableFieldChip
+                                  key={f}
+                                  fieldName={f}
+                                  displayName={meta?.label_override || meta?.name || 'Widget'}
+                                  fieldType='widget'
+                                  colSpan={12}
+                                />
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )
                 })()}
@@ -8245,12 +8917,94 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                 : 'Drag fields into groups and set column widths for side-by-side layout.'}
             </p>
             {layoutType !== 'table' && (
-              <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding(true)}>
-                <Plus className='mr-1 h-3 w-3' />
-                Add Group
-              </Button>
+              <div className='flex gap-2'>
+                {availableWidgets.length > 0 && (
+                  <Popover open={addingWidget} onOpenChange={setAddingWidget}>
+                    <PopoverTrigger asChild>
+                      <Button size='sm' variant='outline' className='h-7 text-[12px]'>
+                        <Plus className='mr-1 h-3 w-3' />
+                        Add Widget
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className='w-56 p-1' align='end'>
+                      {availableWidgets.map(w => {
+                        const key = `__widget_${w.id}__`
+                        const alreadyAdded = widgetSlotMeta[key] !== undefined
+                        return (
+                          <button
+                            key={w.id}
+                            type='button'
+                            disabled={alreadyAdded}
+                            onClick={() => {
+                              if (alreadyAdded) return
+                              setWidgetSlotMeta(prev => ({ ...prev, [key]: { widget_id: w.id, name: w.name, label_override: null, is_visible: true, input_bindings: [] } }))
+                              setLocalFieldOrder(prev => ({
+                                ...prev,
+                                __pool__: [...(prev.__pool__ ?? []), key],
+                                __unassigned__: [...(prev.__unassigned__ ?? []), key],
+                              }))
+                              hasLocalChangeRef.current = true
+                              changeSeqRef.current++
+                              setAddingWidget(false)
+                            }}
+                            className='flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 disabled:opacity-40'
+                          >
+                            <span className='flex-1'>{w.name}</span>
+                            <span className='rounded bg-nvr-cyan/10 px-1 py-px text-[10px] text-nvr-cyan'>{w.widget_type}</span>
+                          </button>
+                        )
+                      })}
+                    </PopoverContent>
+                  </Popover>
+                )}
+                <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding(true)}>
+                  <Plus className='mr-1 h-3 w-3' />
+                  Add Group
+                </Button>
+              </div>
             )}
           </div>
+
+        {/* Header zone — widgets dragged here render in the ItemEdit page header */}
+        {layoutType !== 'table' && (
+          <div className='rounded-lg border border-slate-200 bg-white'>
+            <div className='flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2'>
+              <span className='text-[11px] font-medium text-slate-500'>Item Header</span>
+              <span className='text-[10px] text-slate-300'>— widgets dropped here appear in a strip below the header bar</span>
+            </div>
+            <DroppableFieldZone containerId='__header__'>
+              <SortableContext items={(localFieldOrder.__header__ ?? []).map(f => toSortableId('__header__', f))} strategy={rectSortingStrategy}>
+                <div className={cn('min-h-[44px] p-2', (localFieldOrder.__header__ ?? []).length === 0 ? 'flex items-center justify-center' : 'flex flex-wrap gap-2')}>
+                  {(localFieldOrder.__header__ ?? []).length === 0
+                    ? <p className='text-[11px] text-slate-300'>Drop widgets or fields here</p>
+                    : (localFieldOrder.__header__ ?? []).map(f => {
+                        const isWidget = typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')
+                        const meta = isWidget ? widgetSlotMeta[f] : undefined
+                        const fieldMeta = !isWidget ? allFields.find(af => af.field === f) : undefined
+                        return (
+                          <SortableFieldChip
+                            key={toSortableId('__header__', f)}
+                            sortableId={toSortableId('__header__', f)}
+                            fieldName={f}
+                            displayName={isWidget ? (meta?.label_override || meta?.name || 'Widget') : (fieldMeta?.label || f)}
+                            fieldType={isWidget ? 'widget' : (fieldMeta?.interface ?? fieldMeta?.type ?? 'text')}
+                            colSpan={12}
+                            onUnassign={() => {
+                              setLocalFieldOrder(prev => ({ ...prev, __header__: (prev.__header__ ?? []).filter(x => x !== f), __unassigned__: [...(prev.__unassigned__ ?? []), f] }))
+                              hasLocalChangeRef.current = true
+                              changeSeqRef.current++
+                            }}
+                            extraControls={isWidget ? getExtraControls(f) : getHeaderFieldExtraControls(f)}
+                            inGrid={false}
+                          />
+                        )
+                      })
+                  }
+                </div>
+              </SortableContext>
+            </DroppableFieldZone>
+          </div>
+        )}
 
         {/* Groups + Ungrouped — unified sortable list */}
         {adding && layoutType !== 'table' && (
@@ -8287,7 +9041,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
             <div className='space-y-3'>
               {orderedItems.map(item => {
                 if (item === '__ungrouped__') return (
-                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} isTableMode={layoutType === 'table'} getExtraControls={getExtraControls} />
+                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} isTableMode={layoutType === 'table'} getExtraControls={getExtraControls} widgetSlotMeta={widgetSlotMeta} getInlineDisplay={(f) => inlineDisplayMeta[f]} onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }} />
                 )
                 if (layoutType === 'table') return null
                 if (SLOT_KEYS.includes(item as SlotKey)) return (
@@ -8328,6 +9082,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                     getRowRevisions={f => localRowRevisions[f] ?? false}
                     onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                     getExtraControls={getExtraControls}
+                    widgetSlotMeta={widgetSlotMeta}
+                    getInlineDisplay={(f) => inlineDisplayMeta[f]}
+                    onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                     />
                     {childTabs.length > 0 && (
                       <div className='ml-6 space-y-1.5'>
@@ -8356,6 +9113,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                             getRowRevisions={f => localRowRevisions[f] ?? false}
                             onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                             getExtraControls={getExtraControls}
+                            widgetSlotMeta={widgetSlotMeta}
+                            getInlineDisplay={(f) => inlineDisplayMeta[f]}
+                            onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                           />
                         ))}
                       </div>
@@ -8436,6 +9196,50 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                 </SortableContext>
               </DroppableFieldZone>
             </div>
+          </div>
+        )}
+
+        {/* Subtitle config */}
+        {layoutType !== 'table' && layoutId && (
+          <div className='mt-4 rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+            <div className='flex items-center justify-between border-b border-slate-100 dark:border-border px-3 py-2'>
+              <p className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>Header Subtitle</p>
+              <input type='checkbox' checked={!!subtitleConfig} onChange={(e) => {
+                hasLocalChangeRef.current = true
+                changeSeqRef.current++
+                setSubtitleConfig(e.target.checked ? { fields: [], separator: ' | ' } : null)
+              }} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+            </div>
+            {!!subtitleConfig && (
+              <div className='p-3 space-y-2'>
+                <p className='text-[10px] text-slate-400'>Fields shown inline below the item title in the form header.</p>
+                <div className='flex items-center gap-2'>
+                  <span className='text-[10px] text-slate-400 shrink-0'>Separator</span>
+                  <input type='text' value={subtitleConfig.separator}
+                    onChange={(e) => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(c => c ? { ...c, separator: e.target.value } : null) }}
+                    className='w-24 h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-700 dark:border-border dark:bg-background dark:text-slate-300' />
+                </div>
+                <div className='flex flex-wrap gap-1.5'>
+                  {subtitleConfig.fields.map((sf, i) => (
+                    <span key={i} className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] text-nvr-navy dark:text-nvr-cyan'>
+                      {sf.field}
+                      <button type='button' onClick={() => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(c => c ? { ...c, fields: c.fields.filter((_, j) => j !== i) } : null) }} className='hover:text-red-500 ml-0.5'>✕</button>
+                    </span>
+                  ))}
+                </div>
+                <select value='' onChange={(e) => {
+                  const val = e.target.value
+                  if (!val) return
+                  hasLocalChangeRef.current = true; changeSeqRef.current++
+                  setSubtitleConfig(c => c ? { ...c, fields: [...c.fields, { field: val, label: null }] } : null)
+                }} className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
+                  <option value=''>+ Add field…</option>
+                  {allFields.filter(f => !f.field.startsWith('__') && !subtitleConfig.fields.some(sf => sf.field === f.field)).map(f => (
+                    <option key={f.field} value={f.field}>{f.field}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         )}
 

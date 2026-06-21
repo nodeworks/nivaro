@@ -105,8 +105,8 @@ export function FieldRenderer({
       : null
   if (m2mRel) {
     if (iface === 'files-m2m') {
-      const fOpts = parseJson<{ allow_upload?: boolean; allow_pick?: boolean }>(field.options)
-      return <FileM2MField relation={m2mRel} parentId={itemId} allRelations={relations} disabled={field.readonly} allowUpload={fOpts?.allow_upload !== false} allowPick={fOpts?.allow_pick !== false} />
+      const fOpts = parseJson<{ allow_upload?: boolean; allow_pick?: boolean; pending_save?: boolean }>(field.options)
+      return <FileM2MField relation={m2mRel} parentId={itemId} allRelations={relations} disabled={field.readonly} allowUpload={fOpts?.allow_upload !== false} allowPick={fOpts?.allow_pick !== false} pendingSave={fOpts?.pending_save === true} />
     }
     const fieldOpts = parseJson<{ max_values?: number }>(field.options)
     if (fieldOpts?.max_values === 1) {
@@ -300,8 +300,11 @@ export function FieldRenderer({
         const parentCascades = Array.isArray(opts.parent_cascades)
           ? (opts.parent_cascades as Array<{ parent_field: string; child_field: string }>)
           : undefined
+        const uniqueBy = Array.isArray(opts.unique_by) ? opts.unique_by as string[] : undefined
+        const sortField = typeof opts.sort_field === 'string' && opts.sort_field ? opts.sort_field : undefined
+        const sortDir = opts.sort_dir === 'desc' ? 'desc' as const : 'asc' as const
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutId={layoutId} showRowRevisions={showRowRevisions} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} />
         )
       }
     }

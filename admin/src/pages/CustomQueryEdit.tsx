@@ -20,7 +20,7 @@ import { api } from '@/lib/api'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type ParamType = 'string' | 'number' | 'boolean'
+type ParamType = 'string' | 'number' | 'boolean' | 'date'
 
 type ParamDef = {
   name: string
@@ -81,6 +81,7 @@ export function CustomQueryEditPage() {
   const [slugTouched, setSlugTouched] = useState(false)
   const [testValues, setTestValues] = useState<Record<string, string>>({})
   const [testResult, setTestResult] = useState<string | null>(null)
+  const [showResolvedSql, setShowResolvedSql] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['custom-queries', id],
@@ -117,6 +118,27 @@ export function CustomQueryEditPage() {
     onError: () => toast.error('Failed to save query')
   })
 
+  function buildResolvedSql(): string {
+    let sql = form.sql_text
+    for (const p of form.params) {
+      const raw = testValues[p.name] ?? p.default ?? ''
+      let replacement: string
+      if (raw === '') {
+        replacement = 'NULL'
+      } else if (p.type === 'number') {
+        replacement = raw
+      } else if (p.type === 'boolean') {
+        replacement = raw === 'true' ? '1' : '0'
+      } else if (p.type === 'date') {
+        replacement = `'${raw.replace(/'/g, "''")}'`
+      } else {
+        replacement = `'${raw.replace(/'/g, "''")}'`
+      }
+      sql = sql.replace(new RegExp(`:${p.name}(?=\\W|$)`, 'g'), replacement)
+    }
+    return sql
+  }
+
   const testExecute = useMutation({
     mutationFn: () => {
       const params: Record<string, unknown> = {}
@@ -125,7 +147,7 @@ export function CustomQueryEditPage() {
         if (raw === '' && !p.required) continue
         if (p.type === 'number') params[p.name] = Number(raw)
         else if (p.type === 'boolean') params[p.name] = raw === 'true'
-        else params[p.name] = raw
+        else params[p.name] = raw // string and date both sent as string; server handles date cast
       }
       return api.post(`/custom-queries/${form.slug}/execute`, { params }).then((r) => r.data)
     },
@@ -337,6 +359,7 @@ export function CustomQueryEditPage() {
                         <SelectItem value='string'>string</SelectItem>
                         <SelectItem value='number'>number</SelectItem>
                         <SelectItem value='boolean'>boolean</SelectItem>
+                        <SelectItem value='date'>date</SelectItem>
                       </SelectContent>
                     </Select>
                     <Input
@@ -415,17 +438,33 @@ export function CustomQueryEditPage() {
                           {p.required && <span className='text-red-500'> *</span>}
                         </Label>
                         <Input
+                          type={p.type === 'date' ? 'date' : p.type === 'number' ? 'number' : 'text'}
                           value={testValues[p.name] ?? p.default ?? ''}
                           onChange={(e) =>
                             setTestValues((prev) => ({ ...prev, [p.name]: e.target.value }))
                           }
-                          placeholder={p.type}
+                          placeholder={p.type === 'boolean' ? 'true / false' : p.type}
                           className='text-[12px]'
                         />
                       </div>
                     ))}
                   </div>
                 )}
+                <div className='mb-3'>
+                  <button
+                    type='button'
+                    className='mb-1.5 flex items-center gap-1 text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                    onClick={() => setShowResolvedSql((v) => !v)}
+                  >
+                    <span>{showResolvedSql ? '▾' : '▸'}</span>
+                    Resolved query
+                  </button>
+                  {showResolvedSql && (
+                    <pre className='max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-700 dark:border-border dark:bg-muted/30 dark:text-slate-300'>
+                      {buildResolvedSql()}
+                    </pre>
+                  )}
+                </div>
                 {testResult && (
                   <pre className='max-h-72 overflow-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-slate-100'>
                     {testResult}

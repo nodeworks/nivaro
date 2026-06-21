@@ -202,7 +202,7 @@ export type ActivityEntry = {
 }
 
 export type Revision = {
-  id: number
+  id: number | null
   activity: number | null
   collection: string
   item: string
@@ -216,6 +216,7 @@ export type Revision = {
   first_name: string | null
   last_name: string | null
   user_email: string | null
+  comment?: string | null
 }
 
 export type PipelineTemplate = {

@@ -72,8 +72,11 @@ function castParam(value: unknown, type: ParamType): unknown {
     }
     case 'boolean':
       return value === true || value === 'true' || value === 1 || value === '1'
-    case 'date':
-      return value instanceof Date ? value : new Date(String(value))
+    case 'date': {
+      if (value === '') return null
+      const d = value instanceof Date ? value : new Date(String(value))
+      return Number.isNaN(d.getTime()) ? null : d
+    }
     default:
       return String(value)
   }
@@ -254,8 +257,9 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         if ((value == null || value === '') && def.required) {
           return reply.code(400).send({ error: `Missing required parameter: ${def.name}` })
         }
-        if (value != null) value = castParam(value, def.type)
-        finalParams[def.name] = value ?? null
+        if (value != null && value !== '') value = castParam(value, def.type)
+        else value = null
+        finalParams[def.name] = value
       }
 
       // Cache check.
@@ -275,12 +279,61 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         }
       }
 
-      // Execute. Knex named bindings: :paramName in sql_text resolved from object.
+      // Knex MSSQL always routes through connection.execSql() which wraps the
+      // query in sp_executesql. Stored procedure result sets don't propagate
+      // row events through that path. We use execSqlBatch directly on the raw
+      // tedious connection instead — it sends the SQL as a plain batch, which
+      // correctly surfaces SP result sets.
+      //
+      // All values are substituted as safe literals:
+      //   NULL   → NULL       (no user content)
+      //   bool   → 1 / 0     (no user content)
+      //   number → validated finite literal
+      //   date   → 'YYYY-MM-DD HH:mm:ss.SSS' validated ISO string
+      //   string → 'value' with internal single-quotes doubled (' → '')
+      //            MSSQL '' quoting is injection-safe; backslash is not special
+      const resolvedSql = query.sql_text.replace(/:(\w+)/g, (_, k: string) => {
+        const v = finalParams[k]
+        if (v == null || v === '') return 'NULL'
+        if (typeof v === 'boolean') return v ? '1' : '0'
+        if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL'
+        if (v instanceof Date) {
+          if (Number.isNaN(v.getTime())) return 'NULL'
+          return `'${v.toISOString().slice(0, 23).replace('T', ' ')}'`
+        }
+        return `'${String(v).replace(/'/g, "''")}'`
+      })
+
       let rows: unknown[]
       try {
-        const result = await db.raw(query.sql_text, finalParams)
-        // MSSQL (tedious) returns the rows array directly from db.raw.
-        rows = Array.isArray(result) ? result : ((result?.rows ?? result) as unknown[])
+        // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
+        const knexClient = (db as any).client
+        const Driver = knexClient._driver() as { Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown }
+        const conn = await knexClient.acquireConnection() as { execSqlBatch(r: unknown): void }
+        try {
+          rows = await new Promise<unknown[]>((resolve, reject) => {
+            let settled = false
+            const done = (fn: () => void) => { if (!settled) { settled = true; fn() } }
+            const req = new Driver.Request(resolvedSql, (err: Error | null) => {
+              if (err) done(() => reject(err))
+            }) as {
+              on(ev: 'row', h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void): unknown
+              on(ev: 'error', h: (e: Error) => void): unknown
+              once(ev: 'requestCompleted', h: () => void): unknown
+            }
+            const collected: unknown[] = []
+            req.on('row', (cols) => {
+              const row: Record<string, unknown> = {}
+              for (const col of cols) row[col.metadata.colName] = col.value
+              collected.push(row)
+            })
+            req.once('requestCompleted', () => done(() => resolve(collected)))
+            req.on('error', (e) => done(() => reject(e)))
+            conn.execSqlBatch(req)
+          })
+        } finally {
+          await knexClient.releaseConnection(conn)
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Query execution failed'
         return reply.code(400).send({ error: message })

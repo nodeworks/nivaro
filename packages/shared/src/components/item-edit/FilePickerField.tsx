@@ -436,7 +436,8 @@ export function FileM2MField({
   allRelations: _allRelations,
   disabled,
   allowUpload = true,
-  allowPick = true
+  allowPick = true,
+  pendingSave = false
 }: {
   relation: CMSRelation
   parentId: string
@@ -444,16 +445,21 @@ export function FileM2MField({
   disabled?: boolean
   allowUpload?: boolean
   allowPick?: boolean
+  pendingSave?: boolean
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const flush = useGridFlush()
   const flushKey = useId()
+  const pendingSaveFlushKey = useId()
   const staging = useM2MStaging()
   const [open, setOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<{ file: File; url: string }[]>([])
   const uploadRef = useRef<HTMLInputElement>(null)
+  // pending-save mode: track local adds/removes without hitting API until parent saves
+  const [localAdds, setLocalAdds] = useState<string[]>([])
+  const [localRemovals, setLocalRemovals] = useState<Set<string>>(new Set())
 
   const junctionField = relation.junction_field ?? ''
   const manyField = relation.many_field ?? ''
@@ -468,9 +474,9 @@ export function FileM2MField({
     }
   }, [])
 
-  // register/unregister flush callback when pending files exist
+  // register/unregister flush callback when pending files exist (non-pending-save mode)
   useEffect(() => {
-    if (!flush || !pendingFiles.length) return
+    if (!flush || !pendingFiles.length || pendingSave) return
     const snapshot = pendingFiles
     flush.register(flushKey, async () => {
       for (const pf of snapshot) {
@@ -482,7 +488,45 @@ export function FileM2MField({
       qc.invalidateQueries({ queryKey: ['file-browser'] })
     })
     return () => flush.unregister(flushKey)
-  }, [flush, pendingFiles, flushKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [flush, pendingFiles, flushKey, pendingSave]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // pending-save mode: commit all local adds/removes + pending uploads on parent form save
+  useEffect(() => {
+    if (!flush || !pendingSave) return
+    const hasWork = localAdds.length > 0 || localRemovals.size > 0 || pendingFiles.length > 0
+    if (!hasWork) { flush.unregister(pendingSaveFlushKey); return }
+    const snapshotAdds = localAdds
+    const snapshotRemovals = new Set(localRemovals)
+    const snapshotPending = pendingFiles
+    flush.register(pendingSaveFlushKey, async () => {
+      // upload pending files first, collect IDs
+      const uploadedIds: string[] = []
+      for (const pf of snapshotPending) {
+        const result = await client.upload(pf.file)
+        URL.revokeObjectURL(pf.url)
+        uploadedIds.push(result.id)
+      }
+      // commit adds
+      for (const fileId of [...snapshotAdds, ...uploadedIds]) {
+        await client.request(
+          post(`/items/${relation.many_collection}`, { [manyField]: parentId, [junctionField]: fileId })
+        )
+      }
+      // commit removes
+      for (const fileId of snapshotRemovals) {
+        const junction = junctionItems.find(j => String(j[junctionField]) === fileId)
+        if (junction?.id) {
+          await client.request(del(`/items/${relation.many_collection}/${junction.id}`))
+        }
+      }
+      setLocalAdds([])
+      setLocalRemovals(new Set())
+      setPendingFiles([])
+      qc.invalidateQueries({ queryKey: ['m2m-items', relation.many_collection, manyField, parentId] })
+      qc.invalidateQueries({ queryKey: ['file-browser'] })
+    })
+    return () => flush.unregister(pendingSaveFlushKey)
+  }, [flush, pendingSave, localAdds, localRemovals, pendingFiles, pendingSaveFlushKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: junctionItems = [] } = useQuery<Record<string, unknown>[]>({
     queryKey: ['m2m-items', relation.many_collection, manyField, parentId],
@@ -502,7 +546,11 @@ export function FileM2MField({
 
   const stagedLinks = isNew && staging ? (staging.getStagedLinks(stagingKey) as string[]) : []
   const committedIds = junctionItems.map(j => String(j[junctionField]))
-  const allFileIds = isNew ? stagedLinks : committedIds
+  const allFileIds = isNew
+    ? stagedLinks
+    : pendingSave
+      ? [...committedIds.filter(id => !localRemovals.has(id)), ...localAdds]
+      : committedIds
 
   const { data: filesMap = {} } = useQuery<Record<string, NivaroFile>>({
     queryKey: ['files-meta', ...allFileIds.sort()],
@@ -530,6 +578,14 @@ export function FileM2MField({
       staging.unstageLink(stagingKey, fileId)
       return
     }
+    if (pendingSave) {
+      if (localAdds.includes(fileId)) {
+        setLocalAdds(prev => prev.filter(id => id !== fileId))
+      } else {
+        setLocalRemovals(prev => new Set([...prev, fileId]))
+      }
+      return
+    }
     const junction = junctionItems.find(j => String(j[junctionField]) === fileId)
     if (!junction?.id) return
     await client.request(del(`/items/${relation.many_collection}/${junction.id}`))
@@ -540,6 +596,10 @@ export function FileM2MField({
     if (allFileIds.includes(fileId)) return
     if (isNew && staging) {
       staging.stageLink(stagingKey, fileId)
+      return
+    }
+    if (pendingSave) {
+      setLocalAdds(prev => prev.includes(fileId) ? prev : [...prev, fileId])
       return
     }
     await client.request(

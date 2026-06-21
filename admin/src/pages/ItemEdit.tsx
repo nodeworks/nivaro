@@ -37,7 +37,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { type Addendum, api, type CMSField } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, titleCase } from '@/lib/utils'
-import { ItemEditAuthContext, ItemEditForm, NavigationContext, NivaroProvider } from '@nivaro/shared'
+import { ItemEditAuthContext, ItemEditForm, NavigationContext, NivaroProvider, WidgetSlot } from '@nivaro/shared'
 import { createNivaro } from '@nivaro/sdk'
 
 // ─── Local types ──────────────────────────────────────────────────────────────
@@ -338,6 +338,25 @@ export function ItemEditPage() {
   const [summary, setSummary] = useState<string | null>(null)
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
 
+  const { data: headerLayoutData } = useQuery({
+    queryKey: ['header-widgets', collection],
+    queryFn: () => api.get<{ data: { layout: Record<string, unknown> | null; assignments: Array<{ field: string; group_key: string | null; widget_id: number | null; label_override: string | null; input_bindings: string | null }> } | null }>(`/collection-layouts/active?collection=${collection}`).then((r) => r.data.data ?? null).catch(() => null),
+    enabled: !!collection,
+    staleTime: 30_000
+  })
+
+  const headerWidgets = useMemo(() => {
+    if (!headerLayoutData?.assignments) return []
+    return headerLayoutData.assignments.filter(
+      (a) => a.field.startsWith('__widget_') && a.field.endsWith('__') && a.widget_id != null && a.group_key === '__header__'
+    ).map((a) => ({
+      field: a.field,
+      widgetId: a.widget_id!,
+      label: a.label_override ?? null,
+      inputBindings: typeof a.input_bindings === 'string' ? JSON.parse(a.input_bindings) : []
+    }))
+  }, [headerLayoutData])
+
   // ── Admin-specific queries ────────────────────────────────────────────────
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', collection],
@@ -612,6 +631,19 @@ export function ItemEditPage() {
                 {runningItemAction === action.id ? <Loader2 className='h-4 w-4 mr-1.5 animate-spin' /> : <Play className='h-4 w-4 mr-1.5' />}
                 {action.label}
               </Button>
+            ))}
+
+            {/* Header widgets — compact inline renders from layout __header__ zone */}
+            {headerWidgets.length > 0 && headerWidgets.map((w) => (
+              <WidgetSlot
+                key={w.field}
+                widgetId={w.widgetId}
+                inputBindings={w.inputBindings}
+                itemCollection={collection}
+                label={w.label ?? undefined}
+                compact={true}
+                apiBase='/api'
+              />
             ))}
 
             {/* Admin tool buttons */}

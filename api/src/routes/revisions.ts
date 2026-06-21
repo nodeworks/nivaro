@@ -17,6 +17,45 @@ export async function revisionsRoutes(app: FastifyInstance) {
     return reply.send({ data })
   })
 
+  // GET /revisions/deleted-o2m?collection=X&many_field=Y&parent_id=Z
+  // Returns revision snapshots of items deleted from an O2M child collection for a given parent.
+  app.get('/deleted-o2m', async (req, reply) => {
+    const { collection, many_field, parent_id } = req.query as { collection?: string; many_field?: string; parent_id?: string }
+    if (!collection || !many_field || !parent_id) {
+      return reply.code(400).send({ error: 'collection, many_field, and parent_id are required' })
+    }
+    // Validate many_field is a safe identifier to use inside JSON_VALUE path
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(many_field)) {
+      return reply.code(400).send({ error: 'Invalid many_field' })
+    }
+    if (!(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    // Query delete revisions for this collection filtered by parent FK via MSSQL JSON_VALUE
+    const rows = await db('nivaro_revisions as r')
+      .join('nivaro_activity as a', 'r.activity', 'a.id')
+      .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+      .where('a.collection', collection)
+      .where('a.action', 'delete')
+      .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
+      .select(
+        'a.item',
+        'a.timestamp',
+        'a.user as user_id',
+        'u.first_name',
+        'u.last_name',
+        'u.email as user_email',
+        'r.id as revision_id',
+        'r.data'
+      )
+      .orderBy('a.timestamp', 'desc')
+    const data = rows.map((row: Record<string, unknown>) => ({
+      ...row,
+      data: typeof row.data === 'string' ? (() => { try { return JSON.parse(row.data as string) } catch { return {} } })() : (row.data ?? {})
+    }))
+    return reply.send({ data })
+  })
+
   app.get('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const revision = await getRevision(Number(id))

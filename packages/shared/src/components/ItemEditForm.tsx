@@ -15,8 +15,8 @@ import { ItemEditAuthContext, ParentDraftContext, useNivaroClient } from '../con
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { FieldRow } from './item-edit/FieldRow'
-import { GroupSection, OwnersInline } from './item-edit/GroupSection'
-import { applyDisplayTemplate, resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
+import { GroupSection, InlineDisplay, OwnersInline, OwnersInlineCompact, StripFieldValue } from './item-edit/GroupSection'
+import { applyDisplayTemplate, isSentinelKey, resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import { O2MStagingContext, type O2MStagingCtx } from './item-edit/O2MStagingContext'
 import { StepsBar } from './item-edit/StepsBar'
@@ -33,6 +33,7 @@ import type {
   SummaryEntry
 } from './item-edit/types'
 import { CommentPanel, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
+import { WidgetSlot, type InputBinding } from './WidgetSlot'
 import type { PendingTask } from './panels/TaskPanel'
 import { Button } from './ui/button'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
@@ -211,6 +212,27 @@ export interface ItemEditFormProps {
   renderField?: (props: RenderFieldProps) => ReactNode
   extraTopContent?: ReactNode
   extraBottomContent?: ReactNode
+  onHeaderWidgets?: (widgets: HeaderWidgetInfo[]) => void
+}
+
+export interface HeaderWidgetInfo {
+  field: string
+  widgetId: number
+  label: string | null
+  inputBindings: InputBinding[]
+}
+
+function formatHeaderFieldValue(value: unknown, format: string): string {
+  if (value == null || value === '') return '—'
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  const num = Number(value)
+  if (format === 'currency') return isNaN(num) ? String(value) : new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(num)
+  if (format === 'integer') return isNaN(num) ? String(value) : new Intl.NumberFormat().format(Math.round(num))
+  if (format === 'decimal') return isNaN(num) ? String(value) : new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(num)
+  if (format === 'percent') return isNaN(num) ? String(value) : new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(num / 100)
+  if (format === 'date') { try { return new Date(String(value)).toLocaleDateString() } catch { return String(value) } }
+  if (format === 'datetime') { try { return new Date(String(value)).toLocaleString() } catch { return String(value) } }
+  return String(value)
 }
 
 // ─── Field diff helper ─────────────────────────────────────────────────────────
@@ -250,7 +272,8 @@ export function ItemEditForm({
   headerClassName,
   renderField,
   extraTopContent,
-  extraBottomContent
+  extraBottomContent,
+  onHeaderWidgets
 }: ItemEditFormProps) {
   const client = useNivaroClient()
   const { isAdmin } = useContext(ItemEditAuthContext)
@@ -673,7 +696,7 @@ export function ItemEditForm({
       return true
     })
     if (!assignedFieldSet) return deduped
-    return deduped.filter((f) => assignedFieldSet.has(f.field) || SYSTEM_FIELDS.has(f.field) || SENTINEL_FIELDS.has(f.field))
+    return deduped.filter((f) => assignedFieldSet.has(f.field) || SYSTEM_FIELDS.has(f.field) || isSentinelKey(f.field))
   }, [fieldConfig, assignedFieldSet, layoutSlug, activeLayoutData])
 
   const groups = useMemo<FieldGroup[]>(() => {
@@ -687,7 +710,7 @@ export function ItemEditForm({
       const entries = parseSummaryFields(g.summary_fields)
       if (!entries) continue
       for (const e of entries) {
-        if (typeof e !== 'string' && e.field && e.agg && e.agg_field) map[e.field] = e
+        if (typeof e !== 'string' && e.field && 'agg' in e && e.agg && e.agg_field) map[e.field] = e
       }
     }
     return map
@@ -790,12 +813,27 @@ export function ItemEditForm({
     return s
   }, [o2mRelations, o2mQueryResults, aggRelations, aggQueryResults])
 
+  const o2mUniqueByMap = useMemo<Map<string, string[]>>(() => {
+    const map = new Map<string, string[]>()
+    for (const f of (fieldConfig ?? [])) {
+      if (f.interface !== 'inline-table') continue
+      let opts: Record<string, unknown> = {}
+      try { opts = f.options ? (typeof f.options === 'string' ? JSON.parse(f.options) : f.options as Record<string, unknown>) : {} } catch { continue }
+      const ub = Array.isArray(opts.unique_by) ? (opts.unique_by as string[]) : null
+      if (!ub?.length) continue
+      const rel = relations.find((r) => r.one_field === f.field && r.one_collection === collection && !r.junction_field)
+      if (!rel?.many_collection || !rel?.many_field) continue
+      map.set(`${rel.many_collection}.${rel.many_field}`, ub)
+    }
+    return map
+  }, [fieldConfig, relations, collection])
+
   const groupedMap = useMemo<Record<string, CMSField[]>>(() => {
     // Build from raw fieldConfig (not deduped allFields) so multi-group fields appear in each group
     const raw = fieldConfig ? [...fieldConfig].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0)) : []
     const map: Record<string, CMSField[]> = {}
     for (const f of raw) {
-      if (!f.group_key || SENTINEL_FIELDS.has(f.field)) continue
+      if (!f.group_key || isSentinelKey(f.field)) continue
       if (!map[f.group_key]) map[f.group_key] = []
       // Avoid duplicates within the same group (shouldn't happen with the new unique constraint)
       if (!map[f.group_key].find((e) => e.field === f.field)) map[f.group_key].push(f)
@@ -807,7 +845,7 @@ export function ItemEditForm({
     () =>
       allFields.filter(
         (f) =>
-          !f.group_key && !f.hidden && !SYSTEM_FIELDS.has(f.field) && !SENTINEL_FIELDS.has(f.field) &&
+          !f.group_key && !f.hidden && !SYSTEM_FIELDS.has(f.field) && !isSentinelKey(f.field) &&
           (layoutId === null || f.layout_assigned !== false)
       ),
     [allFields, layoutId]
@@ -964,12 +1002,14 @@ export function ItemEditForm({
   const pipelineSlot = assignments.find((a) => a.field === '__pipeline__')
   const commentsSlot = assignments.find((a) => a.field === '__comments__')
   const tasksSlot = assignments.find((a) => a.field === '__tasks__')
+  const widgetSlots = assignments.filter((a) => a.field.startsWith('__widget_') && a.field.endsWith('__') && a.widget_id != null)
   const ownersSlot = assignments.find((a) => a.field === '__owners__')
   const pdfSlot = assignments.find((a) => a.field === '__pdf__')
   const pdfSlotOverrides = pdfSlot
     ? (() => { try { return typeof pdfSlot.overrides === 'string' ? JSON.parse(pdfSlot.overrides) : (pdfSlot.overrides ?? {}) } catch { return {} } })()
     : null
   const pdfAttachField = pdfSlotOverrides?.attach_to_field as string | null ?? null
+  const pdfFilenameTemplate = pdfSlotOverrides?.filename_template as string | null ?? null
   const pdfGroupKey = pdfSlot?.group_key ?? null
   const pdfInGroup = !!(pdfGroupKey && groups.some((g) => g.key === pdfGroupKey))
   const handleGenerateAndAttach = async () => {
@@ -984,7 +1024,7 @@ export function ItemEditForm({
           ...(workspace ? { 'x-workspace': workspace } : {}),
         },
         credentials: 'include',
-        body: JSON.stringify({ collection, item_id: itemId, attach_field: pdfAttachField }),
+        body: JSON.stringify({ collection, item_id: itemId, attach_field: pdfAttachField, filename_template: pdfFilenameTemplate }),
       })
       if (!resp.ok) throw new Error(await resp.text())
       toast.success('PDF generated and attached')
@@ -1010,10 +1050,94 @@ export function ItemEditForm({
     />
   )
 
+  const headerWidgets = useMemo(() => (activeLayoutData?.assignments ?? [])
+    .filter((a) => a.field.startsWith('__widget_') && a.field.endsWith('__') && a.widget_id != null && (a.group_key ?? null) === '__header__')
+    .map((ws) => ({
+      field: ws.field,
+      widgetId: ws.widget_id!,
+      label: ws.label_override ?? null,
+      sort: ws.sort ?? 0,
+      inputBindings: typeof ws.input_bindings === 'string'
+        ? (JSON.parse(ws.input_bindings) as InputBinding[])
+        : [] as InputBinding[],
+    })), [activeLayoutData])
+
+  const fieldInlineDisplay = useMemo(() => {
+    const out: Record<string, { entries: Array<{ field: string; label: string | null; format: string | null }>; separator: string | null }> = {}
+    for (const a of (activeLayoutData?.assignments ?? [])) {
+      if (!a.field || a.field.startsWith('__')) continue
+      try {
+        const raw = (a as unknown as Record<string, unknown>).input_bindings
+        const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
+        const entry = parsed.find((b) => b.key === '__inline_display__')
+        if (entry?.binding_value) {
+          const data = JSON.parse(entry.binding_value)
+          const isArray = Array.isArray(data)
+          const entries = isArray ? data : (data.fields ?? [])
+          const separator: string | null = isArray ? null : (data.separator ?? null)
+          if (Array.isArray(entries) && entries.length) out[a.field] = { entries, separator }
+        }
+      } catch { /* noop */ }
+    }
+    return out
+  }, [activeLayoutData])
+
+  const subtitleConfig = useMemo(() => {
+    const row = (activeLayoutData?.assignments ?? []).find((a) => a.field === '__subtitle__')
+    if (!row) return null
+    try {
+      const raw = (row as unknown as Record<string, unknown>).input_bindings
+      const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
+      const entry = parsed.find((b) => b.key === '__subtitle_config__')
+      if (!entry?.binding_value) return null
+      const data = JSON.parse(entry.binding_value)
+      if (!data.fields || !Array.isArray(data.fields) || !data.fields.length) return null
+      return { fields: data.fields as Array<{ field: string; label: string | null }>, separator: (data.separator as string) ?? ' | ' }
+    } catch { return null }
+  }, [activeLayoutData])
+
+  const subtitleText = useMemo(() => {
+    if (!subtitleConfig || isNew) return null
+    const src = (itemData as Record<string, unknown> | null) ?? draft
+    const parts = subtitleConfig.fields
+      .map((sf) => {
+        const val = src[sf.field]
+        if (val === null || val === undefined || val === '') return null
+        return String(val)
+      })
+      .filter(Boolean) as string[]
+    return parts.length > 0 ? parts.join(subtitleConfig.separator) : null
+  }, [subtitleConfig, isNew, itemData, draft])
+
+  const headerFields = useMemo(() => (activeLayoutData?.assignments ?? [])
+    .filter((a) => (a.field === '__owners__' || !a.field.startsWith('__')) && (a.group_key ?? null) === '__header__')
+    .map((a) => {
+      const meta = (fieldConfig ?? []).find((f) => f.field === a.field)
+      let displayFormat = 'text'
+      try {
+        const raw = (a as unknown as Record<string, unknown>).input_bindings
+        const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
+        const fmt = parsed.find((b) => b.key === '__display_format__')
+        if (fmt?.binding_value) displayFormat = fmt.binding_value
+      } catch { /* noop */ }
+      return {
+        field: a.field,
+        label: a.label_override ?? meta?.label ?? titleCase(a.field),
+        sort: a.sort ?? 0,
+        displayFormat,
+        cmsField: meta ?? null,
+      }
+    }), [activeLayoutData, fieldConfig])
+
+  useEffect(() => {
+    if (!onHeaderWidgets) return
+    onHeaderWidgets(headerWidgets)
+  }, [headerWidgets, onHeaderWidgets])
+
   const sectionOrder = useMemo(() => {
     const isVisible = (a: SlotAssignment | undefined) =>
       !(a && (a.is_visible === 0 || a.is_visible === false))
-    type Item = FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__' | '__pdf__'
+    type Item = FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__' | '__pdf__' | string
     const entries: Array<{ item: Item; sort: number; tie: number }> = [
       ...sectionGroups.map((g) => ({ item: g as Item, sort: g.sort, tie: 0 })),
       // Container groups sit alongside section groups in the order
@@ -1030,10 +1154,12 @@ export function ItemEditForm({
       entries.push({ item: '__tasks__', sort: tasksSlot.sort, tie: 3 })
     if (effectiveShowComments && commentsSlot && isVisible(commentsSlot))
       entries.push({ item: '__comments__', sort: commentsSlot.sort, tie: 4 })
-    if (showPipeline && ownersSlot && isVisible(ownersSlot) && !ownersInGroup)
+    if (showPipeline && ownersSlot && isVisible(ownersSlot) && !ownersInGroup && ownersGroupKey !== '__header__')
       entries.push({ item: '__owners__', sort: ownersSlot.sort, tie: 5 })
     if (pdfSlot && isVisible(pdfSlot) && !isNew && !pdfInGroup)
       entries.push({ item: '__pdf__', sort: pdfSlot.sort, tie: 6 })
+    // Widget slots never render as standalone panels — they appear in groups (GroupSection)
+    // or in the page header (__header__ group_key). Skip all of them here.
     return entries.sort((a, b) => a.sort - b.sort || a.tie - b.tie).map((e) => e.item)
   }, [
     sectionGroups,
@@ -1056,7 +1182,7 @@ export function ItemEditForm({
   function validateAll(): boolean {
     const errs: Record<string, string> = {}
     for (const f of allFields) {
-      if (f.hidden || f.readonly || SYSTEM_FIELDS.has(f.field) || SENTINEL_FIELDS.has(f.field)) continue
+      if (f.hidden || f.readonly || SYSTEM_FIELDS.has(f.field) || isSentinelKey(f.field)) continue
       if (f.required) {
         if (f.field in fieldCounts) {
           if (fieldCounts[f.field] === 0) errs[f.field] = 'This field is required'
@@ -1090,7 +1216,7 @@ export function ItemEditForm({
       // Build step list from pending state
       const hasM2M = [...m2mLinks.entries()].some(([, ids]) => ids.length > 0) ||
                      [...m2mUnlinks.entries()].some(([, ids]) => ids.size > 0)
-      const newO2MKeys = isNew ? [...pendingO2MRows.entries()].filter(([, r]) => r.length > 0).map(([k]) => k) : []
+      const newO2MKeys = [...pendingO2MRows.entries()].filter(([, r]) => r.length > 0).map(([k]) => k)
       const editO2MKeys = [...pendingO2MEdits.entries()].filter(([, e]) => e.size > 0).map(([k]) => k)
       const delO2MKeys = [...pendingO2MDeletes.entries()].filter(([, d]) => d.size > 0).map(([k]) => k)
 
@@ -1218,6 +1344,16 @@ export function ItemEditForm({
         const stepId = `o2m:new:${key}`
         const [rc, mf] = key.split('.')
         const rowList = pendingO2MRows.get(key) ?? []
+        const uniqueBy = o2mUniqueByMap.get(key)
+        if (uniqueBy?.length) {
+          const getUK = (r: Record<string, unknown>) => uniqueBy.map(f => String(r[f] ?? '')).join('\x00')
+          const seen = new Set<string>()
+          const hasDup = rowList.some((r) => { const k = getUK(r); if (seen.has(k)) return true; seen.add(k); return false })
+          if (hasDup) {
+            updateStep(stepId, { status: 'error', error: `Duplicate ${uniqueBy.join(' + ')} values in new rows` })
+            continue
+          }
+        }
         updateStep(stepId, { status: 'running', progress: { done: 0, total: rowList.length } })
         try {
           await Promise.all(rowList.map(async (data) => {
@@ -1277,6 +1413,18 @@ export function ItemEditForm({
       setM2mUnlinks(new Map())
       setPendingComments([])
       setPendingTasks([])
+      // Invalidate O2M row queries for every relation that had pending changes
+      const o2mKeysToInvalidate = new Set([
+        ...pendingO2MRows.keys(),
+        ...pendingO2MEdits.keys(),
+        ...pendingO2MDeletes.keys(),
+      ])
+      for (const key of o2mKeysToInvalidate) {
+        const dotIdx = key.indexOf('.')
+        const rc = key.slice(0, dotIdx)
+        const mf = key.slice(dotIdx + 1)
+        qc.invalidateQueries({ queryKey: ['o2m-rows', rc, mf, id] })
+      }
       setPendingO2MRows(new Map())
       qc.invalidateQueries({ queryKey: ['item', collection] })
       qc.invalidateQueries({ queryKey: ['m2m-items'] })
@@ -1350,6 +1498,24 @@ export function ItemEditForm({
     if (key === '__owners__' && showPipeline) {
       return <div key='__owners__'>{renderOwnersPanel()}</div>
     }
+    if (key.startsWith('__widget_') && key.endsWith('__')) {
+      const slot = widgetSlots.find((a) => a.field === key)
+      if (!slot || !slot.widget_id) return null
+      let bindings: InputBinding[] = []
+      try { bindings = typeof slot.input_bindings === 'string' ? JSON.parse(slot.input_bindings) : [] } catch { /* noop */ }
+      return (
+        <WidgetSlot
+          key={key}
+          widgetId={slot.widget_id}
+          inputBindings={bindings}
+          itemDraft={draft}
+          itemCollection={collection}
+          ready={isNew || (!itemLoading && Object.keys(draft).length > 0)}
+          label={slot.label_override ?? undefined}
+          defaultExpanded={slot.default_expanded ?? true}
+        />
+      )
+    }
     if (key === '__pdf__') {
       const layoutId = activeLayoutData?.layout?.id
       if (!layoutId) return null
@@ -1384,24 +1550,42 @@ export function ItemEditForm({
     return (
       <div key='__ungrouped__' className='rounded-xl border border-slate-200 bg-white px-5 py-5'>
         <GridContainer>
-          {(cw) => visible.map((f) => (
-            <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-              <FieldRow
-                field={f}
-                draft={draft}
-                onChange={handleFieldChange}
-                relations={relations}
-                collection={collection}
-                itemId={itemId}
-                error={validationErrors[f.field]}
-                visible={true}
-                locked={isReadOnly}
-                layoutAiEnabled={layoutAiEnabled}
-                renderField={renderField}
-                onCountChange={handleM2MCountChange}
-              />
-            </div>
-          ))}
+          {(cw) => visible.map((f) => {
+            const inlineConfig = fieldInlineDisplay?.[f.field]
+            const inlineEntries = inlineConfig?.entries
+            const inlineSeparator = inlineConfig?.separator ?? null
+            const rawVal = draft[f.field]
+            const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
+            const inlineRelCollection = (inlineEntries?.length && hasVal)
+              ? (relations.find((r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field)?.one_collection ?? null)
+              : null
+            return (
+              <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
+                <FieldRow
+                  field={f}
+                  draft={draft}
+                  onChange={handleFieldChange}
+                  relations={relations}
+                  collection={collection}
+                  itemId={itemId}
+                  error={validationErrors[f.field]}
+                  visible={true}
+                  locked={isReadOnly}
+                  layoutAiEnabled={layoutAiEnabled}
+                  renderField={renderField}
+                  onCountChange={handleM2MCountChange}
+                />
+                {inlineEntries?.length && hasVal && inlineRelCollection && (
+                  <InlineDisplay
+                    relCollection={inlineRelCollection}
+                    relId={rawVal as string | number}
+                    entries={inlineEntries}
+                    separator={inlineSeparator}
+                  />
+                )}
+              </div>
+            )
+          })}
         </GridContainer>
       </div>
     )
@@ -1416,6 +1600,10 @@ export function ItemEditForm({
     const activeKey = getContainerTab(c, children)
     const activeChild = children.find((g) => g.key === activeKey) ?? children[0]
     const activeFields = (groupedMap[activeChild?.key ?? ''] ?? []).filter((f) => !f.hidden)
+    // PDF slot: check if assigned to the active child tab or to the container itself
+    const pdfInContainer = !isNew && !!layoutId && !!pdfSlot && (
+      pdfGroupKey === activeChild?.key || pdfGroupKey === c.key
+    )
 
     const containerCompleted = new Set<string>()
     const containerErrors = new Set<string>()
@@ -1460,25 +1648,57 @@ export function ItemEditForm({
         )}
         <div className='px-5 py-5'>
           <GridContainer>
-            {(cw) => activeFields.map((f) => (
-              <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-                <FieldRow
-                  field={f}
-                  draft={draft}
-                  onChange={handleFieldChange}
-                  relations={relations}
-                  collection={collection}
-                  itemId={itemId}
-                  error={validationErrors[f.field]}
-                  visible={visibleFields.has(f.field) || !visibleFields.size}
-                  locked={lockedFields.has(f.field)}
-                  layoutAiEnabled={layoutAiEnabled}
-                  renderField={renderField}
-                  onCountChange={handleM2MCountChange}
-                />
-              </div>
-            ))}
+            {(cw) => activeFields.map((f) => {
+              const inlineConfig = fieldInlineDisplay?.[f.field]
+              const inlineEntries = inlineConfig?.entries
+              const inlineSeparator = inlineConfig?.separator ?? null
+              const rawVal = draft[f.field]
+              const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
+              const inlineRelCollection = (inlineEntries?.length && hasVal)
+                ? (relations.find((r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field)?.one_collection ?? null)
+                : null
+              return (
+                <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
+                  <FieldRow
+                    field={f}
+                    draft={draft}
+                    onChange={handleFieldChange}
+                    relations={relations}
+                    collection={collection}
+                    itemId={itemId}
+                    error={validationErrors[f.field]}
+                    visible={visibleFields.has(f.field) || !visibleFields.size}
+                    locked={lockedFields.has(f.field)}
+                    layoutAiEnabled={layoutAiEnabled}
+                    renderField={renderField}
+                    onCountChange={handleM2MCountChange}
+                  />
+                  {inlineEntries?.length && hasVal && inlineRelCollection && (
+                    <InlineDisplay relCollection={inlineRelCollection} relId={rawVal as string | number} entries={inlineEntries} separator={inlineSeparator} />
+                  )}
+                </div>
+              )
+            })}
           </GridContainer>
+          {pdfInContainer && (
+            <div className='mt-4 flex items-center gap-2'>
+              <button
+                type='button'
+                onClick={handleGenerateAndAttach}
+                disabled={pdfAttaching || !pdfAttachField}
+                title={!pdfAttachField ? 'Configure PDF field in Data Model → Layouts' : undefined}
+                className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
+              >
+                <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' className='h-3.5 w-3.5'>
+                  <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
+                  <polyline points='14 2 14 8 20 8' />
+                  <line x1='9' y1='13' x2='15' y2='13' />
+                  <line x1='9' y1='17' x2='13' y2='17' />
+                </svg>
+                {pdfAttaching ? 'Generating…' : (pdfSlot?.label_override?.trim() || 'Generate PDF')}
+              </button>
+            </div>
+          )}
           {c.tab_mode === 'steps' && children.length > 1 && (() => {
             const idx = children.findIndex((ch) => ch.key === activeKey)
             const isFirst = idx === 0
@@ -1516,18 +1736,18 @@ export function ItemEditForm({
   }
 
   function renderSectionItem(
-    item: FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__' | '__pdf__'
+    item: FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__' | '__pdf__' | string
   ) {
     if (item === '__ungrouped__') return renderUngrouped()
-    if (item === '__pipeline__' || item === '__comments__' || item === '__tasks__' || item === '__owners__' || item === '__pdf__')
-      return renderSentinel(item)
+    if (typeof item === 'string' && item !== '__ungrouped__') return renderSentinel(item)
     const g = item as FieldGroup
     if (g.type === 'container') return renderContainer(g)
     if (g.type === 'metadata' && isNew) return null
     const groupFields = groupedMap[g.key] ?? []
     const ownersHere = ownersInGroup && ownersGroupKey === g.key && showPipeline
     const pdfHere = pdfInGroup && pdfGroupKey === g.key && !isNew
-    if (groupFields.length === 0 && !ownersHere && !pdfHere) return null
+    const widgetsHere = widgetSlots.filter((ws) => (ws.group_key ?? null) === g.key)
+    if (groupFields.length === 0 && !ownersHere && !pdfHere && widgetsHere.length === 0) return null
     const accordionActive = accordionMode && g.type !== 'tab'
     return (
       <GroupSection
@@ -1537,6 +1757,8 @@ export function ItemEditForm({
         ownersAssignment={ownersHere ? ownersSlot : undefined}
         pdfAssignment={pdfHere ? pdfSlot : undefined}
         pdfAttachField={pdfHere ? pdfAttachField : undefined}
+        pdfFilenameTemplate={pdfHere ? pdfFilenameTemplate : undefined}
+        widgetAssignments={widgetsHere.length > 0 ? widgetsHere : undefined}
         layoutId={activeLayoutData?.layout?.id ?? null}
         draft={draft}
         onChange={handleFieldChange}
@@ -1565,6 +1787,7 @@ export function ItemEditForm({
         summaryAggConfigs={enrichedSummaryAggConfigs}
         o2mLoading={o2mLoading}
         hideEmptySummary={hideEmptySummary}
+        fieldInlineDisplay={fieldInlineDisplay}
       />
     )
   }
@@ -1600,10 +1823,12 @@ export function ItemEditForm({
     ).filter((f) => !f.hidden)
     const ownersHere = ownersInGroup && ownersGroupKey === tabKey && showPipeline
     const pdfHere = pdfInGroup && pdfGroupKey === tabKey && !isNew
+    const widgetsHereTab = widgetSlots.filter((ws) => (ws.group_key ?? null) === tabKey)
     type TabItem = { _k: string; sort: number } & (
       | { _t: 'field'; f: CMSField }
       | { _t: 'owners'; slot: SlotAssignment }
       | { _t: 'pdf'; slot: SlotAssignment }
+      | { _t: 'widget'; slot: SlotAssignment }
     )
     const tabItems: TabItem[] = fields.map((f) => ({ _k: f.field, sort: f.sort ?? 0, _t: 'field' as const, f }))
     if (ownersHere && ownersSlot) {
@@ -1611,6 +1836,9 @@ export function ItemEditForm({
     }
     if (pdfHere && pdfSlot) {
       tabItems.push({ _k: '__pdf__', sort: pdfSlot.sort, _t: 'pdf' as const, slot: pdfSlot })
+    }
+    for (const ws of widgetsHereTab) {
+      tabItems.push({ _k: ws.field, sort: ws.sort, _t: 'widget' as const, slot: ws })
     }
     tabItems.sort((a, b) => a.sort - b.sort)
     return (
@@ -1648,7 +1876,30 @@ export function ItemEditForm({
                 </div>
               )
             }
+            if (item._t === 'widget') {
+              if (!item.slot.widget_id) return null
+              const span = item.slot.col_span ?? 12
+              return (
+                <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
+                  <WidgetSlot
+                    widgetId={item.slot.widget_id}
+                    inputBindings={(item.slot.input_bindings ?? []) as InputBinding[]}
+                    itemDraft={draft}
+                    label={item.slot.label_override ?? undefined}
+                    defaultExpanded={item.slot.default_expanded ?? true}
+                  />
+                </div>
+              )
+            }
             const f = item.f
+            const inlineConfig = fieldInlineDisplay?.[f.field]
+            const inlineEntries = inlineConfig?.entries
+            const inlineSeparator = inlineConfig?.separator ?? null
+            const rawVal = draft[f.field]
+            const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
+            const inlineRelCollection = (inlineEntries?.length && hasVal)
+              ? (relations.find((r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field)?.one_collection ?? null)
+              : null
             return (
               <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
                 <FieldRow
@@ -1665,6 +1916,14 @@ export function ItemEditForm({
                   renderField={renderField}
                   onCountChange={handleM2MCountChange}
                 />
+                {inlineEntries?.length && hasVal && inlineRelCollection && (
+                  <InlineDisplay
+                    relCollection={inlineRelCollection}
+                    relId={rawVal as string | number}
+                    entries={inlineEntries}
+                    separator={inlineSeparator}
+                  />
+                )}
               </div>
             )
           })}
@@ -1708,7 +1967,7 @@ export function ItemEditForm({
         {renderTabContent(activeTab)}
         {sectionOrder
           .filter((item) => typeof item === 'string' && item !== '__ungrouped__')
-          .map((item) => renderSentinel(item as '__pipeline__' | '__comments__' | '__tasks__' | '__owners__' | '__pdf__'))}
+          .map((item) => renderSentinel(item as string))}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} />
         )}
@@ -1807,7 +2066,7 @@ export function ItemEditForm({
       <div className='space-y-4 min-w-0 flex-1'>
         {preTabItems.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
-          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__')}</div>
+          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | string)}</div>
         })}
         <div className='rounded-xl border border-slate-200 bg-white px-5 py-3'>
           <StepsBar
@@ -1825,7 +2084,7 @@ export function ItemEditForm({
         {renderTabContent(activeTab, true)}
         {postTabItems.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
-          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__')}</div>
+          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | string)}</div>
         })}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel collection={collection} item={itemId} defaultExpanded={false} onBeforeTransition={validateAll} />
@@ -1924,9 +2183,14 @@ export function ItemEditForm({
                 <ArrowLeft className='h-4 w-4' />
               </button>
             )}
-            <h1 className='text-base font-semibold text-slate-800'>
-              {isNew ? `New ${singularTitle}` : itemTitle}
-            </h1>
+            <div className='flex flex-col min-w-0'>
+              <h1 className='text-base font-semibold text-slate-800 dark:text-slate-100'>
+                {isNew ? `New ${singularTitle}` : itemTitle}
+              </h1>
+              {subtitleText && (
+                <p className='text-[12px] text-slate-500 dark:text-slate-400 truncate'>{subtitleText}</p>
+              )}
+            </div>
             <div className='ml-auto flex items-center gap-2'>
               {effectiveShowRevisions && !isNew && (
                 <RevisionsPanel
@@ -1985,57 +2249,6 @@ export function ItemEditForm({
                     <Trash2 className='h-3.5 w-3.5' />
                   </Button>
                 ))}
-              {fileLayouts.length === 1 && !isNew && (
-                <Button
-                  type='button'
-                  size='sm'
-                  variant='outline'
-                  className='gap-1.5'
-                  onClick={() => downloadPdf(fileLayouts[0].id)}
-                  disabled={pdfLoading !== null}
-                >
-                  {pdfLoading !== null ? (
-                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                  ) : (
-                    <FileDown className='h-3.5 w-3.5' />
-                  )}
-                  {fileLayouts[0].pdf_button_label ?? 'Download PDF'}
-                </Button>
-              )}
-              {fileLayouts.length > 1 && !isNew && (
-                <div className='relative' data-pdf-dropdown>
-                  <Button
-                    type='button'
-                    size='sm'
-                    variant='outline'
-                    className='gap-1.5'
-                    onClick={() => setShowPdfDropdown(v => !v)}
-                    disabled={pdfLoading !== null}
-                  >
-                    {pdfLoading !== null ? (
-                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                    ) : (
-                      <FileDown className='h-3.5 w-3.5' />
-                    )}
-                    PDF
-                    <ChevronDown className='h-3 w-3' />
-                  </Button>
-                  {showPdfDropdown && (
-                    <div className='absolute right-0 top-full z-50 mt-1 min-w-[160px] rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-border dark:bg-background'>
-                      {fileLayouts.map(l => (
-                        <button
-                          key={l.id}
-                          type='button'
-                          onClick={() => downloadPdf(l.id)}
-                          className='w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'
-                        >
-                          {l.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
               {!isStepsMode && (
                 <Button
                   type='button'
@@ -2068,6 +2281,55 @@ export function ItemEditForm({
               )}
             </div>
           </header>
+        )}
+
+        {showHeader && (headerWidgets.length > 0 || headerFields.length > 0) && (
+          <div className='flex shrink-0 overflow-x-auto border-b border-slate-200 dark:border-border bg-white dark:bg-card'>
+            {[
+              ...headerWidgets.map((w) => ({ type: 'widget' as const, sort: w.sort, key: w.field, data: w })),
+              ...headerFields.map((f) => ({ type: 'field' as const, sort: f.sort, key: f.field, data: f })),
+            ]
+              .sort((a, b) => a.sort - b.sort)
+              .map((item) => {
+                if (item.type === 'widget') {
+                  const w = item.data
+                  return (
+                    <WidgetSlot
+                      key={w.field}
+                      widgetId={w.widgetId}
+                      inputBindings={w.inputBindings}
+                      itemDraft={draft}
+                      itemCollection={collection}
+                      label={w.label ?? undefined}
+                      compact={true}
+                      strip={true}
+                      apiBase='/api'
+                    />
+                  )
+                }
+                const f = item.data
+                if (f.field === '__owners__') {
+                  return (
+                    <div key='__owners__' className='flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2.5 min-w-0 gap-1'>
+                      <span className='text-[9px] font-medium uppercase tracking-wider leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
+                      <OwnersInlineCompact collection={collection} itemId={itemId} />
+                    </div>
+                  )
+                }
+                const raw = draft[f.field]
+                return (
+                  <div key={f.field} className='flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2.5 min-w-0 gap-1'>
+                    <span className='text-[9px] font-medium uppercase tracking-wider leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
+                    <span className='leading-none truncate max-w-[220px]'>
+                      {f.cmsField
+                        ? <StripFieldValue field={f.cmsField} val={raw} relations={relations} collection={collection} displayFormat={f.displayFormat} />
+                        : <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{formatHeaderFieldValue(raw, f.displayFormat)}</span>
+                      }
+                    </span>
+                  </div>
+                )
+              })}
+          </div>
         )}
 
         <div
@@ -2124,7 +2386,19 @@ export function ItemEditForm({
                     staging={m2mStagingCtx}
                     errors={validationErrors}
                     onFieldClick={(stepKey, fieldKey) => {
-                      setActiveTab(stepKey)
+                      if (hasContainers) {
+                        const ownerContainer = containerGroups.find((c) =>
+                          groups.some((g) => g.type === 'tab' && g.container_id === c.id && g.key === stepKey)
+                        )
+                        if (ownerContainer) {
+                          setContainerTab(ownerContainer, stepKey)
+                          bodyRef.current?.scrollTo({ top: 0 })
+                        } else {
+                          setActiveTab(stepKey)
+                        }
+                      } else {
+                        setActiveTab(stepKey)
+                      }
                       setTimeout(() => {
                         const el = document.querySelector(
                           `[data-field="${fieldKey}"]`

@@ -59,13 +59,14 @@ function M2MSummaryCount({
     enabled: !!parentId && parentId !== 'new'
   })
 
+  const isFilesCollection = relatedCollection === 'nivaro_files' || relatedCollection === 'directus_files'
   const { data: colMeta } = useQuery<{ display_template?: string }>({
     queryKey: ['col-meta', relatedCollection],
     queryFn: () =>
       client
         .request<{ data: { display_template?: string } }>(get(`/collections/${relatedCollection}`))
         .then((r) => r.data),
-    enabled: !!relatedCollection,
+    enabled: !!relatedCollection && !isFilesCollection,
     staleTime: 300_000
   })
 
@@ -137,7 +138,7 @@ function O2MSummaryCount({
 
 // ─── SummaryFieldValue ─────────────────────────────────────────────────────────
 
-function SummaryFieldValue({
+export function SummaryFieldValue({
   field,
   val,
   relations,

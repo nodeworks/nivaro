@@ -56,6 +56,8 @@ export interface SlotAssignment {
   label_override?: string | null
   show_row_revisions?: boolean | number
   overrides?: Record<string, unknown> | string | null
+  widget_id?: number | null
+  input_bindings?: string | null  // JSON: [{key,binding_type,binding_value}]
 }
 
 export interface LayoutMeta {
@@ -87,6 +89,11 @@ export interface StepDef {
   label: string
 }
 
+export interface SummaryScalarConfig {
+  field: string
+  label?: string
+}
+
 export interface SummaryAggConfig {
   field: string
   agg: 'sum' | 'count' | 'avg' | 'min' | 'max'
@@ -95,7 +102,7 @@ export interface SummaryAggConfig {
   field_options?: string | null
 }
 
-export type SummaryEntry = string | SummaryAggConfig
+export type SummaryEntry = string | SummaryScalarConfig | SummaryAggConfig
 
 export type RenderFieldProps = {
   field: any

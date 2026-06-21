@@ -238,7 +238,12 @@ function evalFormula(formula: string, item: Record<string, unknown>): unknown {
   try {
     // expr-eval's Value type is narrower than Record<string,unknown> but handles nested objects fine at runtime
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return _exprParser.evaluate(formula, { item } as any)
+    const result = _exprParser.evaluate(formula, { item } as any)
+    // NaN means a field reference resolved to undefined (e.g. missing field in payload).
+    // Treat as formula failure so we don't overwrite a valid client value with NaN,
+    // which tedious rejects as "Invalid number" for numeric columns.
+    if (typeof result === 'number' && isNaN(result)) return null
+    return result
   } catch {
     return null
   }
@@ -415,9 +420,9 @@ async function applyWriteComputedFields(
   for (const f of writeFields) {
     const store = f.computed_store === true || f.computed_store === 1
     // Always evaluate the formula; only write to payload when computed_store=true.
-    // Non-stored write formulas are evaluated but the result is not persisted.
+    // Skip overwrite when result is null (formula failure) to preserve any client-provided value.
     const result = evalFormula(f.computed_formula as string, evalCtx)
-    if (store) {
+    if (store && result !== null) {
       payload[f.field] = result
     }
   }

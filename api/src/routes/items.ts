@@ -341,6 +341,9 @@ export async function itemsRoutes(app: FastifyInstance) {
 
   app.post('/:collection', async (req, reply) => {
     const { collection } = req.params as { collection: string }
+    const q = req.query as Record<string, string>
+    const parentCollection = q.parent_collection ?? null
+    const parentId = q.parent_id ?? null
     try {
       const item = await createOne(
         req.user!,
@@ -349,6 +352,16 @@ export async function itemsRoutes(app: FastifyInstance) {
         req,
         req.workspaceId ?? undefined
       )
+      if (parentCollection && parentId) {
+        await logActivity({
+          action: 'o2m-create',
+          user: req.user!.id,
+          collection: parentCollection,
+          item: parentId,
+          comment: JSON.stringify({ child_collection: collection, child_id: String((item as Record<string, unknown>).id), snapshot: item }),
+          req
+        })
+      }
       return reply.code(201).send({ data: item })
     } catch (err) {
       return handleError(err, reply)
@@ -357,6 +370,9 @@ export async function itemsRoutes(app: FastifyInstance) {
 
   app.patch('/:collection/:id', async (req, reply) => {
     const { collection, id } = req.params as { collection: string; id: string }
+    const q = req.query as Record<string, string>
+    const parentCollection = q.parent_collection ?? null
+    const parentId = q.parent_id ?? null
     try {
       const item = await updateOne(
         req.user!,
@@ -366,6 +382,16 @@ export async function itemsRoutes(app: FastifyInstance) {
         req,
         req.workspaceId ?? undefined
       )
+      if (parentCollection && parentId) {
+        await logActivity({
+          action: 'o2m-update',
+          user: req.user!.id,
+          collection: parentCollection,
+          item: parentId,
+          comment: JSON.stringify({ child_collection: collection, child_id: id, snapshot: item }),
+          req
+        })
+      }
       return reply.send({ data: item })
     } catch (err) {
       return handleError(err, reply)
@@ -374,8 +400,26 @@ export async function itemsRoutes(app: FastifyInstance) {
 
   app.delete('/:collection/:id', async (req, reply) => {
     const { collection, id } = req.params as { collection: string; id: string }
+    const q = req.query as Record<string, string>
+    const parentCollection = q.parent_collection ?? null
+    const parentId = q.parent_id ?? null
+    // capture snapshot before deletion so we can store it in parent activity
+    let childSnapshot: Record<string, unknown> | null = null
+    if (parentCollection && parentId) {
+      childSnapshot = await db(collection).where({ id }).first().catch(() => null) ?? null
+    }
     try {
       await deleteOne(req.user!, collection, id, req, req.workspaceId ?? undefined)
+      if (parentCollection && parentId) {
+        await logActivity({
+          action: 'o2m-delete',
+          user: req.user!.id,
+          collection: parentCollection,
+          item: parentId,
+          comment: JSON.stringify({ child_collection: collection, child_id: id, snapshot: childSnapshot }),
+          req
+        })
+      }
       return reply.code(204).send()
     } catch (err) {
       return handleError(err, reply)

@@ -343,7 +343,7 @@ export function M2MSingleSelectCombobox({
     retry: false
   })
 
-  const { data: junctionItems = [] } = useQuery<Record<string, unknown>[]>({
+  const { data: junctionItems = [], isFetching: isLoadingJunction } = useQuery<Record<string, unknown>[]>({
     queryKey: ['m2m-items', relation.many_collection, manyField, parentId],
     queryFn: () =>
       client
@@ -489,7 +489,7 @@ export function M2MSingleSelectCombobox({
             isSingleStale ? 'border-amber-300 dark:border-amber-600' : isPendingChange ? 'border-nvr-cyan/50' : 'border-slate-200'
           )}
         >
-          {isLoadingLabel ? (
+          {isLoadingLabel || (isLoadingJunction && stagedRelatedId == null && parentId !== 'new') ? (
             <Loader2 className='h-3.5 w-3.5 animate-spin text-muted-foreground' />
           ) : (
             <span

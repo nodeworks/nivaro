@@ -238,15 +238,21 @@ export function RelatedItemLabel({
   displayTemplate?: string | null
 }) {
   const client = useNivaroClient()
+  const isFiles = collection === 'nivaro_files' || collection === 'directus_files'
   const { data, isLoading } = useQuery<Record<string, unknown>>({
     queryKey: ['relation-single', collection, String(id)],
     queryFn: () =>
-      client
-        .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
-        .then((r) => r.data),
+      isFiles
+        ? client.request<{ data: Record<string, unknown> }>(get(`/files/${id}`)).then((r) => r.data)
+        : client.request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`)).then((r) => r.data),
     enabled: !!id && !!collection,
     staleTime: 60_000
   })
   if (isLoading) return <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
-  return <span>{data ? applyDisplayTemplate(displayTemplate, data) : String(id ?? '')}</span>
+  if (!data) return <span>{String(id ?? '')}</span>
+  if (isFiles) {
+    const label = (data.title || data.filename_download || data.filename_disk || String(id)) as string
+    return <span>{label}</span>
+  }
+  return <span>{applyDisplayTemplate(displayTemplate, data)}</span>
 }

@@ -12,9 +12,123 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu'
+import { WidgetSlot } from '../WidgetSlot'
 import { FieldRow } from './FieldRow'
 import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpers'
 import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps, SlotAssignment, SummaryAggConfig, SummaryEntry } from './types'
+
+// ── Inline display ────────────────────────────────────────────────────────────
+
+export type InlineDisplayEntry = { field: string; label: string | null; format: string | null; line_break?: boolean }
+
+export function InlineDisplay({
+  relCollection,
+  relId,
+  entries,
+  separator,
+}: {
+  relCollection: string
+  relId: string | number
+  entries: InlineDisplayEntry[]
+  separator?: string | null
+}) {
+  const client = useOptionalNivaroClient()
+  const idStr = String(relId)
+  const { data: record } = useQuery<Record<string, unknown> | null>({
+    queryKey: ['inline-display', relCollection, idStr],
+    queryFn: () =>
+      client!
+        .request<{ data: Record<string, unknown> }>(get(`/items/${relCollection}/${idStr}`))
+        .then((r) => r.data ?? null),
+    enabled: !!client && !!idStr,
+    staleTime: 60_000,
+  })
+  if (!record) return null
+
+  if (separator != null) {
+    const resolveDisplay = (e: InlineDisplayEntry): string | null => {
+      const val = record[e.field]
+      if (val === null || val === undefined || val === '') return null
+      const fmt = e.format ?? 'text'
+      if (fmt === 'date' || fmt === 'datetime') {
+        try { return new Date(String(val)).toLocaleDateString() } catch { return String(val) }
+      }
+      if (fmt === 'boolean') return val ? 'Yes' : 'No'
+      return String(val)
+    }
+    // Group entries into visual lines via line_break markers
+    const lines: InlineDisplayEntry[][] = []
+    let cur: InlineDisplayEntry[] = []
+    for (const e of entries) {
+      if (e.line_break && cur.length > 0) { lines.push(cur); cur = [e] }
+      else cur.push(e)
+    }
+    if (cur.length > 0) lines.push(cur)
+    type Token = { label: string | null; display: string }
+    const renderedLines: Token[][] = lines
+      .map((line) =>
+        line
+          .map((e) => { const d = resolveDisplay(e); return d ? { label: e.label ?? null, display: d } : null })
+          .filter(Boolean) as Token[]
+      )
+      .filter((l) => l.length > 0)
+    if (renderedLines.length === 0) return null
+    return (
+      <div className='mt-1'>
+        {renderedLines.map((tokens, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: stable line order
+          <p key={i} className='text-[12px] text-slate-500 dark:text-slate-400'>
+            {tokens.map((t, j) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: stable token order
+              <React.Fragment key={j}>
+                {j > 0 && separator}
+                {t.label && <span className='font-semibold text-slate-600 dark:text-slate-300'>{t.label}:</span>}
+                {t.label ? ' ' : ''}{t.display}
+              </React.Fragment>
+            ))}
+          </p>
+        ))}
+      </div>
+    )
+  }
+
+  const rows = entries
+    .map((e) => {
+      const val = record[e.field]
+      if (val === null || val === undefined || val === '') return null
+      const fmt = e.format ?? 'text'
+      let display: string
+      if (fmt === 'date' || fmt === 'datetime') {
+        try {
+          display = new Date(String(val)).toLocaleDateString()
+        } catch {
+          display = String(val)
+        }
+      } else if (fmt === 'boolean') {
+        display = val ? 'Yes' : 'No'
+      } else {
+        display = String(val)
+      }
+      return { label: e.label, display }
+    })
+    .filter(Boolean) as Array<{ label: string | null; display: string }>
+  if (rows.length === 0) return null
+  return (
+    <div className='mt-1 rounded border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 px-3 py-1.5 space-y-0.5'>
+      {rows.map((row, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: stable order from config
+        <div key={i} className='flex items-baseline gap-2'>
+          {row.label && (
+            <span className='shrink-0 min-w-[56px] text-[10px] font-medium text-slate-400'>
+              {row.label}
+            </span>
+          )}
+          <span className='text-[12px] text-slate-700 dark:text-slate-300 truncate'>{row.display}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function resolveIcon(name: string | null | undefined): React.ElementType | null {
   if (!name) return null
@@ -101,6 +215,8 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
   return s
 }
 
+export { formatDisplayValue }
+
 // Tiny inline user pill — used in SummaryStrip only
 function SummaryUserName({ userId }: { userId: string }) {
   const client = useOptionalNivaroClient()
@@ -129,7 +245,10 @@ function SummaryUserName({ userId }: { userId: string }) {
           <User className='h-3.5 w-3.5' /> View profile
         </DropdownMenuItem>
         {user?.email && (
-          <DropdownMenuItem className='gap-2 text-[12px] cursor-pointer' onSelect={() => window.open(`mailto:${user.email}`)}>
+          <DropdownMenuItem
+            className='gap-2 text-[12px] cursor-pointer'
+            onSelect={() => { window.location.href = `mailto:${user.email}` }}
+          >
             <Mail className='h-3.5 w-3.5' /> Send email
           </DropdownMenuItem>
         )}
@@ -139,9 +258,9 @@ function SummaryUserName({ userId }: { userId: string }) {
 }
 
 // Compact owners — no label, tiny inline style, used inside SummaryStrip
-function OwnersInlineCompact({ collection, itemId }: { collection: string; itemId: string }) {
+export function OwnersInlineCompact({ collection, itemId }: { collection: string; itemId: string }) {
   const client = useOptionalNivaroClient()
-  const { data: owners = [] } = useQuery<Array<{ id: number; first_name: string | null; last_name: string | null; email: string }>>({
+  const { data: owners = [], isLoading } = useQuery<Array<{ id: number; first_name: string | null; last_name: string | null; email: string }>>({
     queryKey: ['pipeline-instance-owners', collection, itemId],
     queryFn: () =>
       client!.request<{ data: Array<{ id: number; first_name: string | null; last_name: string | null; email: string }> }>(
@@ -154,6 +273,7 @@ function OwnersInlineCompact({ collection, itemId }: { collection: string; itemI
     [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
   const initials = (o: { first_name: string | null; last_name: string | null; email: string }) =>
     name(o).split(' ').map((p) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+  if (isLoading) return <span className='animate-pulse h-3 w-20 rounded bg-slate-200 dark:bg-slate-700 inline-block' />
   if (owners.length === 0) return <span className='text-[11px] text-slate-400'>—</span>
   return (
     <span className='inline-flex flex-wrap gap-x-1.5 gap-y-0.5'>
@@ -205,10 +325,10 @@ export function OwnersInline({ collection, itemId, label }: { collection: string
 }
 
 // Single user chip — fetches user by id, shows initials avatar + name
-function UserChip({ userId }: { userId: string }) {
+export function UserChip({ userId }: { userId: string }) {
   const client = useOptionalNivaroClient()
   const { navigate } = useNavigation()
-  const { data: user } = useQuery<{ id: number; first_name: string | null; last_name: string | null; email: string } | null>({
+  const { data: user, isLoading } = useQuery<{ id: number; first_name: string | null; last_name: string | null; email: string } | null>({
     queryKey: ['user-chip', userId],
     queryFn: () =>
       client!.request<{ data: { id: number; first_name: string | null; last_name: string | null; email: string } }>(
@@ -217,6 +337,12 @@ function UserChip({ userId }: { userId: string }) {
     enabled: !!client && !!userId,
     staleTime: 120_000,
   })
+  if (isLoading) {
+    return <span className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'>
+      <span className='flex h-6 w-6 shrink-0 rounded-full animate-pulse bg-slate-200 dark:bg-slate-700' />
+      <span className='animate-pulse h-2.5 w-16 rounded bg-slate-200 dark:bg-slate-700 inline-block' />
+    </span>
+  }
   const name = user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId
   const initials = name.split(' ').map((p: string) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
   return (
@@ -234,7 +360,10 @@ function UserChip({ userId }: { userId: string }) {
           <User className='h-3.5 w-3.5' /> View profile
         </DropdownMenuItem>
         {user?.email && (
-          <DropdownMenuItem className='gap-2 text-[12px] cursor-pointer' onSelect={() => window.open(`mailto:${user.email}`)}>
+          <DropdownMenuItem
+            className='gap-2 text-[12px] cursor-pointer'
+            onSelect={() => { window.location.href = `mailto:${user.email}` }}
+          >
             <Mail className='h-3.5 w-3.5' /> Send email
           </DropdownMenuItem>
         )}
@@ -244,11 +373,12 @@ function UserChip({ userId }: { userId: string }) {
 }
 
 // Async M2O display cell — fetches related record + collection display_template
-function PdfGenerateButton({ collection, itemId, layoutId, attachField, label }: {
+function PdfGenerateButton({ collection, itemId, layoutId, attachField, filenameTemplate, label }: {
   collection: string
   itemId: string
   layoutId: number
   attachField: string | null
+  filenameTemplate?: string | null
   label: string
 }) {
   const client = useOptionalNivaroClient()
@@ -262,6 +392,7 @@ function PdfGenerateButton({ collection, itemId, layoutId, attachField, label }:
         collection,
         item_id: itemId,
         attach_field: attachField,
+        filename_template: filenameTemplate ?? undefined,
       }))
       qc.invalidateQueries({ queryKey: ['m2m-items'] })
       qc.invalidateQueries({ queryKey: ['items', collection, itemId] })
@@ -289,7 +420,7 @@ function PdfGenerateButton({ collection, itemId, layoutId, attachField, label }:
   )
 }
 
-function RelationCell({ relCollection, id }: { relCollection: string; id: unknown }) {
+export function RelationCell({ relCollection, id }: { relCollection: string; id: unknown }) {
   const client = useOptionalNivaroClient()
   const idStr = id != null && id !== '' ? String(id) : null
   const { data: colMeta } = useQuery<{ display_template?: string | null }>({
@@ -307,12 +438,120 @@ function RelationCell({ relCollection, id }: { relCollection: string; id: unknow
     staleTime: 60_000,
   })
   if (!idStr) return <span>—</span>
-  if (isLoading) return <span className='text-slate-400 text-[13px]'>…</span>
+  if (isLoading) return <span className='animate-pulse h-3 w-20 rounded bg-slate-200 dark:bg-slate-700 inline-block' />
   if (!record) return <span className='text-[13px] text-slate-700'>{idStr}</span>
   const label = colMeta?.display_template
     ? applyDisplayTemplate(colMeta.display_template, record)
     : String(record.name ?? record.title ?? record.label ?? record.display_name ?? idStr)
   return <span className='text-[13px] text-slate-700'>{label}</span>
+}
+
+// Compact user pill for the header strip — smaller than UserChip, with dropdown
+function StripUserChip({ userId }: { userId: string }) {
+  const client = useOptionalNivaroClient()
+  const { navigate } = useNavigation()
+  const { data: user, isLoading } = useQuery<{ first_name: string | null; last_name: string | null; email: string } | null>({
+    queryKey: ['user-chip', userId],
+    queryFn: () =>
+      client!.request<{ data: { first_name: string | null; last_name: string | null; email: string } }>(
+        get(`/users/${userId}`)
+      ).then((r) => r.data ?? null),
+    enabled: !!client && !!userId,
+    staleTime: 120_000,
+  })
+  if (isLoading) return <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-slate-700' />
+  const name = user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId
+  const initials = name.split(' ').map((p: string) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 py-px pl-px pr-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors'>
+          <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
+          <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>{name}</span>
+        </span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='start' className='text-[12px]'>
+        <DropdownMenuItem className='gap-2 text-[12px] cursor-pointer' onSelect={() => navigate(`/users/${userId}`)}>
+          <User className='h-3.5 w-3.5' /> View profile
+        </DropdownMenuItem>
+        {user?.email && (
+          <DropdownMenuItem
+            className='gap-2 text-[12px] cursor-pointer'
+            onSelect={() => { window.location.href = `mailto:${user.email}` }}
+          >
+            <Mail className='h-3.5 w-3.5' /> Send email
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+// ─── StripFieldValue ──────────────────────────────────────────────────────────
+// Used by ItemEditForm header strip — same rendering logic as SummaryStrip
+
+export function StripFieldValue({
+  field,
+  val,
+  relations,
+  collection,
+  displayFormat,
+}: {
+  field: CMSField
+  val: unknown
+  relations: CMSRelation[]
+  collection: string
+  displayFormat?: string
+}) {
+  const m2oRel = relations.find(
+    (r) => r.many_collection === collection && r.many_field === field.field && !r.junction_field
+  )
+
+  if (m2oRel?.one_collection) {
+    const ids = Array.isArray(val) ? val : (val != null && val !== '' ? [val] : [])
+    if (ids.length === 0) return <span className='text-slate-300 dark:text-slate-600'>—</span>
+    if (m2oRel.one_collection === 'nivaro_users') {
+      return (
+        <span className='inline-flex flex-wrap gap-x-1 gap-y-0.5'>
+          {ids.map((id) => <StripUserChip key={String(id)} userId={String(id)} />)}
+        </span>
+      )
+    }
+    return (
+      <span className='inline-flex flex-wrap gap-x-1.5'>
+        {ids.map((id) => <RelationCell key={String(id)} relCollection={m2oRel.one_collection!} id={id} />)}
+      </span>
+    )
+  }
+
+  if (val === null || val === undefined || val === '') {
+    return <span className='text-slate-300 dark:text-slate-600'>—</span>
+  }
+
+  // Display format override from layout assignment (currency/integer/decimal/percent/date/datetime)
+  if (displayFormat && displayFormat !== 'text') {
+    const num = Number(val)
+    if (displayFormat === 'currency' && !isNaN(num)) {
+      return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(num)}</span>
+    }
+    if (displayFormat === 'integer' && !isNaN(num)) {
+      return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Math.round(num))}</span>
+    }
+    if (displayFormat === 'decimal' && !isNaN(num)) {
+      return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(num)}</span>
+    }
+    if (displayFormat === 'percent' && !isNaN(num)) {
+      return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(num / 100)}</span>
+    }
+    if (displayFormat === 'date') {
+      try { return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Date(String(val)).toLocaleDateString()}</span> } catch { /* fall through */ }
+    }
+    if (displayFormat === 'datetime') {
+      try { return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Date(String(val)).toLocaleString()}</span> } catch { /* fall through */ }
+    }
+  }
+
+  return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{formatDisplayValue(val, field)}</span>
 }
 
 function SummaryStrip({
@@ -369,8 +608,10 @@ function SummaryStrip({
       )
     }
 
+    const entry = summaryFields.find((e) => (typeof e === 'string' ? e : e.field) === key)
+    const customLabel = entry && typeof entry !== 'string' ? entry.label : undefined
     const f = fields.find((x) => x.field === key)
-    const label = f?.label || key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    const label = customLabel || f?.label || key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 
     if (o2mLoading?.has(key)) {
       return (
@@ -528,8 +769,12 @@ export function GroupSection({
   ownersAssignment,
   pdfAssignment,
   pdfAttachField,
+  pdfFilenameTemplate,
   layoutId,
-  hideEmptySummary
+  hideEmptySummary,
+  widgetAssignments,
+  widgetApiBase = '/api',
+  fieldInlineDisplay,
 }: {
   group: FieldGroup
   fields: CMSField[]
@@ -559,8 +804,12 @@ export function GroupSection({
   ownersAssignment?: SlotAssignment | null
   pdfAssignment?: SlotAssignment | null
   pdfAttachField?: string | null
+  pdfFilenameTemplate?: string | null
   layoutId?: number | null
   hideEmptySummary?: boolean
+  widgetAssignments?: SlotAssignment[]
+  widgetApiBase?: string
+  fieldInlineDisplay?: Record<string, { entries: InlineDisplayEntry[]; separator: string | null }>
 }) {
   const [localCollapsed, setLocalCollapsed] = useState(group.is_collapsed ?? false)
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
@@ -622,11 +871,12 @@ export function GroupSection({
       {!collapsed && (
         <div className='border-t border-slate-100 px-5 py-4'>
           {(() => {
-            // Merge fields + optional inline owners into a sorted render list
+            // Merge fields + optional inline owners/pdf/widgets into a sorted render list
             type RenderItem = { _k: string; sort: number } & (
               | { _t: 'field'; f: CMSField }
               | { _t: 'owners'; slot: SlotAssignment }
               | { _t: 'pdf'; slot: SlotAssignment }
+              | { _t: 'widget'; slot: SlotAssignment }
             )
             const items: RenderItem[] = visibleFields_.map((f) => ({ _k: f.field, sort: f.sort ?? 0, _t: 'field' as const, f }))
             if (ownersAssignment) {
@@ -634,6 +884,9 @@ export function GroupSection({
             }
             if (pdfAssignment) {
               items.push({ _k: '__pdf__', sort: pdfAssignment.sort, _t: 'pdf' as const, slot: pdfAssignment })
+            }
+            for (const ws of (widgetAssignments ?? [])) {
+              items.push({ _k: ws.field, sort: ws.sort, _t: 'widget' as const, slot: ws })
             }
             items.sort((a, b) => a.sort - b.sort)
 
@@ -649,6 +902,7 @@ export function GroupSection({
                     )
                   }
                   if (item._t === 'pdf') return null
+                  if (item._t === 'widget') return null
                   const f = item.f
                   const m2oRel = relations.find(
                     (r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field
@@ -696,12 +950,37 @@ export function GroupSection({
                           itemId={itemId}
                           layoutId={layoutId}
                           attachField={pdfAttachField ?? null}
+                          filenameTemplate={pdfFilenameTemplate}
                           label={label}
                         />
                       </div>
                     )
                   }
+                  if (item._t === 'widget') {
+                    if (!item.slot.widget_id) return null
+                    const span = item.slot.col_span ?? 12
+                    return (
+                      <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
+                        <WidgetSlot
+                          widgetId={item.slot.widget_id}
+                          inputBindings={(item.slot.input_bindings ?? []) as import('../WidgetSlot').InputBinding[]}
+                          itemDraft={draft}
+                          label={item.slot.label_override ?? undefined}
+                          defaultExpanded={item.slot.default_expanded ?? true}
+                          apiBase={widgetApiBase}
+                        />
+                      </div>
+                    )
+                  }
                   const f = item.f
+                  const inlineConfig = fieldInlineDisplay?.[f.field]
+                  const inlineEntries = inlineConfig?.entries
+                  const inlineSeparator = inlineConfig?.separator ?? null
+                  const rawVal = draft[f.field]
+                  const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
+                  const inlineRelCollection = (inlineEntries?.length && hasVal)
+                    ? (relations.find((r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field)?.one_collection ?? null)
+                    : null
                   return (
                     <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, containerWidth)}` }}>
                       <FieldRow
@@ -718,6 +997,14 @@ export function GroupSection({
                         renderField={renderField}
                         onCountChange={onCountChange}
                       />
+                      {inlineEntries?.length && hasVal && inlineRelCollection && (
+                        <InlineDisplay
+                          relCollection={inlineRelCollection}
+                          relId={rawVal as string | number}
+                          entries={inlineEntries}
+                          separator={inlineSeparator}
+                        />
+                      )}
                     </div>
                   )
                 })}

@@ -53,6 +53,13 @@ export async function buildServer() {
     await app.register(adminProvisionRoutes)
   }
 
+  // Allow DELETE/PUT/PATCH requests with Content-Type: application/json but no body
+  // (SDK sends the header even on bodyless requests; Fastify v5 rejects empty JSON by default)
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    if (!body || (body as string).trim() === '') { done(null, undefined); return }
+    try { done(null, JSON.parse(body as string)) } catch (err) { done(err as Error, undefined) }
+  })
+
   // ─── CORS ──────────────────────────────────────────────────────────────────
   // Open to all origins, no credentials — tracker runs on external sites.
   // Admin UI is same-origin in prod; Vite proxy makes it same-origin in dev.

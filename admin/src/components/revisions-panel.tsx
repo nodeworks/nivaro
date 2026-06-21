@@ -12,7 +12,16 @@ import { cn, formatRelative } from '@/lib/utils'
 const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 'secondary'> = {
   create: 'success',
   update: 'default',
-  delete: 'destructive'
+  delete: 'destructive',
+  'o2m-create': 'success',
+  'o2m-update': 'default',
+  'o2m-delete': 'destructive'
+}
+
+const O2M_LABELS: Record<string, string> = {
+  'o2m-create': 'sub-create',
+  'o2m-update': 'sub-update',
+  'o2m-delete': 'sub-delete'
 }
 
 function revisionUserName(rev: Revision): string {
@@ -192,6 +201,42 @@ function SnapshotDataView({ data }: { data: Record<string, unknown> }) {
   )
 }
 
+interface O2MComment {
+  child_collection?: string
+  child_id?: string | number
+  snapshot?: Record<string, unknown>
+}
+
+function O2MEventView({ comment, action }: { comment: string | null | undefined; action: string }) {
+  let parsed: O2MComment = {}
+  try {
+    parsed = comment ? (JSON.parse(comment) as O2MComment) : {}
+  } catch {
+    parsed = {}
+  }
+  const { child_collection, child_id, snapshot } = parsed
+  const verb = action === 'o2m-create' ? 'created' : action === 'o2m-delete' ? 'deleted' : 'updated'
+  return (
+    <div className='space-y-2'>
+      <div className='flex items-center gap-2 text-[11px] text-slate-500'>
+        <span className='font-medium text-slate-700 capitalize'>{verb}</span>
+        {child_collection && (
+          <span className='font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[10.5px]'>{child_collection}</span>
+        )}
+        {child_id != null && (
+          <span className='text-slate-400'>#{String(child_id)}</span>
+        )}
+      </div>
+      {snapshot && Object.keys(snapshot).length > 0 && (
+        <div>
+          <p className='text-[10px] font-medium text-slate-400 mb-1 uppercase tracking-wide'>Snapshot</p>
+          <SnapshotDataView data={snapshot} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 function RevisionRow({
   revision,
   previousData,
@@ -208,6 +253,7 @@ function RevisionRow({
   const isUpdate = revision.action === 'update'
   const isCreate = revision.action === 'create'
   const isDelete = revision.action === 'delete'
+  const isO2M = revision.action?.startsWith('o2m-') ?? false
 
   // Side-by-side states: create → nothing before; delete → snapshot is the before state
   const sideBefore: Record<string, unknown> = isDelete
@@ -243,9 +289,9 @@ function RevisionRow({
         )}
         <Badge
           variant={ACTION_VARIANTS[revision.action ?? ''] ?? 'secondary'}
-          className='text-[10px] capitalize w-14 justify-center shrink-0'
+          className='text-[10px] capitalize shrink-0 justify-center min-w-[3.5rem]'
         >
-          {revision.action ?? '—'}
+          {O2M_LABELS[revision.action ?? ''] ?? revision.action ?? '—'}
         </Badge>
         <span className='text-[12px] text-slate-700 flex-1 truncate'>
           {revisionUserName(revision)}
@@ -264,32 +310,36 @@ function RevisionRow({
 
       {expanded && (
         <div className='px-6 pb-3 space-y-2'>
-          <div className='flex items-center justify-between'>
-            <p className='text-[10px] font-medium text-slate-500'>
-              {view === 'side'
-                ? 'Before / After'
-                : isUpdate && revision.delta
-                  ? 'Changes'
-                  : 'Snapshot'}
-            </p>
-            <div className='flex items-center overflow-hidden rounded border border-slate-200 dark:border-border'>
-              {(['delta', 'side'] as const).map((v) => (
-                <button
-                  key={v}
-                  type='button'
-                  onClick={() => setView(v)}
-                  className={
-                    view === v
-                      ? 'bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy dark:text-nvr-cyan'
-                      : 'px-2 py-0.5 text-[10px] text-slate-400 transition-colors hover:text-slate-600'
-                  }
-                >
-                  {v === 'delta' ? 'Delta' : 'Side-by-side'}
-                </button>
-              ))}
+          {!isO2M && (
+            <div className='flex items-center justify-between'>
+              <p className='text-[10px] font-medium text-slate-500'>
+                {view === 'side'
+                  ? 'Before / After'
+                  : isUpdate && revision.delta
+                    ? 'Changes'
+                    : 'Snapshot'}
+              </p>
+              <div className='flex items-center overflow-hidden rounded border border-slate-200 dark:border-border'>
+                {(['delta', 'side'] as const).map((v) => (
+                  <button
+                    key={v}
+                    type='button'
+                    onClick={() => setView(v)}
+                    className={
+                      view === v
+                        ? 'bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                        : 'px-2 py-0.5 text-[10px] text-slate-400 transition-colors hover:text-slate-600'
+                    }
+                  >
+                    {v === 'delta' ? 'Delta' : 'Side-by-side'}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-          {view === 'side' ? (
+          )}
+          {isO2M ? (
+            <O2MEventView comment={revision.comment} action={revision.action ?? ''} />
+          ) : view === 'side' ? (
             <SideBySideView before={sideBefore} after={sideAfter} />
           ) : isUpdate && revision.delta ? (
             <DeltaView delta={revision.delta} />
