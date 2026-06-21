@@ -294,6 +294,7 @@ export function FieldRenderer({
           : (field.options ?? {})
         const layoutId = (opts.layout_id as number | null) ?? null
         const showRowRevisions = !!opts.show_row_revisions
+        const allowRevisionRestore = opts.allow_revision_restore !== false
         const saveMode = (opts.save_mode as 'immediate' | 'pending') ?? 'immediate'
         const showLineNumbers = !!(opts.show_line_numbers)
         const enableReorder = opts.enable_reorder !== false
@@ -304,7 +305,7 @@ export function FieldRenderer({
         const sortField = typeof opts.sort_field === 'string' && opts.sort_field ? opts.sort_field : undefined
         const sortDir = opts.sort_dir === 'desc' ? 'desc' as const : 'asc' as const
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} />
         )
       }
     }

@@ -56,6 +56,8 @@ export interface SlotAssignment {
   default_expanded?: boolean
   label_override?: string | null
   show_row_revisions?: boolean | number
+  allow_revision_restore?: boolean | number
+  lock_conditions?: string | null
   overrides?: Record<string, unknown> | string | null
   widget_id?: number | null
   input_bindings?: string | null  // JSON: [{key,binding_type,binding_value}]

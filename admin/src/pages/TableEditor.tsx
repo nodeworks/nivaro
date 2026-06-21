@@ -5121,6 +5121,10 @@ function FieldSettingsPopover({
   onSave,
   showRowRevisions,
   onRowRevisionsChange,
+  allowRevisionRestore = true,
+  onAllowRevisionRestoreChange,
+  lockConditions = [],
+  onLockConditionsChange,
   inlineDisplayConfig,
   onInlineDisplayChange,
 }: {
@@ -5135,6 +5139,10 @@ function FieldSettingsPopover({
   onSave: (patch: Partial<FieldSettings> & { dependency_config?: string }) => void
   showRowRevisions?: boolean
   onRowRevisionsChange?: (v: boolean) => void
+  allowRevisionRestore?: boolean
+  onAllowRevisionRestoreChange?: (v: boolean) => void
+  lockConditions?: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>
+  onLockConditionsChange?: (v: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>) => void
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
 }) {
@@ -5745,6 +5753,63 @@ function FieldSettingsPopover({
                   <span className='text-[11px] text-slate-600'>Show row revision history</span>
                 </div>
               )}
+              {iface === 'inline-table' && showRowRevisions && onAllowRevisionRestoreChange && (
+                <div className='flex items-center gap-2 pl-4'>
+                  <Switch checked={!!allowRevisionRestore} onCheckedChange={onAllowRevisionRestoreChange} className='scale-75' />
+                  <span className='text-[11px] text-slate-600'>Allow restore from revision</span>
+                </div>
+              )}
+              {onLockConditionsChange && (
+                <div className='space-y-1.5 border-t border-slate-100 pt-3'>
+                  <div className='flex items-center justify-between'>
+                    <span className='text-[11px] font-medium text-slate-600'>Lock conditions</span>
+                    <button type='button'
+                      onClick={() => onLockConditionsChange([...lockConditions, { type: 'pipeline_state', state_keys: [] }])}
+                      className='text-[10px] font-medium text-[#00ceff] hover:underline'>
+                      + Add
+                    </button>
+                  </div>
+                  {lockConditions.length === 0 && (
+                    <p className='text-[10px] text-slate-400'>No conditions — field is always editable.</p>
+                  )}
+                  {lockConditions.map((cond, i) => (
+                    <div key={i} className='rounded border border-slate-200 bg-slate-50 p-2 space-y-1.5'>
+                      <div className='flex items-center gap-1.5'>
+                        <select
+                          value={cond.type}
+                          onChange={(e) => { const next = [...lockConditions]; next[i] = { ...next[i], type: e.target.value }; onLockConditionsChange(next) }}
+                          className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px]'
+                        >
+                          <option value='pipeline_state'>Pipeline state</option>
+                          <option value='role'>User role</option>
+                        </select>
+                        <button type='button' onClick={() => onLockConditionsChange(lockConditions.filter((_, j) => j !== i))}
+                          className='text-slate-400 hover:text-red-500'>
+                          <X className='h-3 w-3' />
+                        </button>
+                      </div>
+                      {cond.type === 'pipeline_state' && (
+                        <input
+                          type='text'
+                          placeholder='state keys, comma-separated'
+                          value={(cond.state_keys ?? []).join(', ')}
+                          onChange={(e) => { const next = [...lockConditions]; next[i] = { ...next[i], state_keys: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }; onLockConditionsChange(next) }}
+                          className='w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] placeholder:text-slate-300'
+                        />
+                      )}
+                      {cond.type === 'role' && (
+                        <input
+                          type='text'
+                          placeholder='role UUIDs, comma-separated'
+                          value={(cond.role_ids ?? []).join(', ')}
+                          onChange={(e) => { const next = [...lockConditions]; next[i] = { ...next[i], role_ids: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }; onLockConditionsChange(next) }}
+                          className='w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] placeholder:text-slate-300'
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -5796,6 +5861,10 @@ function FieldChip({
   onUnassign,
   rowRevisions,
   onRowRevisionsChange,
+  allowRevisionRestore = true,
+  onAllowRevisionRestoreChange,
+  lockConditions = [],
+  onLockConditionsChange,
   extraControls,
   inlineDisplayConfig,
   onInlineDisplayChange,
@@ -5819,6 +5888,10 @@ function FieldChip({
   onUnassign?: () => void
   rowRevisions?: boolean
   onRowRevisionsChange?: (v: boolean) => void
+  allowRevisionRestore?: boolean
+  onAllowRevisionRestoreChange?: (v: boolean) => void
+  lockConditions?: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>
+  onLockConditionsChange?: (v: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>) => void
   extraControls?: React.ReactNode
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
@@ -5871,6 +5944,10 @@ function FieldChip({
           onSave={onSettings}
           showRowRevisions={rowRevisions}
           onRowRevisionsChange={onRowRevisionsChange}
+          allowRevisionRestore={allowRevisionRestore}
+          onAllowRevisionRestoreChange={onAllowRevisionRestoreChange}
+          lockConditions={lockConditions}
+          onLockConditionsChange={onLockConditionsChange}
           inlineDisplayConfig={inlineDisplayConfig}
           onInlineDisplayChange={onInlineDisplayChange}
         />
@@ -6366,6 +6443,10 @@ function SortableGroupCard({
   onGroupSettings,
   getRowRevisions,
   onRowRevisions,
+  getAllowRevisionRestore,
+  onAllowRevisionRestore,
+  getLockConditions,
+  onLockConditions,
   getExtraControls,
   widgetSlotMeta,
   getInlineDisplay,
@@ -6395,6 +6476,10 @@ function SortableGroupCard({
   onGroupSettings?: (id: number, patch: Partial<Pick<FieldGroup, 'hide_when_empty' | 'visibility_mode' | 'summary_fields' | 'summary_hide_empty' | 'swap_config'>>) => void
   getRowRevisions?: (f: string) => boolean
   onRowRevisions?: (f: string, v: boolean) => void
+  getAllowRevisionRestore?: (f: string) => boolean
+  onAllowRevisionRestore?: (f: string, v: boolean) => void
+  getLockConditions?: (f: string) => Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>
+  onLockConditions?: (f: string, v: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>) => void
   getExtraControls?: (f: string, opts?: { isM2O?: boolean; relatedCollection?: string | null }) => React.ReactNode
   widgetSlotMeta?: Record<string, { widget_id: number; name: string; label_override: string | null }>
   getInlineDisplay?: (f: string) => InlineDisplayConfig | undefined
@@ -6790,6 +6875,10 @@ function SortableGroupCard({
                   onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
                   rowRevisions={getRowRevisions?.(f)}
                   onRowRevisionsChange={onRowRevisions ? v => onRowRevisions(f, v) : undefined}
+                  allowRevisionRestore={getAllowRevisionRestore?.(f) ?? true}
+                  onAllowRevisionRestoreChange={onAllowRevisionRestore ? v => onAllowRevisionRestore(f, v) : undefined}
+                  lockConditions={getLockConditions?.(f) ?? []}
+                  onLockConditionsChange={onLockConditions ? v => onLockConditions(f, v) : undefined}
                   extraControls={getExtraControls?.(f, { isM2O: kind === 'M2O', relatedCollection: getRelatedCollection?.(f) })}
                   inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
                   onInlineDisplayChange={kind === 'M2O' && onInlineDisplayChange ? (config) => onInlineDisplayChange(f, config) : undefined}
@@ -8041,6 +8130,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const [localAssignments, setLocalAssignments] = useState<Record<string, string | null>>({})
   const [localColSpans, setLocalColSpans] = useState<Record<string, number | null>>({})
   const [localRowRevisions, setLocalRowRevisions] = useState<Record<string, boolean>>({})
+  const [localAllowRevisionRestore, setLocalAllowRevisionRestore] = useState<Record<string, boolean>>({})
+  const [localLockConditions, setLocalLockConditions] = useState<Record<string, Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>>>({})
   const [inlineDisplayMeta, setInlineDisplayMeta] = useState<Record<string, InlineDisplayConfig>>({})
   const [subtitleConfig, setSubtitleConfig] = useState<{ fields: SubtitleField[]; separator: string } | null>(null)
   const [subtitlePickerOpen, setSubtitlePickerOpen] = useState(false)
@@ -8174,6 +8265,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     const colSpans: Record<string, number | null> = {}
     const overrides: Record<string, Record<string, unknown>> = {}
     const rowRevisions: Record<string, boolean> = {}
+    const allowRevisionRestore: Record<string, boolean> = {}
+    const lockConditions: Record<string, Array<{ type: string; state_keys?: string[]; role_ids?: string[] }>> = {}
     for (const f of sorted) {
       const fc = fieldConfig.find(fc => fc.field === f.field)
       const opts = fc?.options
@@ -8181,6 +8274,10 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       const span = parsed?.col_span
       colSpans[f.field] = typeof span === 'number' ? span : null
       rowRevisions[f.field] = !!parsed?.show_row_revisions
+      allowRevisionRestore[f.field] = parsed?.allow_revision_restore !== false
+      if (parsed?.lock_conditions) {
+        try { lockConditions[f.field] = typeof parsed.lock_conditions === 'string' ? JSON.parse(parsed.lock_conditions) : parsed.lock_conditions } catch { /* noop */ }
+      }
       const raw = (fc as Record<string, unknown> | undefined)?._overrides
       if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
         overrides[f.field] = raw as Record<string, unknown>
@@ -8188,6 +8285,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     }
     setLocalColSpans(colSpans)
     setLocalRowRevisions(rowRevisions)
+    setLocalAllowRevisionRestore(allowRevisionRestore)
+    setLocalLockConditions(lockConditions)
     setLocalOverrides(overrides)
     // Parse __inline_display__ bindings for M2O fields
     const nextInlineDisplay: Record<string, InlineDisplayConfig> = {}
@@ -8260,7 +8359,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       const seq = changeSeqRef.current
       const ungroupedPos = localGroupOrder.indexOf('__ungrouped__')
       // Build assignments from localFieldOrder directly — __pool__ is the static Fields List, skip it
-      const fieldAssignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean; col_span?: number | null; overrides?: Record<string, unknown> | null; show_row_revisions?: boolean; widget_id?: number; input_bindings?: Array<{ key: string; binding_type: string; binding_value: string }> | null }> = []
+      const fieldAssignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean; col_span?: number | null; overrides?: Record<string, unknown> | null; show_row_revisions?: boolean; allow_revision_restore?: boolean | null; lock_conditions?: string | null; widget_id?: number; input_bindings?: Array<{ key: string; binding_type: string; binding_value: string }> | null }> = []
       for (const [container, fields] of Object.entries(localFieldOrder)) {
         if (container === '__pool__') continue
         const gk = container === '__unassigned__' ? null : container
@@ -8282,7 +8381,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
             const inlineBinding = config && config.entries.length > 0
               ? [{ key: '__inline_display__', binding_type: 'static' as const, binding_value: JSON.stringify({ fields: config.entries, separator: config.separator }) }]
               : null
-            fieldAssignments.push({ field: f, group_key: gk, sort: idx, col_span: localColSpans[f] ?? null, overrides: ov && Object.keys(ov).length > 0 ? ov : null, show_row_revisions: localRowRevisions[f] ?? false, input_bindings: inlineBinding })
+            const lc = localLockConditions[f]
+            fieldAssignments.push({ field: f, group_key: gk, sort: idx, col_span: localColSpans[f] ?? null, overrides: ov && Object.keys(ov).length > 0 ? ov : null, show_row_revisions: localRowRevisions[f] ?? false, allow_revision_restore: localAllowRevisionRestore[f] ?? true, lock_conditions: lc?.length ? JSON.stringify(lc) : null, input_bindings: inlineBinding })
           }
         })
       }
@@ -9549,6 +9649,10 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                     onGroupSettings={(id, patch) => patchGroupSettingsMut.mutate({ id, patch })}
                     getRowRevisions={f => localRowRevisions[f] ?? false}
                     onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
+                    getAllowRevisionRestore={f => localAllowRevisionRestore[f] ?? true}
+                    onAllowRevisionRestore={(f, v) => { setLocalAllowRevisionRestore(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
+                    getLockConditions={f => localLockConditions[f] ?? []}
+                    onLockConditions={(f, v) => { setLocalLockConditions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                     getExtraControls={getExtraControls}
                     widgetSlotMeta={widgetSlotMeta}
                     getInlineDisplay={(f) => inlineDisplayMeta[f]}

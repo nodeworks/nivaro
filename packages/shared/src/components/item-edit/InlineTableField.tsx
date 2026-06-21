@@ -107,6 +107,7 @@ export function InlineTableField({
   parentCollection,
   layoutId,
   showRowRevisions,
+  allowRevisionRestore = true,
   saveMode = 'immediate',
   showLineNumbers = false,
   enableReorder = true,
@@ -121,6 +122,7 @@ export function InlineTableField({
   parentCollection?: string
   layoutId?: number | null
   showRowRevisions?: boolean
+  allowRevisionRestore?: boolean
   saveMode?: 'immediate' | 'pending'
   showLineNumbers?: boolean
   enableReorder?: boolean
@@ -1314,6 +1316,18 @@ export function InlineTableField({
                       </div>
                     ))}
                   </div>
+                  {allowRevisionRestore && rev.data && (
+                    <button
+                      type='button'
+                      onClick={() => {
+                        setEditState({ rowId: String(historyRow!.id), draft: { ...(rev.data as Record<string, unknown>) } })
+                        setHistoryRow(null)
+                      }}
+                      className='mt-2 rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10'
+                    >
+                      Restore to this version
+                    </button>
+                  )}
                 </div>
               )
             })

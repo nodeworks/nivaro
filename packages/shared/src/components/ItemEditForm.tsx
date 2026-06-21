@@ -675,6 +675,27 @@ export function ItemEditForm({
   // ── Layout / groups ────────────────────────────────────────────────────────
   const assignments: SlotAssignment[] = activeLayoutData?.assignments ?? []
 
+  // ── Lock condition data ────────────────────────────────────────────────────
+  const hasLockConditions = assignments.some((a) => a.lock_conditions)
+
+  const { data: currentUserData } = useQuery<{ role?: string | null } | null>({
+    queryKey: ['current-user-me'],
+    queryFn: () =>
+      client.request<{ data: { role?: string | null } }>(get('/users/me')).then((r) => r.data ?? null),
+    staleTime: 5 * 60_000,
+    enabled: hasLockConditions
+  })
+
+  const { data: pipelineInstanceData } = useQuery<{ instance?: { current_state?: string | null } | null; states?: Array<{ id: string; key: string }> } | null>({
+    queryKey: ['pipeline-instance-lock', collection, itemId],
+    queryFn: () =>
+      client.request<{ data: unknown }>(get(`/pipelines/instance/${collection}/${itemId}`))
+        .then((r) => r.data as { instance?: { current_state?: string | null } | null; states?: Array<{ id: string; key: string }> })
+        .catch(() => null),
+    staleTime: 30_000,
+    enabled: hasLockConditions && !isNew
+  })
+
   // When a specific layout is requested by slug, only show fields explicitly
   // assigned to that layout — unassigned fields should not appear.
   const assignedFieldSet = useMemo<Set<string> | null>(() => {
@@ -1488,6 +1509,24 @@ export function ItemEditForm({
   // ── Render helpers ─────────────────────────────────────────────────────────
   const visibleFields = new Set<string>()
   const lockedFields = new Set<string>()
+  if (hasLockConditions) {
+    const currentRole = currentUserData?.role ?? null
+    const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
+    const currentStateKey = currentStateId
+      ? (pipelineInstanceData?.states ?? []).find((s) => s.id === currentStateId)?.key ?? null
+      : null
+    for (const a of assignments) {
+      if (!a.lock_conditions) continue
+      let conds: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }> = []
+      try { conds = JSON.parse(a.lock_conditions) } catch { continue }
+      const locked = conds.some((c) => {
+        if (c.type === 'pipeline_state' && c.state_keys?.length) return c.state_keys.includes(currentStateKey ?? '')
+        if (c.type === 'role' && c.role_ids?.length) return c.role_ids.includes(currentRole ?? '')
+        return false
+      })
+      if (locked) lockedFields.add(a.field)
+    }
+  }
 
   function renderSentinel(key: string) {
     if (key === '__pipeline__' && showPipeline) {
