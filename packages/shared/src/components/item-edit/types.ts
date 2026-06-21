@@ -44,6 +44,7 @@ export interface FieldGroup {
   visibility_mode?: 'always' | 'new_only' | 'existing_only'
   summary_fields?: string[] | string | null
   summary_hide_empty?: boolean | number
+  swap_config?: string | null
 }
 
 export interface SlotAssignment {

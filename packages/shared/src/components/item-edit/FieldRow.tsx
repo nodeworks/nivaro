@@ -112,7 +112,10 @@ export function FieldRow({
   locked,
   layoutAiEnabled,
   renderField,
-  onCountChange
+  onCountChange,
+  swapButton,
+  swapContent,
+  forceVisible
 }: {
   field: CMSField
   draft: Record<string, unknown>
@@ -126,6 +129,9 @@ export function FieldRow({
   layoutAiEnabled?: boolean
   renderField?: (props: RenderFieldProps) => ReactNode
   onCountChange?: (field: string, count: number) => void
+  swapButton?: ReactNode
+  swapContent?: ReactNode
+  forceVisible?: boolean
 }) {
   // Hooks must be called before any early return
   const m2mStaging = useM2MStaging()
@@ -182,7 +188,7 @@ export function FieldRow({
     ])
   )
 
-  if (!visible || (!field.layout_assigned && (field.hidden || SYSTEM_FIELDS.has(field.field)))) return null
+  if (!forceVisible && (!visible || (!field.layout_assigned && (field.hidden || SYSTEM_FIELDS.has(field.field))))) return null
   const value = draft[field.field] ?? null
   const label = field.label ?? titleCase(field.field)
 
@@ -353,6 +359,7 @@ export function FieldRow({
             AI
           </button>
         )}
+        {swapButton}
         {locked && <span className='text-[10px] text-amber-500 font-medium'>(locked)</span>}
         {cascadeFilter && Object.keys(cascadeFilter).length > 0 && cascadeParentLabels.length > 0 && (
           <TooltipProvider delayDuration={100}>
@@ -374,7 +381,7 @@ export function FieldRow({
           </TooltipProvider>
         )}
       </div>}
-      <div className={cn(locked && 'pointer-events-none opacity-60', error && 'ring-1 ring-red-400 rounded-md')}>
+      {swapContent ?? <div className={cn(locked && 'pointer-events-none opacity-60', error && 'ring-1 ring-red-400 rounded-md')}>
         {renderField ? (
           renderField({
             field,
@@ -401,7 +408,7 @@ export function FieldRow({
             onCountChange={onCountChange ? (count) => onCountChange(field.field, count) : undefined}
           />
         )}
-      </div>
+      </div>}
     </div>
   )
 }

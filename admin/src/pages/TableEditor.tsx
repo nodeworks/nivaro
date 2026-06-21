@@ -19,6 +19,7 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
   ChevronUp,
@@ -31,8 +32,10 @@ import {
   Lock,
   Pencil,
   Plus,
+  Search,
   Settings2,
   Trash2,
+  Users,
   X
 } from 'lucide-react'
 
@@ -72,7 +75,7 @@ import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { CollectionFieldPickerPanel, FieldPicker, type PickedField } from '@/components/field-picker'
+import { CollectionFieldPickerPanel, FieldPicker, FieldPickerPanel, type PickedField } from '@/components/field-picker'
 import { FormulaBuilder } from '@/components/formula-builder'
 import { IconPicker } from '@/components/icon-picker'
 import { Badge } from '@/components/ui/badge'
@@ -100,7 +103,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
-import { api, type CMSRelation } from '@/lib/api'
+import { api, type CMSField, type CMSRelation } from '@/lib/api'
 import {
   CHOICE_INTERFACES,
   type Choice,
@@ -4491,6 +4494,7 @@ interface SlotState {
   label_override: string | null
   is_visible: boolean
   default_expanded: boolean
+  show_approval_chain: boolean
 }
 const SLOT_KEYS: SlotKey[] = ['__pipeline__', '__comments__', '__tasks__']
 const SLOT_META: Record<SlotKey, { name: string; defaultLabel: string; editable: boolean }> = {
@@ -4521,6 +4525,7 @@ interface FieldGroup {
   visibility_mode?: 'always' | 'new_only' | 'existing_only'
   summary_fields?: string | null
   summary_hide_empty?: boolean | number
+  swap_config?: string | null
 }
 
 // ── Width options ──────────────────────────────────────────────────────────────
@@ -6167,6 +6172,175 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
 
 // ── SortableGroupCard ─────────────────────────────────────────────────────────
 
+function SwapConfigEditor({
+  group,
+  allFields,
+  onGroupSettings,
+}: {
+  group: FieldGroup
+  allFields: Array<{ field: string; type?: string }>
+  onGroupSettings: (id: number, patch: Partial<Pick<FieldGroup, 'swap_config'>>) => void
+}) {
+  type AltField = { field: string; width: 1 | 2 }
+  type SwapCfg = { enabled: boolean; primary_field: string; alternate_fields: AltField[]; toggle_label?: string; back_label?: string }
+
+  const [pfOpen, setPfOpen] = useState(false)
+  const [afOpen, setAfOpen] = useState(false)
+  const [pfSearch, setPfSearch] = useState('')
+  const [afSearch, setAfSearch] = useState('')
+
+  const swapCfg = (() => {
+    try {
+      if (!group.swap_config) return null
+      const raw = JSON.parse(group.swap_config)
+      // Normalise legacy string[] to AltField[]
+      const alts: AltField[] = (raw.alternate_fields ?? []).map((x: string | AltField) =>
+        typeof x === 'string' ? { field: x, width: 2 } : x
+      )
+      return { ...raw, alternate_fields: alts } as SwapCfg
+    } catch { return null }
+  })()
+
+  const save = (patch: Partial<SwapCfg>) => {
+    const next: SwapCfg = { enabled: swapCfg?.enabled ?? false, primary_field: swapCfg?.primary_field ?? '', alternate_fields: swapCfg?.alternate_fields ?? [], toggle_label: swapCfg?.toggle_label, back_label: swapCfg?.back_label, ...patch }
+    onGroupSettings(group.id, { swap_config: JSON.stringify(next) })
+  }
+
+  const fieldLabel = (f: string) => titleCase(f)
+  const altFieldKeys = new Set((swapCfg?.alternate_fields ?? []).map(a => a.field))
+  const pfFiltered = allFields.filter(f => !f.field.startsWith('__') && f.field.toLowerCase().includes(pfSearch.toLowerCase()))
+  const afFiltered = allFields.filter(f => !f.field.startsWith('__') && f.field.toLowerCase().includes(afSearch.toLowerCase()) && !altFieldKeys.has(f.field))
+  const altFields = swapCfg?.alternate_fields ?? []
+
+  const setWidth = (field: string, width: 1 | 2) => {
+    save({ alternate_fields: altFields.map(a => a.field === field ? { ...a, width } : a) })
+  }
+  const removeAlt = (field: string) => {
+    save({ alternate_fields: altFields.filter(a => a.field !== field) })
+  }
+
+  return (
+    <div className='border-t border-slate-100 dark:border-border pt-3 space-y-2'>
+      <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Field Swap</p>
+      <p className='text-[10px] text-slate-400'>Toggle between a M2O picker and manual entry fields.</p>
+      <label className='flex items-center gap-2 text-[11px] text-slate-600'>
+        <input type='checkbox' checked={!!swapCfg?.enabled}
+          onChange={e => save({ enabled: e.target.checked })}
+          className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+        Enable field swap
+      </label>
+      {swapCfg?.enabled && (
+        <div className='space-y-2 pl-1'>
+          {/* Primary field */}
+          <div>
+            <p className='text-[10px] text-slate-400 mb-1'>Primary field (M2O)</p>
+            <button type='button'
+              onClick={() => { setPfOpen(v => !v); setPfSearch('') }}
+              className='w-full h-7 rounded border border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-left text-[11px] flex items-center justify-between gap-1 hover:border-nvr-cyan/50'>
+              {swapCfg.primary_field
+                ? <span className='flex-1 truncate'><span className='font-medium'>{fieldLabel(swapCfg.primary_field)}</span> <span className='font-mono text-[10px] text-slate-400'>{swapCfg.primary_field}</span></span>
+                : <span className='text-slate-400'>Select field…</span>}
+              <ChevronDown className='h-3 w-3 shrink-0 text-slate-400' />
+            </button>
+            {pfOpen && (
+              <div className='mt-0.5 rounded border border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm overflow-hidden'>
+                <div className='flex items-center border-b border-slate-100 dark:border-border px-2'>
+                  <Search className='h-3 w-3 text-slate-400 shrink-0' />
+                  <input autoFocus value={pfSearch} onChange={e => setPfSearch(e.target.value)}
+                    placeholder='Search…' className='flex-1 h-7 bg-transparent px-2 text-[11px] outline-none' />
+                </div>
+                <div className='max-h-36 overflow-y-auto'>
+                  {pfFiltered.length === 0
+                    ? <p className='px-3 py-2 text-[11px] text-slate-400'>No fields</p>
+                    : pfFiltered.map(f => (
+                      <button key={f.field} type='button'
+                        onClick={() => { save({ primary_field: f.field }); setPfOpen(false) }}
+                        className={['w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 dark:hover:bg-muted flex items-center justify-between gap-2', swapCfg.primary_field === f.field ? 'bg-nvr-cyan/5 text-nvr-cyan' : ''].join(' ')}>
+                        <span className='font-medium truncate'>{fieldLabel(f.field)}</span>
+                        <span className='font-mono text-[10px] text-slate-400 shrink-0'>{f.type ?? ''}</span>
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+          {/* Alternate fields */}
+          <div>
+            <p className='text-[10px] text-slate-400 mb-1'>Alternate fields</p>
+            {altFields.length > 0 && (
+              <div className='mb-1 space-y-1'>
+                {altFields.map(a => (
+                  <div key={a.field} className='flex items-center gap-1.5 rounded border border-slate-100 dark:border-border bg-white dark:bg-card px-2 py-1'>
+                    <span className='flex-1 truncate text-[11px] font-medium text-slate-700 dark:text-slate-200'>{fieldLabel(a.field)}</span>
+                    <div className='flex rounded border border-slate-200 dark:border-border overflow-hidden shrink-0'>
+                      <button type='button'
+                        onClick={() => setWidth(a.field, 1)}
+                        className={['px-1.5 py-0.5 text-[10px] font-medium transition-colors', a.width === 1 ? 'bg-nvr-cyan text-white' : 'text-slate-400 hover:text-slate-600'].join(' ')}
+                        title='Half width'>½
+                      </button>
+                      <button type='button'
+                        onClick={() => setWidth(a.field, 2)}
+                        className={['px-1.5 py-0.5 text-[10px] font-medium transition-colors border-l border-slate-200 dark:border-border', a.width === 2 ? 'bg-nvr-cyan text-white' : 'text-slate-400 hover:text-slate-600'].join(' ')}
+                        title='Full width'>1
+                      </button>
+                    </div>
+                    <button type='button' onClick={() => removeAlt(a.field)} className='text-slate-300 hover:text-red-500 text-[14px] leading-none shrink-0'>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button type='button'
+              onClick={() => { setAfOpen(v => !v); setAfSearch('') }}
+              className='w-full h-7 rounded border border-dashed border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-left text-[11px] flex items-center gap-1.5 text-slate-400 hover:border-nvr-cyan/50 hover:text-nvr-cyan'>
+              <Plus className='h-3 w-3' /> Add field…
+            </button>
+            {afOpen && (
+              <div className='mt-0.5 rounded border border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm overflow-hidden'>
+                <div className='flex items-center border-b border-slate-100 dark:border-border px-2'>
+                  <Search className='h-3 w-3 text-slate-400 shrink-0' />
+                  <input autoFocus value={afSearch} onChange={e => setAfSearch(e.target.value)}
+                    placeholder='Search…' className='flex-1 h-7 bg-transparent px-2 text-[11px] outline-none' />
+                </div>
+                <div className='max-h-36 overflow-y-auto'>
+                  {afFiltered.length === 0
+                    ? <p className='px-3 py-2 text-[11px] text-slate-400'>No more fields</p>
+                    : afFiltered.map(f => (
+                      <button key={f.field} type='button'
+                        onClick={() => { save({ alternate_fields: [...altFields, { field: f.field, width: 2 }] }); setAfSearch(''); setAfOpen(false) }}
+                        className='w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 dark:hover:bg-muted flex items-center justify-between gap-2'>
+                        <span className='font-medium truncate'>{fieldLabel(f.field)}</span>
+                        <span className='font-mono text-[10px] text-slate-400 shrink-0'>{f.type ?? ''}</span>
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+          {/* Labels */}
+          <div className='flex gap-2'>
+            <div className='flex-1'>
+              <p className='text-[10px] text-slate-400 mb-1'>Toggle label</p>
+              <input type='text' placeholder='Enter custom'
+                key={`tl-${group.id}`}
+                defaultValue={swapCfg.toggle_label ?? ''}
+                onBlur={e => save({ toggle_label: e.target.value || undefined })}
+                className='w-full h-6 rounded border border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-[11px]' />
+            </div>
+            <div className='flex-1'>
+              <p className='text-[10px] text-slate-400 mb-1'>Back label</p>
+              <input type='text' placeholder='Use saved'
+                key={`bl-${group.id}`}
+                defaultValue={swapCfg.back_label ?? ''}
+                onBlur={e => save({ back_label: e.target.value || undefined })}
+                className='w-full h-6 rounded border border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-[11px]' />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SortableGroupCard({
   group,
   fieldNames,
@@ -6218,7 +6392,7 @@ function SortableGroupCard({
   containerGroups?: FieldGroup[]
   onSetContainer?: (id: number, container_id: number | null) => void
   onToggleCollapsed?: (id: number) => void
-  onGroupSettings?: (id: number, patch: Partial<Pick<FieldGroup, 'hide_when_empty' | 'visibility_mode' | 'summary_fields' | 'summary_hide_empty'>>) => void
+  onGroupSettings?: (id: number, patch: Partial<Pick<FieldGroup, 'hide_when_empty' | 'visibility_mode' | 'summary_fields' | 'summary_hide_empty' | 'swap_config'>>) => void
   getRowRevisions?: (f: string) => boolean
   onRowRevisions?: (f: string, v: boolean) => void
   getExtraControls?: (f: string, opts?: { isM2O?: boolean; relatedCollection?: string | null }) => React.ReactNode
@@ -6318,7 +6492,7 @@ function SortableGroupCard({
             {containerGroups.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
         )}
-        {(group.type === 'section' || group.type === 'metadata') && onGroupSettings && (
+        {(group.type === 'section' || group.type === 'metadata' || group.type === 'tab') && onGroupSettings && (
           <div onPointerDown={e => e.stopPropagation()}>
             <Popover>
               <PopoverTrigger asChild>
@@ -6488,6 +6662,7 @@ function SortableGroupCard({
                     Hide fields with no values
                   </label>
                 </div>
+                <SwapConfigEditor group={group} allFields={allFields} onGroupSettings={onGroupSettings} />
               </PopoverContent>
             </Popover>
           </div>
@@ -7557,6 +7732,16 @@ function SortableSlotCard({
             ? <ChevronDown className='h-3.5 w-3.5' />
             : <ChevronRight className='h-3.5 w-3.5' />}
         </button>
+        {slotKey === '__pipeline__' && (
+          <button
+            type='button'
+            title={s.show_approval_chain ? 'Hide approval chain button' : 'Show approval chain button'}
+            onClick={() => updateSlot(slotKey, { show_approval_chain: !s.show_approval_chain })}
+            className={cn('shrink-0 rounded p-1 transition-colors', s.show_approval_chain ? 'text-nvr-cyan' : 'text-slate-400 hover:text-nvr-cyan')}
+          >
+            <Users className='h-3.5 w-3.5' />
+          </button>
+        )}
         <button type='button' title={s.is_visible ? 'Hide' : 'Show'} onClick={() => updateSlot(slotKey, { is_visible: !s.is_visible })}
           className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'>
           {s.is_visible ? <Eye className='h-3.5 w-3.5' /> : <EyeOff className='h-3.5 w-3.5' />}
@@ -7568,7 +7753,7 @@ function SortableSlotCard({
 
 type InlineDisplayEntry = { field: string; label: string | null; format: string | null; line_break?: boolean }
 type InlineDisplayConfig = { entries: InlineDisplayEntry[]; separator: string | null }
-type SubtitleField = { field: string; label: string | null }
+type SubtitleField = { field: string; label: string | null; color?: string; weight?: string; display_as?: string }
 
 function InlineDisplaySection({
   relatedCollection,
@@ -7851,13 +8036,15 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const [localGroupOrder, setLocalGroupOrder] = useState<(number | '__ungrouped__' | SlotKey | string)[]>([])
   type WidgetSlotMeta = { widget_id: number; name: string; label_override: string | null; is_visible: boolean; input_bindings: Array<{ key: string; binding_type: string; binding_value: string }> }
   const [widgetSlotMeta, setWidgetSlotMeta] = useState<Record<string, WidgetSlotMeta>>({})
-  type HeaderFieldMeta = { label_override: string | null; display_format: string }
+  type HeaderFieldMeta = { label_override: string | null; display_format: string; color?: string; weight?: string; display_as?: string }
   const [headerFieldDisplayMeta, setHeaderFieldDisplayMeta] = useState<Record<string, HeaderFieldMeta>>({})
   const [localAssignments, setLocalAssignments] = useState<Record<string, string | null>>({})
   const [localColSpans, setLocalColSpans] = useState<Record<string, number | null>>({})
   const [localRowRevisions, setLocalRowRevisions] = useState<Record<string, boolean>>({})
   const [inlineDisplayMeta, setInlineDisplayMeta] = useState<Record<string, InlineDisplayConfig>>({})
   const [subtitleConfig, setSubtitleConfig] = useState<{ fields: SubtitleField[]; separator: string } | null>(null)
+  const [subtitlePickerOpen, setSubtitlePickerOpen] = useState(false)
+  const [subtitleStyleOpen, setSubtitleStyleOpen] = useState<number | null>(null)
   const [localOverrides, setLocalOverrides] = useState<Record<string, Record<string, unknown>>>({})
   const [localFieldOrder, setLocalFieldOrder] = useState<Record<string, string[]>>({})
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
@@ -7867,9 +8054,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   // Special panels (pipeline/comments/tasks) persisted as sentinel assignments.
   // sort = position relative to groups/ungrouped; label_override only for comments/tasks.
   const [slots, setSlots] = useState<Record<SlotKey, SlotState>>(() => ({
-    __pipeline__: { sort: 0, label_override: null, is_visible: true, default_expanded: true },
-    __comments__: { sort: 0, label_override: null, is_visible: true, default_expanded: true },
-    __tasks__: { sort: 0, label_override: null, is_visible: true, default_expanded: true },
+    __pipeline__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
+    __comments__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
+    __tasks__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
   }))
   const [editingSlot, setEditingSlot] = useState<SlotKey | null>(null)
   const [slotLabelDraft, setSlotLabelDraft] = useState('')
@@ -7933,9 +8120,14 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         const fmt = parsed.find(b => b.key === '__display_format__')
         if (fmt?.binding_value) displayFormat = fmt.binding_value
       } catch { /* noop */ }
+      const rawBindings2 = (row as Record<string, unknown>).input_bindings
+      const parsedBindings2: Array<{ key: string; binding_value: string }> = (() => { try { return typeof rawBindings2 === 'string' ? JSON.parse(rawBindings2) : Array.isArray(rawBindings2) ? rawBindings2 : [] } catch { return [] } })()
       nextHeaderFieldMeta[f] = {
         label_override: ((row as Record<string, unknown>).label_override as string | null) ?? null,
         display_format: displayFormat,
+        color: parsedBindings2.find(b => b.key === '__color__')?.binding_value || undefined,
+        weight: parsedBindings2.find(b => b.key === '__weight__')?.binding_value || undefined,
+        display_as: parsedBindings2.find(b => b.key === '__display_as__')?.binding_value || undefined,
       }
     }
     setHeaderFieldDisplayMeta(nextHeaderFieldMeta)
@@ -8021,9 +8213,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
     // ── Parse page slot sentinels from the same assignments payload ──
     const nextSlots: Record<SlotKey, SlotState> = {
-      __pipeline__: { sort: groups.length + 1, label_override: null, is_visible: true, default_expanded: true },
-      __comments__: { sort: groups.length + 2, label_override: null, is_visible: true, default_expanded: true },
-      __tasks__: { sort: groups.length + 3, label_override: null, is_visible: true, default_expanded: true },
+      __pipeline__: { sort: groups.length + 1, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
+      __comments__: { sort: groups.length + 2, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
+      __tasks__: { sort: groups.length + 3, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
     }
     for (const key of SLOT_KEYS) {
       const row = fieldConfig.find(fc => fc.field === key) as Record<string, unknown> | undefined
@@ -8033,6 +8225,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         label_override: (row.label_override as string | null | undefined) ?? null,
         is_visible: row.is_visible === undefined || row.is_visible === null ? true : !!row.is_visible,
         default_expanded: row.default_expanded === undefined || row.default_expanded === null ? true : !!row.default_expanded,
+        show_approval_chain: !!row.show_approval_chain,
       }
     }
     setSlots(nextSlots)
@@ -8077,10 +8270,12 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
             if (wMeta) fieldAssignments.push({ field: f, group_key: gk, sort: idx, label_override: wMeta.label_override, is_visible: wMeta.is_visible, widget_id: wMeta.widget_id, input_bindings: wMeta.input_bindings.length > 0 ? wMeta.input_bindings : null })
           } else if (gk === '__header__') {
             const hMeta = headerFieldDisplayMeta[f]
-            const fmtBinding = hMeta?.display_format && hMeta.display_format !== 'text'
-              ? [{ key: '__display_format__', binding_type: 'static' as const, binding_value: hMeta.display_format }]
-              : null
-            fieldAssignments.push({ field: f, group_key: gk, sort: idx, label_override: hMeta?.label_override ?? null, input_bindings: fmtBinding })
+            const styleBindings: Array<{ key: string; binding_type: 'static'; binding_value: string }> = []
+            if (hMeta?.display_format && hMeta.display_format !== 'text') styleBindings.push({ key: '__display_format__', binding_type: 'static', binding_value: hMeta.display_format })
+            if (hMeta?.color) styleBindings.push({ key: '__color__', binding_type: 'static', binding_value: hMeta.color })
+            if (hMeta?.weight) styleBindings.push({ key: '__weight__', binding_type: 'static', binding_value: hMeta.weight })
+            if (hMeta?.display_as) styleBindings.push({ key: '__display_as__', binding_type: 'static', binding_value: hMeta.display_as })
+            fieldAssignments.push({ field: f, group_key: gk, sort: idx, label_override: hMeta?.label_override ?? null, input_bindings: styleBindings.length > 0 ? styleBindings : null })
           } else {
             const ov = localOverrides[f]
             const config = inlineDisplayMeta[f]
@@ -8102,6 +8297,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
           label_override: slots[key].label_override,
           is_visible: slots[key].is_visible,
           default_expanded: slots[key].default_expanded,
+          show_approval_chain: slots[key].show_approval_chain,
         })),
         // Subtitle sentinel
         ...(subtitleConfig ? [{
@@ -8713,6 +8909,113 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   ]
 
   const getHeaderFieldExtraControls = useCallback((f: string): React.ReactNode => {
+    const isWidgetSlot = typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')
+
+    if (isWidgetSlot) {
+      const wMeta = widgetSlotMeta[f]
+      if (!wMeta) return undefined
+      const wDef = availableWidgets.find(w => w.id === wMeta.widget_id)
+      const declaredInputs = (wDef?.inputs as Array<{ key: string; label: string; type: string; required?: boolean }> | null) ?? []
+      const derivedInputs: Array<{ key: string; label: string; type: string }> = (() => {
+        if (declaredInputs.length > 0) return []
+        const cfg = ((wDef as unknown as Record<string, unknown>)?.config as Record<string, unknown> | null) ?? {}
+        const pb = (cfg.param_bindings as Array<{ param?: string; input_key?: string }> | null) ?? []
+        const seen = new Set<string>()
+        const out: Array<{ key: string; label: string; type: string }> = []
+        for (const b of pb) {
+          const k = b.input_key
+          if (k && !seen.has(k)) { seen.add(k); out.push({ key: k, label: k, type: 'string' }) }
+        }
+        return out
+      })()
+      const wInputs = declaredInputs.length > 0 ? declaredInputs : derivedInputs
+      const updateBinding = (inputKey: string, patch: Partial<{ binding_type: string; binding_value: string }>) => {
+        setWidgetSlotMeta(prev => {
+          const prevMeta = prev[f]
+          const existing = prevMeta.input_bindings.find(b => b.key === inputKey)
+          const updated = {
+            key: inputKey,
+            binding_type: (patch.binding_type ?? existing?.binding_type ?? 'item_field') as 'item_field' | 'static' | 'url_param',
+            binding_value: patch.binding_value ?? existing?.binding_value ?? ''
+          }
+          const next = prevMeta.input_bindings.filter(b => b.key !== inputKey)
+          next.push(updated)
+          return { ...prev, [f]: { ...prevMeta, input_bindings: next } }
+        })
+        hasLocalChangeRef.current = true
+        changeSeqRef.current++
+      }
+      return (
+        <Popover>
+          <PopoverTrigger asChild>
+            <button type='button' className='ml-0.5 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600' onClick={e => e.stopPropagation()}>
+              <Settings2 className='h-3 w-3' />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-52 p-2 space-y-2' side='bottom' align='start' onClick={e => e.stopPropagation()}>
+            <div className='space-y-1'>
+              <p className='text-[10px] font-medium text-slate-400'>Label override</p>
+              <input
+                type='text'
+                placeholder='Use default'
+                defaultValue={wMeta.label_override ?? ''}
+                onBlur={e => {
+                  const v = e.target.value.trim() || null
+                  setWidgetSlotMeta(prev => ({ ...prev, [f]: { ...prev[f], label_override: v } }))
+                  hasLocalChangeRef.current = true
+                  changeSeqRef.current++
+                }}
+                className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+              />
+            </div>
+            {wInputs.length > 0 && (
+              <div className='space-y-1.5'>
+                <p className='text-[10px] font-medium text-slate-400'>Bindings</p>
+                {wInputs.map(inp => {
+                  const binding = wMeta.input_bindings.find(b => b.key === inp.key) ?? { key: inp.key, binding_type: 'item_field' as const, binding_value: '' }
+                  return (
+                    <div key={inp.key} className='space-y-0.5'>
+                      <div className='flex items-center gap-1'>
+                        <span className='w-16 shrink-0 truncate font-mono text-[9px] text-slate-400'>{inp.label || inp.key}</span>
+                        <select
+                          value={binding.binding_type}
+                          onChange={e => updateBinding(inp.key, { binding_type: e.target.value, binding_value: '' })}
+                          className='w-20 shrink-0 rounded border border-slate-200 bg-white px-1 py-px text-[9px]'
+                        >
+                          <option value='item_field'>Field</option>
+                          <option value='static'>Static</option>
+                          <option value='url_param'>URL Param</option>
+                        </select>
+                      </div>
+                      {binding.binding_type === 'item_field' ? (
+                        <FieldPicker
+                          collection={tableName}
+                          fields={allFields}
+                          relations={relations as CMSRelation[]}
+                          value={binding.binding_value}
+                          onChange={(picked) => updateBinding(inp.key, { binding_value: picked.path.join('.') })}
+                          onClear={() => updateBinding(inp.key, { binding_value: '' })}
+                          placeholder='Select field…'
+                        />
+                      ) : (
+                        <input
+                          type='text'
+                          value={binding.binding_value}
+                          placeholder={binding.binding_type === 'url_param' ? 'param name' : 'value'}
+                          onChange={e => updateBinding(inp.key, { binding_value: e.target.value })}
+                          className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-px text-[9px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+                        />
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </PopoverContent>
+        </Popover>
+      )
+    }
+
     const meta = headerFieldDisplayMeta[f] ?? { label_override: null, display_format: 'text' }
     const update = (patch: Partial<HeaderFieldMeta>) => {
       setHeaderFieldDisplayMeta(prev => ({ ...prev, [f]: { ...meta, ...patch } }))
@@ -8720,24 +9023,74 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       changeSeqRef.current++
     }
     return (
-      <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5'>
-        <input
-          type='text'
-          placeholder='Label override'
-          defaultValue={meta.label_override ?? ''}
-          onBlur={e => update({ label_override: e.target.value.trim() || null })}
-          className='w-32 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
-        />
-        <select
-          value={meta.display_format}
-          onChange={e => update({ display_format: e.target.value })}
-          className='w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-        >
-          {FORMAT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-      </div>
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            className='ml-0.5 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+            onClick={e => e.stopPropagation()}
+          >
+            <Settings2 className='h-3 w-3' />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-52 p-2 space-y-2' side='bottom' align='start' onClick={e => e.stopPropagation()}>
+          <div className='space-y-1'>
+            <p className='text-[10px] text-slate-400 font-medium'>Label override</p>
+            <input
+              type='text'
+              placeholder='Use default'
+              defaultValue={meta.label_override ?? ''}
+              onBlur={e => update({ label_override: e.target.value.trim() || null })}
+              className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+            />
+          </div>
+          <div className='space-y-1'>
+            <p className='text-[10px] text-slate-400 font-medium'>Display format</p>
+            <select
+              value={meta.display_format}
+              onChange={e => update({ display_format: e.target.value })}
+              className='w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+            >
+              {FORMAT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          <div className='space-y-1'>
+            <p className='text-[10px] text-slate-400 font-medium'>Color</p>
+            <div className='flex flex-wrap gap-1'>
+              {(['default','cyan','blue','green','amber','red','purple'] as const).map(c => (
+                <button key={c} type='button'
+                  onClick={() => update({ color: c === 'default' ? undefined : c })}
+                  className={['w-5 h-5 rounded-full border-2 transition-all', meta.color === c || (!meta.color && c === 'default') ? 'border-nvr-cyan scale-110' : 'border-transparent', c === 'default' ? 'bg-slate-300' : c === 'cyan' ? 'bg-nvr-cyan' : c === 'blue' ? 'bg-blue-500' : c === 'green' ? 'bg-emerald-500' : c === 'amber' ? 'bg-amber-500' : c === 'red' ? 'bg-red-500' : 'bg-purple-500'].join(' ')}
+                />
+              ))}
+            </div>
+          </div>
+          <div className='space-y-1'>
+            <p className='text-[10px] text-slate-400 font-medium'>Weight</p>
+            <div className='flex gap-1'>
+              {(['normal','medium','semibold','bold'] as const).map(w => (
+                <button key={w} type='button'
+                  onClick={() => update({ weight: w === 'normal' ? undefined : w })}
+                  className={['rounded px-1.5 py-0.5 text-[10px] border transition-colors', meta.weight === w || (!meta.weight && w === 'normal') ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300'].join(' ')}
+                >{w[0].toUpperCase()}</button>
+              ))}
+            </div>
+          </div>
+          <div className='space-y-1'>
+            <p className='text-[10px] text-slate-400 font-medium'>Display as</p>
+            <div className='flex gap-1'>
+              {(['text','pill','tag'] as const).map(d => (
+                <button key={d} type='button'
+                  onClick={() => update({ display_as: d === 'text' ? undefined : d })}
+                  className={['rounded px-1.5 py-0.5 text-[10px] border transition-colors', meta.display_as === d || (!meta.display_as && d === 'text') ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300'].join(' ')}
+                >{d}</button>
+              ))}
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
     )
-  }, [headerFieldDisplayMeta])
+  }, [headerFieldDisplayMeta, widgetSlotMeta, availableWidgets, tableName, allFields, relations])
 
   const updateSlot = useCallback((key: SlotKey, patch: Partial<SlotState>) => {
     setSlots(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }))
@@ -8818,8 +9171,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       onDragCancel={handleDragCancel}
     >
       <div className='flex gap-4 items-start'>
-        {/* Left sidebar — unassigned field pool (static palette, drag source only) */}
+        {/* Left sidebar — unassigned field pool; also a drop target so dragging chips back here unassigns them */}
         <div className='w-64 shrink-0'>
+          <DroppableFieldZone containerId='__pool__'>
           <div className='rounded-lg border border-dashed border-slate-200 bg-slate-50 sticky top-0'>
             <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2'>
               <p className='text-[11px] font-medium text-slate-400'>
@@ -8917,6 +9271,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                 })()}
               </div>
           </div>
+          </DroppableFieldZone>
         </div>
 
         {/* Main area — groups */}
@@ -8931,12 +9286,6 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
               <div className='flex gap-2'>
                 {availableWidgets.length > 0 && (
                   <Popover open={addingWidget} onOpenChange={setAddingWidget}>
-                    <PopoverTrigger asChild>
-                      <Button size='sm' variant='outline' className='h-7 text-[12px]'>
-                        <Plus className='mr-1 h-3 w-3' />
-                        Add Widget
-                      </Button>
-                    </PopoverTrigger>
                     <PopoverContent className='w-56 p-1' align='end'>
                       {availableWidgets.map(w => {
                         const key = `__widget_${w.id}__`
@@ -8976,12 +9325,114 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
             )}
           </div>
 
+        {/* Subtitle config */}
+        {layoutType !== 'table' && layoutId && (
+          <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+            <div className='flex items-center justify-between border-b border-slate-100 dark:border-border px-3 py-2'>
+              <p className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>Header Subtitle</p>
+              <input type='checkbox' checked={!!subtitleConfig} onChange={(e) => {
+                hasLocalChangeRef.current = true
+                changeSeqRef.current++
+                setSubtitleConfig(e.target.checked ? { fields: [], separator: ' | ' } : null)
+              }} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+            </div>
+            {!!subtitleConfig && (
+              <div className='p-3 space-y-2'>
+                <p className='text-[10px] text-slate-400'>Fields shown inline below the item title in the form header.</p>
+                <div className='flex items-center gap-2'>
+                  <span className='text-[10px] text-slate-400 shrink-0'>Separator</span>
+                  <input type='text' value={subtitleConfig.separator}
+                    onChange={(e) => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(c => c ? { ...c, separator: e.target.value } : null) }}
+                    className='w-24 h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-700 dark:border-border dark:bg-background dark:text-slate-300' />
+                </div>
+                <div className='flex flex-wrap gap-1.5'>
+                  {subtitleConfig.fields.map((sf, i) => (
+                    <span key={i} className='relative inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] text-nvr-navy dark:text-nvr-cyan'>
+                      {sf.label ?? sf.field}
+                      <button type='button' onClick={() => setSubtitleStyleOpen(subtitleStyleOpen === i ? null : i)} className='hover:text-nvr-cyan ml-0.5 opacity-50 hover:opacity-100'>⚙</button>
+                      <button type='button' onClick={() => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(c => c ? { ...c, fields: c.fields.filter((_, j) => j !== i) } : null) }} className='hover:text-red-500 opacity-50 hover:opacity-100'>✕</button>
+                      {subtitleStyleOpen === i && (
+                        <>
+                          <div className='fixed inset-0 z-40' onClick={() => setSubtitleStyleOpen(null)} />
+                          <div className='absolute left-0 top-full z-50 mt-1 w-44 rounded-lg border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card p-2 space-y-2'>
+                            <div className='space-y-1'>
+                              <p className='text-[10px] font-medium text-slate-400'>Color</p>
+                              <div className='flex flex-wrap gap-1'>
+                                {(['default','cyan','blue','green','amber','red','purple'] as const).map(c => (
+                                  <button key={c} type='button'
+                                    onClick={() => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(cfg => cfg ? { ...cfg, fields: cfg.fields.map((f, j) => j === i ? { ...f, color: c === 'default' ? undefined : c } : f) } : null) }}
+                                    className={['w-5 h-5 rounded-full border-2 transition-all', sf.color === c || (!sf.color && c === 'default') ? 'border-nvr-cyan scale-110' : 'border-transparent', c === 'default' ? 'bg-slate-300' : c === 'cyan' ? 'bg-nvr-cyan' : c === 'blue' ? 'bg-blue-500' : c === 'green' ? 'bg-emerald-500' : c === 'amber' ? 'bg-amber-500' : c === 'red' ? 'bg-red-500' : 'bg-purple-500'].join(' ')}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                            <div className='space-y-1'>
+                              <p className='text-[10px] font-medium text-slate-400'>Weight</p>
+                              <div className='flex gap-1'>
+                                {(['normal','medium','semibold','bold'] as const).map(w => (
+                                  <button key={w} type='button'
+                                    onClick={() => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(cfg => cfg ? { ...cfg, fields: cfg.fields.map((f, j) => j === i ? { ...f, weight: w === 'normal' ? undefined : w } : f) } : null) }}
+                                    className={['rounded px-1.5 py-0.5 text-[10px] border transition-colors', sf.weight === w || (!sf.weight && w === 'normal') ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300'].join(' ')}
+                                  >{w[0].toUpperCase()}</button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className='space-y-1'>
+                              <p className='text-[10px] font-medium text-slate-400'>Display as</p>
+                              <div className='flex gap-1'>
+                                {(['text','pill','tag'] as const).map(d => (
+                                  <button key={d} type='button'
+                                    onClick={() => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(cfg => cfg ? { ...cfg, fields: cfg.fields.map((f, j) => j === i ? { ...f, display_as: d === 'text' ? undefined : d } : f) } : null) }}
+                                    className={['rounded px-1.5 py-0.5 text-[10px] border transition-colors', sf.display_as === d || (!sf.display_as && d === 'text') ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300'].join(' ')}
+                                  >{d}</button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </span>
+                  ))}
+                </div>
+                <div className='relative'>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-6 w-full justify-start text-[11px] font-normal text-slate-500 border-dashed'
+                    onClick={() => setSubtitlePickerOpen(v => !v)}
+                  >
+                    <Plus className='mr-1 h-3 w-3' />
+                    Add field…
+                  </Button>
+                  {subtitlePickerOpen && (
+                    <>
+                      <div className='fixed inset-0 z-40' onClick={() => setSubtitlePickerOpen(false)} />
+                      <div className='absolute left-0 top-full z-50 mt-1'>
+                        <FieldPickerPanel
+                          collection={tableName}
+                          fields={allFields.filter(f => !f.field.startsWith('__') && !subtitleConfig.fields.some(sf => sf.field === f.field)) as CMSField[]}
+                          relations={relations as CMSRelation[]}
+                          onSelect={(picked) => {
+                            hasLocalChangeRef.current = true; changeSeqRef.current++
+                            setSubtitleConfig(c => c ? { ...c, fields: [...c.fields, { field: picked.path.join('.'), label: picked.pathLabels.join(' › ') }] } : null)
+                            setSubtitlePickerOpen(false)
+                          }}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Header zone — widgets dragged here render in the ItemEdit page header */}
         {layoutType !== 'table' && (
           <div className='rounded-lg border border-slate-200 bg-white'>
             <div className='flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2'>
               <span className='text-[11px] font-medium text-slate-500'>Item Header</span>
-              <span className='text-[10px] text-slate-300'>— widgets dropped here appear in a strip below the header bar</span>
+              <span className='text-[10px] text-slate-300'>— items dropped here appear in a strip below the header bar</span>
             </div>
             <DroppableFieldZone containerId='__header__'>
               <SortableContext items={(localFieldOrder.__header__ ?? []).map(f => toSortableId('__header__', f))} strategy={rectSortingStrategy}>
@@ -8997,7 +9448,13 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                             key={toSortableId('__header__', f)}
                             sortableId={toSortableId('__header__', f)}
                             fieldName={f}
-                            displayName={isWidget ? (meta?.label_override || meta?.name || 'Widget') : (fieldMeta?.label || f)}
+                            displayName={isWidget
+                              ? (meta?.label_override || meta?.name || 'Widget')
+                              : (headerFieldDisplayMeta[f]?.label_override
+                                || (f === '__owners__' ? 'Owners' : f === '__pdf__' ? 'PDF' : null)
+                                || fieldConfig.find(fc => fc.field === f)?.label
+                                || f)
+                            }
                             fieldType={isWidget ? 'widget' : (fieldMeta?.interface ?? fieldMeta?.type ?? 'text')}
                             colSpan={12}
                             onUnassign={() => {
@@ -9005,7 +9462,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                               hasLocalChangeRef.current = true
                               changeSeqRef.current++
                             }}
-                            extraControls={isWidget ? getExtraControls(f) : getHeaderFieldExtraControls(f)}
+                            extraControls={f === PDF_FIELD ? getExtraControls(f) : getHeaderFieldExtraControls(f)}
                             inGrid={false}
                           />
                         )
@@ -9121,6 +9578,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                             onUnassign={handleUnassign}
                             containerGroups={groups.filter(cg => cg.type === 'container')}
                             onSetContainer={(id, container_id) => setContainerMut.mutate({ id, container_id })}
+                            onToggleCollapsed={(id) => patchCollapsedMut.mutate({ id, is_collapsed: !groups.find(g => g.id === id)?.is_collapsed })}
+                            onGroupSettings={(id, patch) => patchGroupSettingsMut.mutate({ id, patch })}
                             getRowRevisions={f => localRowRevisions[f] ?? false}
                             onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                             getExtraControls={getExtraControls}
@@ -9210,49 +9669,6 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
           </div>
         )}
 
-        {/* Subtitle config */}
-        {layoutType !== 'table' && layoutId && (
-          <div className='mt-4 rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-            <div className='flex items-center justify-between border-b border-slate-100 dark:border-border px-3 py-2'>
-              <p className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>Header Subtitle</p>
-              <input type='checkbox' checked={!!subtitleConfig} onChange={(e) => {
-                hasLocalChangeRef.current = true
-                changeSeqRef.current++
-                setSubtitleConfig(e.target.checked ? { fields: [], separator: ' | ' } : null)
-              }} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-            </div>
-            {!!subtitleConfig && (
-              <div className='p-3 space-y-2'>
-                <p className='text-[10px] text-slate-400'>Fields shown inline below the item title in the form header.</p>
-                <div className='flex items-center gap-2'>
-                  <span className='text-[10px] text-slate-400 shrink-0'>Separator</span>
-                  <input type='text' value={subtitleConfig.separator}
-                    onChange={(e) => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(c => c ? { ...c, separator: e.target.value } : null) }}
-                    className='w-24 h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-700 dark:border-border dark:bg-background dark:text-slate-300' />
-                </div>
-                <div className='flex flex-wrap gap-1.5'>
-                  {subtitleConfig.fields.map((sf, i) => (
-                    <span key={i} className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] text-nvr-navy dark:text-nvr-cyan'>
-                      {sf.field}
-                      <button type='button' onClick={() => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(c => c ? { ...c, fields: c.fields.filter((_, j) => j !== i) } : null) }} className='hover:text-red-500 ml-0.5'>✕</button>
-                    </span>
-                  ))}
-                </div>
-                <select value='' onChange={(e) => {
-                  const val = e.target.value
-                  if (!val) return
-                  hasLocalChangeRef.current = true; changeSeqRef.current++
-                  setSubtitleConfig(c => c ? { ...c, fields: [...c.fields, { field: val, label: null }] } : null)
-                }} className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
-                  <option value=''>+ Add field…</option>
-                  {allFields.filter(f => !f.field.startsWith('__') && !subtitleConfig.fields.some(sf => sf.field === f.field)).map(f => (
-                    <option key={f.field} value={f.field}>{f.field}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-        )}
 
         </div>{/* end main area */}
       </div>{/* end flex row */}

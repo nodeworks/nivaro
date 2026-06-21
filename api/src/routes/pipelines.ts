@@ -2008,12 +2008,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         string,
         { state: ReturnType<typeof formatState>; owners: ResolvedOwner[] }
       > = {}
-      for (const s of states) {
-        result[s.id] = {
-          state: formatState(s),
-          owners: await resolveStateOwners(s.id, instance?.id ?? null, collection, item, db)
-        }
-      }
+      await Promise.all(
+        states.map(async (s) => {
+          result[s.id] = {
+            state: formatState(s),
+            owners: await resolveStateOwners(s.id, instance?.id ?? null, collection, item, db)
+          }
+        })
+      )
 
       return reply.send({ data: result })
     }

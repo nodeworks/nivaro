@@ -34,6 +34,7 @@ export interface FieldGroup {
     is_collapsed: boolean;
     container_id?: number | null;
     tab_mode?: 'tabs' | 'steps' | null;
+    swap_config?: string | null;
 }
 export interface SlotAssignment {
     field: string;

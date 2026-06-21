@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Loader2, Mail, User } from 'lucide-react'
+import { ChevronDown, ChevronRight, ExternalLink, Loader2, Mail, Phone, User } from 'lucide-react'
 import * as LucideIcons from 'lucide-react'
 import React, { type ReactNode } from 'react'
 import { useRef, useState } from 'react'
@@ -12,6 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { WidgetSlot } from '../WidgetSlot'
 import { FieldRow } from './FieldRow'
 import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpers'
@@ -324,51 +325,109 @@ export function OwnersInline({ collection, itemId, label }: { collection: string
   )
 }
 
-// Single user chip — fetches user by id, shows initials avatar + name
+// Single user chip — fetches user by id, shows initials avatar + contact card on click
 export function UserChip({ userId }: { userId: string }) {
   const client = useOptionalNivaroClient()
   const { navigate } = useNavigation()
-  const { data: user, isLoading } = useQuery<{ id: number; first_name: string | null; last_name: string | null; email: string } | null>({
+  const { data: user, isLoading } = useQuery<{
+    id: number
+    first_name: string | null
+    last_name: string | null
+    email: string
+    title?: string | null
+    phone?: string | null
+    department?: string | null
+  } | null>({
     queryKey: ['user-chip', userId],
     queryFn: () =>
-      client!.request<{ data: { id: number; first_name: string | null; last_name: string | null; email: string } }>(
+      client!.request<{ data: { id: number; first_name: string | null; last_name: string | null; email: string; title?: string | null; phone?: string | null; department?: string | null } }>(
         get(`/users/${userId}`)
       ).then((r) => r.data ?? null),
     enabled: !!client && !!userId,
     staleTime: 120_000,
   })
+
   if (isLoading) {
-    return <span className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'>
-      <span className='flex h-6 w-6 shrink-0 rounded-full animate-pulse bg-slate-200 dark:bg-slate-700' />
-      <span className='animate-pulse h-2.5 w-16 rounded bg-slate-200 dark:bg-slate-700 inline-block' />
-    </span>
+    return (
+      <span className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'>
+        <span className='flex h-6 w-6 shrink-0 rounded-full animate-pulse bg-slate-200 dark:bg-slate-700' />
+        <span className='animate-pulse h-2.5 w-16 rounded bg-slate-200 dark:bg-slate-700 inline-block' />
+      </span>
+    )
   }
+
   const name = user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId
   const initials = name.split(' ').map((p: string) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <div className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 hover:bg-slate-100 transition-colors'>
+    <Popover>
+      <PopoverTrigger asChild>
+        <div className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 hover:bg-slate-100 dark:border-border dark:bg-card dark:hover:bg-accent transition-colors'>
           <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
             {initials}
           </span>
-          <span className='text-[12px] text-slate-700'>{name}</span>
+          <span className='text-[12px] text-slate-700 dark:text-slate-300'>{name}</span>
         </div>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align='start' className='text-[12px]'>
-        <DropdownMenuItem className='gap-2 text-[12px] cursor-pointer' onSelect={() => navigate(`/users/${userId}`)}>
-          <User className='h-3.5 w-3.5' /> View profile
-        </DropdownMenuItem>
-        {user?.email && (
-          <DropdownMenuItem
-            className='gap-2 text-[12px] cursor-pointer'
-            onSelect={() => { window.location.href = `mailto:${user.email}` }}
-          >
-            <Mail className='h-3.5 w-3.5' /> Send email
-          </DropdownMenuItem>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-64 p-0 overflow-hidden'>
+        {/* Header */}
+        <div className='flex items-center gap-3 p-4 bg-gradient-to-br from-nvr-cyan/8 to-nvr-cyan/4 dark:from-nvr-cyan/10 dark:to-transparent border-b border-slate-100 dark:border-border'>
+          <span className='flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[15px] font-bold text-nvr-navy dark:text-nvr-cyan ring-2 ring-white dark:ring-card shadow-sm'>
+            {initials}
+          </span>
+          <div className='min-w-0 flex-1'>
+            <p className='text-[13px] font-semibold text-slate-800 dark:text-slate-100 truncate'>{name}</p>
+            {(user?.title || user?.department) && (
+              <p className='text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5'>
+                {[user.title, user.department].filter(Boolean).join(' · ')}
+              </p>
+            )}
+          </div>
+        </div>
+        {/* Contact info */}
+        {(user?.email || user?.phone) && (
+          <div className='px-4 py-3 space-y-2 border-b border-slate-100 dark:border-border'>
+            {user?.email && (
+              <a
+                href={`mailto:${user.email}`}
+                className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300 hover:text-nvr-navy dark:hover:text-nvr-cyan transition-colors truncate group'
+              >
+                <Mail className='h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-nvr-cyan transition-colors' />
+                <span className='truncate'>{user.email}</span>
+              </a>
+            )}
+            {user?.phone && (
+              <a
+                href={`tel:${user.phone}`}
+                className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300 hover:text-nvr-navy dark:hover:text-nvr-cyan transition-colors group'
+              >
+                <Phone className='h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-nvr-cyan transition-colors' />
+                <span>{user.phone}</span>
+              </a>
+            )}
+          </div>
         )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+        {/* Actions */}
+        <div className='flex items-center gap-1 p-2'>
+          <button
+            type='button'
+            onClick={() => navigate(`/users/${userId}`)}
+            className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
+          >
+            <User className='h-3.5 w-3.5' /> View profile
+          </button>
+          {user?.email && (
+            <button
+              type='button'
+              onClick={() => { window.location.href = `mailto:${user.email}` }}
+              className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
+            >
+              <ExternalLink className='h-3.5 w-3.5' /> Send email
+            </button>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -446,14 +505,21 @@ export function RelationCell({ relCollection, id }: { relCollection: string; id:
   return <span className='text-[13px] text-slate-700'>{label}</span>
 }
 
-// Compact user pill for the header strip — smaller than UserChip, with dropdown
+// Compact user pill for the header strip — smaller trigger, same contact card popover as UserChip
 function StripUserChip({ userId }: { userId: string }) {
   const client = useOptionalNivaroClient()
   const { navigate } = useNavigation()
-  const { data: user, isLoading } = useQuery<{ first_name: string | null; last_name: string | null; email: string } | null>({
+  const { data: user, isLoading } = useQuery<{
+    first_name: string | null
+    last_name: string | null
+    email: string
+    title?: string | null
+    phone?: string | null
+    department?: string | null
+  } | null>({
     queryKey: ['user-chip', userId],
     queryFn: () =>
-      client!.request<{ data: { first_name: string | null; last_name: string | null; email: string } }>(
+      client!.request<{ data: { first_name: string | null; last_name: string | null; email: string; title?: string | null; phone?: string | null; department?: string | null } }>(
         get(`/users/${userId}`)
       ).then((r) => r.data ?? null),
     enabled: !!client && !!userId,
@@ -463,27 +529,72 @@ function StripUserChip({ userId }: { userId: string }) {
   const name = user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId
   const initials = name.split(' ').map((p: string) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <Popover>
+      <PopoverTrigger asChild>
         <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 py-px pl-px pr-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors'>
           <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
           <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>{name}</span>
         </span>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align='start' className='text-[12px]'>
-        <DropdownMenuItem className='gap-2 text-[12px] cursor-pointer' onSelect={() => navigate(`/users/${userId}`)}>
-          <User className='h-3.5 w-3.5' /> View profile
-        </DropdownMenuItem>
-        {user?.email && (
-          <DropdownMenuItem
-            className='gap-2 text-[12px] cursor-pointer'
-            onSelect={() => { window.location.href = `mailto:${user.email}` }}
-          >
-            <Mail className='h-3.5 w-3.5' /> Send email
-          </DropdownMenuItem>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-64 p-0 overflow-hidden'>
+        {/* Header */}
+        <div className='flex items-center gap-3 p-4 bg-gradient-to-br from-nvr-cyan/8 to-nvr-cyan/4 dark:from-nvr-cyan/10 dark:to-transparent border-b border-slate-100 dark:border-border'>
+          <span className='flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[15px] font-bold text-nvr-navy dark:text-nvr-cyan ring-2 ring-white dark:ring-card shadow-sm'>
+            {initials}
+          </span>
+          <div className='min-w-0 flex-1'>
+            <p className='text-[13px] font-semibold text-slate-800 dark:text-slate-100 truncate'>{name}</p>
+            {(user?.title || user?.department) && (
+              <p className='text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5'>
+                {[user.title, user.department].filter(Boolean).join(' · ')}
+              </p>
+            )}
+          </div>
+        </div>
+        {/* Contact info */}
+        {(user?.email || user?.phone) && (
+          <div className='px-4 py-3 space-y-2 border-b border-slate-100 dark:border-border'>
+            {user?.email && (
+              <a
+                href={`mailto:${user.email}`}
+                className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300 hover:text-nvr-navy dark:hover:text-nvr-cyan transition-colors truncate group'
+              >
+                <Mail className='h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-nvr-cyan transition-colors' />
+                <span className='truncate'>{user.email}</span>
+              </a>
+            )}
+            {user?.phone && (
+              <a
+                href={`tel:${user.phone}`}
+                className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300 hover:text-nvr-navy dark:hover:text-nvr-cyan transition-colors group'
+              >
+                <Phone className='h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-nvr-cyan transition-colors' />
+                <span>{user.phone}</span>
+              </a>
+            )}
+          </div>
         )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+        {/* Actions */}
+        <div className='flex items-center gap-1 p-2'>
+          <button
+            type='button'
+            onClick={() => navigate(`/users/${userId}`)}
+            className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
+          >
+            <User className='h-3.5 w-3.5' /> View profile
+          </button>
+          {user?.email && (
+            <button
+              type='button'
+              onClick={() => { window.location.href = `mailto:${user.email}` }}
+              className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
+            >
+              <ExternalLink className='h-3.5 w-3.5' /> Send email
+            </button>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -496,13 +607,16 @@ export function StripFieldValue({
   relations,
   collection,
   displayFormat,
+  textClassName,
 }: {
   field: CMSField
   val: unknown
   relations: CMSRelation[]
   collection: string
   displayFormat?: string
+  textClassName?: string
 }) {
+  const base = textClassName ?? 'text-slate-900 dark:text-slate-100'
   const m2oRel = relations.find(
     (r) => r.many_collection === collection && r.many_field === field.field && !r.junction_field
   )
@@ -532,26 +646,26 @@ export function StripFieldValue({
   if (displayFormat && displayFormat !== 'text') {
     const num = Number(val)
     if (displayFormat === 'currency' && !isNaN(num)) {
-      return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(num)}</span>
+      return <span className={`text-[13px] font-semibold ${base}`}>{new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(num)}</span>
     }
     if (displayFormat === 'integer' && !isNaN(num)) {
-      return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Math.round(num))}</span>
+      return <span className={`text-[13px] font-semibold ${base}`}>{new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Math.round(num))}</span>
     }
     if (displayFormat === 'decimal' && !isNaN(num)) {
-      return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(num)}</span>
+      return <span className={`text-[13px] font-semibold ${base}`}>{new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(num)}</span>
     }
     if (displayFormat === 'percent' && !isNaN(num)) {
-      return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(num / 100)}</span>
+      return <span className={`text-[13px] font-semibold ${base}`}>{new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(num / 100)}</span>
     }
     if (displayFormat === 'date') {
-      try { return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Date(String(val)).toLocaleDateString()}</span> } catch { /* fall through */ }
+      try { return <span className={`text-[13px] font-semibold ${base}`}>{new Date(String(val)).toLocaleDateString()}</span> } catch { /* fall through */ }
     }
     if (displayFormat === 'datetime') {
-      try { return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{new Date(String(val)).toLocaleString()}</span> } catch { /* fall through */ }
+      try { return <span className={`text-[13px] font-semibold ${base}`}>{new Date(String(val)).toLocaleString()}</span> } catch { /* fall through */ }
     }
   }
 
-  return <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{formatDisplayValue(val, field)}</span>
+  return <span className={`text-[13px] font-semibold ${base}`}>{formatDisplayValue(val, field)}</span>
 }
 
 function SummaryStrip({
@@ -775,6 +889,11 @@ export function GroupSection({
   widgetAssignments,
   widgetApiBase = '/api',
   fieldInlineDisplay,
+  swapConfig,
+  swapped,
+  onSwapToggle,
+  alternateFields,
+  alternateWidths,
 }: {
   group: FieldGroup
   fields: CMSField[]
@@ -810,6 +929,11 @@ export function GroupSection({
   widgetAssignments?: SlotAssignment[]
   widgetApiBase?: string
   fieldInlineDisplay?: Record<string, { entries: InlineDisplayEntry[]; separator: string | null }>
+  swapConfig?: { enabled: boolean; primary_field: string; alternate_fields: ({ field: string; width: 1 | 2 } | string)[]; toggle_label?: string; back_label?: string } | null
+  swapped?: boolean
+  onSwapToggle?: () => void
+  alternateFields?: CMSField[]
+  alternateWidths?: Record<string, 1 | 2>
 }) {
   const [localCollapsed, setLocalCollapsed] = useState(group.is_collapsed ?? false)
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
@@ -981,6 +1105,56 @@ export function GroupSection({
                   const inlineRelCollection = (inlineEntries?.length && hasVal)
                     ? (relations.find((r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field)?.one_collection ?? null)
                     : null
+                  const isPrimary = swapConfig?.enabled && f.field === swapConfig.primary_field
+                  const primaryHasValue = (() => { const v = draft[swapConfig?.primary_field ?? '']; return v !== null && v !== undefined && v !== '' })()
+                  const altHasValue = (alternateFields ?? []).some((af) => { const v = draft[af.field]; return v !== null && v !== undefined && v !== '' })
+                  const swapBtn = isPrimary && onSwapToggle ? (
+                    <span className='inline-flex items-center gap-1.5'>
+                      <button
+                        type='button'
+                        onClick={onSwapToggle}
+                        className='inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 transition-colors'
+                      >
+                        {swapped ? (swapConfig!.back_label ?? 'Back') : (swapConfig!.toggle_label ?? 'Enter manually')}
+                      </button>
+                      <span className={['inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium', primaryHasValue ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'].join(' ')} title='Original field'>
+                        <span className={['h-1.5 w-1.5 rounded-full', primaryHasValue ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'].join(' ')} />
+                        Original
+                      </span>
+                      <span className={['inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium', altHasValue ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'].join(' ')} title='Manual fields'>
+                        <span className={['h-1.5 w-1.5 rounded-full', altHasValue ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'].join(' ')} />
+                        Manual
+                      </span>
+                    </span>
+                  ) : undefined
+                  const swapCnt = isPrimary && swapped && alternateFields?.length ? (
+                    <div className='mt-2 rounded-lg border border-slate-200 bg-slate-50 dark:border-border dark:bg-slate-900/40 p-3'>
+                    <div className='grid grid-cols-2 gap-3'>
+                      {alternateFields.map((af) => {
+                        const w = alternateWidths?.[af.field] ?? 2
+                        return (
+                          <div key={af.field} style={{ gridColumn: `span ${w}` }}>
+                            <FieldRow
+                              field={af}
+                              draft={draft}
+                              onChange={onChange}
+                              relations={relations}
+                              collection={collection}
+                              itemId={itemId}
+                              error={errors[af.field]}
+                              visible={true}
+                              forceVisible={true}
+                              locked={lockedFields.has(af.field)}
+                              layoutAiEnabled={layoutAiEnabled}
+                              renderField={renderField}
+                              onCountChange={onCountChange}
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
+                    </div>
+                  ) : undefined
                   return (
                     <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, containerWidth)}` }}>
                       <FieldRow
@@ -996,6 +1170,8 @@ export function GroupSection({
                         layoutAiEnabled={layoutAiEnabled}
                         renderField={renderField}
                         onCountChange={onCountChange}
+                        swapButton={swapBtn}
+                        swapContent={swapCnt}
                       />
                       {inlineEntries?.length && hasVal && inlineRelCollection && (
                         <InlineDisplay

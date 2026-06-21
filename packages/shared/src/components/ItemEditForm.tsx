@@ -881,6 +881,7 @@ export function ItemEditForm({
   const [summaryCollapsed, setSummaryCollapsed] = useState(false)
   // Accordion mode: track the single open section group id (null = none open)
   const [openSectionId, setOpenSectionId] = useState<number | null>(null)
+  const [swappedGroups, setSwappedGroups] = useState<Set<number>>(new Set())
   const prevAccordionModeRef = useRef(false)
   useEffect(() => {
     if (!accordionMode) { prevAccordionModeRef.current = false; return }
@@ -1092,21 +1093,25 @@ export function ItemEditForm({
       if (!entry?.binding_value) return null
       const data = JSON.parse(entry.binding_value)
       if (!data.fields || !Array.isArray(data.fields) || !data.fields.length) return null
-      return { fields: data.fields as Array<{ field: string; label: string | null }>, separator: (data.separator as string) ?? ' | ' }
+      return { fields: data.fields as Array<{ field: string; label: string | null; color?: string; weight?: string; display_as?: string }>, separator: (data.separator as string) ?? ' | ' }
     } catch { return null }
   }, [activeLayoutData])
 
-  const subtitleText = useMemo(() => {
-    if (!subtitleConfig || isNew) return null
+  const subtitleFieldSet = useMemo<Set<string>>(
+    () => new Set((subtitleConfig?.fields ?? []).map((sf) => sf.field)),
+    [subtitleConfig]
+  )
+
+  const subtitleParts = useMemo(() => {
+    if (!subtitleConfig || isNew) return []
     const src = (itemData as Record<string, unknown> | null) ?? draft
-    const parts = subtitleConfig.fields
+    return subtitleConfig.fields
       .map((sf) => {
         const val = src[sf.field]
         if (val === null || val === undefined || val === '') return null
-        return String(val)
+        return { value: String(val), color: sf.color, weight: sf.weight, display_as: sf.display_as }
       })
-      .filter(Boolean) as string[]
-    return parts.length > 0 ? parts.join(subtitleConfig.separator) : null
+      .filter(Boolean) as Array<{ value: string; color?: string; weight?: string; display_as?: string }>
   }, [subtitleConfig, isNew, itemData, draft])
 
   const headerFields = useMemo(() => (activeLayoutData?.assignments ?? [])
@@ -1114,17 +1119,26 @@ export function ItemEditForm({
     .map((a) => {
       const meta = (fieldConfig ?? []).find((f) => f.field === a.field)
       let displayFormat = 'text'
+      let color: string | undefined
+      let weight: string | undefined
+      let displayAs: string | undefined
       try {
         const raw = (a as unknown as Record<string, unknown>).input_bindings
         const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
         const fmt = parsed.find((b) => b.key === '__display_format__')
         if (fmt?.binding_value) displayFormat = fmt.binding_value
+        color = parsed.find((b) => b.key === '__color__')?.binding_value || undefined
+        weight = parsed.find((b) => b.key === '__weight__')?.binding_value || undefined
+        displayAs = parsed.find((b) => b.key === '__display_as__')?.binding_value || undefined
       } catch { /* noop */ }
       return {
         field: a.field,
         label: a.label_override ?? meta?.label ?? titleCase(a.field),
         sort: a.sort ?? 0,
         displayFormat,
+        color,
+        weight,
+        displayAs,
         cmsField: meta ?? null,
       }
     }), [activeLayoutData, fieldConfig])
@@ -1144,7 +1158,23 @@ export function ItemEditForm({
       ...containerGroups.map((g) => ({ item: g as Item, sort: g.sort, tie: 0 })),
       {
         item: '__ungrouped__',
-        sort: activeLayoutData?.ungrouped_sort ?? sectionGroups.length,
+        sort: (() => {
+          const saved = activeLayoutData?.ungrouped_sort ?? sectionGroups.length
+          // Subtitle fields in the ungrouped zone must appear before panels (not buried below
+          // Notes/Tasks). Cap the ungrouped sort to just before the earliest active slot.
+          if (subtitleFieldSet.size > 0 && ungroupedFields.some((f) => subtitleFieldSet.has(f.field))) {
+            const slotSorts = [
+              showPipeline && pipelineSlot ? pipelineSlot.sort : null,
+              effectiveShowTasks && tasksSlot ? tasksSlot.sort : null,
+              effectiveShowComments && commentsSlot ? commentsSlot.sort : null,
+              showPipeline && ownersSlot && !ownersInGroup ? ownersSlot.sort : null,
+              pdfSlot && !isNew && !pdfInGroup ? pdfSlot.sort : null,
+            ].filter((s): s is number => s !== null)
+            const minSlot = slotSorts.length > 0 ? Math.min(...slotSorts) : Infinity
+            if (isFinite(minSlot) && saved >= minSlot) return minSlot - 0.5
+          }
+          return saved
+        })(),
         tie: 1
       }
     ]
@@ -1175,7 +1205,10 @@ export function ItemEditForm({
     effectiveShowTasks,
     pdfSlot,
     pdfInGroup,
-    isNew
+    isNew,
+    subtitleFieldSet,
+    ungroupedFields,
+    ownersGroupKey
   ])
 
   // ── Client-side validation ─────────────────────────────────────────────────
@@ -1465,6 +1498,7 @@ export function ItemEditForm({
           item={itemId}
           title={pipelineSlot?.label_override ?? undefined}
           defaultExpanded={pipelineSlot?.default_expanded ?? false}
+          showApprovalChain={!!(pipelineSlot as unknown as Record<string, unknown>)?.show_approval_chain}
           onBeforeTransition={validateAll}
         />
       )
@@ -1599,6 +1633,11 @@ export function ItemEditForm({
     const isSteps = c.tab_mode === 'steps'
     const activeKey = getContainerTab(c, children)
     const activeChild = children.find((g) => g.key === activeKey) ?? children[0]
+    const activeSwapCfg = (() => {
+      try { return activeChild?.swap_config ? JSON.parse(activeChild.swap_config) as { enabled: boolean; primary_field: string; alternate_fields: ({ field: string; width: 1 | 2 } | string)[]; toggle_label?: string; back_label?: string } : null } catch { return null }
+    })()
+    const normActiveAlts = (activeSwapCfg?.alternate_fields ?? []).map(x => typeof x === 'string' ? { field: x, width: 2 as const } : x)
+    const activeIsSwapped = activeSwapCfg?.enabled ? swappedGroups.has(activeChild?.id ?? -1) : false
     const activeFields = (groupedMap[activeChild?.key ?? ''] ?? []).filter((f) => !f.hidden)
     // PDF slot: check if assigned to the active child tab or to the container itself
     const pdfInContainer = !isNew && !!layoutId && !!pdfSlot && (
@@ -1657,6 +1696,57 @@ export function ItemEditForm({
               const inlineRelCollection = (inlineEntries?.length && hasVal)
                 ? (relations.find((r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field)?.one_collection ?? null)
                 : null
+              const isPrimarySwapField = activeSwapCfg?.enabled && f.field === activeSwapCfg.primary_field
+              const primaryHasVal = (() => { const v = draft[activeSwapCfg?.primary_field ?? '']; return v !== null && v !== undefined && v !== '' })()
+              const altHasVal = normActiveAlts.some((a) => { const v = draft[a.field]; return v !== null && v !== undefined && v !== '' })
+              const swapToggleBtn = isPrimarySwapField ? (
+                <span className='inline-flex items-center gap-1.5'>
+                  <button
+                    type='button'
+                    onClick={() => setSwappedGroups((prev) => { const next = new Set(prev); if (next.has(activeChild!.id)) next.delete(activeChild!.id); else next.add(activeChild!.id); return next })}
+                    className='inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 transition-colors'
+                  >
+                    {activeIsSwapped ? (activeSwapCfg!.back_label ?? 'Back') : (activeSwapCfg!.toggle_label ?? 'Enter manually')}
+                  </button>
+                  <span className={['inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium', primaryHasVal ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'].join(' ')}>
+                    <span className={['h-1.5 w-1.5 rounded-full', primaryHasVal ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'].join(' ')} />
+                    Original
+                  </span>
+                  <span className={['inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium', altHasVal ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'].join(' ')}>
+                    <span className={['h-1.5 w-1.5 rounded-full', altHasVal ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'].join(' ')} />
+                    Manual
+                  </span>
+                </span>
+              ) : undefined
+              const swapContentNode = isPrimarySwapField && activeIsSwapped ? (
+                <div className='mt-2 rounded-lg border border-slate-200 bg-slate-50 dark:border-border dark:bg-slate-900/40 p-3'>
+                <div className='grid grid-cols-2 gap-3'>
+                  {normActiveAlts.map((a) => {
+                    const af = (fieldConfig ?? []).find(fc => fc.field === a.field)
+                    if (!af) return null
+                    return (
+                      <div key={af.field} style={{ gridColumn: `span ${a.width}` }}>
+                        <FieldRow
+                          field={af}
+                          draft={draft}
+                          onChange={handleFieldChange}
+                          relations={relations}
+                          collection={collection}
+                          itemId={itemId}
+                          error={validationErrors[af.field]}
+                          visible={true}
+                          forceVisible={true}
+                          locked={lockedFields.has(af.field)}
+                          layoutAiEnabled={layoutAiEnabled}
+                          renderField={renderField}
+                          onCountChange={handleM2MCountChange}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+                </div>
+              ) : undefined
               return (
                 <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
                   <FieldRow
@@ -1672,6 +1762,8 @@ export function ItemEditForm({
                     layoutAiEnabled={layoutAiEnabled}
                     renderField={renderField}
                     onCountChange={handleM2MCountChange}
+                    swapButton={swapToggleBtn}
+                    swapContent={swapContentNode}
                   />
                   {inlineEntries?.length && hasVal && inlineRelCollection && (
                     <InlineDisplay relCollection={inlineRelCollection} relId={rawVal as string | number} entries={inlineEntries} separator={inlineSeparator} />
@@ -1743,7 +1835,13 @@ export function ItemEditForm({
     const g = item as FieldGroup
     if (g.type === 'container') return renderContainer(g)
     if (g.type === 'metadata' && isNew) return null
-    const groupFields = groupedMap[g.key] ?? []
+    const swapCfg = (() => {
+      try { return g.swap_config ? JSON.parse(g.swap_config) as { enabled: boolean; primary_field: string; alternate_fields: ({ field: string; width: 1 | 2 } | string)[]; toggle_label?: string; back_label?: string } : null } catch { return null }
+    })()
+    const normAlts = (swapCfg?.alternate_fields ?? []).map(x => typeof x === 'string' ? { field: x, width: 2 as const } : x)
+    const isSwapped = swapCfg?.enabled ? swappedGroups.has(g.id) : false
+    const baseFields = groupedMap[g.key] ?? []
+    const groupFields = baseFields
     const ownersHere = ownersInGroup && ownersGroupKey === g.key && showPipeline
     const pdfHere = pdfInGroup && pdfGroupKey === g.key && !isNew
     const widgetsHere = widgetSlots.filter((ws) => (ws.group_key ?? null) === g.key)
@@ -1788,6 +1886,15 @@ export function ItemEditForm({
         o2mLoading={o2mLoading}
         hideEmptySummary={hideEmptySummary}
         fieldInlineDisplay={fieldInlineDisplay}
+        swapConfig={swapCfg}
+        swapped={isSwapped}
+        onSwapToggle={swapCfg?.enabled ? () => setSwappedGroups((prev) => {
+          const next = new Set(prev)
+          if (next.has(g.id)) next.delete(g.id); else next.add(g.id)
+          return next
+        }) : undefined}
+        alternateFields={swapCfg?.enabled ? (fieldConfig ?? []).filter((af) => normAlts.some(a => a.field === af.field)) : undefined}
+        alternateWidths={swapCfg?.enabled ? Object.fromEntries(normAlts.map(a => [a.field, a.width])) : undefined}
       />
     )
   }
@@ -2187,8 +2294,30 @@ export function ItemEditForm({
               <h1 className='text-base font-semibold text-slate-800 dark:text-slate-100'>
                 {isNew ? `New ${singularTitle}` : itemTitle}
               </h1>
-              {subtitleText && (
-                <p className='text-[12px] text-slate-500 dark:text-slate-400 truncate'>{subtitleText}</p>
+              {subtitleParts.length > 0 && (
+                <div className='flex flex-wrap items-center gap-1 mt-0.5'>
+                  {subtitleParts.map((p, i) => {
+                    const weightClass = p.weight === 'bold' ? 'font-bold' : p.weight === 'semibold' ? 'font-semibold' : p.weight === 'medium' ? 'font-medium' : 'font-normal'
+                    const colorClass = p.color === 'cyan' ? 'text-nvr-cyan' : p.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : p.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : p.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : p.color === 'red' ? 'text-red-600 dark:text-red-400' : p.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-500 dark:text-slate-400'
+                    const isPill = p.display_as === 'pill'
+                    const isTag = p.display_as === 'tag'
+                    const sep = subtitleConfig?.separator ?? ' | '
+                    return (
+                      <span key={i} className='flex items-center gap-1'>
+                        {i > 0 && !isPill && !isTag && <span className='text-slate-300 dark:text-slate-600 text-[11px]'>{sep}</span>}
+                        <span className={[
+                          'text-[12px]',
+                          weightClass,
+                          colorClass,
+                          isPill ? 'rounded-full px-2 py-0.5 bg-current/10 text-[11px]' : '',
+                          isTag ? 'rounded px-1.5 py-0.5 border border-current/30 text-[11px]' : '',
+                        ].filter(Boolean).join(' ')}>
+                          {p.value}
+                        </span>
+                      </span>
+                    )
+                  })}
+                </div>
               )}
             </div>
             <div className='ml-auto flex items-center gap-2'>
@@ -2284,7 +2413,7 @@ export function ItemEditForm({
         )}
 
         {showHeader && (headerWidgets.length > 0 || headerFields.length > 0) && (
-          <div className='flex shrink-0 overflow-x-auto border-b border-slate-200 dark:border-border bg-white dark:bg-card'>
+          <div className='flex shrink-0 overflow-x-auto border-b border-slate-200 dark:border-border bg-white dark:bg-card px-4'>
             {[
               ...headerWidgets.map((w) => ({ type: 'widget' as const, sort: w.sort, key: w.field, data: w })),
               ...headerFields.map((f) => ({ type: 'field' as const, sort: f.sort, key: f.field, data: f })),
@@ -2317,13 +2446,18 @@ export function ItemEditForm({
                   )
                 }
                 const raw = draft[f.field]
+                const hColorClass = f.color === 'cyan' ? 'text-nvr-cyan' : f.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : f.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : f.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : f.color === 'red' ? 'text-red-600 dark:text-red-400' : f.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-900 dark:text-slate-100'
+                const hWeightClass = f.weight === 'bold' ? 'font-bold' : f.weight === 'semibold' ? 'font-semibold' : f.weight === 'medium' ? 'font-medium' : 'font-semibold'
+                const textCls = `${hColorClass} ${hWeightClass}`
+                const isPill = f.displayAs === 'pill'
+                const isTag = f.displayAs === 'tag'
                 return (
                   <div key={f.field} className='flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2.5 min-w-0 gap-1'>
                     <span className='text-[9px] font-medium uppercase tracking-wider leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
-                    <span className='leading-none truncate max-w-[220px]'>
+                    <span className={['leading-none truncate max-w-[220px]', isPill ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10` : isTag ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}` : ''].filter(Boolean).join(' ')}>
                       {f.cmsField
-                        ? <StripFieldValue field={f.cmsField} val={raw} relations={relations} collection={collection} displayFormat={f.displayFormat} />
-                        : <span className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{formatHeaderFieldValue(raw, f.displayFormat)}</span>
+                        ? <StripFieldValue field={f.cmsField} val={raw} relations={relations} collection={collection} displayFormat={f.displayFormat} textClassName={textCls} />
+                        : <span className={`text-[13px] ${textCls}`}>{formatHeaderFieldValue(raw, f.displayFormat)}</span>
                       }
                     </span>
                   </div>

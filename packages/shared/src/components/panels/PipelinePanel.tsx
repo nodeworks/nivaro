@@ -637,6 +637,111 @@ function OwnersSection({
   )
 }
 
+// ─── Approval Chain View ──────────────────────────────────────────────────────
+
+interface AllOwnersEntry {
+  state: PipelineState
+  owners: Array<{ id: string; email: string; first_name: string | null; last_name: string | null }>
+}
+
+function ApprovalChainView({
+  collection,
+  item,
+  states
+}: {
+  collection: string
+  item: string
+  states: PipelineState[]
+}) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const { data, isLoading } = useQuery<Record<string, AllOwnersEntry> | null>({
+    queryKey: ['pipeline-all-owners', collection, item],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, AllOwnersEntry> | null }>(
+          get(`/pipelines/instance/${collection}/${item}/owners/all`)
+        )
+        .then((r) => r.data ?? null),
+    enabled: open,
+    staleTime: 30_000,
+  })
+
+  const sorted = [...states].sort((a, b) => a.sort - b.sort)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          title='View approval chain'
+          className='flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600'
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Users className='h-3.5 w-3.5' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' sideOffset={6} className='w-72 p-0 overflow-hidden'>
+        <div className='border-b border-slate-100 px-4 py-3'>
+          <p className='text-[12px] font-semibold text-slate-700'>Approval Chain</p>
+          <p className='text-[11px] text-slate-400 mt-0.5'>Owners per pipeline state</p>
+        </div>
+        <div className='max-h-72 overflow-y-auto'>
+          {isLoading ? (
+            <div className='space-y-px p-3'>
+              {[1, 2, 3].map((i) => (
+                <Skeleton key={i} className='h-10 w-full' />
+              ))}
+            </div>
+          ) : !data ? (
+            <p className='px-4 py-3 text-[12px] text-slate-400'>No pipeline configured.</p>
+          ) : (
+            <div className='divide-y divide-slate-100'>
+              {sorted.map((s) => {
+                const owners = data[s.id]?.owners ?? []
+                return (
+                  <div key={s.id} className='flex items-center gap-3 px-4 py-2.5'>
+                    <StateBadge label={s.label} color={s.color} small />
+                    <div className='flex flex-1 flex-wrap items-center gap-1'>
+                      {owners.length === 0 ? (
+                        <span className='text-[11px] text-slate-300'>—</span>
+                      ) : (
+                        <TooltipProvider delayDuration={200}>
+                          {owners.map((o) => {
+                            const name =
+                              [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
+                            const initials = name
+                              .split(' ')
+                              .map((p) => p[0])
+                              .filter(Boolean)
+                              .slice(0, 2)
+                              .join('')
+                              .toUpperCase()
+                            return (
+                              <Tooltip key={o.id}>
+                                <TooltipTrigger asChild>
+                                  <span className='flex h-6 w-6 shrink-0 cursor-default items-center justify-center rounded-full bg-nvr-cyan/15 text-[9px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+                                    {initials}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent side='top'>{name}</TooltipContent>
+                              </Tooltip>
+                            )
+                          })}
+                        </TooltipProvider>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 // ─── Pipeline Panel ───────────────────────────────────────────────────────────
 
 export function PipelinePanel({
@@ -644,12 +749,14 @@ export function PipelinePanel({
   item,
   defaultExpanded,
   title,
+  showApprovalChain,
   onBeforeTransition
 }: {
   collection: string
   item: string
   defaultExpanded?: boolean
   title?: string
+  showApprovalChain?: boolean
   onBeforeTransition?: () => boolean
 }) {
   if (item === 'new') return null
@@ -659,6 +766,7 @@ export function PipelinePanel({
       item={item}
       defaultExpanded={defaultExpanded}
       title={title}
+      showApprovalChain={showApprovalChain}
       onBeforeTransition={onBeforeTransition}
     />
   )
@@ -669,12 +777,14 @@ function PipelinePanelInner({
   item,
   defaultExpanded,
   title,
+  showApprovalChain,
   onBeforeTransition
 }: {
   collection: string
   item: string
   defaultExpanded?: boolean
   title?: string
+  showApprovalChain?: boolean
   onBeforeTransition?: () => boolean
 }) {
   const client = useNivaroClient()
@@ -916,33 +1026,35 @@ function PipelinePanelInner({
           )}
           {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
         </div>
-        {!expanded && hasTransitions && (
-          <div
-            className='flex flex-wrap items-center gap-1.5'
-            onClick={(e) => e.stopPropagation()}
-          >
-            {renderTransitionButtons(transitions, true)}
-          </div>
-        )}
-        {!expanded && !instance && data?.binding && (
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-7 gap-1.5 text-[11px]'
-            onClick={(e) => { e.stopPropagation(); startPipeline.mutate() }}
-            disabled={startPipeline.isPending}
-          >
-            {startPipeline.isPending ? (
-              <Loader2 className='h-3 w-3 animate-spin' />
-            ) : (
-              <GitBranch className='h-3 w-3' />
-            )}
-            Start
-          </Button>
-        )}
+        <div className='ml-auto flex items-center gap-2' onClick={(e) => e.stopPropagation()}>
+          {!expanded && hasTransitions && (
+            <div className='flex flex-wrap items-center gap-1.5'>
+              {renderTransitionButtons(transitions, true)}
+            </div>
+          )}
+          {!expanded && !instance && data?.binding && (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 gap-1.5 text-[11px]'
+              onClick={(e) => { e.stopPropagation(); startPipeline.mutate() }}
+              disabled={startPipeline.isPending}
+            >
+              {startPipeline.isPending ? (
+                <Loader2 className='h-3 w-3 animate-spin' />
+              ) : (
+                <GitBranch className='h-3 w-3' />
+              )}
+              Start
+            </Button>
+          )}
+          {showApprovalChain && data?.binding && (
+            <ApprovalChainView collection={collection} item={item} states={states ?? []} />
+          )}
+        </div>
         <ChevronDown
           className={cn(
-            'ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150',
+            'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150',
             expanded && 'rotate-180'
           )}
         />
@@ -988,7 +1100,7 @@ function PipelinePanelInner({
               </div>
               {hasTransitions && (
                 <div className='space-y-3 px-5 py-4'>
-                  <div className='flex flex-wrap gap-2'>{renderTransitionButtons(transitions)}</div>
+                  <div className='flex flex-wrap justify-end gap-2'>{renderTransitionButtons(transitions)}</div>
                   {pendingTransition && confirmForm}
                 </div>
               )}
@@ -1118,7 +1230,7 @@ function PipelineTransitionButtonsInner({
 
   return (
     <div className='space-y-2'>
-      <div className='flex flex-wrap gap-2'>
+      <div className='flex flex-wrap justify-end gap-2'>
         {Array.from(byLabel.entries()).map(([label, txs]) => {
           const txColor = txs[0]?.color ?? null
           const isActive = txs.some((t) => t.id === pendingTransition)

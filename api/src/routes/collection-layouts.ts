@@ -82,10 +82,10 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.conditions = parseConditions(layout.conditions)
 
     const [groups, assignments] = await Promise.all([
-      db('nivaro_field_groups').where({ layout_id: layout.id }).select('id','key','label','type','icon','sort','is_collapsed','container_id','tab_mode','hide_when_empty','visibility_mode','summary_fields','summary_hide_empty').orderBy('sort', 'asc'),
+      db('nivaro_field_groups').where({ layout_id: layout.id }).select('id','key','label','type','icon','sort','is_collapsed','container_id','tab_mode','hide_when_empty','visibility_mode','summary_fields','summary_hide_empty','swap_config').orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: layout.id })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides', 'widget_id', 'input_bindings')
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'show_approval_chain', 'col_span', 'overrides', 'widget_id', 'input_bindings')
         .orderBy('sort', 'asc')
     ])
 
@@ -625,7 +625,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!layout) return reply.code(404).send({ error: 'Not found' })
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides', 'widget_id', 'input_bindings')
+      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'show_approval_chain', 'col_span', 'overrides', 'widget_id', 'input_bindings')
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })
@@ -657,6 +657,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         is_visible?: boolean
         default_expanded?: boolean
         show_row_revisions?: boolean
+        show_approval_chain?: boolean
         col_span?: number | null
         overrides?: Record<string, unknown> | null
         widget_id?: number | null
@@ -678,6 +679,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
             is_visible: a.is_visible === false ? 0 : 1,
             default_expanded: a.default_expanded === false ? 0 : 1,
             show_row_revisions: a.show_row_revisions === true ? 1 : 0,
+            show_approval_chain: a.show_approval_chain === true ? 1 : 0,
             col_span: a.col_span ?? null,
             overrides: a.overrides != null ? JSON.stringify(a.overrides) : null,
             widget_id: a.widget_id ?? null,
@@ -689,7 +691,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'col_span', 'overrides', 'widget_id', 'input_bindings')
+      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'show_approval_chain', 'col_span', 'overrides', 'widget_id', 'input_bindings')
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })
