@@ -188,17 +188,26 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       const sorted = [...body.row_rules].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
       for (const rule of sorted) {
         const triggerField = rule.trigger_field ?? null
+        const isParentTrigger = !!triggerField && triggerField.startsWith('$parent.')
         const extraTriggerFields = Array.isArray(rule.trigger_fields) ? rule.trigger_fields.filter(Boolean) : []
         const allTriggerFields = triggerField ? [triggerField, ...extraTriggerFields] : extraTriggerFields
 
-        if (body.changed_field && allTriggerFields.length > 0 && !allTriggerFields.includes(body.changed_field)) continue
-        if (triggerField && !(triggerField in working)) continue
+        if (!isParentTrigger) {
+          if (body.changed_field && allTriggerFields.length > 0 && !allTriggerFields.includes(body.changed_field)) continue
+          if (triggerField && !(triggerField in working)) continue
+        }
 
-        // val = the field that actually changed (for OR triggers), falling back to trigger_field
-        const activeField = (body.changed_field && allTriggerFields.includes(body.changed_field))
-          ? body.changed_field
-          : triggerField
-        let val: unknown = activeField ? working[activeField] : null
+        let val: unknown
+        if (isParentTrigger) {
+          const parentKey = triggerField!.slice(8) // strip '$parent.'
+          val = parentContext[parentKey] ?? null
+        } else {
+          // val = the field that actually changed (for OR triggers), falling back to trigger_field
+          const activeField = (body.changed_field && allTriggerFields.includes(body.changed_field))
+            ? body.changed_field
+            : triggerField
+          val = activeField ? working[activeField] : null
+        }
 
         // When trigger_related_field is set, resolve the M2O related record and compare that field.
         // Supports dot-path (e.g. "category_type.type") for multi-hop traversal.
