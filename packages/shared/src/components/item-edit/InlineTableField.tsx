@@ -585,8 +585,18 @@ export function InlineTableField({
 
     if (rowRules && rowRules.length > 0 && client) {
       const parentCtx: Record<string, unknown> = {}
-      if (parentContextFields?.length && parentDraftCtx?.draft) {
-        for (const f of parentContextFields) parentCtx[f] = parentDraftCtx.draft[f] ?? null
+      if (parentDraftCtx?.draft) {
+        if (parentContextFields?.length) {
+          for (const f of parentContextFields) parentCtx[f] = parentDraftCtx.draft[f] ?? null
+        }
+        // Auto-include any $parent.* fields referenced in rules, even if not in parentContextFields
+        for (const rule of rowRules) {
+          const tf = (rule as { trigger_field?: unknown }).trigger_field
+          if (typeof tf === 'string' && tf.startsWith('$parent.')) {
+            const key = tf.slice(8)
+            if (!(key in parentCtx)) parentCtx[key] = parentDraftCtx.draft[key] ?? null
+          }
+        }
       }
       client.request<{ updates: Record<string, unknown> }>(
         post('/field-rules/evaluate', {

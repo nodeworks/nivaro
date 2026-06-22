@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, FileDown, Loader2, Save, Trash2 } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileDown, Loader2, Save, Trash2 } from 'lucide-react'
 import { CloneDialog } from './item-edit/CloneDialog'
 import {
   type ReactNode,
@@ -418,6 +418,8 @@ export function ItemEditForm({
   }
   const initialDataRef = useRef<Record<string, unknown>>({})
   const touchedFields = useRef<Set<string>>(new Set())
+
+  const [copiedHeaderField, setCopiedHeaderField] = useState<string | null>(null)
 
   // ── Pending comments (new records) ────────────────────────────────────────
   const [pendingComments, setPendingComments] = useState<string[]>([])
@@ -2330,11 +2332,30 @@ export function ItemEditForm({
               </button>
             )}
             <div className='flex flex-col min-w-0'>
-              <h1 className='text-base font-semibold text-slate-800 dark:text-slate-100'>
-                {isNew ? `New ${singularTitle}` : itemTitle}
-              </h1>
+              <div className='group/title flex items-center gap-1'>
+                <h1 className='text-base font-semibold text-slate-800 dark:text-slate-100'>
+                  {isNew ? `New ${singularTitle}` : itemTitle}
+                </h1>
+                {!isNew && itemTitle && (
+                  copiedHeaderField === '__title__'
+                    ? <Check className='h-3 w-3 shrink-0 text-green-500' />
+                    : (
+                      <button
+                        type='button'
+                        className='cursor-pointer opacity-0 group-hover/title:opacity-100 transition-opacity'
+                        onClick={() => {
+                          navigator.clipboard.writeText(itemTitle ?? '').catch(() => {})
+                          setCopiedHeaderField('__title__')
+                          setTimeout(() => setCopiedHeaderField((prev) => prev === '__title__' ? null : prev), 1500)
+                        }}
+                      >
+                        <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                      </button>
+                    )
+                )}
+              </div>
               {subtitleParts.length > 0 && (
-                <div className='flex flex-wrap items-center gap-1 mt-0.5'>
+                <div className='group/subtitle flex flex-wrap items-center gap-1 mt-0.5'>
                   {subtitleParts.map((p, i) => {
                     const weightClass = p.weight === 'bold' ? 'font-bold' : p.weight === 'semibold' ? 'font-semibold' : p.weight === 'medium' ? 'font-medium' : 'font-normal'
                     const colorClass = p.color === 'cyan' ? 'text-nvr-cyan' : p.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : p.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : p.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : p.color === 'red' ? 'text-red-600 dark:text-red-400' : p.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-500 dark:text-slate-400'
@@ -2356,6 +2377,24 @@ export function ItemEditForm({
                       </span>
                     )
                   })}
+                  {copiedHeaderField === '__subtitle__'
+                    ? <Check className='h-3 w-3 shrink-0 text-green-500' />
+                    : (
+                      <button
+                        type='button'
+                        className='cursor-pointer opacity-0 group-hover/subtitle:opacity-100 transition-opacity'
+                        onClick={() => {
+                          const sep = subtitleConfig?.separator ?? ' | '
+                          const text = subtitleParts.map((p) => p.value).join(sep)
+                          navigator.clipboard.writeText(text).catch(() => {})
+                          setCopiedHeaderField('__subtitle__')
+                          setTimeout(() => setCopiedHeaderField((prev) => prev === '__subtitle__' ? null : prev), 1500)
+                        }}
+                      >
+                        <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                      </button>
+                    )
+                  }
                 </div>
               )}
             </div>
@@ -2459,28 +2498,65 @@ export function ItemEditForm({
             ]
               .sort((a, b) => a.sort - b.sort)
               .map((item) => {
+                const copyCell = (el: HTMLElement | null, field: string) => {
+                  if (!el) return
+                  const clone = el.cloneNode(true) as HTMLElement
+                  clone.querySelectorAll('[data-copy-skip], button').forEach((n) => n.remove())
+                  const text = clone.textContent?.trim() ?? ''
+                  if (text) {
+                    navigator.clipboard.writeText(text).catch(() => {})
+                    setCopiedHeaderField(field)
+                    setTimeout(() => setCopiedHeaderField((prev) => prev === field ? null : prev), 1500)
+                  }
+                }
+
                 if (item.type === 'widget') {
                   const w = item.data
                   return (
-                    <WidgetSlot
-                      key={w.field}
-                      widgetId={w.widgetId}
-                      inputBindings={w.inputBindings}
-                      itemDraft={draft}
-                      itemCollection={collection}
-                      label={w.label ?? undefined}
-                      compact={true}
-                      strip={true}
-                      apiBase='/api'
-                    />
+                    <div key={w.field} className='group relative'>
+                      <WidgetSlot
+                        widgetId={w.widgetId}
+                        inputBindings={w.inputBindings}
+                        itemDraft={draft}
+                        itemCollection={collection}
+                        label={w.label ?? undefined}
+                        compact={true}
+                        strip={true}
+                        apiBase='/api'
+                      />
+                      {copiedHeaderField === w.field
+                        ? <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                        : (
+                          <button
+                            type='button'
+                            className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                            onClick={(e) => copyCell(e.currentTarget.closest<HTMLElement>('.group'), w.field)}
+                          >
+                            <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                          </button>
+                        )
+                      }
+                    </div>
                   )
                 }
                 const f = item.data
                 if (f.field === '__owners__') {
                   return (
-                    <div key='__owners__' className='flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2.5 min-w-0 gap-1'>
+                    <div key='__owners__' className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2.5 min-w-0 gap-1'>
                       <span className='text-[9px] font-medium uppercase tracking-wider leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
                       <OwnersInlineCompact collection={collection} itemId={itemId} />
+                      {copiedHeaderField === '__owners__'
+                        ? <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                        : (
+                          <button
+                            type='button'
+                            className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                            onClick={(e) => copyCell(e.currentTarget.closest<HTMLElement>('.group'), '__owners__')}
+                          >
+                            <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                          </button>
+                        )
+                      }
                     </div>
                   )
                 }
@@ -2491,7 +2567,10 @@ export function ItemEditForm({
                 const isPill = f.displayAs === 'pill'
                 const isTag = f.displayAs === 'tag'
                 return (
-                  <div key={f.field} className='flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2.5 min-w-0 gap-1'>
+                  <div
+                    key={f.field}
+                    className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2.5 min-w-0 gap-1'
+                  >
                     <span className='text-[9px] font-medium uppercase tracking-wider leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
                     <span className={['leading-none truncate max-w-[220px]', isPill ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10` : isTag ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}` : ''].filter(Boolean).join(' ')}>
                       {f.cmsField
@@ -2499,6 +2578,32 @@ export function ItemEditForm({
                         : <span className={`text-[13px] ${textCls}`}>{formatHeaderFieldValue(raw, f.displayFormat)}</span>
                       }
                     </span>
+                    {copiedHeaderField === f.field
+                      ? <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                      : (
+                        <button
+                          type='button'
+                          className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                          onClick={(e) => {
+                            const cell = e.currentTarget.closest<HTMLElement>('.group')
+                            const valueSpan = cell?.querySelectorAll<HTMLElement>(':scope > span')[1]
+                            let text = ''
+                            if (valueSpan) {
+                              const clone = valueSpan.cloneNode(true) as HTMLElement
+                              clone.querySelectorAll('[data-copy-skip]').forEach(el => el.remove())
+                              text = clone.textContent?.trim() ?? ''
+                            }
+                            if (text) {
+                              navigator.clipboard.writeText(text).catch(() => {})
+                              setCopiedHeaderField(f.field)
+                              setTimeout(() => setCopiedHeaderField(prev => prev === f.field ? null : prev), 1500)
+                            }
+                          }}
+                        >
+                          <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                        </button>
+                      )
+                    }
                   </div>
                 )
               })}

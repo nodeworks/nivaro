@@ -168,9 +168,9 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         trigger_op?: string
         trigger_value?: string | null
         target_field: string
-        target_type: 'set' | 'clear' | 'relation_field' | 'precedence'
+        target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick'
         target_value?: string | null
-        sources?: Array<{ source_type: string; source_field: string; source_related_field: string }>
+        sources?: Array<{ source_type: string; source_field: string; source_related_field: string; source_hop?: string; o2m_collection?: string; filter_field?: string; filter_value?: string; source_one_collection?: string }>
         only_if_empty?: boolean
         sort?: number
       }>
@@ -284,7 +284,7 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
 
         if (rule.target_type === 'clear') {
           working[rule.target_field] = null
-        } else if (rule.target_type === 'set') {
+        } else if (rule.target_type === 'set' || rule.target_type === 'pick') {
           const rv = rule.target_value?.replace(/\$parent\.(\w+)/g, (_, f) => {
             const v = parentContext[f]; return v != null ? String(v) : ''
           }) ?? null
@@ -336,6 +336,65 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
                   .orderBy('id', 'asc')
                   .first() as Record<string, unknown> | undefined
                 const candidate = firstRec?.[src.source_related_field] ?? null
+                if (candidate != null) { resolved = candidate; break }
+              } else if (src.source_type === 'o2m_filtered') {
+                if (!src.o2m_collection || !src.filter_field) continue
+                const hop = src.source_hop ?? 'm2o'
+                // Step 1: resolve the intermediate record ID
+                let intermediateId: string | null = null
+                let intermediateCollection: string | null = null
+                if (hop === 'm2o') {
+                  const fkId = working[src.source_field]
+                  if (fkId == null) continue
+                  intermediateId = String(fkId)
+                  const rel = await db('nivaro_relations')
+                    .where({ many_collection: body.collection, many_field: src.source_field })
+                    .whereNull('junction_field')
+                    .first() as { one_collection: string } | undefined
+                  intermediateCollection = rel?.one_collection ?? null
+                } else {
+                  // o2m_first: take first child record of the line
+                  const rowId = working.id
+                  if (rowId == null) continue
+                  const rel = await db('nivaro_relations')
+                    .where({ one_collection: body.collection, one_field: src.source_field })
+                    .whereNull('junction_field')
+                    .first() as { many_collection: string; many_field: string } | undefined
+                  if (!rel?.many_collection) continue
+                  const firstRec = await db(rel.many_collection)
+                    .where({ [rel.many_field]: String(rowId) })
+                    .orderBy('id', 'asc')
+                    .first() as Record<string, unknown> | undefined
+                  if (firstRec?.id == null) continue
+                  intermediateId = String(firstRec.id)
+                  intermediateCollection = rel.many_collection
+                }
+                if (!intermediateId || !intermediateCollection) continue
+                // Step 2: find FK from o2m_collection back to intermediateCollection
+                const fkRel = await db('nivaro_relations')
+                  .where({ many_collection: src.o2m_collection, one_collection: intermediateCollection })
+                  .whereNull('junction_field')
+                  .first() as { many_field: string } | undefined
+                if (!fkRel?.many_field) continue
+                // Step 3: resolve filter value ($parent.X substitution)
+                const resolvedFilter = (src.filter_value ?? '').replace(/\$parent\.(\w+)/g, (_, f) => {
+                  const v = parentContext[f]; return v != null ? String(v) : ''
+                })
+                // Step 4: query the child collection
+                const matchRec = await db(src.o2m_collection)
+                  .where({ [fkRel.many_field]: intermediateId, [src.filter_field]: resolvedFilter })
+                  .orderBy('id', 'asc')
+                  .first() as Record<string, unknown> | undefined
+                const candidate = matchRec?.[src.source_related_field] ?? null
+                if (candidate != null) { resolved = candidate; break }
+              } else if (src.source_type === 'parent_m2o') {
+                if (!src.source_one_collection) continue
+                const fkId = parentContext[src.source_field]
+                if (fkId == null) continue
+                const relRec = await db(src.source_one_collection)
+                  .where({ id: String(fkId) })
+                  .first() as Record<string, unknown> | undefined
+                const candidate = relRec?.[src.source_related_field] ?? null
                 if (candidate != null) { resolved = candidate; break }
               }
             } catch { continue }

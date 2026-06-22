@@ -16,17 +16,15 @@ function StripCell({ label, value, display, loading }: {
   const suffix = (display.suffix ?? '') as string
   const formatted = loading ? null : formatStatValue(value, (display.format ?? '') as string)
   return (
-    <div className='flex flex-col justify-start px-4 py-2.5 min-w-0 gap-1'>
+    <div className='flex flex-col justify-start px-4 py-2.5 min-w-0 gap-1.5'>
       <span className='text-[9px] font-medium uppercase tracking-wider leading-none truncate text-slate-400 dark:text-slate-500'>{label}</span>
-      <span className='flex items-baseline gap-0.5 text-[13px] font-semibold tabular-nums leading-none text-slate-900 dark:text-slate-100'>
+      <span className='leading-none truncate max-w-[220px]'>
         {loading ? (
           <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-slate-700' />
         ) : (
-          <>
-            {prefix && <span className='text-[11px] text-slate-500 dark:text-slate-400'>{prefix}</span>}
-            {formatted}
-            {suffix && <span className='text-[11px] text-slate-500 dark:text-slate-400'>{suffix}</span>}
-          </>
+          <span className='text-[13px] font-semibold tabular-nums text-slate-900 dark:text-slate-100'>
+            {prefix}{formatted}{suffix}
+          </span>
         )}
       </span>
     </div>

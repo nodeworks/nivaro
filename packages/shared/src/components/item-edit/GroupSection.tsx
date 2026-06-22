@@ -280,7 +280,7 @@ export function OwnersInlineCompact({ collection, itemId }: { collection: string
     <span className='inline-flex flex-wrap gap-x-1.5 gap-y-0.5'>
       {owners.map((o) => (
         <span key={o.id} className='inline-flex items-center gap-1 rounded-full bg-slate-100 py-px pl-0.5 pr-2'>
-          <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials(o)}</span>
+          <span data-copy-skip aria-hidden='true' className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials(o)}</span>
           <span className='text-[11px] text-slate-600'>{name(o)}</span>
         </span>
       ))}
@@ -498,12 +498,12 @@ export function UserChip({ userId, size = 'default' }: { userId: string; size?: 
       <PopoverTrigger asChild>
         {size === 'compact' ? (
           <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 py-px pl-px pr-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors'>
-            <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
+            <span data-copy-skip aria-hidden='true' className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
             <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>{name}</span>
           </span>
         ) : (
           <div className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 hover:bg-slate-100 dark:border-border dark:bg-card dark:hover:bg-accent transition-colors'>
-            <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
+            <span data-copy-skip aria-hidden='true' className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
             <span className='text-[12px] text-slate-700 dark:text-slate-300'>{name}</span>
           </div>
         )}
