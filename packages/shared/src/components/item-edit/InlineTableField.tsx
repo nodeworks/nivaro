@@ -464,17 +464,20 @@ export function InlineTableField({
     return map
   }, [displayCols, childRelations, relatedCollection])
 
-  // Collect unique FK ids per one_collection from all rows
+  // Collect unique FK ids per one_collection from all rows (incl. pending edits)
   const m2oLookupIds = useMemo(() => {
     const result = new Map<string, string[]>()
     const allRows = [...rows, ...pendingRows]
+    const pendingEditRows = [...pendingEdits.values()]
     for (const [field, rel] of m2oRelMap) {
       if (!rel.one_collection) continue
-      const ids = [...new Set(allRows.map((r) => r[field]).filter((v) => v != null).map(String))].sort()
+      const rowIds = allRows.map((r) => r[field]).filter((v) => v != null).map(String)
+      const editIds = pendingEditRows.map((r) => r[field]).filter((v) => v != null).map(String)
+      const ids = [...new Set([...rowIds, ...editIds])].sort()
       if (ids.length) result.set(rel.one_collection, ids)
     }
     return result
-  }, [rows, pendingRows, m2oRelMap])
+  }, [rows, pendingRows, pendingEdits, m2oRelMap])
 
   // For relation-grouped fields, track which collection needs group/option expansion
   const m2oGroupedConfig = useMemo(() => {

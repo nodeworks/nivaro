@@ -99,6 +99,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
@@ -5234,52 +5235,332 @@ function CascadeRuleRow({
   )
 }
 
+type RowRuleSource = {
+  source_type: 'relation_field' | 'o2m_first'
+  source_field: string
+  source_related_field: string
+}
+
 type RowRuleItem = {
-  trigger_field?: string | null; trigger_op?: string; trigger_value?: string | null
-  target_field: string; target_type: 'set' | 'clear' | 'relation_field'; target_value?: string | null
+  trigger_field?: string | null
+  trigger_fields?: string[] | null
+  trigger_related_field?: string | null
+  trigger_op?: string; trigger_value?: string | null
+  target_field: string
+  target_type: 'set' | 'clear' | 'relation_field' | 'precedence'
+  target_value?: string | null
+  sources?: RowRuleSource[]
   only_if_empty?: boolean; sort?: number
+}
+
+const ROW_RULE_SKIP_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
+const VIA_ID_MARKERS = new Set(['__id__', '__entity__'])
+
+function ViaValuePicker({
+  collection,
+  value,
+  isMulti,
+  onChange,
+}: {
+  collection: string
+  value: string | null
+  isMulti: boolean
+  onChange: (v: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+
+  const selectedIds = value ? value.split(',').map(s => s.trim()).filter(Boolean) : []
+
+  const { data: items = [] } = useQuery<Array<Record<string, unknown>>>({
+    queryKey: ['via-pick-items', collection, search],
+    queryFn: () =>
+      api.get<{ data: Array<Record<string, unknown>> }>(`/items/${collection}`, {
+        params: { limit: 50, ...(search ? { search } : {}) },
+      }).then(r => r.data.data ?? []),
+    enabled: !!collection,
+    staleTime: 30_000,
+  })
+
+  const { data: selectedItems = [] } = useQuery<Array<Record<string, unknown>>>({
+    queryKey: ['via-pick-selected', collection, selectedIds.join(',')],
+    queryFn: () =>
+      api.get<{ data: Array<Record<string, unknown>> }>(`/items/${collection}`, {
+        params: {
+          filter: JSON.stringify({ id: { _in: selectedIds } }),
+          limit: selectedIds.length,
+        },
+      }).then(r => r.data.data ?? []),
+    enabled: selectedIds.length > 0,
+    staleTime: 60_000,
+  })
+
+  function getLabel(item: Record<string, unknown>) {
+    return String(item.name ?? item.title ?? item.label ?? item.id ?? '')
+  }
+
+  function toggle(id: string) {
+    if (isMulti) {
+      const next = selectedIds.includes(id)
+        ? selectedIds.filter(s => s !== id)
+        : [...selectedIds, id]
+      onChange(next.length ? next.join(',') : null)
+    } else {
+      onChange(selectedIds[0] === id ? null : id)
+      setOpen(false)
+    }
+  }
+
+  return (
+    <div className='space-y-1'>
+      {selectedIds.length > 0 && (
+        <div className='flex flex-wrap gap-1'>
+          {selectedIds.map(id => {
+            const item = selectedItems.find(r => String(r.id) === id)
+            return (
+              <span key={id} className='inline-flex items-center gap-0.5 rounded bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan text-[10px] px-1.5 py-0.5'>
+                {item ? getLabel(item) : id}
+                <button type='button' onClick={() => toggle(id)} className='hover:text-red-400 ml-0.5'>✕</button>
+              </span>
+            )
+          })}
+        </div>
+      )}
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button type='button' className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left hover:border-slate-400 text-slate-400'>
+            {isMulti ? '+ add record…' : (selectedIds.length ? 'change…' : 'pick record…')}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-60 p-0' align='start'>
+          <Command>
+            <CommandInput placeholder='Search…' className='h-8 text-[12px]' value={search} onValueChange={setSearch} />
+            <CommandList>
+              <CommandGroup>
+                {items.map(item => {
+                  const id = String(item.id ?? '')
+                  const isSelected = selectedIds.includes(id)
+                  return (
+                    <CommandItem key={id} value={`${id} ${getLabel(item)}`} onSelect={() => toggle(id)} className='text-[12px]'>
+                      {isMulti && <Check className={cn('h-3 w-3 mr-1 shrink-0', isSelected ? 'opacity-100' : 'opacity-0')} />}
+                      {getLabel(item)}
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+}
+
+function PrecedenceSourceRow({
+  source, index, total, m2oRels, o2mRels,
+  onChange, onRemove, onMoveUp, onMoveDown,
+}: {
+  source: RowRuleSource
+  index: number
+  total: number
+  m2oRels: Array<{ many_field: string; one_collection: string }>
+  o2mRels: Array<{ one_field: string; many_collection: string }>
+  onChange: (s: RowRuleSource) => void
+  onRemove: () => void
+  onMoveUp: () => void
+  onMoveDown: () => void
+}) {
+  const [sfOpen, setSfOpen] = useState(false)
+  const [rfOpen, setRfOpen] = useState(false)
+
+  const relCollection = source.source_type === 'relation_field'
+    ? (m2oRels.find(r => r.many_field === source.source_field)?.one_collection ?? null)
+    : (o2mRels.find(r => r.one_field === source.source_field)?.many_collection ?? null)
+
+  const { data: relFieldsRaw } = useQuery({
+    queryKey: ['field-config-all', relCollection],
+    queryFn: () => api.get(`/field-config/${relCollection}`).then((r: { data: { data?: Array<{ field: string; label?: string | null; type?: string }> } }) => r.data.data ?? []),
+    enabled: !!relCollection,
+    staleTime: 5 * 60 * 1000,
+  })
+  const relFieldOpts = (relFieldsRaw ?? [])
+    .filter((f: { field: string; type?: string }) => f.field !== 'id' && !ROW_RULE_SKIP_TYPES.has(f.type ?? ''))
+    .map((f: { field: string; label?: string | null }) => ({ value: f.field, label: f.label || f.field }))
+
+  const sourceFieldOpts = source.source_type === 'relation_field'
+    ? m2oRels.map(r => ({ value: r.many_field, label: r.many_field }))
+    : o2mRels.map(r => ({ value: r.one_field, label: r.one_field }))
+
+  return (
+    <div className='flex items-center gap-1 flex-wrap rounded bg-white border border-slate-100 p-1'>
+      <span className='text-[10px] text-slate-400 w-4 shrink-0 text-center'>{index + 1}.</span>
+      <select
+        value={source.source_type}
+        onChange={e => onChange({ ...source, source_type: e.target.value as RowRuleSource['source_type'], source_field: '', source_related_field: '' })}
+        className='h-6 rounded border border-slate-200 bg-white px-1 text-[10px] text-slate-700 focus:outline-none shrink-0'
+      >
+        <option value='relation_field'>M2O →</option>
+        <option value='o2m_first'>O2M first →</option>
+      </select>
+      <Popover open={sfOpen} onOpenChange={setSfOpen}>
+        <PopoverTrigger asChild>
+          <button type='button' className='h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-[70px] max-w-[110px]'>
+            {source.source_field || <span className='text-slate-400'>field…</span>}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-44 p-0' align='start'>
+          <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
+            {sourceFieldOpts.length === 0
+              ? <div className='px-3 py-2 text-[11px] text-slate-400'>No relations</div>
+              : sourceFieldOpts.map(f => (
+                  <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...source, source_field: f.value, source_related_field: '' }); setSfOpen(false) }} className='text-[11px]'>{f.label}</CommandItem>
+                ))}
+          </CommandGroup></CommandList></Command>
+        </PopoverContent>
+      </Popover>
+      <span className='text-[10px] text-slate-400 shrink-0'>→</span>
+      <Popover open={rfOpen} onOpenChange={setRfOpen}>
+        <PopoverTrigger asChild>
+          <button type='button' className='h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-[70px] max-w-[110px]'>
+            {source.source_related_field
+              ? (relFieldOpts.find((f: { value: string }) => f.value === source.source_related_field)?.label ?? source.source_related_field)
+              : <span className='text-slate-400'>{relCollection ? 'field…' : '—'}</span>}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-44 p-0' align='start'>
+          <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
+            {relFieldOpts.length === 0
+              ? <div className='px-3 py-2 text-[11px] text-slate-400'>No fields</div>
+              : relFieldOpts.map((f: { value: string; label: string }) => (
+                  <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...source, source_related_field: f.value }); setRfOpen(false) }} className='text-[11px]'>{f.label}</CommandItem>
+                ))}
+          </CommandGroup></CommandList></Command>
+        </PopoverContent>
+      </Popover>
+      <div className='flex items-center gap-0.5 ml-auto shrink-0'>
+        <button type='button' onClick={onMoveUp} disabled={index === 0} className='h-5 w-5 flex items-center justify-center text-slate-400 hover:text-slate-600 disabled:opacity-25 text-[10px]'>↑</button>
+        <button type='button' onClick={onMoveDown} disabled={index === total - 1} className='h-5 w-5 flex items-center justify-center text-slate-400 hover:text-slate-600 disabled:opacity-25 text-[10px]'>↓</button>
+        <button type='button' onClick={onRemove} className='h-5 w-5 flex items-center justify-center text-slate-300 hover:text-red-400 text-[10px]'>✕</button>
+      </div>
+    </div>
+  )
+}
+
+function OrTriggerPicker({
+  value,
+  fieldOpts,
+  onChange,
+}: {
+  value: string
+  fieldOpts: Array<{ value: string; label: string }>
+  onChange: (v: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type='button' className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'>
+          {value ? (fieldOpts.find(f => f.value === value)?.label ?? value) : <span className='text-slate-400'>field…</span>}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-52 p-0' align='start'>
+        <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
+          {fieldOpts.map(f => (
+            <CommandItem key={f.value} value={f.value} onSelect={() => { onChange(f.value); setOpen(false) }} className='text-[11px]'>{f.label}</CommandItem>
+          ))}
+        </CommandGroup></CommandList></Command>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 function RowRuleRow({
   rule,
   childFields,
   m2oRels,
+  o2mRels,
   onChange,
   onRemove,
 }: {
   rule: RowRuleItem
   childFields: Array<{ field: string; label?: string | null; type?: string }>
   m2oRels: Array<{ many_field: string; one_collection: string }>
+  o2mRels: Array<{ one_field: string; many_collection: string }>
   onChange: (r: RowRuleItem) => void
   onRemove: () => void
 }) {
   const [tfOpen, setTfOpen] = useState(false)
   const [tgtOpen, setTgtOpen] = useState(false)
   const [tvOpen, setTvOpen] = useState(false)
+  const [trfOpen, setTrfOpen] = useState(false)
+  const [trf2Open, setTrf2Open] = useState(false)
   const fieldOpts = childFields.map(f => ({ value: f.field, label: f.label || f.field }))
 
+  const isTriggerM2O = !!rule.trigger_field && !!m2oRels.find(r => r.many_field === rule.trigger_field)
   const relatedCollection = rule.trigger_field
     ? (m2oRels.find(r => r.many_field === rule.trigger_field)?.one_collection ?? null)
     : null
 
+  // Parse dot-path in trigger_related_field (e.g. "category_type.type")
+  const trfParts = (rule.trigger_related_field ?? '').split('.').filter(Boolean)
+  const trfSeg1 = trfParts[0] ?? null
+  const trfSeg2 = trfParts[1] ?? null
+
   const { data: relatedFieldsData } = useQuery({
     queryKey: ['field-config-all', relatedCollection],
     queryFn: () => api.get(`/field-config/${relatedCollection}`).then((r: { data: { data?: Array<{ field: string; label?: string | null; type?: string }> } }) => r.data.data ?? []),
-    enabled: !!relatedCollection && rule.target_type === 'relation_field',
+    enabled: !!relatedCollection && (rule.target_type === 'relation_field' || isTriggerM2O),
     staleTime: 5 * 60 * 1000,
   })
 
-  const SKIP_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
   const relatedFieldOpts = (relatedFieldsData ?? [])
-    .filter((f: { field: string; type?: string }) => f.field !== 'id' && !SKIP_TYPES.has(f.type ?? ''))
+    .filter((f: { field: string; type?: string }) => f.field !== 'id' && !ROW_RULE_SKIP_TYPES.has(f.type ?? ''))
     .map((f: { field: string; label?: string | null }) => ({ value: f.field, label: f.label || f.field }))
 
-  const showTriggerValue = rule.trigger_op && !['null', 'nnull'].includes(rule.trigger_op)
+  // Fetch relations on the related collection so we can detect 2nd-level M2O hops
+  const { data: relCollRelations } = useQuery({
+    queryKey: ['relations-for', relatedCollection],
+    queryFn: () => api.get<{ data: Array<{ many_collection?: string; many_field?: string; one_collection?: string; junction_field?: unknown }> }>(`/data-model/relations/for/${relatedCollection}`).then(r => r.data.data ?? []),
+    enabled: !!relatedCollection && isTriggerM2O,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const seg1Rel = trfSeg1
+    ? (relCollRelations ?? []).find((r: { many_collection?: string; many_field?: string; one_collection?: string; junction_field?: unknown }) =>
+        r.many_collection === relatedCollection && r.many_field === trfSeg1 && !r.junction_field)
+    : null
+  const relRelCollection = (seg1Rel as { one_collection?: string } | null | undefined)?.one_collection ?? null
+
+  const { data: relRelFieldsData } = useQuery({
+    queryKey: ['field-config-all', relRelCollection],
+    queryFn: () => api.get(`/field-config/${relRelCollection}`).then((r: { data: { data?: Array<{ field: string; label?: string | null; type?: string }> } }) => r.data.data ?? []),
+    enabled: !!relRelCollection,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const relRelFieldOpts = (relRelFieldsData ?? [])
+    .filter((f: { field: string; type?: string }) => f.field !== 'id' && !ROW_RULE_SKIP_TYPES.has(f.type ?? ''))
+    .map((f: { field: string; label?: string | null }) => ({ value: f.field, label: f.label || f.field }))
+
+  // Op shows after the final resolved field (not mid-hop M2O that still needs a second level)
+  const showViaOp = !!rule.trigger_related_field && (!relRelCollection || !!trfSeg2)
+
+  const isViaIdOrEntity = !!trfSeg2 && VIA_ID_MARKERS.has(trfSeg2)
+
+  const showTriggerValue = !!rule.trigger_op && !['null', 'nnull'].includes(rule.trigger_op)
   const showTargetValue = rule.target_type === 'set' || rule.target_type === 'relation_field'
   const showRelatedCombobox = rule.target_type === 'relation_field' && !!relatedCollection
+  const sources = rule.sources ?? []
+
+  function moveSource(idx: number, dir: -1 | 1) {
+    const next = [...sources]
+    const tmp = next[idx]; next[idx] = next[idx + dir]; next[idx + dir] = tmp
+    onChange({ ...rule, sources: next })
+  }
 
   return (
     <div className='space-y-1.5 rounded border border-slate-100 bg-slate-50 p-2'>
+      {/* Trigger field row */}
       <div className='flex items-center gap-1.5'>
         <Popover open={tfOpen} onOpenChange={setTfOpen}>
           <PopoverTrigger asChild>
@@ -5290,33 +5571,132 @@ function RowRuleRow({
           <PopoverContent className='w-52 p-0' align='start'>
             <Command><CommandInput placeholder='Search…' className='h-8 text-[12px]' /><CommandList><CommandGroup>
               {fieldOpts.map(f => (
-                <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, trigger_field: f.value }); setTfOpen(false) }} className='text-[12px]'>{f.label}</CommandItem>
+                <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, trigger_field: f.value, trigger_related_field: null }); setTfOpen(false) }} className='text-[12px]'>{f.label}</CommandItem>
               ))}
             </CommandGroup></CommandList></Command>
           </PopoverContent>
         </Popover>
-        <select
-          value={rule.trigger_op ?? 'nnull'}
-          onChange={e => onChange({ ...rule, trigger_op: e.target.value })}
-          className='h-7 rounded border border-slate-200 bg-white px-1 text-[11px] text-slate-700 focus:outline-none'
-        >
-          <option value='nnull'>has value</option>
-          <option value='null'>is empty</option>
-          <option value='eq'>equals</option>
-          <option value='neq'>not equals</option>
-          <option value='contains'>contains</option>
-        </select>
+        {/* Op only shows here when NOT using a via: path */}
+        {!trfSeg1 && (
+          <select
+            value={rule.trigger_op ?? 'nnull'}
+            onChange={e => onChange({ ...rule, trigger_op: e.target.value })}
+            className='h-7 rounded border border-slate-200 bg-white px-1 text-[11px] text-slate-700 focus:outline-none shrink-0'
+          >
+            <option value='nnull'>has value</option>
+            <option value='null'>is empty</option>
+            <option value='eq'>equals</option>
+            <option value='neq'>≠</option>
+            <option value='in'>in list</option>
+            <option value='contains'>contains</option>
+          </select>
+        )}
         <button type='button' onClick={onRemove} className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'>✕</button>
       </div>
-      {showTriggerValue && (
-        <input
-          type='text'
-          value={rule.trigger_value ?? ''}
-          onChange={e => onChange({ ...rule, trigger_value: e.target.value || null })}
-          placeholder='value (or $parent.field_name)'
-          className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-        />
+
+      {/* Via related field — shown when trigger_field is M2O */}
+      {isTriggerM2O && (
+        <div className='flex items-center gap-1.5 ml-2 flex-wrap'>
+          <span className='text-[10px] text-slate-400 shrink-0'>via:</span>
+          {/* First-level field picker (fields on relatedCollection) */}
+          <Popover open={trfOpen} onOpenChange={setTrfOpen}>
+            <PopoverTrigger asChild>
+              <button type='button' className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'>
+                {trfSeg1
+                  ? (relatedFieldOpts.find((f: { value: string }) => f.value === trfSeg1)?.label ?? trfSeg1)
+                  : <span className='text-slate-400 italic'>FK id (direct)</span>}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className='w-48 p-0' align='start'>
+              <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
+                <CommandItem value='__none__' onSelect={() => { onChange({ ...rule, trigger_related_field: null }); setTrfOpen(false) }} className='text-[11px] text-slate-400 italic'>FK id (direct)</CommandItem>
+                {relatedFieldOpts.map((f: { value: string; label: string }) => (
+                  <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, trigger_related_field: f.value }); setTrfOpen(false) }} className='text-[11px]'>{f.label}</CommandItem>
+                ))}
+              </CommandGroup></CommandList></Command>
+            </PopoverContent>
+          </Popover>
+          {/* Second-level picker — shown when trfSeg1 resolves to an M2O on relatedCollection */}
+          {trfSeg1 && relRelCollection && (
+            <>
+              <span className='text-[10px] text-slate-400 shrink-0'>→</span>
+              <Popover open={trf2Open} onOpenChange={setTrf2Open}>
+                <PopoverTrigger asChild>
+                  <button type='button' className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'>
+                    {(trfSeg2 === '__entity__' || trfSeg2 === '__id__') ? <span className='italic'>(entity)</span>
+                      : trfSeg2 ? (relRelFieldOpts.find((f: { value: string }) => f.value === trfSeg2)?.label ?? trfSeg2)
+                      : <span className='text-slate-400 italic'>field…</span>}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className='w-48 p-0' align='start'>
+                  <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
+                    <CommandItem value='__entity__' onSelect={() => { onChange({ ...rule, trigger_related_field: `${trfSeg1}.__entity__`, trigger_value: null }); setTrf2Open(false) }} className='text-[11px] italic text-slate-500'>(entity) — record picker</CommandItem>
+                    {relRelFieldOpts.map((f: { value: string; label: string }) => (
+                      <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, trigger_related_field: `${trfSeg1}.${f.value}`, trigger_value: null }); setTrf2Open(false) }} className='text-[11px]'>{f.label}</CommandItem>
+                    ))}
+                  </CommandGroup></CommandList></Command>
+                </PopoverContent>
+              </Popover>
+            </>
+          )}
+          {/* Op moves here once a final leaf field is selected */}
+          {showViaOp && (
+            <select
+              value={rule.trigger_op ?? 'nnull'}
+              onChange={e => onChange({ ...rule, trigger_op: e.target.value })}
+              className='h-6 rounded border border-slate-200 bg-white px-1 text-[10px] text-slate-700 focus:outline-none shrink-0'
+            >
+              <option value='nnull'>has value</option>
+              <option value='null'>is empty</option>
+              <option value='eq'>equals</option>
+              <option value='neq'>≠</option>
+              <option value='in'>in list</option>
+              <option value='contains'>contains</option>
+            </select>
+          )}
+        </div>
       )}
+
+      {/* Extra OR trigger fields */}
+      {(rule.trigger_fields ?? []).map((tf, i) => (
+        <div key={i} className='flex items-center gap-1 ml-2'>
+          <span className='text-[10px] text-slate-400 shrink-0'>or</span>
+          <OrTriggerPicker
+            value={tf}
+            fieldOpts={fieldOpts}
+            onChange={v => {
+              const next = [...(rule.trigger_fields ?? [])]
+              next[i] = v
+              onChange({ ...rule, trigger_fields: next })
+            }}
+          />
+          <button type='button' onClick={() => onChange({ ...rule, trigger_fields: (rule.trigger_fields ?? []).filter((_, j) => j !== i) })} className='shrink-0 text-slate-300 hover:text-red-400 text-[10px] px-0.5'>✕</button>
+        </div>
+      ))}
+      {rule.trigger_field && (
+        <button
+          type='button'
+          onClick={() => onChange({ ...rule, trigger_fields: [...(rule.trigger_fields ?? []), ''] })}
+          className='ml-2 text-[10px] text-nvr-cyan hover:underline'
+        >
+          + or when another field changes
+        </button>
+      )}
+
+      {/* Trigger value input */}
+      {showTriggerValue && (
+        isViaIdOrEntity && relRelCollection
+          ? <ViaValuePicker collection={relRelCollection} value={rule.trigger_value ?? null} isMulti={rule.trigger_op === 'in'} onChange={v => onChange({ ...rule, trigger_value: v })} />
+          : <input
+              type='text'
+              value={rule.trigger_value ?? ''}
+              onChange={e => onChange({ ...rule, trigger_value: e.target.value || null })}
+              placeholder={rule.trigger_op === 'in' ? 'Materials,Equipment (comma-separated)' : 'value (or $parent.field_name)'}
+              className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+            />
+      )}
+
+      {/* Target field + type row */}
       <div className='flex items-center gap-1.5'>
         <span className='text-[10px] text-slate-400 shrink-0'>→ set</span>
         <Popover open={tgtOpen} onOpenChange={setTgtOpen}>
@@ -5335,20 +5715,23 @@ function RowRuleRow({
         </Popover>
         <select
           value={rule.target_type}
-          onChange={e => onChange({ ...rule, target_type: e.target.value as RowRuleItem['target_type'], target_value: null })}
-          className='h-7 rounded border border-slate-200 bg-white px-1 text-[11px] text-slate-700 focus:outline-none'
+          onChange={e => onChange({ ...rule, target_type: e.target.value as RowRuleItem['target_type'], target_value: null, sources: [] })}
+          className='h-7 rounded border border-slate-200 bg-white px-1 text-[11px] text-slate-700 focus:outline-none shrink-0'
         >
           <option value='set'>= literal</option>
-          <option value='relation_field'>= from related</option>
+          <option value='relation_field'>= from M2O</option>
+          <option value='precedence'>= chain</option>
           <option value='clear'>= clear</option>
         </select>
       </div>
+
+      {/* Target value: literal set or relation_field combobox */}
       {showTargetValue && showRelatedCombobox && (
         <Popover open={tvOpen} onOpenChange={setTvOpen}>
           <PopoverTrigger asChild>
             <button type='button' className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400'>
               {rule.target_value
-                ? (relatedFieldOpts.find((f: { value: string; label: string }) => f.value === rule.target_value)?.label ?? rule.target_value)
+                ? (relatedFieldOpts.find((f: { value: string }) => f.value === rule.target_value)?.label ?? rule.target_value)
                 : <span className='text-slate-400'>field from {relatedCollection}…</span>}
             </button>
           </PopoverTrigger>
@@ -5368,11 +5751,40 @@ function RowRuleRow({
           type='text'
           value={rule.target_value ?? ''}
           onChange={e => onChange({ ...rule, target_value: e.target.value || null })}
-          placeholder={rule.target_type === 'relation_field' ? 'select a trigger field (M2O) first' : 'value (or $parent.field_name)'}
+          placeholder={rule.target_type === 'relation_field' ? 'select an M2O trigger field first' : 'value (or $parent.field_name)'}
           className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
           readOnly={rule.target_type === 'relation_field'}
         />
       )}
+
+      {/* Precedence chain sources */}
+      {rule.target_type === 'precedence' && (
+        <div className='space-y-1 pt-0.5'>
+          <p className='text-[10px] text-slate-500 font-medium'>Sources — first non-null wins:</p>
+          {sources.map((src, idx) => (
+            <PrecedenceSourceRow
+              key={idx}
+              source={src}
+              index={idx}
+              total={sources.length}
+              m2oRels={m2oRels}
+              o2mRels={o2mRels}
+              onChange={updated => onChange({ ...rule, sources: sources.map((s, i) => i === idx ? updated : s) })}
+              onRemove={() => onChange({ ...rule, sources: sources.filter((_, i) => i !== idx) })}
+              onMoveUp={() => moveSource(idx, -1)}
+              onMoveDown={() => moveSource(idx, 1)}
+            />
+          ))}
+          <button
+            type='button'
+            onClick={() => onChange({ ...rule, sources: [...sources, { source_type: 'relation_field', source_field: '', source_related_field: '' }] })}
+            className='text-[10px] text-nvr-cyan hover:underline ml-4'
+          >
+            + Add source
+          </button>
+        </div>
+      )}
+
       <label className='flex items-center gap-1.5 cursor-pointer'>
         <input type='checkbox' checked={!!rule.only_if_empty} onChange={e => onChange({ ...rule, only_if_empty: e.target.checked })} className='h-3 w-3' />
         <span className='text-[10px] text-slate-500'>Only if target is empty (fallback)</span>
@@ -5549,11 +5961,7 @@ function FieldSettingsPopover({
   const [showLineNumbers, setShowLineNumbers] = useState(false)
   const [enableReorder, setEnableReorder] = useState(true)
   const [parentCascades, setParentCascades] = useState<Array<{ parent_field: string; child_field: string }>>([])
-  const [rowRulesLocal, setRowRulesLocal] = useState<Array<{
-    trigger_field?: string | null; trigger_op?: string; trigger_value?: string | null
-    target_field: string; target_type: 'set' | 'clear' | 'relation_field'; target_value?: string | null
-    only_if_empty?: boolean; sort?: number
-  }>>([])
+  const [rowRulesLocal, setRowRulesLocal] = useState<RowRuleItem[]>([])
   const [parentContextFieldsLocal, setParentContextFieldsLocal] = useState<string[]>([])
   const [uniqueBy, setUniqueBy] = useState<string[]>([])
   const [uniqueByOpen, setUniqueByOpen] = useState(false)
@@ -5590,6 +5998,15 @@ function FieldSettingsPopover({
     return rels
       .filter((r) => r.many_collection === relatedCollection && r.many_field && r.one_collection && !r.junction_field)
       .map((r) => ({ many_field: r.many_field!, one_collection: r.one_collection! }))
+  }, [childCollectionMeta, relatedCollection])
+
+  const childO2MRels = useMemo(() => {
+    const rels = (childCollectionMeta?.relations ?? []) as Array<{
+      one_collection?: string; one_field?: string; many_collection?: string; junction_field?: string | null
+    }>
+    return rels
+      .filter((r) => r.one_collection === relatedCollection && r.one_field && r.many_collection && !r.junction_field)
+      .map((r) => ({ one_field: r.one_field!, many_collection: r.many_collection! }))
   }, [childCollectionMeta, relatedCollection])
 
   const parentM2OFields = useMemo(
@@ -5735,8 +6152,8 @@ function FieldSettingsPopover({
   const hasOverrides = !!settings.label || !!settings.interface || !!settings.note || settings.hidden || settings.readonly || settings.required
 
   return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>
+    <Sheet open={open} onOpenChange={handleOpenChange}>
+      <SheetTrigger asChild>
         <button
           type='button'
           title='Display settings'
@@ -5750,17 +6167,18 @@ function FieldSettingsPopover({
         >
           <Settings2 className='h-3.5 w-3.5' />
         </button>
-      </PopoverTrigger>
-      <PopoverContent
-        className='w-72 p-0 max-h-[700px] overflow-y-auto'
-        align='end'
+      </SheetTrigger>
+      <SheetContent
+        side='right'
+        className='!w-[480px] flex flex-col p-0 gap-0'
         onPointerDown={e => e.stopPropagation()}
         onClick={e => e.stopPropagation()}
       >
-        <div className='border-b border-slate-100 px-3 py-2'>
+        <div className='shrink-0 border-b border-slate-100 px-3 py-2 pr-10'>
           <p className='text-[12px] font-medium text-slate-800'>Display settings</p>
           <p className='text-[11px] text-slate-400 font-mono'>{fieldName}</p>
         </div>
+        <div className='flex-1 overflow-y-auto'>
         <div className='space-y-3 p-3'>
           {/* Label override */}
           <div className='space-y-1'>
@@ -6072,6 +6490,7 @@ function FieldSettingsPopover({
                       rule={rule}
                       childFields={childAllFields.filter(f => !f.hidden && f.field !== 'id')}
                       m2oRels={childM2ORels}
+                      o2mRels={childO2MRels}
                       onChange={updated => setRowRulesLocal(rowRulesLocal.map((r, i) => i === idx ? updated : r))}
                       onRemove={() => setRowRulesLocal(rowRulesLocal.filter((_, i) => i !== idx))}
                     />
@@ -6270,17 +6689,18 @@ function FieldSettingsPopover({
             </div>
           )}
 
-          <div className='flex gap-2 pt-1'>
-            <Button size='sm' className='h-7 flex-1 text-[12px]' onClick={save}>
-              Save
-            </Button>
-            <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-          </div>
         </div>
-      </PopoverContent>
-    </Popover>
+        </div>
+        <div className='shrink-0 flex gap-2 p-3 border-t border-slate-100'>
+          <Button size='sm' className='h-7 flex-1 text-[12px]' onClick={save}>
+            Save
+          </Button>
+          <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+        </div>
+      </SheetContent>
+    </Sheet>
   )
 }
 
@@ -10131,7 +10551,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                     collection={tableName}
                     />
                     {childTabs.length > 0 && (
-                      <div className='ml-6 space-y-1.5'>
+                      <div className='ml-4 border-l-2 border-slate-200 pl-3 space-y-1.5'>
                         {childTabs.map(ch => (
                           <SortableGroupCard
                             key={ch.id}

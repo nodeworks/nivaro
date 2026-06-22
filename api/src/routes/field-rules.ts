@@ -163,11 +163,14 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       parent_context?: Record<string, unknown>
       row_rules?: Array<{
         trigger_field?: string | null
+        trigger_fields?: string[] | null
+        trigger_related_field?: string | null
         trigger_op?: string
         trigger_value?: string | null
         target_field: string
-        target_type: 'set' | 'clear' | 'relation_field'
+        target_type: 'set' | 'clear' | 'relation_field' | 'precedence'
         target_value?: string | null
+        sources?: Array<{ source_type: string; source_field: string; source_related_field: string }>
         only_if_empty?: boolean
         sort?: number
       }>
@@ -185,10 +188,60 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       const sorted = [...body.row_rules].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
       for (const rule of sorted) {
         const triggerField = rule.trigger_field ?? null
-        if (body.changed_field && triggerField && triggerField !== body.changed_field) continue
+        const extraTriggerFields = Array.isArray(rule.trigger_fields) ? rule.trigger_fields.filter(Boolean) : []
+        const allTriggerFields = triggerField ? [triggerField, ...extraTriggerFields] : extraTriggerFields
+
+        if (body.changed_field && allTriggerFields.length > 0 && !allTriggerFields.includes(body.changed_field)) continue
         if (triggerField && !(triggerField in working)) continue
 
-        const val = triggerField ? working[triggerField] : null
+        // val = the field that actually changed (for OR triggers), falling back to trigger_field
+        const activeField = (body.changed_field && allTriggerFields.includes(body.changed_field))
+          ? body.changed_field
+          : triggerField
+        let val: unknown = activeField ? working[activeField] : null
+
+        // When trigger_related_field is set, resolve the M2O related record and compare that field.
+        // Supports dot-path (e.g. "category_type.type") for multi-hop traversal.
+        if (rule.trigger_related_field && triggerField && val != null) {
+          try {
+            const trigRel = await db('nivaro_relations')
+              .where({ many_collection: body.collection, many_field: triggerField })
+              .whereNull('junction_field')
+              .first() as { one_collection: string } | undefined
+            if (trigRel?.one_collection) {
+              let currentRecord = await db(trigRel.one_collection)
+                .where({ id: String(val) })
+                .first() as Record<string, unknown> | undefined
+              let currentCollection = trigRel.one_collection
+              let lastFkId: string | null = String(val)
+              const parts = rule.trigger_related_field.split('.')
+              for (let i = 0; i < parts.length - 1; i++) {
+                const hop = parts[i]
+                const fkId = currentRecord?.[hop]
+                if (fkId == null) { currentRecord = undefined; lastFkId = null; break }
+                lastFkId = String(fkId)
+                const hopRel = await db('nivaro_relations')
+                  .where({ many_collection: currentCollection, many_field: hop })
+                  .whereNull('junction_field')
+                  .first() as { one_collection: string } | undefined
+                if (!hopRel?.one_collection) { currentRecord = undefined; lastFkId = null; break }
+                currentRecord = await db(hopRel.one_collection)
+                  .where({ id: String(fkId) })
+                  .first() as Record<string, unknown> | undefined
+                currentCollection = hopRel.one_collection
+              }
+              const lastPart = parts[parts.length - 1]
+              val = (lastPart === '__id__' || lastPart === '__entity__')
+                ? lastFkId
+                : (currentRecord?.[lastPart] ?? null)
+            } else {
+              val = null
+            }
+          } catch {
+            val = null
+          }
+        }
+
         const op = rule.trigger_op ?? 'nnull'
         const rawTriggerValue = rule.trigger_value?.replace(/\$parent\.(\w+)/g, (_, f) => {
           const v = parentContext[f]; return v != null ? String(v) : ''
@@ -201,8 +254,14 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
           case 'null': triggered = val == null; break
           case 'nnull': triggered = val != null; break
           case 'in': {
-            const list = (() => { try { return JSON.parse(rawTriggerValue ?? '[]') } catch { return [] } })() as unknown[]
-            triggered = list.map(String).includes(String(val)); break
+            let list: string[]
+            try {
+              const parsed = JSON.parse(rawTriggerValue ?? '[]')
+              list = Array.isArray(parsed) ? parsed.map(String) : []
+            } catch {
+              list = (rawTriggerValue ?? '').split(',').map((s: string) => s.trim()).filter(Boolean)
+            }
+            triggered = list.includes(String(val)); break
           }
           case 'contains': triggered = String(val).includes(String(rawTriggerValue ?? '')); break
           default: triggered = triggerField ? val != null : true
@@ -237,6 +296,42 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
               ? (relatedRecord[rule.target_value] ?? null)
               : null
           } catch { /* non-fatal */ }
+        } else if (rule.target_type === 'precedence' && Array.isArray(rule.sources)) {
+          let resolved: unknown = null
+          for (const src of rule.sources) {
+            if (!src.source_field || !src.source_related_field) continue
+            try {
+              if (src.source_type === 'relation_field') {
+                const fkId = working[src.source_field]
+                if (fkId == null) continue
+                const rel = await db('nivaro_relations')
+                  .where({ many_collection: body.collection, many_field: src.source_field })
+                  .whereNull('junction_field')
+                  .first() as { one_collection: string } | undefined
+                if (!rel?.one_collection) continue
+                const relRec = await db(rel.one_collection)
+                  .where({ id: String(fkId) })
+                  .first() as Record<string, unknown> | undefined
+                const candidate = relRec?.[src.source_related_field] ?? null
+                if (candidate != null) { resolved = candidate; break }
+              } else if (src.source_type === 'o2m_first') {
+                const rowId = working.id
+                if (rowId == null) continue
+                const rel = await db('nivaro_relations')
+                  .where({ one_collection: body.collection, one_field: src.source_field })
+                  .whereNull('junction_field')
+                  .first() as { many_collection: string; many_field: string } | undefined
+                if (!rel?.many_collection) continue
+                const firstRec = await db(rel.many_collection)
+                  .where({ [rel.many_field]: String(rowId) })
+                  .orderBy('id', 'asc')
+                  .first() as Record<string, unknown> | undefined
+                const candidate = firstRec?.[src.source_related_field] ?? null
+                if (candidate != null) { resolved = candidate; break }
+              }
+            } catch { continue }
+          }
+          working[rule.target_field] = resolved
         }
       }
     } else {
