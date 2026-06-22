@@ -74,7 +74,7 @@ export async function usersRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     if (id !== req.user!.id && !req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
     const body = req.body as Record<string, unknown>
-    const allowed: Array<keyof Parameters<typeof updateUser>[1]> = req.isAdmin
+    const allowed: string[] = req.isAdmin
       ? [
           'first_name',
           'last_name',

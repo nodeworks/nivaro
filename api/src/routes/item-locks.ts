@@ -87,11 +87,11 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     const { collection } = req.params as { collection: string }
     const { item_locking_enabled } = req.body as { item_locking_enabled: boolean }
 
-    const exists = await db('nivaro_collections').where({ name: collection }).first()
+    const exists = await db('nivaro_collections').where({ collection }).first()
     if (!exists) return reply.code(404).send({ error: 'Collection not found' })
 
     await db('nivaro_collections')
-      .where({ name: collection })
+      .where({ collection })
       .update({ item_locking_enabled: item_locking_enabled ? 1 : 0 })
 
     // Release all active locks when disabling

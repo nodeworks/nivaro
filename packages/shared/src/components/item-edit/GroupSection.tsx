@@ -326,107 +326,189 @@ export function OwnersInline({ collection, itemId, label }: { collection: string
 }
 
 // Single user chip — fetches user by id, shows initials avatar + contact card on click
-export function UserChip({ userId }: { userId: string }) {
+interface UserCardData {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  email: string
+  title?: string | null
+  phone?: string | null
+  department?: string | null
+  status?: string | null
+  last_access?: string | null
+  is_out_of_office?: boolean
+  role_name?: string | null
+  manager_name?: string | null
+  manager_id?: string | null
+}
+
+
+function UserCardPopover({ user, userId, initials, navigate, online }: {
+  user: UserCardData | null | undefined
+  userId: string
+  initials: string
+  navigate: (path: string) => void
+  online?: boolean
+}) {
+  const managerName = user?.manager_name?.trim() || null
+  const lastSeen = user?.last_access
+    ? (() => {
+        const diff = Date.now() - new Date(user.last_access).getTime()
+        const mins = Math.floor(diff / 60_000)
+        if (mins < 2) return 'Just now'
+        if (mins < 60) return `${mins}m ago`
+        const hrs = Math.floor(mins / 60)
+        if (hrs < 24) return `${hrs}h ago`
+        return `${Math.floor(hrs / 24)}d ago`
+      })()
+    : null
+
+  return (
+    <PopoverContent align='start' className='w-72 p-0 overflow-hidden'>
+      {/* Header */}
+      <div className='flex items-center gap-3 p-4 bg-gradient-to-br from-nvr-cyan/8 to-nvr-cyan/4 dark:from-nvr-cyan/10 dark:to-transparent border-b border-slate-100 dark:border-border'>
+        <span className='flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[15px] font-bold text-nvr-navy dark:text-nvr-cyan ring-2 ring-white dark:ring-card shadow-sm'>
+          {initials}
+        </span>
+        <div className='min-w-0 flex-1'>
+          <div className='flex items-center gap-1.5'>
+            {online && (
+              <span className='h-2 w-2 rounded-full bg-emerald-400 shrink-0 ring-2 ring-white dark:ring-card' title='Online' />
+            )}
+            <p className='text-[13px] font-semibold text-slate-800 dark:text-slate-100 truncate'>
+              {user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId}
+            </p>
+            {user?.status && user.status !== 'active' && (
+              <span className={`inline-flex items-center rounded-full px-1.5 py-px text-[10px] font-medium ${user.status === 'suspended' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'}`}>
+                {user.status}
+              </span>
+            )}
+          </div>
+          {(user?.title || user?.department) && (
+            <p className='text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5'>
+              {[user.title, user.department].filter(Boolean).join(' · ')}
+            </p>
+          )}
+          {user?.is_out_of_office && (
+            <span className='mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/30 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400'>
+              <UserCheck className='h-2.5 w-2.5' /> Out of office
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Contact */}
+      {(user?.email || user?.phone) && (
+        <div className='px-4 py-3 space-y-1.5 border-b border-slate-100 dark:border-border'>
+          {user?.email && (
+            <a href={`mailto:${user.email}`} className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300 hover:text-nvr-navy dark:hover:text-nvr-cyan transition-colors truncate group'>
+              <Mail className='h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-nvr-cyan transition-colors' />
+              <span className='truncate'>{user.email}</span>
+            </a>
+          )}
+          {user?.phone && (
+            <a href={`tel:${user.phone}`} className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300 hover:text-nvr-navy dark:hover:text-nvr-cyan transition-colors group'>
+              <Phone className='h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-nvr-cyan transition-colors' />
+              <span>{user.phone}</span>
+            </a>
+          )}
+        </div>
+      )}
+
+      {/* Meta */}
+      {(user?.role_name || managerName || lastSeen) && (
+        <div className='px-4 py-3 space-y-1.5 border-b border-slate-100 dark:border-border'>
+          {user?.role_name && (
+            <div className='flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400'>
+              <Building2 className='h-3.5 w-3.5 shrink-0' />
+              <span>{user.role_name}</span>
+            </div>
+          )}
+          {managerName && (
+            <div className='flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400'>
+              <User className='h-3.5 w-3.5 shrink-0' />
+              <span>Reports to <span className='font-medium text-slate-600 dark:text-slate-300'>{managerName}</span></span>
+            </div>
+          )}
+          {lastSeen && (
+            <div className='flex items-center gap-2 text-[11px] text-slate-400'>
+              <Clock className='h-3.5 w-3.5 shrink-0' />
+              <span>Last seen {lastSeen}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className='flex items-center gap-1 p-2'>
+        <button type='button' onClick={() => navigate(`/users/${userId}`)}
+          className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'>
+          <User className='h-3.5 w-3.5' /> View profile
+        </button>
+        {user?.email && (
+          <button type='button' onClick={() => { window.location.href = `mailto:${user.email}` }}
+            className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'>
+            <ExternalLink className='h-3.5 w-3.5' /> Send email
+          </button>
+        )}
+      </div>
+    </PopoverContent>
+  )
+}
+
+export function UserChip({ userId, size = 'default' }: { userId: string; size?: 'default' | 'compact' }) {
   const client = useOptionalNivaroClient()
   const { navigate } = useNavigation()
-  const { data: user, isLoading } = useQuery<{
-    id: number
-    first_name: string | null
-    last_name: string | null
-    email: string
-    title?: string | null
-    phone?: string | null
-    department?: string | null
-  } | null>({
-    queryKey: ['user-chip', userId],
+  const [open, setOpen] = useState(false)
+
+  const { data: user, isLoading } = useQuery<UserCardData | null>({
+    queryKey: ['user-card', userId],
     queryFn: () =>
-      client!.request<{ data: { id: number; first_name: string | null; last_name: string | null; email: string; title?: string | null; phone?: string | null; department?: string | null } }>(
-        get(`/users/${userId}`)
-      ).then((r) => r.data ?? null),
+      client!.request<{ data: UserCardData }>(get(`/users/${userId}/card`)).then((r) => r.data ?? null),
     enabled: !!client && !!userId,
     staleTime: 120_000,
   })
 
-  if (isLoading) {
-    return (
-      <span className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'>
-        <span className='flex h-6 w-6 shrink-0 rounded-full animate-pulse bg-slate-200 dark:bg-slate-700' />
-        <span className='animate-pulse h-2.5 w-16 rounded bg-slate-200 dark:bg-slate-700 inline-block' />
-      </span>
-    )
-  }
+  const { data: presenceData } = useQuery<{ online: boolean }>({
+    queryKey: ['user-presence', userId],
+    queryFn: () =>
+      client!.request<{ online: boolean }>(get(`/presence/users/${userId}`)).then((r) => r as { online: boolean }),
+    enabled: !!client && !!userId && open,
+    staleTime: 15_000,
+    refetchInterval: open ? 20_000 : false,
+  })
 
   const name = user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId
   const initials = name.split(' ').map((p: string) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+  const online = presenceData?.online ?? false
+
+  if (isLoading) {
+    return size === 'compact'
+      ? <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-slate-700' />
+      : (
+        <span className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'>
+          <span className='flex h-6 w-6 shrink-0 rounded-full animate-pulse bg-slate-200 dark:bg-slate-700' />
+          <span className='animate-pulse h-2.5 w-16 rounded bg-slate-200 dark:bg-slate-700 inline-block' />
+        </span>
+      )
+  }
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <div className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 hover:bg-slate-100 dark:border-border dark:bg-card dark:hover:bg-accent transition-colors'>
-          <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
-            {initials}
+        {size === 'compact' ? (
+          <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 py-px pl-px pr-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors'>
+            <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
+            <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>{name}</span>
           </span>
-          <span className='text-[12px] text-slate-700 dark:text-slate-300'>{name}</span>
-        </div>
-      </PopoverTrigger>
-      <PopoverContent align='start' className='w-64 p-0 overflow-hidden'>
-        {/* Header */}
-        <div className='flex items-center gap-3 p-4 bg-gradient-to-br from-nvr-cyan/8 to-nvr-cyan/4 dark:from-nvr-cyan/10 dark:to-transparent border-b border-slate-100 dark:border-border'>
-          <span className='flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[15px] font-bold text-nvr-navy dark:text-nvr-cyan ring-2 ring-white dark:ring-card shadow-sm'>
-            {initials}
-          </span>
-          <div className='min-w-0 flex-1'>
-            <p className='text-[13px] font-semibold text-slate-800 dark:text-slate-100 truncate'>{name}</p>
-            {(user?.title || user?.department) && (
-              <p className='text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5'>
-                {[user.title, user.department].filter(Boolean).join(' · ')}
-              </p>
-            )}
-          </div>
-        </div>
-        {/* Contact info */}
-        {(user?.email || user?.phone) && (
-          <div className='px-4 py-3 space-y-2 border-b border-slate-100 dark:border-border'>
-            {user?.email && (
-              <a
-                href={`mailto:${user.email}`}
-                className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300 hover:text-nvr-navy dark:hover:text-nvr-cyan transition-colors truncate group'
-              >
-                <Mail className='h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-nvr-cyan transition-colors' />
-                <span className='truncate'>{user.email}</span>
-              </a>
-            )}
-            {user?.phone && (
-              <a
-                href={`tel:${user.phone}`}
-                className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300 hover:text-nvr-navy dark:hover:text-nvr-cyan transition-colors group'
-              >
-                <Phone className='h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-nvr-cyan transition-colors' />
-                <span>{user.phone}</span>
-              </a>
-            )}
+        ) : (
+          <div className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 hover:bg-slate-100 dark:border-border dark:bg-card dark:hover:bg-accent transition-colors'>
+            <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
+            <span className='text-[12px] text-slate-700 dark:text-slate-300'>{name}</span>
           </div>
         )}
-        {/* Actions */}
-        <div className='flex items-center gap-1 p-2'>
-          <button
-            type='button'
-            onClick={() => navigate(`/users/${userId}`)}
-            className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
-          >
-            <User className='h-3.5 w-3.5' /> View profile
-          </button>
-          {user?.email && (
-            <button
-              type='button'
-              onClick={() => { window.location.href = `mailto:${user.email}` }}
-              className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
-            >
-              <ExternalLink className='h-3.5 w-3.5' /> Send email
-            </button>
-          )}
-        </div>
-      </PopoverContent>
+      </PopoverTrigger>
+      <UserCardPopover user={user} userId={userId} initials={initials} navigate={navigate} online={online} />
     </Popover>
   )
 }
@@ -507,95 +589,7 @@ export function RelationCell({ relCollection, id }: { relCollection: string; id:
 
 // Compact user pill for the header strip — smaller trigger, same contact card popover as UserChip
 function StripUserChip({ userId }: { userId: string }) {
-  const client = useOptionalNivaroClient()
-  const { navigate } = useNavigation()
-  const { data: user, isLoading } = useQuery<{
-    first_name: string | null
-    last_name: string | null
-    email: string
-    title?: string | null
-    phone?: string | null
-    department?: string | null
-  } | null>({
-    queryKey: ['user-chip', userId],
-    queryFn: () =>
-      client!.request<{ data: { first_name: string | null; last_name: string | null; email: string; title?: string | null; phone?: string | null; department?: string | null } }>(
-        get(`/users/${userId}`)
-      ).then((r) => r.data ?? null),
-    enabled: !!client && !!userId,
-    staleTime: 120_000,
-  })
-  if (isLoading) return <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-slate-700' />
-  const name = user ? ([user.first_name, user.last_name].filter(Boolean).join(' ') || user.email) : userId
-  const initials = name.split(' ').map((p: string) => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 py-px pl-px pr-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors'>
-          <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>{initials}</span>
-          <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>{name}</span>
-        </span>
-      </PopoverTrigger>
-      <PopoverContent align='start' className='w-64 p-0 overflow-hidden'>
-        {/* Header */}
-        <div className='flex items-center gap-3 p-4 bg-gradient-to-br from-nvr-cyan/8 to-nvr-cyan/4 dark:from-nvr-cyan/10 dark:to-transparent border-b border-slate-100 dark:border-border'>
-          <span className='flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[15px] font-bold text-nvr-navy dark:text-nvr-cyan ring-2 ring-white dark:ring-card shadow-sm'>
-            {initials}
-          </span>
-          <div className='min-w-0 flex-1'>
-            <p className='text-[13px] font-semibold text-slate-800 dark:text-slate-100 truncate'>{name}</p>
-            {(user?.title || user?.department) && (
-              <p className='text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5'>
-                {[user.title, user.department].filter(Boolean).join(' · ')}
-              </p>
-            )}
-          </div>
-        </div>
-        {/* Contact info */}
-        {(user?.email || user?.phone) && (
-          <div className='px-4 py-3 space-y-2 border-b border-slate-100 dark:border-border'>
-            {user?.email && (
-              <a
-                href={`mailto:${user.email}`}
-                className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300 hover:text-nvr-navy dark:hover:text-nvr-cyan transition-colors truncate group'
-              >
-                <Mail className='h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-nvr-cyan transition-colors' />
-                <span className='truncate'>{user.email}</span>
-              </a>
-            )}
-            {user?.phone && (
-              <a
-                href={`tel:${user.phone}`}
-                className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300 hover:text-nvr-navy dark:hover:text-nvr-cyan transition-colors group'
-              >
-                <Phone className='h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-nvr-cyan transition-colors' />
-                <span>{user.phone}</span>
-              </a>
-            )}
-          </div>
-        )}
-        {/* Actions */}
-        <div className='flex items-center gap-1 p-2'>
-          <button
-            type='button'
-            onClick={() => navigate(`/users/${userId}`)}
-            className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
-          >
-            <User className='h-3.5 w-3.5' /> View profile
-          </button>
-          {user?.email && (
-            <button
-              type='button'
-              onClick={() => { window.location.href = `mailto:${user.email}` }}
-              className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
-            >
-              <ExternalLink className='h-3.5 w-3.5' /> Send email
-            </button>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
-  )
+  return <UserChip userId={userId} size='compact' />
 }
 
 // ─── StripFieldValue ──────────────────────────────────────────────────────────

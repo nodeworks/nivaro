@@ -13,9 +13,9 @@ export interface User {
   last_page: string | null
   preferences: Record<string, unknown> | null
   current_workspace: string | null
-  title: string | null
-  phone: string | null
-  department: string | null
+  title?: string | null
+  phone?: string | null
+  department?: string | null
   manager_id: string | null
   delegate_id: string | null
   delegate_expires_at: Date | null

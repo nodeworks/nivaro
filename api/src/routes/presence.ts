@@ -332,6 +332,19 @@ export async function presenceAdminRoutes(app: FastifyInstance) {
     }
   )
 
+  // ── GET /users/:userId ──────────────────────────────────────────────────
+  // Online status for a specific CMS user — used by the UserChip contact card.
+  app.get<{ Params: { userId: string } }>(
+    '/users/:userId',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      if (!app.redis) return reply.send({ online: false })
+      const sessions = await getActiveSessions(app)
+      const online = sessions.some((s) => s.userId === req.params.userId)
+      return reply.send({ online })
+    }
+  )
+
   // ── GET /:collection/:item ───────────────────────────────────────────────
   // Current viewers of a specific item (for the admin UI item editor).
   // Matches active presence sessions whose pageUrl path is /collections/:collection/:item.

@@ -95,12 +95,32 @@ export async function addendumsRoutes(app: FastifyInstance) {
 
     const col = (await db('nivaro_collections')
       .where({ collection: body.parent_collection })
-      .select('addendums_enabled')
-      .first()) as { addendums_enabled: number | boolean } | undefined
+      .select('addendums_enabled', 'addendum_allowed_states')
+      .first()) as { addendums_enabled: number | boolean; addendum_allowed_states?: string | null } | undefined
 
     const enabled = col?.addendums_enabled === 1 || col?.addendums_enabled === true
     if (!enabled) {
       return reply.code(403).send({ error: 'Addendums are not enabled for this collection' })
+    }
+
+    // Enforce pipeline state restrictions if configured
+    const allowedStates = col?.addendum_allowed_states
+      ? (() => { try { return JSON.parse(col.addendum_allowed_states) } catch { return null } })()
+      : null
+    if (Array.isArray(allowedStates) && allowedStates.length > 0) {
+      for (const rule of allowedStates as Array<{ pipeline_id: string; state_keys: string[] }>) {
+        if (!rule.pipeline_id || !rule.state_keys?.length) continue
+        const instance = await db('nivaro_workflow_instances')
+          .where({ collection: body.parent_collection, item: String(body.parent_id), template: rule.pipeline_id })
+          .first() as { current_state: string } | undefined
+        if (!instance) {
+          return reply.code(403).send({ error: 'Item must be in an allowed pipeline state to create an addendum' })
+        }
+        const state = await db('nivaro_workflow_states').where({ id: instance.current_state }).first() as { key: string; label: string } | undefined
+        if (!state || !rule.state_keys.includes(state.key)) {
+          return reply.code(403).send({ error: `Addendums cannot be created in the current pipeline state "${state?.label ?? state?.key ?? 'unknown'}"` })
+        }
+      }
     }
 
     const now = new Date()

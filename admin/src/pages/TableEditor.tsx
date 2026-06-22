@@ -3726,7 +3726,53 @@ function ItemLockingSection({ tableName }: { tableName: string }) {
   )
 }
 
-// ─── Addendums toggle (Settings tab) ───────────────────────────────────────────
+// ─── Addendums toggle + state restrictions (Settings tab) ─────────────────────
+
+function AddendumPipelineRow({
+  pipeline,
+  stateKeys,
+  onStateKeysChange,
+}: {
+  pipeline: { id: string; name: string }
+  stateKeys: string[]
+  onStateKeysChange: (keys: string[]) => void
+}) {
+  const { data: detail } = useQuery<{ states: Array<{ id: string; key: string; label: string; color?: string }> }>({
+    queryKey: ['pipeline-detail-lock', pipeline.id],
+    queryFn: () => api.get(`/pipelines/${pipeline.id}`).then((r) => r.data.data),
+    staleTime: 60_000,
+  })
+  const states = detail?.states ?? []
+
+  return (
+    <div className='mt-3'>
+      <p className='text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5'>{pipeline.name}</p>
+      {states.length === 0 ? (
+        <p className='text-[11px] text-slate-400 italic'>No states defined.</p>
+      ) : (
+        <div className='grid grid-cols-2 gap-x-4 gap-y-1'>
+          {states.map((s) => (
+            <label key={s.key} className='flex items-center gap-1.5 text-[11px] cursor-pointer select-none'>
+              <input
+                type='checkbox'
+                checked={stateKeys.includes(s.key)}
+                onChange={(e) => {
+                  if (e.target.checked) onStateKeysChange([...stateKeys, s.key])
+                  else onStateKeysChange(stateKeys.filter((k) => k !== s.key))
+                }}
+                className='rounded'
+              />
+              <span className='inline-flex items-center gap-1'>
+                {s.color && <span className='h-2 w-2 rounded-full shrink-0' style={{ background: s.color }} />}
+                <span className='text-slate-700 dark:text-slate-300'>{s.label}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function AddendumsSection({ tableName }: { tableName: string }) {
   const qc = useQueryClient()
@@ -3735,15 +3781,15 @@ function AddendumsSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta', tableName],
     queryFn: () =>
       api
-        .get<{ data: { addendums_enabled: boolean } }>(`/collections/${tableName}`)
+        .get<{ data: { addendums_enabled: boolean; addendum_allowed_states?: string | null } }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
     enabled: !!tableName,
     staleTime: 10 * 60 * 1000
   })
 
   const toggleMut = useMutation({
-    mutationFn: (enabled: boolean) =>
-      api.patch(`/collections/${tableName}`, { addendums_enabled: enabled ? 1 : 0 }),
+    mutationFn: (v: boolean) =>
+      api.patch(`/collections/${tableName}`, { addendums_enabled: v ? 1 : 0 }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
       toast.success('Addendums setting saved')
@@ -3753,14 +3799,58 @@ function AddendumsSection({ tableName }: { tableName: string }) {
 
   const enabled = col?.addendums_enabled === true || (col?.addendums_enabled as unknown) === 1
 
+  // State restrictions
+  const [stateRules, setStateRules] = useState<Array<{ pipeline_id: string; state_keys: string[] }>>([])
+  const [rulesInit, setRulesInit] = useState(false)
+
+  useEffect(() => {
+    if (col !== undefined && !rulesInit) {
+      try {
+        const parsed = col.addendum_allowed_states ? JSON.parse(col.addendum_allowed_states) : []
+        setStateRules(Array.isArray(parsed) ? parsed : [])
+      } catch {
+        setStateRules([])
+      }
+      setRulesInit(true)
+    }
+  }, [col, rulesInit])
+
+  const saveRulesMut = useMutation({
+    mutationFn: (rules: typeof stateRules) =>
+      api.patch(`/collections/${tableName}`, {
+        addendum_allowed_states: rules.length ? JSON.stringify(rules) : null,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      toast.success('State restrictions saved')
+    },
+    onError: () => toast.error('Failed to save state restrictions'),
+  })
+
+  const { data: pipelinesData } = useQuery<Array<{ id: string; name: string; collections: string[] }>>({
+    queryKey: ['pipelines-list-for-lock'],
+    queryFn: () => api.get('/pipelines').then((r) => r.data.data),
+    staleTime: 60_000,
+    enabled: enabled && !!tableName,
+  })
+  const boundPipelines = (pipelinesData ?? []).filter((p) => p.collections.includes(tableName))
+
+  const updateRule = (pipelineId: string, stateKeys: string[]) => {
+    setStateRules((prev) => {
+      const next = prev.filter((r) => r.pipeline_id !== pipelineId)
+      if (stateKeys.length > 0) next.push({ pipeline_id: pipelineId, state_keys: stateKeys })
+      return next
+    })
+  }
+
   return (
-    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
       <div className='flex items-center justify-between px-4 py-3'>
         <div>
-          <p className='text-[13px] font-medium text-slate-800'>Addendums</p>
-          <p className='mt-0.5 text-[12px] text-slate-500'>
-            Allow amendment records (addendums) to be created against items in this collection, with
-            optional cost and timeline impact tracking.
+          <p className='text-[13px] font-medium text-slate-800 dark:text-slate-100'>Addendums</p>
+          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400'>
+            Allow amendment records to be created against items in this collection, with optional cost
+            and timeline impact tracking.
           </p>
         </div>
         <Switch
@@ -3769,6 +3859,41 @@ function AddendumsSection({ tableName }: { tableName: string }) {
           disabled={toggleMut.isPending || col === undefined}
         />
       </div>
+
+      {enabled && (
+        <div className='border-t border-slate-100 dark:border-border px-4 pb-4 pt-3'>
+          <div className='flex items-center justify-between mb-1'>
+            <div>
+              <p className='text-[12px] font-medium text-slate-700 dark:text-slate-300'>State restrictions</p>
+              <p className='text-[11px] text-slate-500 dark:text-slate-400 mt-0.5'>
+                Check the pipeline states from which addendums can be created. Leave all unchecked to allow from any state.
+              </p>
+            </div>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 text-[11px] shrink-0 ml-4'
+              onClick={() => saveRulesMut.mutate(stateRules)}
+              disabled={saveRulesMut.isPending}
+            >
+              Save
+            </Button>
+          </div>
+
+          {boundPipelines.length === 0 ? (
+            <p className='mt-2 text-[11px] text-slate-400 italic'>No pipelines are bound to this collection.</p>
+          ) : (
+            boundPipelines.map((pipeline) => (
+              <AddendumPipelineRow
+                key={pipeline.id}
+                pipeline={pipeline}
+                stateKeys={stateRules.find((r) => r.pipeline_id === pipeline.id)?.state_keys ?? []}
+                onStateKeysChange={(keys) => updateRule(pipeline.id, keys)}
+              />
+            ))
+          )}
+        </div>
+      )}
     </div>
   )
 }
