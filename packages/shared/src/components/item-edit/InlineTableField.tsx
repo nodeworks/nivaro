@@ -1,6 +1,17 @@
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, GripVertical, History, Loader2, X } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+
+export interface RowRule {
+  trigger_field?: string | null
+  trigger_op?: string
+  trigger_value?: string | null
+  target_field: string
+  target_type: 'set' | 'clear' | 'relation_field'
+  target_value?: string | null
+  only_if_empty?: boolean
+  sort?: number
+}
 import { useNivaroClient, useParentDraft } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
@@ -122,6 +133,8 @@ export function InlineTableField({
   showLineNumbers = false,
   enableReorder = true,
   parentCascades,
+  rowRules,
+  parentContextFields,
   uniqueBy,
   sortField,
   sortDir = 'asc'
@@ -137,6 +150,8 @@ export function InlineTableField({
   showLineNumbers?: boolean
   enableReorder?: boolean
   parentCascades?: CascadeRule[]
+  rowRules?: RowRule[]
+  parentContextFields?: string[]
   uniqueBy?: string[]
   sortField?: string
   sortDir?: 'asc' | 'desc'
@@ -230,6 +245,8 @@ export function InlineTableField({
 
   // { rowId, draft } — null = no row editing, 'new' = adding new row
   const [editState, setEditState] = useState<{ rowId: string; draft: Record<string, unknown> } | null>(null)
+  const editStateRef = useRef<{ rowId: string; draft: Record<string, unknown> } | null>(null)
+  useEffect(() => { editStateRef.current = editState }, [editState])
   const [saving, setSaving] = useState(false)
   const [uniqueError, setUniqueError] = useState<string | null>(null)
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -559,11 +576,32 @@ export function InlineTableField({
   }
 
   function setDraftField(k: string, v: unknown) {
-    setEditState((s) => {
-      if (!s) return s
-      const draft = applyComputedFields({ ...s.draft, [k]: v })
-      return { ...s, draft }
-    })
+    const cur = editStateRef.current
+    const nextDraft = cur ? applyComputedFields({ ...cur.draft, [k]: v }) : applyComputedFields({ [k]: v })
+    setEditState((s) => s ? { ...s, draft: nextDraft } : s)
+
+    if (rowRules && rowRules.length > 0 && client) {
+      const parentCtx: Record<string, unknown> = {}
+      if (parentContextFields?.length && parentDraftCtx?.draft) {
+        for (const f of parentContextFields) parentCtx[f] = parentDraftCtx.draft[f] ?? null
+      }
+      client.request<{ updates: Record<string, unknown> }>(
+        post('/field-rules/evaluate', {
+          collection: relatedCollection,
+          data: nextDraft,
+          changed_field: k,
+          parent_context: parentCtx,
+          row_rules: rowRules
+        })
+      ).then((res) => {
+        if (res.updates && Object.keys(res.updates).length > 0) {
+          setEditState((s) => {
+            if (!s) return s
+            return { ...s, draft: applyComputedFields({ ...s.draft, ...res.updates }) }
+          })
+        }
+      }).catch(() => {})
+    }
   }
 
   async function saveEdit() {

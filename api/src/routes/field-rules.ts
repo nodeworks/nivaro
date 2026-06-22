@@ -160,6 +160,17 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       collection?: string
       data?: Record<string, unknown>
       changed_field?: string
+      parent_context?: Record<string, unknown>
+      row_rules?: Array<{
+        trigger_field?: string | null
+        trigger_op?: string
+        trigger_value?: string | null
+        target_field: string
+        target_type: 'set' | 'clear' | 'relation_field'
+        target_value?: string | null
+        only_if_empty?: boolean
+        sort?: number
+      }>
     }
 
     if (!body.collection || !body.data || typeof body.data !== 'object') {
@@ -168,7 +179,69 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
 
     const before = { ...body.data }
     const working = { ...body.data }
-    await applyFieldRules(body.collection, working, body.changed_field)
+    const parentContext = body.parent_context ?? {}
+
+    if (Array.isArray(body.row_rules) && body.row_rules.length > 0) {
+      const sorted = [...body.row_rules].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+      for (const rule of sorted) {
+        const triggerField = rule.trigger_field ?? null
+        if (body.changed_field && triggerField && triggerField !== body.changed_field) continue
+        if (triggerField && !(triggerField in working)) continue
+
+        const val = triggerField ? working[triggerField] : null
+        const op = rule.trigger_op ?? 'nnull'
+        const rawTriggerValue = rule.trigger_value?.replace(/\$parent\.(\w+)/g, (_, f) => {
+          const v = parentContext[f]; return v != null ? String(v) : ''
+        }) ?? null
+
+        let triggered = false
+        switch (op) {
+          case 'eq': triggered = String(val) === String(rawTriggerValue ?? ''); break
+          case 'neq': triggered = String(val) !== String(rawTriggerValue ?? ''); break
+          case 'null': triggered = val == null; break
+          case 'nnull': triggered = val != null; break
+          case 'in': {
+            const list = (() => { try { return JSON.parse(rawTriggerValue ?? '[]') } catch { return [] } })() as unknown[]
+            triggered = list.map(String).includes(String(val)); break
+          }
+          case 'contains': triggered = String(val).includes(String(rawTriggerValue ?? '')); break
+          default: triggered = triggerField ? val != null : true
+        }
+        if (!triggered) continue
+
+        if (rule.only_if_empty) {
+          const existing = working[rule.target_field]
+          if (existing != null && existing !== '') continue
+        }
+
+        if (rule.target_type === 'clear') {
+          working[rule.target_field] = null
+        } else if (rule.target_type === 'set') {
+          const rv = rule.target_value?.replace(/\$parent\.(\w+)/g, (_, f) => {
+            const v = parentContext[f]; return v != null ? String(v) : ''
+          }) ?? null
+          if (rv !== null) working[rule.target_field] = rv
+        } else if (rule.target_type === 'relation_field') {
+          const fkId = triggerField ? working[triggerField] : null
+          if (fkId == null) { working[rule.target_field] = null; continue }
+          try {
+            const rel = await db('nivaro_relations')
+              .where({ many_collection: body.collection, many_field: triggerField })
+              .whereNull('junction_field')
+              .first() as { one_collection: string } | undefined
+            if (!rel?.one_collection) continue
+            const relatedRecord = await db(rel.one_collection)
+              .where({ id: String(fkId) })
+              .first() as Record<string, unknown> | undefined
+            working[rule.target_field] = relatedRecord && rule.target_value
+              ? (relatedRecord[rule.target_value] ?? null)
+              : null
+          } catch { /* non-fatal */ }
+        }
+      }
+    } else {
+      await applyFieldRules(body.collection, working, body.changed_field)
+    }
 
     // Return only the fields that the rules actually changed.
     const updates: Record<string, unknown> = {}

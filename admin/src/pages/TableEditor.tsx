@@ -5234,6 +5234,153 @@ function CascadeRuleRow({
   )
 }
 
+type RowRuleItem = {
+  trigger_field?: string | null; trigger_op?: string; trigger_value?: string | null
+  target_field: string; target_type: 'set' | 'clear' | 'relation_field'; target_value?: string | null
+  only_if_empty?: boolean; sort?: number
+}
+
+function RowRuleRow({
+  rule,
+  childFields,
+  m2oRels,
+  onChange,
+  onRemove,
+}: {
+  rule: RowRuleItem
+  childFields: Array<{ field: string; label?: string | null; type?: string }>
+  m2oRels: Array<{ many_field: string; one_collection: string }>
+  onChange: (r: RowRuleItem) => void
+  onRemove: () => void
+}) {
+  const [tfOpen, setTfOpen] = useState(false)
+  const [tgtOpen, setTgtOpen] = useState(false)
+  const [tvOpen, setTvOpen] = useState(false)
+  const fieldOpts = childFields.map(f => ({ value: f.field, label: f.label || f.field }))
+
+  const relatedCollection = rule.trigger_field
+    ? (m2oRels.find(r => r.many_field === rule.trigger_field)?.one_collection ?? null)
+    : null
+
+  const { data: relatedFieldsData } = useQuery({
+    queryKey: ['field-config-all', relatedCollection],
+    queryFn: () => api.get(`/field-config/${relatedCollection}`).then((r: { data: { data?: Array<{ field: string; label?: string | null; type?: string }> } }) => r.data.data ?? []),
+    enabled: !!relatedCollection && rule.target_type === 'relation_field',
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const SKIP_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
+  const relatedFieldOpts = (relatedFieldsData ?? [])
+    .filter((f: { field: string; type?: string }) => f.field !== 'id' && !SKIP_TYPES.has(f.type ?? ''))
+    .map((f: { field: string; label?: string | null }) => ({ value: f.field, label: f.label || f.field }))
+
+  const showTriggerValue = rule.trigger_op && !['null', 'nnull'].includes(rule.trigger_op)
+  const showTargetValue = rule.target_type === 'set' || rule.target_type === 'relation_field'
+  const showRelatedCombobox = rule.target_type === 'relation_field' && !!relatedCollection
+
+  return (
+    <div className='space-y-1.5 rounded border border-slate-100 bg-slate-50 p-2'>
+      <div className='flex items-center gap-1.5'>
+        <Popover open={tfOpen} onOpenChange={setTfOpen}>
+          <PopoverTrigger asChild>
+            <button type='button' className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0'>
+              {rule.trigger_field ? (fieldOpts.find(f => f.value === rule.trigger_field)?.label ?? rule.trigger_field) : <span className='text-slate-400'>when field changes…</span>}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-52 p-0' align='start'>
+            <Command><CommandInput placeholder='Search…' className='h-8 text-[12px]' /><CommandList><CommandGroup>
+              {fieldOpts.map(f => (
+                <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, trigger_field: f.value }); setTfOpen(false) }} className='text-[12px]'>{f.label}</CommandItem>
+              ))}
+            </CommandGroup></CommandList></Command>
+          </PopoverContent>
+        </Popover>
+        <select
+          value={rule.trigger_op ?? 'nnull'}
+          onChange={e => onChange({ ...rule, trigger_op: e.target.value })}
+          className='h-7 rounded border border-slate-200 bg-white px-1 text-[11px] text-slate-700 focus:outline-none'
+        >
+          <option value='nnull'>has value</option>
+          <option value='null'>is empty</option>
+          <option value='eq'>equals</option>
+          <option value='neq'>not equals</option>
+          <option value='contains'>contains</option>
+        </select>
+        <button type='button' onClick={onRemove} className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'>✕</button>
+      </div>
+      {showTriggerValue && (
+        <input
+          type='text'
+          value={rule.trigger_value ?? ''}
+          onChange={e => onChange({ ...rule, trigger_value: e.target.value || null })}
+          placeholder='value (or $parent.field_name)'
+          className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+        />
+      )}
+      <div className='flex items-center gap-1.5'>
+        <span className='text-[10px] text-slate-400 shrink-0'>→ set</span>
+        <Popover open={tgtOpen} onOpenChange={setTgtOpen}>
+          <PopoverTrigger asChild>
+            <button type='button' className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0'>
+              {rule.target_field ? (fieldOpts.find(f => f.value === rule.target_field)?.label ?? rule.target_field) : <span className='text-slate-400'>target field…</span>}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-52 p-0' align='start'>
+            <Command><CommandInput placeholder='Search…' className='h-8 text-[12px]' /><CommandList><CommandGroup>
+              {fieldOpts.map(f => (
+                <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, target_field: f.value }); setTgtOpen(false) }} className='text-[12px]'>{f.label}</CommandItem>
+              ))}
+            </CommandGroup></CommandList></Command>
+          </PopoverContent>
+        </Popover>
+        <select
+          value={rule.target_type}
+          onChange={e => onChange({ ...rule, target_type: e.target.value as RowRuleItem['target_type'], target_value: null })}
+          className='h-7 rounded border border-slate-200 bg-white px-1 text-[11px] text-slate-700 focus:outline-none'
+        >
+          <option value='set'>= literal</option>
+          <option value='relation_field'>= from related</option>
+          <option value='clear'>= clear</option>
+        </select>
+      </div>
+      {showTargetValue && showRelatedCombobox && (
+        <Popover open={tvOpen} onOpenChange={setTvOpen}>
+          <PopoverTrigger asChild>
+            <button type='button' className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400'>
+              {rule.target_value
+                ? (relatedFieldOpts.find((f: { value: string; label: string }) => f.value === rule.target_value)?.label ?? rule.target_value)
+                : <span className='text-slate-400'>field from {relatedCollection}…</span>}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-52 p-0' align='start'>
+            <Command><CommandInput placeholder='Search…' className='h-8 text-[12px]' /><CommandList><CommandGroup>
+              {relatedFieldOpts.length === 0
+                ? <div className='px-3 py-2 text-[11px] text-slate-400'>No fields found</div>
+                : relatedFieldOpts.map((f: { value: string; label: string }) => (
+                    <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, target_value: f.value }); setTvOpen(false) }} className='text-[12px]'>{f.label}</CommandItem>
+                  ))}
+            </CommandGroup></CommandList></Command>
+          </PopoverContent>
+        </Popover>
+      )}
+      {showTargetValue && !showRelatedCombobox && (
+        <input
+          type='text'
+          value={rule.target_value ?? ''}
+          onChange={e => onChange({ ...rule, target_value: e.target.value || null })}
+          placeholder={rule.target_type === 'relation_field' ? 'select a trigger field (M2O) first' : 'value (or $parent.field_name)'}
+          className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+          readOnly={rule.target_type === 'relation_field'}
+        />
+      )}
+      <label className='flex items-center gap-1.5 cursor-pointer'>
+        <input type='checkbox' checked={!!rule.only_if_empty} onChange={e => onChange({ ...rule, only_if_empty: e.target.checked })} className='h-3 w-3' />
+        <span className='text-[10px] text-slate-500'>Only if target is empty (fallback)</span>
+      </label>
+    </div>
+  )
+}
+
 function RoleConditionRow({
   roleIds,
   onRoleIdsChange,
@@ -5402,6 +5549,12 @@ function FieldSettingsPopover({
   const [showLineNumbers, setShowLineNumbers] = useState(false)
   const [enableReorder, setEnableReorder] = useState(true)
   const [parentCascades, setParentCascades] = useState<Array<{ parent_field: string; child_field: string }>>([])
+  const [rowRulesLocal, setRowRulesLocal] = useState<Array<{
+    trigger_field?: string | null; trigger_op?: string; trigger_value?: string | null
+    target_field: string; target_type: 'set' | 'clear' | 'relation_field'; target_value?: string | null
+    only_if_empty?: boolean; sort?: number
+  }>>([])
+  const [parentContextFieldsLocal, setParentContextFieldsLocal] = useState<string[]>([])
   const [uniqueBy, setUniqueBy] = useState<string[]>([])
   const [uniqueByOpen, setUniqueByOpen] = useState(false)
   const [sortField, setSortField] = useState<string>('')
@@ -5430,6 +5583,15 @@ function FieldSettingsPopover({
       .map((r) => ({ value: r.many_field!, label: `${r.many_field} → ${r.one_collection}` }))
   }, [childCollectionMeta, relatedCollection])
 
+  const childM2ORels = useMemo(() => {
+    const rels = (childCollectionMeta?.relations ?? []) as Array<{
+      many_collection?: string; many_field?: string; one_collection?: string; junction_field?: string | null
+    }>
+    return rels
+      .filter((r) => r.many_collection === relatedCollection && r.many_field && r.one_collection && !r.junction_field)
+      .map((r) => ({ many_field: r.many_field!, one_collection: r.one_collection! }))
+  }, [childCollectionMeta, relatedCollection])
+
   const parentM2OFields = useMemo(
     () => (m2oFields ?? []).filter((f) => f.kind === 'M2O').map((f) => ({ value: f.field, label: f.label })),
     [m2oFields]
@@ -5439,6 +5601,13 @@ function FieldSettingsPopover({
     queryKey: ['field-config-all', relatedCollection],
     queryFn: () => api.get(`/field-config/${relatedCollection}`).then((r) => r.data.data ?? []),
     enabled: !!relatedCollection && iface === 'inline-table',
+    staleTime: 5 * 60 * 1000
+  })
+
+  const { data: parentAllFields = [] } = useQuery<Array<{ field: string; label?: string | null; type?: string }>>({
+    queryKey: ['field-config-all', collection],
+    queryFn: () => api.get(`/field-config/${collection}`).then((r) => r.data.data ?? []),
+    enabled: !!collection && iface === 'inline-table',
     staleTime: 5 * 60 * 1000
   })
 
@@ -5482,12 +5651,14 @@ function FieldSettingsPopover({
         setShowLineNumbers(!!(opts.show_line_numbers))
         setEnableReorder(opts.enable_reorder !== false)
         setParentCascades(Array.isArray(opts.parent_cascades) ? opts.parent_cascades as Array<{ parent_field: string; child_field: string }> : [])
+        setRowRulesLocal(Array.isArray(opts.row_rules) ? opts.row_rules as typeof rowRulesLocal : [])
+        setParentContextFieldsLocal(Array.isArray(opts.parent_context_fields) ? opts.parent_context_fields as string[] : [])
         setUniqueBy(Array.isArray(opts.unique_by) ? opts.unique_by as string[] : [])
         setSortField((opts.sort_field as string) ?? '')
         setSortDir((opts.sort_dir as 'asc' | 'desc') === 'desc' ? 'desc' : 'asc')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
-      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setFilePendingSave(false); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate(''); setSaveMode('immediate'); setShowLineNumbers(false); setEnableReorder(true); setParentCascades([]); setUniqueBy([]); setSortField(''); setSortDir('asc'); setGroupedGroupField(''); setGroupedOptionField('') }
+      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setFilePendingSave(false); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate(''); setSaveMode('immediate'); setShowLineNumbers(false); setEnableReorder(true); setParentCascades([]); setRowRulesLocal([]); setParentContextFieldsLocal([]); setUniqueBy([]); setSortField(''); setSortDir('asc'); setGroupedGroupField(''); setGroupedOptionField('') }
     }
     setOpen(next)
   }
@@ -5526,7 +5697,7 @@ function FieldSettingsPopover({
           delete existing.aggregate
         }
         const o2mOpts = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table'))
-          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : { save_mode: saveMode, show_line_numbers: showLineNumbers, enable_reorder: enableReorder, ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}), ...(uniqueBy.length > 0 ? { unique_by: uniqueBy } : { unique_by: undefined }), ...(sortField ? { sort_field: sortField, sort_dir: sortDir } : { sort_field: undefined, sort_dir: undefined }) }) }
+          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : { save_mode: saveMode, show_line_numbers: showLineNumbers, enable_reorder: enableReorder, ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}), ...(rowRulesLocal.length > 0 ? { row_rules: rowRulesLocal } : { row_rules: undefined }), ...(parentContextFieldsLocal.length > 0 ? { parent_context_fields: parentContextFieldsLocal } : { parent_context_fields: undefined }), ...(uniqueBy.length > 0 ? { unique_by: uniqueBy } : { unique_by: undefined }), ...(sortField ? { sort_field: sortField, sort_dir: sortDir } : { sort_field: undefined, sort_dir: undefined }) }) }
           : {}
         const fileOpts = (iface === 'file-image' || iface === 'files-m2m')
           ? { allow_upload: allowUpload, allow_pick: allowPick, ...(iface === 'files-m2m' ? { pending_save: filePendingSave } : {}) }
@@ -5880,6 +6051,53 @@ function FieldSettingsPopover({
                   ))}
                   {parentCascades.length > 0 && (
                     <p className='text-[10px] text-slate-400'>Parent = M2O on this form. Child = M2O on each row.</p>
+                  )}
+                </div>
+              )}
+              {iface === 'inline-table' && (
+                <div className='space-y-1.5'>
+                  <div className='flex items-center justify-between'>
+                    <p className='text-[11px] font-medium text-slate-500'>Row auto-fill rules</p>
+                    <button
+                      type='button'
+                      onClick={() => setRowRulesLocal([...rowRulesLocal, { trigger_field: null, trigger_op: 'nnull', target_field: '', target_type: 'relation_field', sort: rowRulesLocal.length }])}
+                      className='text-[10px] text-nvr-cyan hover:underline'
+                    >
+                      + Add rule
+                    </button>
+                  </div>
+                  {rowRulesLocal.map((rule, idx) => (
+                    <RowRuleRow
+                      key={idx}
+                      rule={rule}
+                      childFields={childAllFields.filter(f => !f.hidden && f.field !== 'id')}
+                      m2oRels={childM2ORels}
+                      onChange={updated => setRowRulesLocal(rowRulesLocal.map((r, i) => i === idx ? updated : r))}
+                      onRemove={() => setRowRulesLocal(rowRulesLocal.filter((_, i) => i !== idx))}
+                    />
+                  ))}
+                  {rowRulesLocal.length > 0 && (
+                    <div className='space-y-1'>
+                      <p className='text-[11px] font-medium text-slate-500 mt-1'>Parent context fields</p>
+                      <p className='text-[10px] text-slate-400'>Fields from parent record available as <code className='font-mono bg-slate-100 px-0.5 rounded'>$parent.field_name</code> in rules.</p>
+                      <div className='flex flex-wrap gap-1'>
+                        {parentAllFields
+                          .filter(f => f.field !== 'id' && !['alias','o2m','m2m','m2a','presentation','group','divider'].includes(f.type ?? ''))
+                          .map(f => {
+                            const checked = parentContextFieldsLocal.includes(f.field)
+                            return (
+                              <button
+                                key={f.field}
+                                type='button'
+                                onClick={() => setParentContextFieldsLocal(checked ? parentContextFieldsLocal.filter(x => x !== f.field) : [...parentContextFieldsLocal, f.field])}
+                                className={`h-6 rounded px-2 text-[10px] border ${checked ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-400'}`}
+                              >
+                                {f.label || f.field}
+                              </button>
+                            )
+                          })}
+                      </div>
+                    </div>
                   )}
                 </div>
               )}
@@ -8754,7 +8972,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
   // Option keys inside `options` JSON that are scoped to a specific layout and must NOT
   // be written to nivaro_fields (global). They live in layout_field_assignments.overrides.options.
-  const LAYOUT_LOCAL_OPTION_KEYS = ['layout_id', 'layout_slug', 'save_mode', 'show_line_numbers', 'enable_reorder', 'parent_cascades', 'unique_by', 'sort_field', 'sort_dir']
+  const LAYOUT_LOCAL_OPTION_KEYS = ['layout_id', 'layout_slug', 'save_mode', 'show_line_numbers', 'enable_reorder', 'parent_cascades', 'row_rules', 'parent_context_fields', 'unique_by', 'sort_field', 'sort_dir']
 
   const patchField = useCallback((field: string, patch: Record<string, unknown>) => {
     if (layoutId && ('group_key' in patch || 'sort' in patch)) {
