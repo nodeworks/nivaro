@@ -2641,7 +2641,7 @@ export function ItemEditForm({
                 type='button'
                 onClick={() => setSummaryCollapsed(v => !v)}
                 title={summaryCollapsed ? 'Expand summary' : 'Collapse summary'}
-                className='flex w-6 shrink-0 items-start justify-center pt-3 text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors'
+                className='border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:text-slate-500 dark:hover:text-slate-300'
               >
                 {summaryCollapsed
                   ? <ChevronLeft className='h-3.5 w-3.5' />

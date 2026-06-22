@@ -4,7 +4,6 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
-  ChevronRight,
   GitBranch,
   Loader2,
   Search,
@@ -477,6 +476,7 @@ function OwnersSection({
   const [adding, setAdding] = useState(false)
   const [userId, setUserId] = useState('')
   const [stateScope, setStateScope] = useState('')
+  const [scopeOpen, setScopeOpen] = useState(false)
   const ownersKey = ['pipeline-instance-owners', collection, item]
 
   const { data: owners, isLoading: ownersLoading } = useQuery<PipelineInstanceOwner[]>({
@@ -592,21 +592,38 @@ function OwnersSection({
         </div>
       )}
       {adding && (
-        <div className='mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3'>
+        <div className='mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-border p-3'>
           <p className='text-[11px] font-semibold text-slate-500'>Add owner</p>
           <AsyncUserPicker value={userId} onChange={setUserId} />
-          <select
-            value={stateScope}
-            onChange={(e) => setStateScope(e.target.value)}
-            className='h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700'
-          >
-            <option value=''>All states</option>
-            {states.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
+          <Popover open={scopeOpen} onOpenChange={setScopeOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type='button'
+                className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-left text-[13px] text-slate-700 transition-colors hover:border-slate-300 dark:border-border dark:bg-transparent dark:text-slate-300'
+              >
+                <span className='truncate'>
+                  {stateScope ? (states.find((s) => s.id === stateScope)?.label ?? stateScope) : 'All states'}
+                </span>
+                <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align='start' sideOffset={4} className='w-52 p-1'>
+              {(['', ...states.map((s) => s.id)] as string[]).map((id) => {
+                const label = id === '' ? 'All states' : (states.find((s) => s.id === id)?.label ?? id)
+                const active = stateScope === id
+                return (
+                  <button
+                    key={id}
+                    type='button'
+                    className={cn('flex w-full rounded px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-slate-50 dark:hover:bg-white/5', active && 'font-medium text-slate-800 dark:text-slate-200')}
+                    onClick={() => { setStateScope(id); setScopeOpen(false) }}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </PopoverContent>
+          </Popover>
           <div className='flex items-center justify-end gap-2 pt-0.5'>
             <Button
               type='button'
@@ -696,7 +713,7 @@ function ApprovalChainView({
           ) : !data ? (
             <p className='px-4 py-3 text-[12px] text-slate-400'>No pipeline configured.</p>
           ) : (
-            <div className='divide-y divide-slate-100'>
+            <div className='divide-y divide-slate-100 dark:divide-border/60'>
               {sorted.map((s) => {
                 const owners = data[s.id]?.owners ?? []
                 return (
@@ -950,7 +967,7 @@ function PipelinePanelInner({
   }
 
   const confirmForm = (
-    <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3.5'>
+    <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-border p-3.5'>
       <div className='flex flex-wrap items-center gap-2'>
         <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
         {pendingTx && (
@@ -1007,13 +1024,13 @@ function PipelinePanelInner({
   )
 
   return (
-    <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
+    <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border'>
       <div
         role='button'
         tabIndex={0}
         onClick={() => setExpanded((v) => !v)}
         onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setExpanded((v) => !v)}
-        className='flex w-full cursor-pointer items-center gap-2.5 px-5 py-3.5'
+        className='flex w-full cursor-pointer items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
       >
         <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         <span className='font-semibold text-sm text-slate-700'>{title || 'Pipeline'}</span>
@@ -1060,10 +1077,10 @@ function PipelinePanelInner({
         />
       </div>
       {!expanded && pendingTransition && (
-        <div className='border-t border-slate-100 px-4 py-3'>{confirmForm}</div>
+        <div className='border-t border-slate-100 dark:border-border/60 px-4 py-3'>{confirmForm}</div>
       )}
       {expanded && (
-        <div className='border-t border-slate-100'>
+        <div className='border-t border-slate-100 dark:border-border/60'>
           {!instance ? (
             <div className='flex items-center justify-between gap-4 px-5 py-4'>
               <p className='text-[13px] text-slate-500'>Pipeline not started for this record.</p>
@@ -1083,7 +1100,7 @@ function PipelinePanelInner({
               </Button>
             </div>
           ) : (
-            <div className='divide-y divide-slate-100'>
+            <div className='divide-y divide-slate-100 dark:divide-border/60'>
               {(states ?? []).length > 1 && (
                 <div className='px-5 py-4'>
                   <StateTrack
@@ -1110,11 +1127,7 @@ function PipelinePanelInner({
                   className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-slate-600'
                   onClick={() => setShowHistory((v) => !v)}
                 >
-                  {showHistory ? (
-                    <ChevronDown className='h-3.5 w-3.5' />
-                  ) : (
-                    <ChevronRight className='h-3.5 w-3.5' />
-                  )}
+                  <ChevronDown className={cn('h-3.5 w-3.5 transition-transform duration-200', showHistory && 'rotate-180')} />
                   Transition history <span className='tabular-nums'>({history?.length ?? 0})</span>
                 </button>
                 {showHistory && (
@@ -1292,7 +1305,7 @@ function PipelineTransitionButtonsInner({
         })}
       </div>
       {pendingTransition && (
-        <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3.5'>
+        <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-border p-3.5'>
           <div className='flex flex-wrap items-center gap-2'>
             <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
             {pendingTx && (

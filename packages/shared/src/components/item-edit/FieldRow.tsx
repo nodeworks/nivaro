@@ -1,5 +1,5 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChartLine, Info, Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { ChartLine, Info, Lock, Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
@@ -360,7 +360,20 @@ export function FieldRow({
           </button>
         )}
         {swapButton}
-        {locked && <span className='text-[10px] text-amber-500 font-medium'>(locked)</span>}
+        {locked && (
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className='inline-flex items-center text-slate-300 dark:text-slate-600'>
+                  <Lock className='h-3 w-3' />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side='top' className='text-[12px]'>
+                This field is locked
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
         {cascadeFilter && Object.keys(cascadeFilter).length > 0 && cascadeParentLabels.length > 0 && (
           <TooltipProvider delayDuration={100}>
             <Tooltip>
@@ -368,14 +381,13 @@ export function FieldRow({
                 <button
                   type='button'
                   onClick={flashParentFields}
-                  className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-[rgba(0,206,255,0.12)] text-[#00ceff] dark:bg-nvr-cyan/15 dark:text-nvr-cyan max-w-[160px] min-w-0 cursor-pointer hover:bg-[rgba(0,206,255,0.22)] transition-colors'
+                  className='inline-flex items-center text-slate-300 hover:text-nvr-cyan dark:text-slate-600 dark:hover:text-nvr-cyan transition-colors'
                 >
-                  <SlidersHorizontal className='h-2.5 w-2.5 shrink-0' />
-                  <span className='truncate'>Filtered by {cascadeParentLabels.join(', ')}</span>
+                  <SlidersHorizontal className='h-3 w-3' />
                 </button>
               </TooltipTrigger>
               <TooltipContent side='top' className='text-[12px]'>
-                Click to highlight {cascadeParentLabels.join(', ')}
+                Filtered by {cascadeParentLabels.join(', ')} — click to highlight
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>

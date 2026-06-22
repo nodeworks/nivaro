@@ -113,11 +113,11 @@ export function CommentPanel({
   }
 
   return (
-    <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
+    <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border'>
       <button
         type='button'
         onClick={() => setExpanded((v) => !v)}
-        className='flex w-full items-center gap-2.5 px-5 py-3.5'
+        className='flex w-full items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
       >
         <MessageSquare className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         <span className='font-semibold text-sm text-slate-700'>{title || 'Comments'}</span>
@@ -133,7 +133,7 @@ export function CommentPanel({
         />
       </button>
       {expanded && (
-        <div className='border-t border-slate-100 p-6'>
+        <div className='border-t border-slate-100 px-5 py-4 dark:border-border/60'>
           {isNew ? (
             <div className='space-y-4'>
               <form onSubmit={handleSubmit} className='space-y-2'>
@@ -155,9 +155,9 @@ export function CommentPanel({
                 <div className='space-y-2'>
                   <Separator />
                   {(queuedComments ?? []).map((text, i) => (
-                    <div key={i} className='flex gap-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2'>
-                      <span className='mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>Pending</span>
-                      <p className='text-[13px] leading-relaxed text-slate-600'>{text}</p>
+                    <div key={i} className='flex items-start gap-2.5 rounded-lg border border-dashed border-amber-200/70 bg-amber-50/40 px-3 py-2 dark:border-amber-500/20 dark:bg-amber-500/5'>
+                      <span className='mt-0.5 inline-flex shrink-0 items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:bg-amber-500/15 dark:text-amber-400'>Pending</span>
+                      <p className='text-[13px] leading-relaxed text-slate-600 dark:text-slate-300'>{text}</p>
                     </div>
                   ))}
                 </div>

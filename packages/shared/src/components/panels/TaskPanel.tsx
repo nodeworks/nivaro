@@ -214,11 +214,11 @@ export function TaskPanel({
   }
 
   return (
-    <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
+    <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border'>
       <button
         type='button'
         onClick={() => setExpanded((v) => !v)}
-        className='flex w-full items-center gap-2.5 px-5 py-3.5'
+        className='flex w-full items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
       >
         <ClipboardList className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         <span className='font-semibold text-sm text-slate-700'>{title || 'Tasks'}</span>
@@ -230,18 +230,16 @@ export function TaskPanel({
         />
       </button>
       {expanded && isNew && (
-        <div className='border-t border-slate-100'>
-          <div className='flex items-center justify-between px-4 py-2'>
+        <div className='border-t border-slate-100 dark:border-border/60'>
+          <div className='space-y-3 px-5 py-3'>
             {!adding && (
-              <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding(true)}>
-                <Plus className='mr-1 h-3.5 w-3.5' />
+              <button type='button' onClick={() => setAdding(true)} className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-[#00ceff]'>
+                <Plus className='h-3.5 w-3.5' />
                 Add task
-              </Button>
+              </button>
             )}
-          </div>
-          <div className='space-y-3 px-4 pb-4'>
             {adding && (
-              <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3'>
+              <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:bg-slate-900/30 dark:border-border'>
                 <div>
                   <Label className='mb-1 block text-[11px]'>Title</Label>
                   <Input
@@ -271,10 +269,10 @@ export function TaskPanel({
               </div>
             )}
             {(queuedTasks ?? []).length > 0 && (
-              <div className='divide-y divide-slate-100'>
+              <div className='divide-y divide-slate-100 dark:divide-border/60'>
                 {(queuedTasks ?? []).map((t, i) => (
                   <div key={i} className='flex items-start gap-2.5 py-2'>
-                    <span className='mt-0.5 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>Pending</span>
+                    <span className='mt-0.5 inline-flex shrink-0 items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:bg-amber-500/15 dark:text-amber-400'>Pending</span>
                     <div className='min-w-0 flex-1'>
                       <p className='text-[13px] font-medium text-slate-800'>{t.title}</p>
                       <div className='mt-0.5 flex items-center gap-3 text-[11px] text-slate-400'>
@@ -293,26 +291,13 @@ export function TaskPanel({
         </div>
       )}
       {expanded && !isNew && (
-        <div className='border-t border-slate-100'>
-          <div className='flex items-center justify-between px-4 py-2'>
-            {!adding && (
-              <Button
-                size='sm'
-                variant='outline'
-                className='h-7 text-[12px]'
-                onClick={() => setAdding(true)}
-              >
-                <Plus className='mr-1 h-3.5 w-3.5' />
-                Add task
-              </Button>
-            )}
-          </div>
-          <div className='space-y-3 px-4 pb-4'>
+        <div className='border-t border-slate-100 dark:border-border/60'>
+          <div className='space-y-3 px-5 py-3'>
             {openTasks.length === 0 && !adding && (
               <p className='py-1 text-[13px] text-slate-400'>No open tasks</p>
             )}
             {openTasks.length > 0 && (
-              <div className='divide-y divide-slate-100'>
+              <div className='divide-y divide-slate-100 dark:divide-border/60'>
                 {openTasks.map((t) => {
                   const overdue = t.due_date ? new Date(t.due_date).getTime() < now : false
                   return (
@@ -354,8 +339,14 @@ export function TaskPanel({
                 })}
               </div>
             )}
+            {!adding && (
+              <button type='button' onClick={() => setAdding(true)} className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-[#00ceff]'>
+                <Plus className='h-3.5 w-3.5' />
+                Add task
+              </button>
+            )}
             {adding && (
-              <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3'>
+              <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:bg-slate-900/30 dark:border-border'>
                 <div>
                   <Label className='mb-1 block text-[11px]'>Title</Label>
                   <Input

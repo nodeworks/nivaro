@@ -705,12 +705,17 @@ function SummaryStrip({
     : summaryKeys
   if (visibleFields.length === 0) return null
 
+  const LBL = 'text-[9px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 shrink-0'
+  const VAL = 'text-[12px] font-semibold text-slate-700 dark:text-slate-300'
+  const EMPTY = 'text-[12px] text-slate-300 dark:text-slate-600'
+  const ROW = 'flex items-baseline gap-1.5'
+
   const renderItem = (key: string): React.ReactNode => {
     if (key === '__owners__') {
       const ownersLabel = ownersAssignment?.label_override || 'Owners'
       return (
         <div className='flex items-center gap-1.5'>
-          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{ownersLabel}</span>
+          <span className={LBL}>{ownersLabel}</span>
           <OwnersInlineCompact collection={collection} itemId={itemId} />
         </div>
       )
@@ -724,7 +729,7 @@ function SummaryStrip({
     if (o2mLoading?.has(key)) {
       return (
         <div className='flex items-center gap-1.5'>
-          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
+          <span className={LBL}>{label}</span>
           <Loader2 className='h-3 w-3 animate-spin text-slate-300' />
         </div>
       )
@@ -759,9 +764,9 @@ function SummaryStrip({
         }
       }
       return (
-        <div className='flex items-center gap-1.5'>
-          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{displayLabel}</span>
-          <span className='text-[11px] text-slate-600'>{formatted}</span>
+        <div className={ROW}>
+          <span className={LBL}>{displayLabel}</span>
+          <span className={VAL}>{formatted}</span>
         </div>
       )
     }
@@ -769,9 +774,9 @@ function SummaryStrip({
     if (m2mCounts && key in m2mCounts) {
       const n = m2mCounts[key]
       return (
-        <div className='flex items-center gap-1.5'>
-          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
-          <span className='text-[11px] text-slate-600'>{n} item{n !== 1 ? 's' : ''}</span>
+        <div className={ROW}>
+          <span className={LBL}>{label}</span>
+          <span className={VAL}>{n} item{n !== 1 ? 's' : ''}</span>
         </div>
       )
     }
@@ -779,9 +784,9 @@ function SummaryStrip({
     if (o2mCounts && key in o2mCounts) {
       const n = o2mCounts[key]
       return (
-        <div className='flex items-center gap-1.5'>
-          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
-          <span className='text-[11px] text-slate-600'>{n} row{n !== 1 ? 's' : ''}</span>
+        <div className={ROW}>
+          <span className={LBL}>{label}</span>
+          <span className={VAL}>{n} row{n !== 1 ? 's' : ''}</span>
         </div>
       )
     }
@@ -794,10 +799,10 @@ function SummaryStrip({
     if (m2oRel?.one_collection) {
       const ids = Array.isArray(v) ? v : (v != null && v !== '' ? [v] : [])
       return (
-        <div className='flex items-center gap-1.5'>
-          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
+        <div className={ROW}>
+          <span className={LBL}>{label}</span>
           {ids.length === 0
-            ? <span className='text-[11px] text-slate-400'>—</span>
+            ? <span className={EMPTY}>—</span>
             : m2oRel.one_collection === 'nivaro_users'
               ? <span className='inline-flex flex-wrap gap-x-1.5 gap-y-0.5'>{ids.map((id) => <SummaryUserName key={String(id)} userId={String(id)} />)}</span>
               : <span className='inline-flex flex-wrap gap-x-1.5'>{ids.map((id) => <RelationCell key={String(id)} relCollection={m2oRel.one_collection!} id={id} />)}</span>
@@ -810,39 +815,37 @@ function SummaryStrip({
       const m2mRel = relations.find((r) => r.many_field === key && r.junction_field)
       const targetCol = m2mRel?.one_collection
       return (
-        <div className='flex items-center gap-1.5'>
-          <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
+        <div className={ROW}>
+          <span className={LBL}>{label}</span>
           {v.length === 0
-            ? <span className='text-[11px] text-slate-400'>—</span>
+            ? <span className={EMPTY}>—</span>
             : targetCol
               ? <span className='inline-flex flex-wrap gap-x-1.5 gap-y-0.5'>{v.map((id) =>
                   targetCol === 'nivaro_users'
                     ? <SummaryUserName key={String(id)} userId={String(id)} />
                     : <RelationCell key={String(id)} relCollection={targetCol} id={id} />
                 )}</span>
-              : <span className='text-[11px] text-slate-600'>{v.length} item{v.length !== 1 ? 's' : ''}</span>
+              : <span className={VAL}>{v.length} item{v.length !== 1 ? 's' : ''}</span>
           }
         </div>
       )
     }
 
     return (
-      <div className='flex items-center gap-1.5'>
-        <span className='text-[10px] font-medium text-slate-400 shrink-0'>{label}</span>
+      <div className={ROW}>
+        <span className={LBL}>{label}</span>
         {(v === null || v === undefined || v === '')
-          ? <span className='text-[11px] text-slate-400'>—</span>
-          : <span className='text-[11px] text-slate-600'>{formatDisplayValue(v, f)}</span>
+          ? <span className={EMPTY}>—</span>
+          : <span className={VAL}>{formatDisplayValue(v, f)}</span>
         }
       </div>
     )
   }
 
   return (
-    <div className='flex flex-wrap gap-1.5 border-t border-slate-100 px-5 py-2'>
+    <div className='flex flex-wrap items-baseline gap-x-5 gap-y-1.5 border-t border-slate-100 dark:border-border/60 bg-slate-50/50 dark:bg-white/[0.015] px-5 py-2.5'>
       {visibleFields.map((key) => (
-        <div key={key} className='inline-flex items-center gap-1.5 rounded border border-slate-200 bg-slate-50 px-2.5 py-1'>
-          {renderItem(key)}
-        </div>
+        <React.Fragment key={key}>{renderItem(key)}</React.Fragment>
       ))}
     </div>
   )
@@ -953,21 +956,20 @@ export function GroupSection({
   const visibleFields_ = fields.filter((f) => !f.hidden)
 
   return (
-    <div className='rounded-xl border border-slate-200 bg-white'>
+    <div className={cn(
+      'rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border',
+      displayOnly && 'bg-slate-50/60 dark:bg-slate-900/20'
+    )}>
       <button
         type='button'
         onClick={toggle}
-        className='flex w-full items-center gap-2.5 px-5 py-3.5 text-left hover:bg-slate-50/50'
+        className='flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-slate-50/50 dark:hover:bg-white/[0.02] rounded-xl'
       >
-        {GroupIcon && <GroupIcon className='h-3.5 w-3.5 shrink-0 text-slate-400' />}
-        <span className='font-semibold text-sm shrink-0 text-slate-700'>{group.label}</span>
+        {GroupIcon && <GroupIcon className='h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500' />}
+        <span className='font-medium text-[13px] shrink-0 text-slate-800 dark:text-slate-200'>{group.label}</span>
         <span className='flex-1' />
         {hasErrors && <span className='h-2 w-2 rounded-full bg-destructive shrink-0' />}
-        {collapsed ? (
-          <ChevronRight className='h-4 w-4 text-slate-400' />
-        ) : (
-          <ChevronDown className='h-4 w-4 text-slate-400' />
-        )}
+        <ChevronDown className={cn('h-4 w-4 text-slate-400 dark:text-slate-500 transition-transform duration-200', collapsed && '-rotate-90')} />
       </button>
       {collapsed && summaryFields && summaryFields.length > 0 && (
         <SummaryStrip

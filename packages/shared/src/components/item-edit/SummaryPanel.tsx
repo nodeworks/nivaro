@@ -79,27 +79,27 @@ function M2MSummaryCount({
     ...committedItems.map((i) => i[junctionField]).filter((id) => id != null)
   ]
 
-  if (allRelatedIds.length === 0) return <span className='text-slate-300'>—</span>
+  if (allRelatedIds.length === 0) return <span className='text-slate-400 dark:text-slate-500'>—</span>
 
   if (relatedCollection) {
     const MAX_SHOW = 5
     const showIds = allRelatedIds.slice(0, MAX_SHOW)
     const extra = allRelatedIds.length - MAX_SHOW
     return (
-      <span className='text-[12px] text-slate-800'>
+      <span className='text-[12px] text-slate-700 dark:text-slate-200'>
         {showIds.map((id, i) => (
           <span key={String(id)}>
             {i > 0 && ', '}
             <RelatedItemLabel collection={relatedCollection} id={id} displayTemplate={colMeta?.display_template} />
           </span>
         ))}
-        {extra > 0 && <span className='text-slate-400'> +{extra} more</span>}
+        {extra > 0 && <span className='text-slate-400 dark:text-slate-500'> +{extra} more</span>}
       </span>
     )
   }
 
   return (
-    <span className='text-slate-800'>
+    <span className='text-slate-700 dark:text-slate-200'>
       {allRelatedIds.length} item{allRelatedIds.length !== 1 ? 's' : ''}
     </span>
   )
@@ -131,9 +131,9 @@ function O2MSummaryCount({
     enabled: !!parentId && parentId !== 'new',
     staleTime: 30_000
   })
-  if (isLoading) return <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
-  if (!rows || rows.length === 0) return <span className='text-slate-400 italic text-[11px]'>No rows</span>
-  return <span className='text-slate-800'>{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
+  if (isLoading) return <Loader2 className='h-3 w-3 animate-spin text-slate-400 dark:text-slate-500' />
+  if (!rows || rows.length === 0) return <span className='italic text-[11px] text-slate-400 dark:text-slate-500'>No rows</span>
+  return <span className='text-slate-700 dark:text-slate-200'>{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
 }
 
 // ─── SummaryFieldValue ─────────────────────────────────────────────────────────
@@ -206,7 +206,7 @@ export function SummaryFieldValue({
   }
 
   const isEmpty = val === null || val === undefined || val === ''
-  if (isEmpty) return <span className='text-slate-300'>—</span>
+  if (isEmpty) return <span className='text-slate-400 dark:text-slate-500'>—</span>
 
   if (iface === 'extension-editorjs') {
     try {
@@ -215,7 +215,7 @@ export function SummaryFieldValue({
         .map((b) => b.data?.text ?? '')
         .join(' ')
         .trim()
-      return <span className='text-slate-800 truncate'>{text || '—'}</span>
+      return <span className='truncate text-slate-700 dark:text-slate-200'>{text || '—'}</span>
     } catch {
       /* fall through */
     }
@@ -224,11 +224,11 @@ export function SummaryFieldValue({
     const div = typeof document !== 'undefined' ? document.createElement('div') : null
     if (div) {
       div.innerHTML = String(val)
-      return <span className='text-slate-800 truncate'>{div.textContent || '—'}</span>
+      return <span className='truncate text-slate-700 dark:text-slate-200'>{div.textContent || '—'}</span>
     }
   }
 
-  if (typeof val === 'boolean') return <span className='text-slate-800'>{val ? 'Yes' : 'No'}</span>
+  if (typeof val === 'boolean') return <span className='text-slate-700 dark:text-slate-200'>{val ? 'Yes' : 'No'}</span>
 
   const m2oRel = relations.find(
     (r) => r.many_collection === collection && r.many_field === field.field && !r.junction_field
@@ -239,13 +239,13 @@ export function SummaryFieldValue({
 
   if (field.type === 'datetime' || field.type === 'date') {
     try {
-      return <span className='text-slate-800'>{new Date(String(val)).toLocaleDateString()}</span>
+      return <span className='text-slate-700 dark:text-slate-200'>{new Date(String(val)).toLocaleDateString()}</span>
     } catch {
       /* fall through */
     }
   }
 
-  return <span className='text-slate-800 truncate'>{String(val)}</span>
+  return <span className='truncate text-slate-700 dark:text-slate-200'>{String(val)}</span>
 }
 
 // ─── getDisplayText ────────────────────────────────────────────────────────────
@@ -326,18 +326,22 @@ export function SummaryPanel({
   if (stepSections.length === 0 && extraO2MRels.length === 0) return null
 
   return (
-    <div className='bg-white overflow-hidden'>
-      <div className='px-4 py-2.5 border-b border-slate-100'>
-        <p className='text-[11px] font-semibold uppercase tracking-wider text-slate-500'>Summary</p>
+    <div className='overflow-hidden bg-white dark:bg-card'>
+      <div className='bg-slate-200 border-b border-slate-300 px-4 py-2.5 dark:bg-white/[0.1] dark:border-border'>
+        <span className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>Summary</span>
       </div>
+
       {stepSections.map(({ step, fields }, si) => (
         <div key={step.key}>
-          {(si > 0) && <div className='border-t border-slate-200' />}
-          <div className='px-4 py-1.5 bg-slate-50 border-b border-slate-100'>
-            <span className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
+          <div className={cn(
+            'bg-slate-100 px-4 py-2 border-b border-slate-200 dark:bg-white/[0.06] dark:border-border/80',
+            si > 0 && 'border-t border-slate-200 dark:border-border/80'
+          )}>
+            <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
               {step.label}
             </span>
           </div>
+
           {fields.map((f, fi) => {
             const val = draft[f.field]
             const label = f.label ?? titleCase(f.field)
@@ -347,19 +351,26 @@ export function SummaryPanel({
                 key={f.field}
                 className={cn(
                   'group/row flex items-stretch',
-                  fi < fields.length - 1 && 'border-b border-slate-50',
-                  hasError && 'bg-red-50'
+                  fi < fields.length - 1 && 'border-b border-slate-100 dark:border-border/60',
+                  hasError ? 'bg-red-50 dark:bg-red-900/10' : ''
                 )}
               >
                 <button
                   type='button'
                   onClick={() => onFieldClick(step.key, f.field)}
                   className={cn(
-                    'flex flex-1 flex-col px-4 py-2 text-left hover:bg-slate-50 transition-colors min-w-0',
-                    hasError && 'hover:bg-red-50'
+                    'flex flex-1 flex-col px-4 py-2 text-left transition-colors duration-150 min-w-0',
+                    hasError
+                      ? 'hover:bg-red-50 dark:hover:bg-red-900/15'
+                      : 'hover:bg-slate-50 dark:hover:bg-white/[0.03]'
                   )}
                 >
-                  <span className={cn('text-[10px] font-medium truncate', hasError ? 'text-red-500' : 'text-slate-400')}>{label}</span>
+                  <span className={cn(
+                    'text-[10px] font-medium truncate',
+                    hasError ? 'text-red-500 dark:text-red-400' : 'text-slate-400 dark:text-slate-500'
+                  )}>
+                    {label}
+                  </span>
                   <span
                     ref={(el) => { valueRefs.current.set(f.field, el) }}
                     className='mt-0.5 w-full text-[12px] min-w-0 overflow-hidden'
@@ -384,28 +395,39 @@ export function SummaryPanel({
                     setCopiedField(f.field)
                     setTimeout(() => setCopiedField(prev => prev === f.field ? null : prev), 1500)
                   }}
-                  className={`flex items-center px-2 opacity-0 group-hover/row:opacity-100 transition-opacity ${copiedField === f.field ? 'text-green-500' : 'text-slate-300 hover:text-slate-500'}`}
+                  className={cn(
+                    'flex items-center px-2 opacity-0 group-hover/row:opacity-100 transition-all duration-150',
+                    copiedField === f.field
+                      ? 'text-emerald-500'
+                      : 'text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-300'
+                  )}
                 >
-                  {copiedField === f.field ? <Check className='h-3 w-3 text-green-500' /> : <Copy className='h-3 w-3' />}
+                  {copiedField === f.field
+                    ? <Check className='h-3 w-3' />
+                    : <Copy className='h-3 w-3' />
+                  }
                 </button>
               </div>
             )
           })}
         </div>
       ))}
+
       {extraO2MRels.length > 0 && (
         <div>
-          <div className='border-t border-slate-200' />
-          <div className='px-4 py-1.5 bg-slate-50 border-b border-slate-100'>
-            <span className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>Related</span>
+          <div className='bg-slate-100 px-4 py-2 border-y border-slate-200 dark:bg-white/[0.06] dark:border-border/80'>
+            <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>Related</span>
           </div>
           {extraO2MRels.map((r, ri) => (
             <div
               key={r.id ?? `${r.many_collection}.${r.many_field}`}
-              className={cn('flex items-stretch', ri < extraO2MRels.length - 1 && 'border-b border-slate-50')}
+              className={cn(
+                'flex items-stretch',
+                ri < extraO2MRels.length - 1 && 'border-b border-slate-100 dark:border-border/60'
+              )}
             >
               <div className='flex flex-1 flex-col px-4 py-2 min-w-0'>
-                <span className='text-[10px] font-medium truncate text-slate-400'>
+                <span className='text-[10px] font-medium truncate text-slate-400 dark:text-slate-500'>
                   {titleCase(r.one_field ?? r.many_collection ?? '')}
                 </span>
                 <span className='mt-0.5 text-[12px]'>
