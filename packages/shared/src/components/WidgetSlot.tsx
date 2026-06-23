@@ -6,6 +6,44 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from './ui/dropdown-menu'
+import {
+  ArrowRight, ArrowLeft, ArrowUp, ArrowDown, ArrowUpRight,
+  ExternalLink, Link, Share2,
+  Check, CheckCircle, X, XCircle,
+  Plus, Minus, Edit, Edit2, Trash2,
+  Save, Download, Upload, Send,
+  Eye, EyeOff, Lock, Unlock,
+  Star, Heart, Bookmark, Flag,
+  AlertCircle, AlertTriangle, Info, HelpCircle,
+  Play, Pause, RefreshCw, RotateCcw,
+  Settings, Sliders, Filter, Search,
+  Power, Zap, Activity,
+  User, Users, UserPlus, UserCheck,
+  Mail, MessageSquare, Phone, Bell,
+  FileText, File, Folder, Paperclip,
+  Calendar, Clock,
+  Copy, Clipboard, MoreHorizontal, MoreVertical,
+  type LucideIcon
+} from 'lucide-react'
+
+const ICON_MAP: Record<string, LucideIcon> = {
+  ArrowRight, ArrowLeft, ArrowUp, ArrowDown, ArrowUpRight,
+  ExternalLink, Link, Share2,
+  Check, CheckCircle, X, XCircle,
+  Plus, Minus, Edit, Edit2, Trash2,
+  Save, Download, Upload, Send,
+  Eye, EyeOff, Lock, Unlock,
+  Star, Heart, Bookmark, Flag,
+  AlertCircle, AlertTriangle, Info, HelpCircle,
+  Play, Pause, RefreshCw, RotateCcw,
+  Settings, Sliders, Filter, Search,
+  Power, Zap, Activity,
+  User, Users, UserPlus, UserCheck,
+  Mail, MessageSquare, Phone, Bell,
+  FileText, File, Folder, Paperclip,
+  Calendar, Clock,
+  Copy, Clipboard, MoreHorizontal, MoreVertical,
+}
 
 export interface InputBinding {
   key: string
@@ -364,6 +402,7 @@ interface BtnGroupButton {
   label?: string
   icon?: string
   variant?: string
+  color?: string
   action?: string
   // client: open-url
   url?: string
@@ -384,6 +423,7 @@ interface BtnGroupButton {
   variant_on?: string
   variant_off?: string
   toggle_on_value?: string
+  is_on?: boolean
   // server actions share action_config
   action_config?: Record<string, unknown>
 }
@@ -419,7 +459,18 @@ function ButtonGroupDisplay({
   function isToggleOn(btn: BtnGroupButton, idx: number): boolean {
     const btnId = btn.id ?? String(idx)
     if (toggleOverrides[btnId] !== undefined) return toggleOverrides[btnId]
+    // prefer server-resolved state (reliable for bit fields on a different collection)
+    if (btn.is_on !== undefined) return btn.is_on
     return normBit(inputs[btn.toggle_input ?? '']) === normBit(btn.toggle_on_value ?? '1')
+  }
+
+  function getToggleLabel(btn: BtnGroupButton, idx: number): string {
+    if (btn.action !== 'toggle') return btn.label ?? `Action ${idx + 1}`
+    const ac = btn.action_config as Record<string, unknown> | undefined
+    const effectiveToggleInput = btn.toggle_input || (ac?.toggle_input as string) || (ac?.field as string) || ''
+    const bWithInput = effectiveToggleInput && effectiveToggleInput !== btn.toggle_input ? { ...btn, toggle_input: effectiveToggleInput } : btn
+    const on = isToggleOn(bWithInput, idx)
+    return on ? (btn.label_on || btn.label || `Action ${idx + 1}`) : (btn.label_off || btn.label || `Action ${idx + 1}`)
   }
 
   function safeUrl(u: string): string | null {
@@ -493,6 +544,15 @@ function ButtonGroupDisplay({
     }
   }
 
+  function isLightColor(hex: string): boolean {
+    const c = hex.replace('#', '')
+    if (c.length < 6) return true
+    const r = parseInt(c.slice(0, 2), 16)
+    const g = parseInt(c.slice(2, 4), 16)
+    const b = parseInt(c.slice(4, 6), 16)
+    return (r * 299 + g * 587 + b * 114) / 1000 > 128
+  }
+
   function renderBtn(btn: BtnGroupButton, idx: number, variant?: string) {
     const btnId = btn.id ?? String(idx)
     const isCopied = copied === btnId
@@ -501,11 +561,17 @@ function ButtonGroupDisplay({
     let label = btn.label ?? 'Button'
     let v = (variant ?? btn.variant ?? 'secondary') as 'default' | 'secondary' | 'destructive' | 'outline' | 'ghost'
 
-    if (btn.action === 'toggle' && btn.toggle_input) {
-      const on = isToggleOn(btn, idx)
-      label = on ? (btn.label_on ?? label) : (btn.label_off ?? label)
+    const ac = btn.action_config as Record<string, unknown> | undefined
+    const effectiveToggleInput = btn.toggle_input || (ac?.toggle_input as string) || (ac?.field as string) || ''
+    if (btn.action === 'toggle') {
+      const bWithInput = effectiveToggleInput && effectiveToggleInput !== btn.toggle_input ? { ...btn, toggle_input: effectiveToggleInput } : btn
+      const on = isToggleOn(bWithInput, idx)
+      label = on ? (btn.label_on || label) : (btn.label_off || label)
       v = ((on ? (btn.variant_on ?? v) : (btn.variant_off ?? v)) as typeof v)
     }
+
+    const IconComp = btn.icon ? ICON_MAP[btn.icon] : null
+    const colorStyle = btn.color ? { backgroundColor: btn.color, borderColor: btn.color, color: isLightColor(btn.color) ? '#1e293b' : '#ffffff' } as React.CSSProperties : undefined
 
     return (
       <Button
@@ -514,9 +580,11 @@ function ButtonGroupDisplay({
         variant={v}
         size='sm'
         className='h-7 gap-1.5 text-[12px]'
+        style={colorStyle}
         disabled={serverLoading !== null}
         onClick={() => handleClick(btn, idx)}
       >
+        {IconComp && <IconComp className='h-3.5 w-3.5 shrink-0' />}
         {isLoading ? '…' : isCopied ? '✓ Copied' : label}
       </Button>
     )
@@ -528,13 +596,58 @@ function ButtonGroupDisplay({
     const [primary, ...rest] = buttons
     const primaryId = primary.id ?? '0'
     const primaryLoading = serverLoading === primaryId
+    const isLabelOnly = primary.action === 'none' || !primary.action
 
     let primaryLabel = primary.label ?? 'Button'
     let primaryVariant = (primary.variant ?? 'default') as 'default' | 'secondary' | 'destructive' | 'outline' | 'ghost'
-    if (primary.action === 'toggle' && primary.toggle_input) {
-      const on = isToggleOn(primary, 0)
-      primaryLabel = on ? (primary.label_on ?? primaryLabel) : (primary.label_off ?? primaryLabel)
+    const primaryAc = primary.action_config as Record<string, unknown> | undefined
+    const primaryToggleInput = primary.toggle_input || (primaryAc?.toggle_input as string) || (primaryAc?.field as string) || ''
+    if (primary.action === 'toggle' && primaryToggleInput) {
+      const pWithInput = primaryToggleInput !== primary.toggle_input ? { ...primary, toggle_input: primaryToggleInput } : primary
+      const on = isToggleOn(pWithInput, 0)
+      primaryLabel = on ? (primary.label_on || primaryLabel) : (primary.label_off || primaryLabel)
       primaryVariant = ((on ? (primary.variant_on ?? primaryVariant) : (primary.variant_off ?? primaryVariant)) as typeof primaryVariant)
+    }
+
+    const PrimaryIconComp = primary.icon ? ICON_MAP[primary.icon] : null
+    const primaryColorStyle = primary.color ? { backgroundColor: primary.color, borderColor: primary.color, color: isLightColor(primary.color) ? '#1e293b' : '#ffffff' } as React.CSSProperties : undefined
+
+    // Label-only primary: single unified dropdown trigger (label + chevron in one button)
+    if (isLabelOnly) {
+      return (
+        <div className='flex items-center'>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type='button'
+                variant={primaryVariant}
+                size='sm'
+                className='h-7 gap-1.5 text-[12px]'
+                style={primaryColorStyle}
+                disabled={serverLoading !== null}
+              >
+                {PrimaryIconComp && <PrimaryIconComp className='h-3.5 w-3.5 shrink-0' />}
+                {primaryLabel}
+                <svg width='12' height='12' viewBox='0 0 12 12' fill='none' aria-hidden='true'>
+                  <path d='M2 4L6 8L10 4' stroke='currentColor' strokeWidth='1.5' strokeLinecap='round' strokeLinejoin='round'/>
+                </svg>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='end' className='min-w-[140px]'>
+              {rest.map((btn, i) => (
+                <DropdownMenuItem
+                  key={btn.id ?? i}
+                  className='cursor-pointer text-[12px]'
+                  onSelect={() => handleClick(btn, i + 1)}
+                >
+                  {btn.icon && ICON_MAP[btn.icon] && (() => { const IC = ICON_MAP[btn.icon!]; return <IC className='mr-1.5 h-3.5 w-3.5 shrink-0' /> })()}
+                  {getToggleLabel(btn, i + 1)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )
     }
 
     return (
@@ -544,18 +657,21 @@ function ButtonGroupDisplay({
           variant={primaryVariant}
           size='sm'
           className='h-7 rounded-r-none text-[12px] gap-1.5 border-r-0'
+          style={primaryColorStyle}
           disabled={serverLoading !== null}
           onClick={() => handleClick(primary, 0)}
         >
+          {PrimaryIconComp && <PrimaryIconComp className='h-3.5 w-3.5 shrink-0' />}
           {primaryLoading ? '…' : copied === primaryId ? '✓ Copied' : primaryLabel}
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               type='button'
-              variant={(primary.variant ?? 'default') as 'default' | 'secondary' | 'destructive' | 'outline' | 'ghost'}
+              variant={primaryVariant}
               size='sm'
               className='h-7 rounded-l-none px-1.5 text-[12px]'
+              style={primaryColorStyle}
               disabled={serverLoading !== null}
               aria-label='More actions'
             >
@@ -571,7 +687,8 @@ function ButtonGroupDisplay({
                 className='text-[12px]'
                 onSelect={() => handleClick(btn, i + 1)}
               >
-                {btn.label ?? `Action ${i + 2}`}
+                {btn.icon && ICON_MAP[btn.icon] && (() => { const IC = ICON_MAP[btn.icon!]; return <IC className='mr-1.5 h-3.5 w-3.5 shrink-0' /> })()}
+                {getToggleLabel(btn, i + 1)}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>

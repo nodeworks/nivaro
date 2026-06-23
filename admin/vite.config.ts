@@ -18,6 +18,10 @@ export default defineConfig({
   },
   server: {
     port: 3056,
+    watch: {
+      // watch workspace packages outside the admin root so HMR fires when dist recompiles
+      ignored: ['!**/packages/shared/dist/**', '!**/packages/shared/node_modules/**']
+    },
     proxy: {
       '/api/': { target: 'http://localhost:3055', changeOrigin: true },
       '/form/': { target: 'http://localhost:3055', changeOrigin: true },

@@ -209,7 +209,7 @@ async function renderWidget(
 
   if (type === 'button-group') {
     const layout = (config.layout as string) ?? 'flat'
-    const buttons = ((config.buttons as unknown[]) ?? []).map((b) => {
+    const buttons = await Promise.all(((config.buttons as unknown[]) ?? []).map(async (b) => {
       const btn = b as Record<string, unknown>
       const resolved: Record<string, unknown> = {
         id: btn.id,
@@ -217,6 +217,7 @@ async function renderWidget(
         icon: btn.icon,
         variant: btn.variant ?? 'secondary',
         action: btn.action,
+        color: btn.color ?? '',
       }
       if (btn.action === 'open-url') {
         resolved.url = btn.url ? substituteInputs(String(btn.url), inputs) : ''
@@ -233,16 +234,32 @@ async function renderWidget(
         const idKey = String(btn.sidebar_id_input ?? '')
         resolved.sidebar_id = idKey ? String(inputs[idKey] ?? '') : ''
       } else if (btn.action === 'toggle') {
-        resolved.toggle_input = btn.toggle_input
-        resolved.label_on = btn.label_on
-        resolved.label_off = btn.label_off
+        const acConf = (btn.action_config ?? {}) as Record<string, unknown>
+        const tCollection = (acConf.collection as string) || ''
+        const tField = (acConf.field as string) || ''
+        const tIdInput = (acConf.id_input as string) || 'id'
+        const tOnValue = (btn.toggle_on_value as string) || (acConf.on_value as string) || '1'
+        const normBitR = (v: unknown) => (v === true || v === 1) ? '1' : (v === false || v === 0) ? '0' : String(v ?? '')
+        resolved.toggle_input = btn.toggle_input || acConf.toggle_input || tField || ''
+        resolved.label_on = btn.label_on ?? ''
+        resolved.label_off = btn.label_off ?? ''
         resolved.variant_on = btn.variant_on ?? 'destructive'
         resolved.variant_off = btn.variant_off ?? 'default'
-        resolved.toggle_on_value = btn.toggle_on_value ?? '1'
-        resolved.action_config = btn.action_config ?? {}
+        resolved.toggle_on_value = tOnValue
+        resolved.action_config = acConf
+        // resolve current state from DB so display doesn't depend on inputs (reliable for bit fields)
+        if (tCollection && tField) {
+          const itemId = inputs[tIdInput]
+          if (itemId) {
+            try {
+              const row = await db(tCollection).where('id', itemId).select(tField).first() as Record<string, unknown> | undefined
+              if (row) resolved.is_on = normBitR(row[tField]) === normBitR(tOnValue)
+            } catch { /* non-blocking — falls back to client-side inputs check */ }
+          }
+        }
       }
       return resolved
-    })
+    }))
     return { buttons, layout }
   }
 
@@ -455,18 +472,18 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       const field = actionConfig.field as string
       if (!field) return reply.code(400).send({ error: 'Missing toggle field' })
 
-      const toggleInput = actionConfig.toggle_input as string
-      const onValue = actionConfig.on_value ?? '1'
-      const offValue = actionConfig.off_value ?? '0'
-      const currentRaw = inputs[toggleInput]
+      const onValue = (actionConfig.on_value as string) || '1'
+      const offValue = (actionConfig.off_value as string) || '0'
       const normBit = (v: unknown) => (v === true || v === 1) ? '1' : (v === false || v === 0) ? '0' : String(v ?? '')
-      const newValue = normBit(currentRaw) === normBit(onValue) ? offValue : onValue
 
+      // always read current value from DB — inputs reflect the context item, not the target record
       const wsScoped = req.workspaceId && await collectionHasWorkspaceId(collection)
-      let existQ = db(collection).where('id', itemId).select('id')
+      let existQ = db(collection).where('id', itemId).select('id', field)
       if (wsScoped) existQ = existQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
-      const existing = await existQ.first()
+      const existing = await existQ.first() as Record<string, unknown> | undefined
       if (!existing) return reply.code(404).send({ error: 'Record not found' })
+      const currentRaw = existing[field]
+      const newValue = normBit(currentRaw) === normBit(onValue) ? offValue : onValue
 
       let updQ = db(collection).where('id', itemId)
       if (wsScoped) updQ = updQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })

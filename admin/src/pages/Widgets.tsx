@@ -1,18 +1,74 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ArrowUpRight,
+  Activity,
+  AlertCircle,
+  AlertTriangle,
+  Bell,
+  Bookmark,
+  Calendar,
   Check,
+  CheckCircle,
   ChevronsUpDown,
+  ChevronDown,
+  ChevronRight,
+  Clipboard,
+  Clock,
   Code2,
   Copy,
+  Download,
+  Edit,
+  Edit2,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  File,
+  FileText,
+  Filter,
+  Flag,
+  Folder,
+  Heart,
+  HelpCircle,
+  Info,
   LayoutPanelTop,
+  Link,
+  Lock,
+  Mail,
+  MessageSquare,
+  Minus,
+  MoreHorizontal,
+  MoreVertical,
+  Paperclip,
+  Pause,
+  Phone,
+  Play,
   Plus,
+  Power,
   RefreshCw,
+  RotateCcw,
   Save,
+  Search,
+  Send,
+  Settings,
+  Share2,
+  Sliders,
+  Star,
   Trash2,
+  Unlock,
+  Upload,
+  User,
+  UserCheck,
+  UserPlus,
+  Users,
   X,
+  XCircle,
+  Zap,
   Puzzle,
-  ChevronDown,
-  ChevronRight
+  type LucideIcon
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Separator } from '@/components/ui/separator'
@@ -926,6 +982,7 @@ interface BtnGroupBtn {
   label: string
   icon: string
   variant: string
+  color: string
   action: string
   // client: open-url
   url: string
@@ -962,7 +1019,7 @@ interface BtnGroupBtn {
   toggle_off_value: string
 }
 const BLANK_BG_BTN: BtnGroupBtn = {
-  id: '', label: '', icon: '', variant: 'secondary', action: 'open-url',
+  id: '', label: '', icon: '', variant: 'secondary', color: '', action: 'open-url',
   url: '', new_tab: false, email_to: '', email_subject: '', email_body: '',
   copy_input: '', sidebar_collection: '', sidebar_id_input: '',
   ac_url: '', ac_trigger: '', ac_payload: '{}',
@@ -983,6 +1040,7 @@ function rawToBtnGroup(r: Record<string, unknown>): BtnGroupCfg {
         label: String(b.label ?? ''),
         icon: String(b.icon ?? ''),
         variant: String(b.variant ?? 'secondary'),
+        color: String(b.color ?? ''),
         action: at,
         url: String(b.url ?? ''),
         new_tab: Boolean(b.new_tab ?? false),
@@ -1019,6 +1077,7 @@ function btnGroupToRaw(c: BtnGroupCfg): Record<string, unknown> {
     buttons: c.buttons.map((b) => {
       const base: Record<string, unknown> = { id: b.id || crypto.randomUUID(), label: b.label, variant: b.variant, action: b.action }
       if (b.icon) base.icon = b.icon
+      if (b.color) base.color = b.color
       // client-side actions
       if (b.action === 'open-url') { base.url = b.url; if (b.new_tab) base.new_tab = true }
       if (b.action === 'email') { base.email_to = b.email_to; if (b.email_subject) base.email_subject = b.email_subject; if (b.email_body) base.email_body = b.email_body }
@@ -1059,6 +1118,7 @@ const BG_VARIANT_OPTS = [
   { value: 'ghost', label: 'Ghost' }
 ]
 const BG_ACTION_OPTS = [
+  { value: 'none', label: 'None (label only)' },
   { value: 'open-url', label: 'Open URL' },
   { value: 'email', label: 'Send Email' },
   { value: 'copy', label: 'Copy to Clipboard' },
@@ -1072,6 +1132,242 @@ const BG_LAYOUT_OPTS = [
   { value: 'flat', label: 'Flat row' },
   { value: 'split', label: 'Split (primary + dropdown)' }
 ]
+const LUCIDE_ICON_OPTS = [
+  'ArrowRight','ArrowLeft','ArrowUp','ArrowDown','ArrowUpRight',
+  'ExternalLink','Link','Share2',
+  'Check','CheckCircle','X','XCircle',
+  'Plus','Minus','Edit','Edit2','Trash2',
+  'Save','Download','Upload','Send',
+  'Eye','EyeOff','Lock','Unlock',
+  'Star','Heart','Bookmark','Flag',
+  'AlertCircle','AlertTriangle','Info','HelpCircle',
+  'Play','Pause','RefreshCw','RotateCcw',
+  'Settings','Sliders','Filter','Search',
+  'Power','Zap','Activity',
+  'User','Users','UserPlus','UserCheck',
+  'Mail','MessageSquare','Phone','Bell',
+  'FileText','File','Folder','Paperclip',
+  'Calendar','Clock',
+  'Copy','Clipboard','MoreHorizontal','MoreVertical',
+].map(v => ({ value: v, label: v }))
+
+const WIDGETS_ICON_MAP: Record<string, LucideIcon> = {
+  ArrowRight, ArrowLeft, ArrowUp, ArrowDown, ArrowUpRight,
+  ExternalLink, Link, Share2,
+  Check, CheckCircle, X, XCircle,
+  Plus, Minus, Edit, Edit2, Trash2,
+  Save, Download, Upload, Send,
+  Eye, EyeOff, Lock, Unlock,
+  Star, Heart, Bookmark, Flag,
+  AlertCircle, AlertTriangle, Info, HelpCircle,
+  Play, Pause, RefreshCw, RotateCcw,
+  Settings, Sliders, Filter, Search,
+  Power, Zap, Activity,
+  User, Users, UserPlus, UserCheck,
+  Mail, MessageSquare, Phone, Bell,
+  FileText, File, Folder, Paperclip,
+  Calendar, Clock,
+  Copy, Clipboard, MoreHorizontal, MoreVertical,
+}
+
+const PRESET_COLORS = [
+  { label: 'None', value: '' },
+  { label: 'Cyan', value: '#00ceff' },
+  { label: 'Navy', value: '#172940' },
+  { label: 'Emerald', value: '#10b981' },
+  { label: 'Red', value: '#ef4444' },
+  { label: 'Orange', value: '#f97316' },
+  { label: 'Purple', value: '#8b5cf6' },
+  { label: 'Rose', value: '#f43f5e' },
+  { label: 'Slate', value: '#64748b' },
+]
+
+function IconPickerPopover({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const iconNames = LUCIDE_ICON_OPTS.map(o => o.value).filter(Boolean)
+  const selectedIcon = value ? WIDGETS_ICON_MAP[value] : null
+  const SelectedIC = selectedIcon as LucideIcon | null
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className='flex h-7 min-w-[80px] items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-[12px] hover:bg-accent transition-colors'
+        >
+          {SelectedIC ? <SelectedIC className='h-3.5 w-3.5 shrink-0' /> : <span className='text-muted-foreground'>None</span>}
+          {value && <span className='truncate text-[11px] text-muted-foreground'>{value}</span>}
+          <ChevronsUpDown className='ml-auto h-3 w-3 shrink-0 text-muted-foreground' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[280px] p-2' align='start'>
+        <div className='mb-2 flex items-center justify-between'>
+          <span className='text-[11px] font-medium text-muted-foreground'>Choose icon</span>
+          {value && (
+            <button type='button' className='text-[11px] text-muted-foreground hover:text-foreground' onClick={() => { onChange(''); setOpen(false) }}>
+              Clear
+            </button>
+          )}
+        </div>
+        <div className='grid grid-cols-8 gap-0.5'>
+          {iconNames.map((name) => {
+            const IC = WIDGETS_ICON_MAP[name] as LucideIcon
+            if (!IC) return null
+            return (
+              <button
+                key={name}
+                type='button'
+                title={name}
+                onClick={() => { onChange(name); setOpen(false) }}
+                className={`flex h-8 w-8 items-center justify-center rounded transition-colors hover:bg-slate-100 dark:hover:bg-muted ${value === name ? 'bg-[#00ceff]/10 text-[#00ceff]' : 'text-slate-600 dark:text-slate-400'}`}
+              >
+                <IC className='h-4 w-4' />
+              </button>
+            )
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function BtnColorPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className='flex flex-wrap items-center gap-1.5'>
+      {PRESET_COLORS.map((p) => (
+        <button
+          key={p.value}
+          type='button'
+          title={p.label}
+          onClick={() => onChange(p.value)}
+          className={`h-5 w-5 rounded-full border-2 transition-all ${value === p.value ? 'border-slate-900 dark:border-slate-100 scale-110' : 'border-transparent hover:border-slate-400'}`}
+          style={p.value ? { backgroundColor: p.value } : { backgroundColor: '#e2e8f0', backgroundImage: 'repeating-linear-gradient(45deg, #94a3b8 0, #94a3b8 2px, transparent 0, transparent 50%)', backgroundSize: '6px 6px' }}
+        />
+      ))}
+      <input
+        type='color'
+        value={value || '#000000'}
+        onChange={(e) => onChange(e.target.value)}
+        className='h-5 w-5 cursor-pointer rounded-full border-2 border-transparent p-0 hover:border-slate-400'
+        title='Custom color'
+        style={{ appearance: 'none', backgroundColor: 'transparent' }}
+      />
+      {value && (
+        <span className='font-mono text-[11px] text-muted-foreground'>{value}</span>
+      )}
+    </div>
+  )
+}
+
+function BtnFieldUpdateForm({ btn, i, colOpts, updateBtn }: { btn: BtnGroupBtn; i: number; colOpts: {value: string; label: string}[]; updateBtn: (i: number, patch: Partial<BtnGroupBtn>) => void }) {
+  const fields = useCollectionFields(btn.ac_collection)
+  const fieldOpts = fields.map(f => ({ value: f.field, label: f.label ? `${f.label} (${f.field})` : f.field }))
+  const idOpts = [{ value: 'id', label: 'id (default)' }, ...fieldOpts.filter(o => o.value !== 'id')]
+  return (
+    <div className='space-y-2'>
+      <div className='grid grid-cols-2 gap-2'>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-muted-foreground'>Collection</Label>
+          <PickCombobox value={btn.ac_collection} onChange={(v) => updateBtn(i, { ac_collection: v, ac_field: '', ac_id_input: 'id' })} options={colOpts} placeholder='Select…' />
+        </div>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
+          <PickCombobox value={btn.ac_id_input || 'id'} onChange={(v) => updateBtn(i, { ac_id_input: v })} options={idOpts.length > 1 ? idOpts : [{ value: 'id', label: 'id (default)' }]} placeholder='id' />
+        </div>
+      </div>
+      <div className='grid grid-cols-2 gap-2'>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-muted-foreground'>Field</Label>
+          <PickCombobox value={btn.ac_field} onChange={(v) => updateBtn(i, { ac_field: v })} options={fieldOpts.length > 0 ? fieldOpts : []} placeholder={btn.ac_collection ? 'Select field…' : 'Choose collection first'} disabled={!btn.ac_collection} />
+        </div>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-muted-foreground'>Value <span className='text-[10px] opacity-60'>({"{{input_key}}"})</span></Label>
+          <Input className='h-7 font-mono text-[12px]' value={btn.ac_value} onChange={(e) => updateBtn(i, { ac_value: e.target.value })} placeholder='approved' />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function BtnToggleForm({ btn, i, colOpts, updateBtn }: { btn: BtnGroupBtn; i: number; colOpts: {value: string; label: string}[]; updateBtn: (i: number, patch: Partial<BtnGroupBtn>) => void }) {
+  const fields = useCollectionFields(btn.toggle_collection)
+  const fieldOpts = fields.map(f => ({ value: f.field, label: f.label ? `${f.label} (${f.field})` : f.field }))
+  const idOpts = [{ value: 'id', label: 'id (default)' }, ...fieldOpts.filter(o => o.value !== 'id')]
+
+  function handleToggleInputChange(fieldName: string) {
+    const f = fields.find(x => x.field === fieldName)
+    const patch: Partial<BtnGroupBtn> = { toggle_input: fieldName }
+    if (f && (f.type === 'boolean' || f.type === 'bit')) {
+      patch.toggle_on_value = '1'
+      patch.toggle_off_value = '0'
+    }
+    updateBtn(i, patch)
+  }
+
+  return (
+    <div className='space-y-3'>
+      <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
+        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>Field to update</p>
+        <div className='grid grid-cols-2 gap-2'>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>Collection</Label>
+            <PickCombobox value={btn.toggle_collection} onChange={(v) => updateBtn(i, { toggle_collection: v, toggle_field: '', toggle_input: '', toggle_id_input: 'id' })} options={colOpts} placeholder='Select…' />
+          </div>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
+            <PickCombobox value={btn.toggle_id_input || 'id'} onChange={(v) => updateBtn(i, { toggle_id_input: v })} options={idOpts.length > 1 ? idOpts : [{ value: 'id', label: 'id (default)' }]} placeholder='id' />
+          </div>
+        </div>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-muted-foreground'>Field name</Label>
+          <PickCombobox value={btn.toggle_field} onChange={(v) => updateBtn(i, { toggle_field: v })} options={fieldOpts.length > 0 ? fieldOpts : []} placeholder={btn.toggle_collection ? 'Select field…' : 'Choose collection first'} disabled={!btn.toggle_collection} />
+        </div>
+      </div>
+      <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
+        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>State detection</p>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-muted-foreground'>Input key <span className='text-[10px] opacity-60'>(field whose value determines current state)</span></Label>
+          <PickCombobox value={btn.toggle_input} onChange={handleToggleInputChange} options={fieldOpts.length > 0 ? fieldOpts : []} placeholder={btn.toggle_collection ? 'Select field…' : 'Choose collection first'} disabled={!btn.toggle_collection} />
+        </div>
+        <div className='grid grid-cols-2 gap-2'>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>ON value <span className='text-[10px] opacity-60'>(means enabled)</span></Label>
+            <Input className='h-7 font-mono text-[12px]' value={btn.toggle_on_value} onChange={(e) => updateBtn(i, { toggle_on_value: e.target.value })} placeholder='1' />
+          </div>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>OFF value <span className='text-[10px] opacity-60'>(means disabled)</span></Label>
+            <Input className='h-7 font-mono text-[12px]' value={btn.toggle_off_value} onChange={(e) => updateBtn(i, { toggle_off_value: e.target.value })} placeholder='0' />
+          </div>
+        </div>
+      </div>
+      <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
+        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>When currently ON (click to disable)</p>
+        <div className='grid grid-cols-2 gap-2'>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>Label</Label>
+            <Input className='h-7 text-[12px]' value={btn.label_on} onChange={(e) => updateBtn(i, { label_on: e.target.value })} placeholder='Disable Auto Reforecast' />
+          </div>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>Variant</Label>
+            <PickCombobox value={btn.variant_on} onChange={(v) => updateBtn(i, { variant_on: v })} options={BG_VARIANT_OPTS} widthClass='w-[160px]' />
+          </div>
+        </div>
+      </div>
+      <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
+        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>When currently OFF (click to enable)</p>
+        <div className='grid grid-cols-2 gap-2'>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>Label</Label>
+            <Input className='h-7 text-[12px]' value={btn.label_off} onChange={(e) => updateBtn(i, { label_off: e.target.value })} placeholder='Enable Auto Reforecast' />
+          </div>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>Variant</Label>
+            <PickCombobox value={btn.variant_off} onChange={(v) => updateBtn(i, { variant_off: v })} options={BG_VARIANT_OPTS} widthClass='w-[160px]' />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c: BtnGroupCfg) => void }) {
   const [openIdx, setOpenIdx] = useState<number | null>(cfg.buttons.length === 0 ? null : 0)
@@ -1089,6 +1385,14 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
     const next = cfg.buttons.filter((_, j) => j !== i)
     onChange({ ...cfg, buttons: next })
     setOpenIdx(next.length > 0 ? Math.min(i, next.length - 1) : null)
+  }
+  function moveBtn(i: number, dir: -1 | 1) {
+    const next = [...cfg.buttons]
+    const j = i + dir
+    if (j < 0 || j >= next.length) return
+    ;[next[i], next[j]] = [next[j], next[i]]
+    onChange({ ...cfg, buttons: next })
+    setOpenIdx(j)
   }
 
   return (
@@ -1109,7 +1413,17 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
             className='flex w-full items-center justify-between px-3 py-2 text-[12px] hover:bg-slate-50 dark:hover:bg-muted/20'
             onClick={() => setOpenIdx(openIdx === i ? null : i)}
           >
-            <span className='font-medium'>{btn.label || `Button ${i + 1}`}</span>
+            <div className='flex items-center gap-1.5'>
+              <div className='flex flex-col gap-px' onClick={(e) => e.stopPropagation()}>
+                <button type='button' className='h-3.5 w-3.5 rounded text-muted-foreground hover:text-foreground disabled:opacity-20' disabled={i === 0} onClick={() => moveBtn(i, -1)}>
+                  <ArrowUp className='h-3 w-3' />
+                </button>
+                <button type='button' className='h-3.5 w-3.5 rounded text-muted-foreground hover:text-foreground disabled:opacity-20' disabled={i === cfg.buttons.length - 1} onClick={() => moveBtn(i, 1)}>
+                  <ArrowDown className='h-3 w-3' />
+                </button>
+              </div>
+              <span className='font-medium'>{btn.label || `Button ${i + 1}`}</span>
+            </div>
             <div className='flex items-center gap-2'>
               <Badge variant='outline' className='h-5 px-1.5 font-mono text-[10px]'>{btn.action}</Badge>
               {openIdx === i ? <ChevronDown className='h-3.5 w-3.5 text-muted-foreground' /> : <ChevronRight className='h-3.5 w-3.5 text-muted-foreground' />}
@@ -1133,9 +1447,13 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
                   <PickCombobox value={btn.action} onChange={(v) => updateBtn(i, { action: v })} options={BG_ACTION_OPTS} widthClass='w-[220px]' />
                 </div>
                 <div className='space-y-1'>
-                  <Label className='text-[11px] text-muted-foreground'>Icon <span className='text-[10px] opacity-60'>(lucide name)</span></Label>
-                  <Input className='h-7 font-mono text-[12px]' value={btn.icon} onChange={(e) => updateBtn(i, { icon: e.target.value })} placeholder='ExternalLink' />
+                  <Label className='text-[11px] text-muted-foreground'>Icon</Label>
+                  <IconPickerPopover value={btn.icon} onChange={(v) => updateBtn(i, { icon: v })} />
                 </div>
+              </div>
+              <div className='space-y-1'>
+                <Label className='text-[11px] text-muted-foreground'>Color <span className='text-[10px] opacity-60'>(overrides variant)</span></Label>
+                <BtnColorPicker value={btn.color} onChange={(v) => updateBtn(i, { color: v })} />
               </div>
               {btn.action === 'open-url' && (
                 <div className='space-y-2'>
@@ -1201,94 +1519,8 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
                   </div>
                 </div>
               )}
-              {btn.action === 'field-update' && (
-                <div className='space-y-2'>
-                  <div className='grid grid-cols-2 gap-2'>
-                    <div className='space-y-1'>
-                      <Label className='text-[11px] text-muted-foreground'>Collection</Label>
-                      <PickCombobox value={btn.ac_collection} onChange={(v) => updateBtn(i, { ac_collection: v })} options={colOpts} placeholder='Select…' />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
-                      <Input className='h-7 font-mono text-[12px]' value={btn.ac_id_input} onChange={(e) => updateBtn(i, { ac_id_input: e.target.value })} placeholder='id' />
-                    </div>
-                  </div>
-                  <div className='grid grid-cols-2 gap-2'>
-                    <div className='space-y-1'>
-                      <Label className='text-[11px] text-muted-foreground'>Field</Label>
-                      <Input className='h-7 font-mono text-[12px]' value={btn.ac_field} onChange={(e) => updateBtn(i, { ac_field: e.target.value })} placeholder='status' />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label className='text-[11px] text-muted-foreground'>Value <span className='text-[10px] opacity-60'>({'{{input_key}}'})</span></Label>
-                      <Input className='h-7 font-mono text-[12px]' value={btn.ac_value} onChange={(e) => updateBtn(i, { ac_value: e.target.value })} placeholder='approved' />
-                    </div>
-                  </div>
-                </div>
-              )}
-              {btn.action === 'toggle' && (
-                <div className='space-y-3'>
-                  <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
-                    <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>State detection</p>
-                    <div className='space-y-1'>
-                      <Label className='text-[11px] text-muted-foreground'>Input key <span className='text-[10px] opacity-60'>(field whose value determines current state)</span></Label>
-                      <Input className='h-7 font-mono text-[12px]' value={btn.toggle_input} onChange={(e) => updateBtn(i, { toggle_input: e.target.value })} placeholder='auto_reforecast' />
-                    </div>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <div className='space-y-1'>
-                        <Label className='text-[11px] text-muted-foreground'>ON value <span className='text-[10px] opacity-60'>(means enabled)</span></Label>
-                        <Input className='h-7 font-mono text-[12px]' value={btn.toggle_on_value} onChange={(e) => updateBtn(i, { toggle_on_value: e.target.value })} placeholder='1' />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label className='text-[11px] text-muted-foreground'>OFF value <span className='text-[10px] opacity-60'>(means disabled)</span></Label>
-                        <Input className='h-7 font-mono text-[12px]' value={btn.toggle_off_value} onChange={(e) => updateBtn(i, { toggle_off_value: e.target.value })} placeholder='0' />
-                      </div>
-                    </div>
-                  </div>
-                  <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
-                    <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>When currently ON (click to disable)</p>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <div className='space-y-1'>
-                        <Label className='text-[11px] text-muted-foreground'>Label</Label>
-                        <Input className='h-7 text-[12px]' value={btn.label_on} onChange={(e) => updateBtn(i, { label_on: e.target.value })} placeholder='Disable Auto Reforecast' />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label className='text-[11px] text-muted-foreground'>Variant</Label>
-                        <PickCombobox value={btn.variant_on} onChange={(v) => updateBtn(i, { variant_on: v })} options={BG_VARIANT_OPTS} widthClass='w-[160px]' />
-                      </div>
-                    </div>
-                  </div>
-                  <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
-                    <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>When currently OFF (click to enable)</p>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <div className='space-y-1'>
-                        <Label className='text-[11px] text-muted-foreground'>Label</Label>
-                        <Input className='h-7 text-[12px]' value={btn.label_off} onChange={(e) => updateBtn(i, { label_off: e.target.value })} placeholder='Enable Auto Reforecast' />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label className='text-[11px] text-muted-foreground'>Variant</Label>
-                        <PickCombobox value={btn.variant_off} onChange={(v) => updateBtn(i, { variant_off: v })} options={BG_VARIANT_OPTS} widthClass='w-[160px]' />
-                      </div>
-                    </div>
-                  </div>
-                  <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
-                    <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>Field to update</p>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <div className='space-y-1'>
-                        <Label className='text-[11px] text-muted-foreground'>Collection</Label>
-                        <PickCombobox value={btn.toggle_collection} onChange={(v) => updateBtn(i, { toggle_collection: v })} options={colOpts} placeholder='Select…' />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
-                        <Input className='h-7 font-mono text-[12px]' value={btn.toggle_id_input} onChange={(e) => updateBtn(i, { toggle_id_input: e.target.value })} placeholder='id' />
-                      </div>
-                    </div>
-                    <div className='space-y-1'>
-                      <Label className='text-[11px] text-muted-foreground'>Field name</Label>
-                      <Input className='h-7 font-mono text-[12px]' value={btn.toggle_field} onChange={(e) => updateBtn(i, { toggle_field: e.target.value })} placeholder='auto_reforecast' />
-                    </div>
-                  </div>
-                </div>
-              )}
+              {btn.action === 'field-update' && <BtnFieldUpdateForm btn={btn} i={i} colOpts={colOpts} updateBtn={updateBtn} />}
+              {btn.action === 'toggle' && <BtnToggleForm btn={btn} i={i} colOpts={colOpts} updateBtn={updateBtn} />}
               <div className='flex justify-end'>
                 <Button size='sm' variant='ghost' className='h-7 px-2 text-[11px] text-destructive hover:text-destructive' onClick={() => removeBtn(i)}>
                   <Trash2 className='mr-1 h-3 w-3' />Remove
@@ -1412,6 +1644,17 @@ function useFieldOptions(collection: string) {
     enabled: !!collection
   })
   return q.data?.map((f) => ({ value: f.field, label: f.label ? `${f.label} (${f.field})` : f.field })) ?? []
+}
+
+function useCollectionFields(collection: string) {
+  const q = useQuery({
+    queryKey: ['widget-cfg-fields-full', collection],
+    queryFn: () =>
+      api.get<{ data: { fields: Array<{ field: string; label: string | null; type: string }> } }>(`/collections/${collection}`)
+        .then((r) => r.data.data.fields),
+    enabled: !!collection
+  })
+  return q.data ?? []
 }
 
 function StatConfigForm({ cfg, onChange }: { cfg: StatCfg; onChange: (c: StatCfg) => void }) {

@@ -364,7 +364,7 @@ export function FieldRow({
           <TooltipProvider delayDuration={200}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className='inline-flex items-center text-slate-300 dark:text-slate-600'>
+                <span className='inline-flex items-center text-amber-400 dark:text-amber-500'>
                   <Lock className='h-3 w-3' />
                 </span>
               </TooltipTrigger>
@@ -393,7 +393,7 @@ export function FieldRow({
           </TooltipProvider>
         )}
       </div>}
-      {swapContent ?? <div className={cn(locked && 'pointer-events-none opacity-60', error && 'ring-1 ring-red-400 rounded-md')}>
+      {swapContent ?? <div className={cn(locked && 'cursor-not-allowed')}><div className={cn(locked && 'pointer-events-none opacity-60', error && 'ring-1 ring-red-400 rounded-md')}>
         {renderField ? (
           renderField({
             field,
@@ -420,7 +420,7 @@ export function FieldRow({
             onCountChange={onCountChange ? (count) => onCountChange(field.field, count) : undefined}
           />
         )}
-      </div>}
+      </div></div>}
     </div>
   )
 }
