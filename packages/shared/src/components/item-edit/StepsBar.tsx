@@ -1,9 +1,12 @@
 import { Check } from 'lucide-react'
-import { Fragment } from 'react'
 import { cn } from '../../lib/utils'
 import type { StepDef } from './types'
 
 type StepState = 'active' | 'done' | 'error' | 'inactive'
+
+const ARROW_DEPTH = 10
+const SEP = 2 // separator strip width px
+const R = 12  // bar corner radius px (matches rounded-xl = 0.75rem)
 
 function resolveState(
   key: string,
@@ -17,46 +20,29 @@ function resolveState(
   return 'inactive'
 }
 
-// Must match each button's bg colour exactly — used to fill SVG separator correctly
-const LIGHT_BG: Record<StepState, string> = {
-  active: '#172940',
-  done:   '#f1f5f9', // slate-100
-  error:  '#fef2f2', // red-50
-  inactive: '#f1f5f9', // slate-100
+function getOuterClip(isFirst: boolean, isLast: boolean): string {
+  if (isFirst && isLast) return 'none'
+  const d = ARROW_DEPTH
+  if (isFirst) return `polygon(0 0, calc(100% - ${d}px) 0, 100% 50%, calc(100% - ${d}px) 100%, 0 100%)`
+  if (isLast) return `polygon(0 0, 100% 0, 100% 100%, 0 100%, ${d}px 50%)`
+  return `polygon(0 0, calc(100% - ${d}px) 0, 100% 50%, calc(100% - ${d}px) 100%, 0 100%, ${d}px 50%)`
 }
 
-const DARK_BG: Record<StepState, string> = {
-  active:   '#172940',
-  done:     '#1e293b',
-  error:    '#1a0909',
-  inactive: '#1e293b',
+function getInnerClip(isFirst: boolean, isLast: boolean): string {
+  if (isFirst && isLast) return 'none'
+  const d = ARROW_DEPTH
+  const s = SEP
+  if (isLast) return `polygon(0 0, 100% 0, 100% 100%, 0 100%, ${d}px 50%)`
+  if (isFirst) return `polygon(0 0, calc(100% - ${d + s}px) 0, calc(100% - ${s}px) 50%, calc(100% - ${d + s}px) 100%, 0 100%)`
+  return `polygon(0 0, calc(100% - ${d + s}px) 0, calc(100% - ${s}px) 50%, calc(100% - ${d + s}px) 100%, 0 100%, ${d}px 50%)`
 }
 
-// Separator arrow: fills the full SVG area so no page-bg bleed occurs.
-// Structure: rect (right step bg) → outer polygon (border colour) → inner polygon (left step bg)
-function Chevron({
-  leftState,
-  rightState
-}: {
-  leftState: StepState
-  rightState: StepState
-}) {
-  return (
-    <span className='pointer-events-none z-10 w-2 shrink-0 self-stretch' aria-hidden='true'>
-      {/* light — height='100%' attribute prevents SVG defaulting to 150px */}
-      <svg height='100%' width='100%' viewBox='0 0 20 100' preserveAspectRatio='none' className='block dark:hidden'>
-        <rect width='20' height='100' fill={LIGHT_BG[rightState]} />
-        <polygon points='0,0 20,50 0,100' fill='#cbd5e1' />
-        <polygon points='0,0 16,50 0,100' fill={LIGHT_BG[leftState]} />
-      </svg>
-      {/* dark */}
-      <svg height='100%' width='100%' viewBox='0 0 20 100' preserveAspectRatio='none' className='hidden dark:block'>
-        <rect width='20' height='100' fill={DARK_BG[rightState]} />
-        <polygon points='0,0 20,50 0,100' fill='#334155' />
-        <polygon points='0,0 16,50 0,100' fill={DARK_BG[leftState]} />
-      </svg>
-    </span>
-  )
+// border-radius string for each step position
+function getBorderRadius(isFirst: boolean, isLast: boolean): string | undefined {
+  if (isFirst && isLast) return `${R}px ${R}px 0 0`
+  if (isFirst) return `${R}px 0 0 0`
+  if (isLast) return `0 ${R}px 0 0`
+  return undefined
 }
 
 export function StepsBar({
@@ -77,29 +63,55 @@ export function StepsBar({
   return (
     <div
       className={cn(
-        'flex h-9 overflow-hidden',
+        'relative flex h-9',
         embedded
           ? 'border-b border-slate-200 dark:border-border'
           : 'rounded-lg shadow-[0_0_0_1px_#e2e8f0,0_1px_3px_-1px_rgba(0,0,0,0.06)] dark:shadow-none dark:border dark:border-border'
       )}
     >
       {steps.map((s, i) => {
-        const state = resolveState(s.key, active, completed, errorSteps)
-        const nextState = i < steps.length - 1
-          ? resolveState(steps[i + 1].key, active, completed, errorSteps)
-          : null
+        const isFirst = i === 0
         const isLast = i === steps.length - 1
+        const state = resolveState(s.key, active, completed, errorSteps)
         const isActive = state === 'active'
         const isDone = state === 'done'
         const hasError = state === 'error'
+        const borderRadius = getBorderRadius(isFirst, isLast)
 
         return (
-          <Fragment key={s.key}>
+          <div
+            key={s.key}
+            className='relative min-w-0 flex-1'
+            style={{
+              clipPath: getOuterClip(isFirst, isLast),
+              zIndex: steps.length - i,
+              marginLeft: isFirst ? 0 : -ARROW_DEPTH,
+              // overflow + translateZ: promotes wrapper to compositing layer so
+              // Chrome properly clips clip-path'd children to border-radius
+              overflow: 'hidden',
+              transform: 'translateZ(0)',
+              borderRadius,
+            }}
+          >
+            {/* Separator — fills wrapper in border color; button's inner clip leaves SEP px visible at arrow edge */}
+            {!isLast && (
+              <div
+                className='pointer-events-none absolute inset-0 bg-[#cbd5e1] dark:bg-[#334155]'
+                style={{ borderRadius }}
+              />
+            )}
+
             <button
               type='button'
               onClick={() => onStepClick(s.key)}
+              style={{
+                clipPath: getInnerClip(isFirst, isLast),
+                paddingLeft: isFirst ? 12 : 12 + ARROW_DEPTH,
+                paddingRight: 12,
+                borderRadius,
+              }}
               className={cn(
-                'group relative flex min-w-0 flex-1 items-center gap-2 px-3 py-0 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00ceff]',
+                'group absolute inset-0 flex items-center gap-2 py-0 text-left transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00ceff]',
                 isActive
                   ? 'bg-[#172940] dark:bg-[#00ceff]/[0.1]'
                   : hasError
@@ -112,10 +124,10 @@ export function StepsBar({
                 <span className='pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-[#00ceff]' />
               )}
 
-              {/* Bubble */}
+              {/* Step bubble */}
               <span
                 className={cn(
-                  'flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full text-[9px] font-bold leading-none transition-colors duration-150',
+                  'flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full text-[9px] font-bold leading-none transition-colors duration-100',
                   isActive
                     ? 'bg-[#00ceff] text-[#172940]'
                     : isDone
@@ -137,7 +149,7 @@ export function StepsBar({
               {/* Label */}
               <span
                 className={cn(
-                  'min-w-0 truncate text-[11px] font-semibold leading-none transition-colors duration-150',
+                  'min-w-0 truncate text-[11px] font-semibold leading-none transition-colors duration-100',
                   isActive
                     ? 'text-white dark:text-[#00ceff]'
                     : isDone
@@ -150,11 +162,7 @@ export function StepsBar({
                 {s.label}
               </span>
             </button>
-
-            {!isLast && nextState !== null && (
-              <Chevron leftState={state} rightState={nextState} />
-            )}
-          </Fragment>
+          </div>
         )
       })}
     </div>

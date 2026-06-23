@@ -2319,7 +2319,7 @@ export function ItemEditForm({
         {showHeader && (
           <header
             className={cn(
-              'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-6 py-3.5 flex items-center gap-3',
+              'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 py-3.5 flex items-center gap-3',
               headerClassName
             )}
           >
