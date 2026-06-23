@@ -1242,7 +1242,7 @@ function PipelineTransitionButtonsInner({
   }
 
   return (
-    <div className='space-y-2'>
+    <div className='relative'>
       <div className='flex flex-wrap justify-end gap-2'>
         {Array.from(byLabel.entries()).map(([label, txs]) => {
           const txColor = txs[0]?.color ?? null
@@ -1305,7 +1305,7 @@ function PipelineTransitionButtonsInner({
         })}
       </div>
       {pendingTransition && (
-        <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-border p-3.5'>
+        <div className='absolute right-0 top-full z-50 mt-1 w-96 space-y-3 rounded-lg border border-slate-200 bg-white shadow-lg dark:bg-card dark:border-border p-3.5'>
           <div className='flex flex-wrap items-center gap-2'>
             <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
             {pendingTx && (

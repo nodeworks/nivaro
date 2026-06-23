@@ -16,9 +16,9 @@ function StripCell({ label, value, display, loading }: {
   const suffix = (display.suffix ?? '') as string
   const formatted = loading ? null : formatStatValue(value, (display.format ?? '') as string)
   return (
-    <div className='flex flex-col justify-start px-4 py-2.5 min-w-0 gap-1.5'>
-      <span className='text-[9px] font-medium uppercase tracking-wider leading-none truncate text-slate-400 dark:text-slate-500'>{label}</span>
-      <span className='leading-none truncate max-w-[220px]'>
+    <div className='flex flex-col justify-start px-4 py-2 min-w-0'>
+      <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>{label}</span>
+      <span className='mt-1 leading-none truncate max-w-[220px]'>
         {loading ? (
           <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-slate-700' />
         ) : (
@@ -37,7 +37,7 @@ function StripDisplay({ data, label, loading, widgetConfig }: {
   loading?: boolean
   widgetConfig?: Record<string, unknown> | null
 }) {
-  const wrapper = 'flex items-stretch divide-x divide-slate-200 dark:divide-border border-r border-slate-200 dark:border-border'
+  const wrapper = 'h-full flex items-stretch divide-x divide-slate-200 dark:divide-border'
 
   if (data && 'values' in data) {
     const values = (data.values ?? []) as Array<{ value: unknown; label: string; display: Record<string, unknown> }>

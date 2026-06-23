@@ -2501,7 +2501,7 @@ export function ItemEditForm({
         )}
 
         {showHeader && (headerWidgets.length > 0 || headerFields.length > 0) && (
-          <div className='flex shrink-0 overflow-x-auto border-b border-slate-200 dark:border-border bg-white dark:bg-card px-4'>
+          <div className='flex shrink-0 overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4'>
             {[
               ...headerWidgets.map((w) => ({ type: 'widget' as const, sort: w.sort, key: w.field, data: w })),
               ...headerFields.map((f) => ({ type: 'field' as const, sort: f.sort, key: f.field, data: f })),
@@ -2523,7 +2523,7 @@ export function ItemEditForm({
                 if (item.type === 'widget') {
                   const w = item.data
                   return (
-                    <div key={w.field} className='group relative'>
+                    <div key={w.field} className='group relative self-stretch border-r border-slate-200 dark:border-border'>
                       <WidgetSlot
                         widgetId={w.widgetId}
                         inputBindings={w.inputBindings}
@@ -2552,9 +2552,11 @@ export function ItemEditForm({
                 const f = item.data
                 if (f.field === '__owners__') {
                   return (
-                    <div key='__owners__' className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-3 min-w-0 gap-1 transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.025]'>
-                      <span className='text-[10px] font-medium leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
-                      <OwnersInlineCompact collection={collection} itemId={itemId} />
+                    <div key='__owners__' className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'>
+                      <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>{f.label}</span>
+                      <div className='mt-1'>
+                        <OwnersInlineCompact collection={collection} itemId={itemId} />
+                      </div>
                       {copiedHeaderField === '__owners__'
                         ? <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
                         : (
@@ -2579,10 +2581,10 @@ export function ItemEditForm({
                 return (
                   <div
                     key={f.field}
-                    className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-3 min-w-0 gap-1 transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.025]'
+                    className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
                   >
-                    <span className='text-[10px] font-medium leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
-                    <span className={['leading-none truncate max-w-[220px]', isPill ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10` : isTag ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}` : ''].filter(Boolean).join(' ')}>
+                    <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>{f.label}</span>
+                    <span className={['mt-1 leading-none truncate max-w-[220px]', isPill ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10` : isTag ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}` : ''].filter(Boolean).join(' ')}>
                       {f.cmsField
                         ? <StripFieldValue field={f.cmsField} val={raw} relations={relations} collection={collection} displayFormat={f.displayFormat} textClassName={textCls} />
                         : <span className={`text-[13px] ${textCls}`}>{formatHeaderFieldValue(raw, f.displayFormat)}</span>
