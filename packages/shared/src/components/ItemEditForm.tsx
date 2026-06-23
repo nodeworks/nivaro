@@ -2318,7 +2318,7 @@ export function ItemEditForm({
         {showHeader && (
           <header
             className={cn(
-              'shrink-0 border-b border-slate-200 bg-white px-8 py-3 flex items-center gap-3',
+              'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-6 py-3.5 flex items-center gap-3',
               headerClassName
             )}
           >
@@ -2326,36 +2326,36 @@ export function ItemEditForm({
               <button
                 type='button'
                 onClick={onBack}
-                className='text-muted-foreground hover:text-foreground transition-colors'
+                className='shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
               >
                 <ArrowLeft className='h-4 w-4' />
               </button>
             )}
-            <div className='flex flex-col min-w-0'>
-              <div className='group/title flex items-center gap-1'>
-                <h1 className='text-base font-semibold text-slate-800 dark:text-slate-100'>
+            <div className='flex min-w-0 flex-col'>
+              <div className='group/title flex items-center gap-1.5'>
+                <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
                   {isNew ? `New ${singularTitle}` : itemTitle}
                 </h1>
                 {!isNew && itemTitle && (
                   copiedHeaderField === '__title__'
-                    ? <Check className='h-3 w-3 shrink-0 text-green-500' />
+                    ? <Check className='h-3 w-3 shrink-0 text-emerald-500' />
                     : (
                       <button
                         type='button'
-                        className='cursor-pointer opacity-0 group-hover/title:opacity-100 transition-opacity'
+                        className='cursor-pointer opacity-0 transition-opacity group-hover/title:opacity-100'
                         onClick={() => {
                           navigator.clipboard.writeText(itemTitle ?? '').catch(() => {})
                           setCopiedHeaderField('__title__')
                           setTimeout(() => setCopiedHeaderField((prev) => prev === '__title__' ? null : prev), 1500)
                         }}
                       >
-                        <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                        <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
                       </button>
                     )
                 )}
               </div>
               {subtitleParts.length > 0 && (
-                <div className='group/subtitle flex flex-wrap items-center gap-1 mt-0.5'>
+                <div className='group/subtitle mt-0.5 flex flex-wrap items-center gap-1'>
                   {subtitleParts.map((p, i) => {
                     const weightClass = p.weight === 'bold' ? 'font-bold' : p.weight === 'semibold' ? 'font-semibold' : p.weight === 'medium' ? 'font-medium' : 'font-normal'
                     const colorClass = p.color === 'cyan' ? 'text-nvr-cyan' : p.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : p.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : p.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : p.color === 'red' ? 'text-red-600 dark:text-red-400' : p.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-500 dark:text-slate-400'
@@ -2364,7 +2364,7 @@ export function ItemEditForm({
                     const sep = subtitleConfig?.separator ?? ' | '
                     return (
                       <span key={i} className='flex items-center gap-1'>
-                        {i > 0 && !isPill && !isTag && <span className='text-slate-300 dark:text-slate-600 text-[11px]'>{sep}</span>}
+                        {i > 0 && !isPill && !isTag && <span className='text-[11px] text-slate-300 dark:text-slate-600'>{sep}</span>}
                         <span className={[
                           'text-[12px]',
                           weightClass,
@@ -2378,11 +2378,11 @@ export function ItemEditForm({
                     )
                   })}
                   {copiedHeaderField === '__subtitle__'
-                    ? <Check className='h-3 w-3 shrink-0 text-green-500' />
+                    ? <Check className='h-3 w-3 shrink-0 text-emerald-500' />
                     : (
                       <button
                         type='button'
-                        className='cursor-pointer opacity-0 group-hover/subtitle:opacity-100 transition-opacity'
+                        className='cursor-pointer opacity-0 transition-opacity group-hover/subtitle:opacity-100'
                         onClick={() => {
                           const sep = subtitleConfig?.separator ?? ' | '
                           const text = subtitleParts.map((p) => p.value).join(sep)
@@ -2391,86 +2391,96 @@ export function ItemEditForm({
                           setTimeout(() => setCopiedHeaderField((prev) => prev === '__subtitle__' ? null : prev), 1500)
                         }}
                       >
-                        <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                        <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
                       </button>
                     )
                   }
                 </div>
               )}
             </div>
-            <div className='ml-auto flex items-center gap-2'>
-              {effectiveShowRevisions && !isNew && (
-                <RevisionsPanel
-                  collection={collection}
-                  item={itemId}
-                  onRollback={() =>
-                    qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
-                  }
-                />
-              )}
-              {effectiveShowClone && !isNew && isAdmin && (
-                <CloneDialog
-                  collection={collection}
-                  itemId={itemId}
-                  fields={fieldConfig ?? []}
-                  relations={relations}
-                  currentValues={itemData ?? {}}
-                  onSuccess={(newId) => onSaved?.(String(newId))}
-                />
-              )}
-              {canDelete &&
-                (confirmDelete ? (
-                  <>
-                    <span className='text-sm text-muted-foreground'>Delete?</span>
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant='destructive'
-                      className='gap-1.5'
-                      onClick={() => deleteMut.mutate()}
-                      disabled={deleteMut.isPending}
-                    >
-                      {deleteMut.isPending ? (
-                        <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                      ) : (
-                        'Yes, delete'
-                      )}
-                    </Button>
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant='outline'
-                      onClick={() => setConfirmDelete(false)}
-                    >
-                      Cancel
-                    </Button>
-                  </>
-                ) : (
+            <div className='ml-auto flex items-center gap-1.5'>
+              {(effectiveShowRevisions && !isNew) || (effectiveShowClone && !isNew && isAdmin) || canDelete ? (
+                <>
+                  {effectiveShowRevisions && !isNew && (
+                    <RevisionsPanel
+                      collection={collection}
+                      item={itemId}
+                      onRollback={() =>
+                        qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
+                      }
+                    />
+                  )}
+                  {effectiveShowClone && !isNew && isAdmin && (
+                    <CloneDialog
+                      collection={collection}
+                      itemId={itemId}
+                      fields={fieldConfig ?? []}
+                      relations={relations}
+                      currentValues={itemData ?? {}}
+                      onSuccess={(newId) => onSaved?.(String(newId))}
+                    />
+                  )}
+                  {canDelete &&
+                    (confirmDelete ? (
+                      <>
+                        <span className='text-sm text-muted-foreground'>Delete?</span>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='destructive'
+                          className='gap-1.5'
+                          onClick={() => deleteMut.mutate()}
+                          disabled={deleteMut.isPending}
+                        >
+                          {deleteMut.isPending ? (
+                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                          ) : (
+                            'Yes, delete'
+                          )}
+                        </Button>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          onClick={() => setConfirmDelete(false)}
+                        >
+                          Cancel
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant='outline'
+                        className='gap-1.5 text-destructive hover:text-destructive'
+                        onClick={() => setConfirmDelete(true)}
+                      >
+                        <Trash2 className='h-3.5 w-3.5' />
+                      </Button>
+                    ))}
+                  <div className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' />
+                </>
+              ) : null}
+              {!isStepsMode && (
+                <div className='relative'>
+                  {isDirty && !saveMut.isPending && (
+                    <span className='absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card' />
+                  )}
                   <Button
                     type='button'
                     size='sm'
-                    variant='outline'
-                    className='gap-1.5 text-destructive hover:text-destructive'
-                    onClick={() => setConfirmDelete(true)}
+                    onClick={() => handleSave()}
+                    disabled={saveMut.isPending || isReadOnly}
+                    className='gap-1.5'
                   >
-                    <Trash2 className='h-3.5 w-3.5' />
+                    {saveMut.isPending ? (
+                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                    ) : (
+                      <Save className='h-3.5 w-3.5' />
+                    )}
+                    {isNew ? 'Create' : 'Save'}
                   </Button>
-                ))}
-              {!isStepsMode && (
-                <Button
-                  type='button'
-                  size='sm'
-                  onClick={() => handleSave()}
-                  disabled={saveMut.isPending || isReadOnly}
-                  className='gap-1.5'
-                >
-                  {saveMut.isPending ? (
-                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                  ) : (
-                    <Save className='h-3.5 w-3.5' />
-                  )}
-                  {isNew ? 'Create' : 'Save Progress'}
-                </Button>
+                </div>
               )}
               {!isNew && showPipeline && !isStepsMode && (
                 <PipelineTransitionButtons
@@ -2542,8 +2552,8 @@ export function ItemEditForm({
                 const f = item.data
                 if (f.field === '__owners__') {
                   return (
-                    <div key='__owners__' className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2.5 min-w-0 gap-1'>
-                      <span className='text-[9px] font-medium uppercase tracking-wider leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
+                    <div key='__owners__' className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-3 min-w-0 gap-1 transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.025]'>
+                      <span className='text-[10px] font-medium leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
                       <OwnersInlineCompact collection={collection} itemId={itemId} />
                       {copiedHeaderField === '__owners__'
                         ? <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
@@ -2569,9 +2579,9 @@ export function ItemEditForm({
                 return (
                   <div
                     key={f.field}
-                    className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2.5 min-w-0 gap-1'
+                    className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-3 min-w-0 gap-1 transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.025]'
                   >
-                    <span className='text-[9px] font-medium uppercase tracking-wider leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
+                    <span className='text-[10px] font-medium leading-none truncate text-slate-400 dark:text-slate-500'>{f.label}</span>
                     <span className={['leading-none truncate max-w-[220px]', isPill ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10` : isTag ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}` : ''].filter(Boolean).join(' ')}>
                       {f.cmsField
                         ? <StripFieldValue field={f.cmsField} val={raw} relations={relations} collection={collection} displayFormat={f.displayFormat} textClassName={textCls} />
