@@ -7282,6 +7282,7 @@ function FieldChip({
   inlineDisplayConfig,
   onInlineDisplayChange,
   collection,
+  compact,
 }: {
   fieldName: string
   displayName?: string
@@ -7310,9 +7311,40 @@ function FieldChip({
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
   collection?: string
+  compact?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const widthLabel = WIDTH_OPTIONS.find(w => w.span === colSpan)?.label ?? 'Full'
+
+  if (compact) {
+    return (
+      <div
+        style={style}
+        className={cn(
+          'group flex items-center gap-1.5 rounded px-1.5 py-[5px] text-[12px] select-none',
+          isDragging ? 'opacity-30' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+        )}
+      >
+        <span
+          className='shrink-0 cursor-grab text-slate-300 group-hover:text-slate-400 active:cursor-grabbing'
+          {...dragHandleProps}
+        >
+          <GripVertical className='h-3 w-3' />
+        </span>
+        <span className='flex-1 truncate text-slate-700 dark:text-slate-200' title={fieldName}>
+          {displayName ?? <span className='font-mono text-[11px]'>{fieldName}</span>}
+        </span>
+        {fieldType && (
+          <span className={cn(
+            'shrink-0 rounded px-1 py-px font-mono text-[9px] leading-none',
+            FRIENDLY_TYPE_STYLES[fieldType] ?? 'bg-slate-100 text-slate-500'
+          )}>
+            {fieldType}
+          </span>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div
@@ -7459,6 +7491,7 @@ function SortableFieldChip({
   inlineDisplayConfig,
   onInlineDisplayChange,
   collection,
+  compact,
 }: {
   fieldName: string
   displayName?: string
@@ -7486,6 +7519,7 @@ function SortableFieldChip({
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
   collection?: string
+  compact?: boolean
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId ?? fieldName,
@@ -7528,6 +7562,7 @@ function SortableFieldChip({
         inlineDisplayConfig={inlineDisplayConfig}
         onInlineDisplayChange={onInlineDisplayChange}
         collection={collection}
+        compact={compact}
       />
     </div>
   )
@@ -8336,10 +8371,10 @@ function SortableGroupCard({
 
 // ── DroppableFieldZone ────────────────────────────────────────────────────────
 
-function DroppableFieldZone({ containerId, children }: { containerId: string; children: React.ReactNode }) {
+function DroppableFieldZone({ containerId, children, className }: { containerId: string; children: React.ReactNode; className?: string }) {
   const { setNodeRef, isOver } = useDroppable({ id: `drop:${containerId}` })
   return (
-    <div ref={setNodeRef} className={cn('transition-colors', isOver && 'bg-nvr-cyan/[0.04]')}>
+    <div ref={setNodeRef} className={cn('transition-colors', isOver && 'bg-nvr-cyan/[0.04]', className)}>
       {children}
     </div>
   )
@@ -9580,6 +9615,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const [localFieldOrder, setLocalFieldOrder] = useState<Record<string, string[]>>({})
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
+  const [poolSearch, setPoolSearch] = useState('')
+  const [poolCategory, setPoolCategory] = useState<'all' | 'fields' | 'relations' | 'widgets'>('all')
 
   // ── Page slot state ──
   // Special panels (pipeline/comments/tasks) persisted as sentinel assignments.
@@ -10713,104 +10750,188 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     >
       <div className='flex gap-4 items-start'>
         {/* Left sidebar — unassigned field pool; also a drop target so dragging chips back here unassigns them */}
-        <div className='w-64 shrink-0'>
-          <DroppableFieldZone containerId='__pool__'>
-          <div className='rounded-lg border border-dashed border-slate-200 bg-slate-50 sticky top-0'>
-            <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2'>
-              <p className='text-[11px] font-medium text-slate-400'>
-                Fields List
-                <span className='ml-1 text-slate-300'>({(localFieldOrder.__pool__ ?? []).length})</span>
-              </p>
+        <div className='w-60 shrink-0 self-start sticky' style={{ top: 100, height: 'calc(100dvh - 220px)' }}>
+          <DroppableFieldZone containerId='__pool__' className='h-full'>
+          <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card flex flex-col h-full overflow-hidden'>
+            {/* Header */}
+            <div className='shrink-0 border-b border-slate-100 dark:border-border px-3 pt-2.5 pb-2 space-y-2'>
+              <div className='flex items-center justify-between'>
+                <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>Fields</span>
+                <span className='rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-px text-[10px] font-medium text-slate-500 dark:text-slate-400 tabular-nums'>
+                  {(localFieldOrder.__pool__ ?? []).length}
+                </span>
+              </div>
+              {/* Search */}
+              <div className='relative'>
+                <Search className='absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-400 pointer-events-none' />
+                <input
+                  type='text'
+                  value={poolSearch}
+                  onChange={e => setPoolSearch(e.target.value)}
+                  placeholder='Search fields…'
+                  className='w-full rounded-md border border-slate-200 dark:border-border bg-slate-50 dark:bg-slate-900 pl-6 pr-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 placeholder:text-slate-400 outline-none focus:border-nvr-cyan focus:ring-1 focus:ring-nvr-cyan/30'
+                />
+                {poolSearch && (
+                  <button
+                    type='button'
+                    onClick={() => setPoolSearch('')}
+                    className='absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600'
+                  >
+                    <X className='h-2.5 w-2.5' />
+                  </button>
+                )}
+              </div>
+              {/* Category filter pills */}
+              {(() => {
+                const all = localFieldOrder.__pool__ ?? []
+                const wk = all.filter(f => typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__'))
+                const nw = all.filter(f => !wk.includes(f))
+                const rl = nw.filter(f => relKind(f) !== null)
+                const pl = nw.filter(f => relKind(f) === null)
+                const cats: Array<{ id: typeof poolCategory; label: string; count: number }> = [
+                  { id: 'all', label: 'All', count: all.length },
+                  { id: 'fields', label: 'Fields', count: pl.length },
+                  { id: 'relations', label: 'Relations', count: rl.length },
+                  ...(wk.length > 0 ? [{ id: 'widgets' as const, label: 'Widgets', count: wk.length }] : []),
+                ]
+                return (
+                  <div className='flex gap-1'>
+                    {cats.map(c => (
+                      <button
+                        key={c.id}
+                        type='button'
+                        onClick={() => setPoolCategory(c.id)}
+                        className={cn(
+                          'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                          poolCategory === c.id
+                            ? 'bg-nvr-cyan/10 text-nvr-cyan'
+                            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        )}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
             </div>
-              <div className='overflow-y-auto min-h-[40px] p-2' style={{ maxHeight: 'calc(100vh - 220px)' }}>
-                {(() => {
-                  const unassigned = localFieldOrder.__pool__ ?? []
-                  // Pool always shows raw field name — no global or layout labels
-                  const getLabel = (f: string) => titleCase(f)
-                  const widgetKeys = unassigned.filter(f => typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__'))
-                  const nonWidgets = unassigned.filter(f => !widgetKeys.includes(f))
-                  const relFields = nonWidgets.filter(f => relKind(f) !== null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
-                  const plainFields = nonWidgets.filter(f => relKind(f) === null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
-                  const renderChip = (f: string) => {
-                    if (f === OWNERS_FIELD) {
-                      return (
-                        <SortableFieldChip
-                          key={f}
-                          fieldName={f}
-                          displayName='Owners'
-                          fieldType='owners'
-                          colSpan={12}
-                        />
-                      )
-                    }
-                    if (f === PDF_FIELD) {
-                      return (
-                        <SortableFieldChip
-                          key={f}
-                          fieldName={f}
-                          displayName='PDF Button'
-                          fieldType='pdf'
-                          colSpan={12}
-                        />
-                      )
-                    }
-                    const ft = allFields.find(af => af.field === f)
-                    const settings = getBaseFieldSettings(f)
-                    const kind = relKind(f)
+            {/* Field list */}
+            <div className='flex-1 min-h-0 overflow-y-auto'>
+              {(() => {
+                const all = localFieldOrder.__pool__ ?? []
+                const getLabel = (f: string) => titleCase(f)
+                const widgetKeys = all.filter(f => typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__'))
+                const nonWidgets = all.filter(f => !widgetKeys.includes(f))
+                const relFields = nonWidgets.filter(f => relKind(f) !== null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
+                const plainFields = nonWidgets.filter(f => relKind(f) === null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
+
+                const applySearch = (fields: string[]) =>
+                  poolSearch.trim()
+                    ? fields.filter(f => getLabel(f).toLowerCase().includes(poolSearch.toLowerCase()))
+                    : fields
+
+                const visiblePlain = poolCategory === 'all' || poolCategory === 'fields' ? applySearch(plainFields) : []
+                const visibleRel = poolCategory === 'all' || poolCategory === 'relations' ? applySearch(relFields) : []
+                const visibleWidgets = poolCategory === 'all' || poolCategory === 'widgets' ? applySearch(widgetKeys) : []
+                const totalVisible = visiblePlain.length + visibleRel.length + visibleWidgets.length
+
+                const renderRow = (f: string) => {
+                  if (f === OWNERS_FIELD) {
                     return (
                       <SortableFieldChip
                         key={f}
+                        sortableId={`f::__pool__::${f}`}
                         fieldName={f}
-                        displayName={titleCase(f)}
-                        fieldType={kind ?? friendlyType(ft?.type, f)}
-                        abstractType={kind ? kind.toLowerCase() : ft?.type}
-                        isM2O={kind === 'M2O'}
-                        isM2M={kind === 'M2M'}
+                        displayName='Owners'
+                        fieldType='owners'
                         colSpan={12}
-                        fieldSettings={settings}
-                        m2oFields={kind === 'M2O' || kind === 'M2M' ? getM2OFields() : undefined}
-                        dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig(f) : undefined}
-                        relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection(f) : undefined}
+                        compact
                       />
                     )
                   }
+                  if (f === PDF_FIELD) {
+                    return (
+                      <SortableFieldChip
+                        key={f}
+                        sortableId={`f::__pool__::${f}`}
+                        fieldName={f}
+                        displayName='PDF Button'
+                        fieldType='pdf'
+                        colSpan={12}
+                        compact
+                      />
+                    )
+                  }
+                  if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
+                    const meta = widgetSlotMeta[f]
+                    return (
+                      <SortableFieldChip
+                        key={f}
+                        sortableId={`f::__pool__::${f}`}
+                        fieldName={f}
+                        displayName={meta?.label_override || meta?.name || 'Widget'}
+                        fieldType='widget'
+                        colSpan={12}
+                        compact
+                      />
+                    )
+                  }
+                  const ft = allFields.find(af => af.field === f)
+                  const kind = relKind(f)
                   return (
-                    <div className='space-y-3'>
-                      {plainFields.length > 0 && (
-                        <div>
-                          <p className='mb-1 px-1 text-[9px] font-semibold uppercase tracking-wider text-slate-300'>Fields</p>
-                          <div className='space-y-1.5'>{plainFields.map(renderChip)}</div>
-                        </div>
-                      )}
-                      {relFields.length > 0 && (
-                        <div>
-                          <p className='mb-1 px-1 text-[9px] font-semibold uppercase tracking-wider text-slate-300'>Relations</p>
-                          <div className='space-y-1.5'>{relFields.map(renderChip)}</div>
-                        </div>
-                      )}
-                      {widgetKeys.length > 0 && (
-                        <div>
-                          <p className='mb-1 px-1 text-[9px] font-semibold uppercase tracking-wider text-slate-300'>Widgets</p>
-                          <div className='space-y-1.5'>
-                            {widgetKeys.map(f => {
-                              const meta = widgetSlotMeta[f]
-                              return (
-                                <SortableFieldChip
-                                  key={f}
-                                  fieldName={f}
-                                  displayName={meta?.label_override || meta?.name || 'Widget'}
-                                  fieldType='widget'
-                                  colSpan={12}
-                                />
-                              )
-                            })}
-                          </div>
-                        </div>
-                      )}
+                    <SortableFieldChip
+                      key={f}
+                      sortableId={`f::__pool__::${f}`}
+                      fieldName={f}
+                      displayName={titleCase(f)}
+                      fieldType={kind ?? friendlyType(ft?.type, f)}
+                      abstractType={kind ? kind.toLowerCase() : ft?.type}
+                      isM2O={kind === 'M2O'}
+                      isM2M={kind === 'M2M'}
+                      colSpan={12}
+                      compact
+                    />
+                  )
+                }
+
+                if (totalVisible === 0) {
+                  return (
+                    <div className='px-3 py-6 text-center text-[11px] text-slate-400'>
+                      {poolSearch ? `No fields matching "${poolSearch}"` : 'All fields assigned'}
                     </div>
                   )
-                })()}
-              </div>
+                }
+
+                return (
+                  <div className='py-1'>
+                    {visiblePlain.length > 0 && (poolCategory === 'all' || poolCategory === 'fields') && (
+                      <div>
+                        {poolCategory === 'all' && (
+                          <p className='px-3 pt-2 pb-0.5 text-[10px] font-semibold text-slate-400 dark:text-slate-500'>Fields</p>
+                        )}
+                        {visiblePlain.map(renderRow)}
+                      </div>
+                    )}
+                    {visibleRel.length > 0 && (poolCategory === 'all' || poolCategory === 'relations') && (
+                      <div>
+                        {poolCategory === 'all' && (
+                          <p className='px-3 pt-2 pb-0.5 text-[10px] font-semibold text-slate-400 dark:text-slate-500'>Relations</p>
+                        )}
+                        {visibleRel.map(renderRow)}
+                      </div>
+                    )}
+                    {visibleWidgets.length > 0 && (poolCategory === 'all' || poolCategory === 'widgets') && (
+                      <div>
+                        {poolCategory === 'all' && (
+                          <p className='px-3 pt-2 pb-0.5 text-[10px] font-semibold text-slate-400 dark:text-slate-500'>Widgets</p>
+                        )}
+                        {visibleWidgets.map(renderRow)}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+            </div>
           </div>
           </DroppableFieldZone>
         </div>
