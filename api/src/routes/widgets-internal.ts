@@ -29,6 +29,13 @@ function substituteFilters(filters: unknown, inputs: Record<string, unknown>): u
   return filters
 }
 
+// Returns true only when the collection has a registered workspace_id field.
+// Prevents applying a workspace filter against tables that lack the column.
+async function collectionHasWorkspaceId(collection: string): Promise<boolean> {
+  const row = await db('nivaro_fields').where({ collection, field: 'workspace_id' }).first()
+  return !!row
+}
+
 // Only allow relative paths — blocks javascript:, data:, open-redirect to external hosts
 function validateRedirectUrl(url: string): string | null {
   // Strip control chars browsers silently drop before parsing (\r, \n, \t, etc.)
@@ -200,6 +207,45 @@ async function renderWidget(
     return { buttons, inputs }
   }
 
+  if (type === 'button-group') {
+    const layout = (config.layout as string) ?? 'flat'
+    const buttons = ((config.buttons as unknown[]) ?? []).map((b) => {
+      const btn = b as Record<string, unknown>
+      const resolved: Record<string, unknown> = {
+        id: btn.id,
+        label: btn.label,
+        icon: btn.icon,
+        variant: btn.variant ?? 'secondary',
+        action: btn.action,
+      }
+      if (btn.action === 'open-url') {
+        resolved.url = btn.url ? substituteInputs(String(btn.url), inputs) : ''
+        resolved.new_tab = btn.new_tab ?? false
+      } else if (btn.action === 'email') {
+        resolved.email_to = btn.email_to ? substituteInputs(String(btn.email_to), inputs) : ''
+        if (btn.email_subject) resolved.email_subject = substituteInputs(String(btn.email_subject), inputs)
+        if (btn.email_body) resolved.email_body = substituteInputs(String(btn.email_body), inputs)
+      } else if (btn.action === 'copy') {
+        const key = String(btn.copy_input ?? '')
+        resolved.copy_value = key ? String(inputs[key] ?? '') : ''
+      } else if (btn.action === 'open-sidebar') {
+        resolved.sidebar_collection = btn.sidebar_collection
+        const idKey = String(btn.sidebar_id_input ?? '')
+        resolved.sidebar_id = idKey ? String(inputs[idKey] ?? '') : ''
+      } else if (btn.action === 'toggle') {
+        resolved.toggle_input = btn.toggle_input
+        resolved.label_on = btn.label_on
+        resolved.label_off = btn.label_off
+        resolved.variant_on = btn.variant_on ?? 'destructive'
+        resolved.variant_off = btn.variant_off ?? 'default'
+        resolved.toggle_on_value = btn.toggle_on_value ?? '1'
+        resolved.action_config = btn.action_config ?? {}
+      }
+      return resolved
+    })
+    return { buttons, layout }
+  }
+
   return { type, config, inputs }
 }
 
@@ -339,7 +385,7 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     const btn = buttons[buttonIndex]
     if (!btn) return reply.code(400).send({ error: 'Invalid button_index' })
 
-    const actionType = btn.action_type as string
+    const actionType = (btn.action_type ?? btn.action) as string
     const actionConfig = (btn.action_config ?? {}) as Record<string, unknown>
 
     if (actionType === 'field-update') {
@@ -358,14 +404,10 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       const itemId = inputs[idInput]
       if (!itemId) return reply.code(400).send({ error: `Missing input: ${idInput}` })
 
-      // Verify the record exists and is accessible in the current workspace
-      let existingQuery = db(collection).where('id', itemId).select('id')
-      if (req.workspaceId) {
-        existingQuery = existingQuery.where(function () {
-          this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id')
-        })
-      }
-      const existing = await existingQuery.first()
+      const wsScoped = req.workspaceId && await collectionHasWorkspaceId(collection)
+      let existQ = db(collection).where('id', itemId).select('id')
+      if (wsScoped) existQ = existQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
+      const existing = await existQ.first()
       if (!existing) return reply.code(404).send({ error: 'Record not found' })
 
       const fieldUpdates: Record<string, unknown> = {}
@@ -373,7 +415,9 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
         if (k === 'collection' || k === 'id_input') continue
         fieldUpdates[k] = typeof v === 'string' ? substituteInputs(v, inputs) : v
       }
-      await db(collection).where('id', itemId).update(fieldUpdates)
+      let updQ = db(collection).where('id', itemId)
+      if (wsScoped) updQ = updQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
+      await updQ.update(fieldUpdates)
       return reply.send({ data: { success: true } })
     }
 
@@ -394,6 +438,40 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       const payload = { ...inputs, ...((actionConfig.payload as Record<string, unknown>) ?? {}) }
       emitTrigger(triggerType, payload, app.log)
       return reply.send({ data: { success: true } })
+    }
+
+    if (actionType === 'toggle') {
+      const collection = actionConfig.collection as string
+      if (!collection || collection.startsWith('nivaro_')) {
+        return reply.code(403).send({ error: 'Cannot target system tables' })
+      }
+      if (!(await can(req.user!, 'update', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const idInput = actionConfig.id_input as string
+      const itemId = inputs[idInput]
+      if (!itemId) return reply.code(400).send({ error: `Missing input: ${idInput}` })
+
+      const field = actionConfig.field as string
+      if (!field) return reply.code(400).send({ error: 'Missing toggle field' })
+
+      const toggleInput = actionConfig.toggle_input as string
+      const onValue = actionConfig.on_value ?? '1'
+      const offValue = actionConfig.off_value ?? '0'
+      const currentRaw = inputs[toggleInput]
+      const normBit = (v: unknown) => (v === true || v === 1) ? '1' : (v === false || v === 0) ? '0' : String(v ?? '')
+      const newValue = normBit(currentRaw) === normBit(onValue) ? offValue : onValue
+
+      const wsScoped = req.workspaceId && await collectionHasWorkspaceId(collection)
+      let existQ = db(collection).where('id', itemId).select('id')
+      if (wsScoped) existQ = existQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
+      const existing = await existQ.first()
+      if (!existing) return reply.code(404).send({ error: 'Record not found' })
+
+      let updQ = db(collection).where('id', itemId)
+      if (wsScoped) updQ = updQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
+      await updQ.update({ [field]: newValue })
+      return reply.send({ data: { success: true, new_value: newValue } })
     }
 
     return reply.code(400).send({ error: `Unknown action_type: ${actionType}` })

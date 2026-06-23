@@ -689,7 +689,7 @@ interface InternalWidget {
   name: string
   description: string | null
   icon: string | null
-  widget_type: 'stat' | 'action-buttons' | 'custom-query' | 'external-api' | 'list'
+  widget_type: 'stat' | 'action-buttons' | 'custom-query' | 'external-api' | 'list' | 'button-group'
   inputs: unknown[] | null
   config: unknown | null
   is_active: boolean
@@ -700,7 +700,8 @@ const WIDGET_TYPE_OPTIONS = [
   { value: 'stat', label: 'Stat / KPI' },
   { value: 'list', label: 'List' },
   { value: 'custom-query', label: 'Custom Query' },
-  { value: 'action-buttons', label: 'Action Buttons' },
+  { value: 'action-buttons', label: 'Action Buttons (server)' },
+  { value: 'button-group', label: 'Button Group (client)' },
   { value: 'external-api', label: 'External API' }
 ] as const
 
@@ -919,6 +920,391 @@ function btnsToRaw(c: BtnsCfg): Record<string, unknown> {
   }
 }
 
+// ── button group (client-side actions)
+interface BtnGroupBtn {
+  id: string
+  label: string
+  icon: string
+  variant: string
+  action: string
+  // client: open-url
+  url: string
+  new_tab: boolean
+  // client: email
+  email_to: string
+  email_subject: string
+  email_body: string
+  // client: copy
+  copy_input: string
+  // client: open-sidebar
+  sidebar_collection: string
+  sidebar_id_input: string
+  // server: navigate
+  ac_url: string
+  // server: flow
+  ac_trigger: string
+  ac_payload: string
+  // server: field-update
+  ac_collection: string
+  ac_id_input: string
+  ac_field: string
+  ac_value: string
+  // server: toggle
+  toggle_input: string
+  label_on: string
+  label_off: string
+  variant_on: string
+  variant_off: string
+  toggle_collection: string
+  toggle_id_input: string
+  toggle_field: string
+  toggle_on_value: string
+  toggle_off_value: string
+}
+const BLANK_BG_BTN: BtnGroupBtn = {
+  id: '', label: '', icon: '', variant: 'secondary', action: 'open-url',
+  url: '', new_tab: false, email_to: '', email_subject: '', email_body: '',
+  copy_input: '', sidebar_collection: '', sidebar_id_input: '',
+  ac_url: '', ac_trigger: '', ac_payload: '{}',
+  ac_collection: '', ac_id_input: '', ac_field: '', ac_value: '',
+  toggle_input: '', label_on: '', label_off: '', variant_on: 'destructive', variant_off: 'default',
+  toggle_collection: '', toggle_id_input: 'id', toggle_field: '', toggle_on_value: '1', toggle_off_value: '0'
+}
+interface BtnGroupCfg { buttons: BtnGroupBtn[]; layout: string }
+function rawToBtnGroup(r: Record<string, unknown>): BtnGroupCfg {
+  const btns = Array.isArray(r.buttons) ? r.buttons as Array<Record<string, unknown>> : []
+  return {
+    layout: String(r.layout ?? 'flat'),
+    buttons: btns.map((b) => {
+      const at = String(b.action ?? 'open-url')
+      const ac = (typeof b.action_config === 'object' && b.action_config ? b.action_config : {}) as Record<string, unknown>
+      return {
+        id: String(b.id ?? ''),
+        label: String(b.label ?? ''),
+        icon: String(b.icon ?? ''),
+        variant: String(b.variant ?? 'secondary'),
+        action: at,
+        url: String(b.url ?? ''),
+        new_tab: Boolean(b.new_tab ?? false),
+        email_to: String(b.email_to ?? ''),
+        email_subject: String(b.email_subject ?? ''),
+        email_body: String(b.email_body ?? ''),
+        copy_input: String(b.copy_input ?? ''),
+        sidebar_collection: String(b.sidebar_collection ?? ''),
+        sidebar_id_input: String(b.sidebar_id_input ?? ''),
+        ac_url: at === 'navigate' ? String(ac.url ?? '') : '',
+        ac_trigger: at === 'flow' ? String(ac.trigger_type ?? '') : '',
+        ac_payload: at === 'flow' ? JSON.stringify(ac.payload ?? {}, null, 2) : '{}',
+        ac_collection: at === 'field-update' ? String(ac.collection ?? '') : '',
+        ac_id_input: at === 'field-update' ? String(ac.id_input ?? '') : '',
+        ac_field: at === 'field-update' ? String(Object.keys(ac).find((k) => k !== 'collection' && k !== 'id_input') ?? '') : '',
+        ac_value: at === 'field-update' ? String(Object.entries(ac).find(([k]) => k !== 'collection' && k !== 'id_input')?.[1] ?? '') : '',
+        toggle_input: at === 'toggle' ? String(b.toggle_input ?? '') : '',
+        label_on: at === 'toggle' ? String(b.label_on ?? '') : '',
+        label_off: at === 'toggle' ? String(b.label_off ?? '') : '',
+        variant_on: at === 'toggle' ? String(b.variant_on ?? 'destructive') : 'destructive',
+        variant_off: at === 'toggle' ? String(b.variant_off ?? 'default') : 'default',
+        toggle_collection: at === 'toggle' ? String(ac.collection ?? '') : '',
+        toggle_id_input: at === 'toggle' ? String(ac.id_input ?? 'id') : 'id',
+        toggle_field: at === 'toggle' ? String(ac.field ?? '') : '',
+        toggle_on_value: at === 'toggle' ? String(ac.on_value ?? '1') : '1',
+        toggle_off_value: at === 'toggle' ? String(ac.off_value ?? '0') : '0'
+      }
+    })
+  }
+}
+function btnGroupToRaw(c: BtnGroupCfg): Record<string, unknown> {
+  return {
+    layout: c.layout,
+    buttons: c.buttons.map((b) => {
+      const base: Record<string, unknown> = { id: b.id || crypto.randomUUID(), label: b.label, variant: b.variant, action: b.action }
+      if (b.icon) base.icon = b.icon
+      // client-side actions
+      if (b.action === 'open-url') { base.url = b.url; if (b.new_tab) base.new_tab = true }
+      if (b.action === 'email') { base.email_to = b.email_to; if (b.email_subject) base.email_subject = b.email_subject; if (b.email_body) base.email_body = b.email_body }
+      if (b.action === 'copy') base.copy_input = b.copy_input
+      if (b.action === 'open-sidebar') { base.sidebar_collection = b.sidebar_collection; base.sidebar_id_input = b.sidebar_id_input }
+      // server-side actions
+      if (b.action === 'navigate') base.action_config = { url: b.ac_url }
+      if (b.action === 'flow') {
+        let payload = {}
+        try { payload = JSON.parse(b.ac_payload || '{}') } catch { /* invalid JSON — use empty */ }
+        base.action_config = { trigger_type: b.ac_trigger, payload }
+      }
+      if (b.action === 'field-update' && b.ac_field) {
+        base.action_config = { collection: b.ac_collection, id_input: b.ac_id_input, [b.ac_field]: b.ac_value }
+      }
+      if (b.action === 'toggle') {
+        base.toggle_input = b.toggle_input
+        base.label_on = b.label_on
+        base.label_off = b.label_off
+        if (b.variant_on) base.variant_on = b.variant_on
+        if (b.variant_off) base.variant_off = b.variant_off
+        base.action_config = {
+          collection: b.toggle_collection, id_input: b.toggle_id_input,
+          field: b.toggle_field, toggle_input: b.toggle_input,
+          on_value: b.toggle_on_value, off_value: b.toggle_off_value
+        }
+      }
+      return base
+    })
+  }
+}
+
+const BG_VARIANT_OPTS = [
+  { value: 'default', label: 'Default' },
+  { value: 'secondary', label: 'Secondary' },
+  { value: 'destructive', label: 'Destructive' },
+  { value: 'outline', label: 'Outline' },
+  { value: 'ghost', label: 'Ghost' }
+]
+const BG_ACTION_OPTS = [
+  { value: 'open-url', label: 'Open URL' },
+  { value: 'email', label: 'Send Email' },
+  { value: 'copy', label: 'Copy to Clipboard' },
+  { value: 'open-sidebar', label: 'Open in Sidebar' },
+  { value: 'navigate', label: 'Navigate (server)' },
+  { value: 'field-update', label: 'Update Field (server)' },
+  { value: 'flow', label: 'Trigger Flow (server)' },
+  { value: 'toggle', label: 'Toggle Field (server)' }
+]
+const BG_LAYOUT_OPTS = [
+  { value: 'flat', label: 'Flat row' },
+  { value: 'split', label: 'Split (primary + dropdown)' }
+]
+
+function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c: BtnGroupCfg) => void }) {
+  const [openIdx, setOpenIdx] = useState<number | null>(cfg.buttons.length === 0 ? null : 0)
+  const colOpts = useCollectionOptions()
+
+  function updateBtn(i: number, patch: Partial<BtnGroupBtn>) {
+    onChange({ ...cfg, buttons: cfg.buttons.map((b, j) => j === i ? { ...b, ...patch } : b) })
+  }
+  function addBtn() {
+    const next = [...cfg.buttons, { ...BLANK_BG_BTN }]
+    onChange({ ...cfg, buttons: next })
+    setOpenIdx(next.length - 1)
+  }
+  function removeBtn(i: number) {
+    const next = cfg.buttons.filter((_, j) => j !== i)
+    onChange({ ...cfg, buttons: next })
+    setOpenIdx(next.length > 0 ? Math.min(i, next.length - 1) : null)
+  }
+
+  return (
+    <div className='space-y-3'>
+      <div className='space-y-1'>
+        <Label className='text-[11px] text-muted-foreground'>Layout</Label>
+        <PickCombobox value={cfg.layout} onChange={(v) => onChange({ ...cfg, layout: v })} options={BG_LAYOUT_OPTS} widthClass='w-[280px]' />
+        {cfg.layout === 'split' && (
+          <p className='text-[10px] text-muted-foreground mt-1'>First button is primary — remaining buttons appear in a dropdown chevron.</p>
+        )}
+      </div>
+      <Separator />
+      {cfg.buttons.map((btn, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: stable list
+        <div key={i} className='rounded-md border border-slate-200 dark:border-border'>
+          <button
+            type='button'
+            className='flex w-full items-center justify-between px-3 py-2 text-[12px] hover:bg-slate-50 dark:hover:bg-muted/20'
+            onClick={() => setOpenIdx(openIdx === i ? null : i)}
+          >
+            <span className='font-medium'>{btn.label || `Button ${i + 1}`}</span>
+            <div className='flex items-center gap-2'>
+              <Badge variant='outline' className='h-5 px-1.5 font-mono text-[10px]'>{btn.action}</Badge>
+              {openIdx === i ? <ChevronDown className='h-3.5 w-3.5 text-muted-foreground' /> : <ChevronRight className='h-3.5 w-3.5 text-muted-foreground' />}
+            </div>
+          </button>
+          {openIdx === i && (
+            <div className='space-y-3 border-t border-slate-200 p-3 dark:border-border'>
+              <div className='grid grid-cols-2 gap-3'>
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-muted-foreground'>Label</Label>
+                  <Input className='h-7 text-[12px]' value={btn.label} onChange={(e) => updateBtn(i, { label: e.target.value })} placeholder='View record' />
+                </div>
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-muted-foreground'>Variant</Label>
+                  <PickCombobox value={btn.variant} onChange={(v) => updateBtn(i, { variant: v })} options={BG_VARIANT_OPTS} widthClass='w-[180px]' />
+                </div>
+              </div>
+              <div className='grid grid-cols-2 gap-3'>
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-muted-foreground'>Action</Label>
+                  <PickCombobox value={btn.action} onChange={(v) => updateBtn(i, { action: v })} options={BG_ACTION_OPTS} widthClass='w-[220px]' />
+                </div>
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-muted-foreground'>Icon <span className='text-[10px] opacity-60'>(lucide name)</span></Label>
+                  <Input className='h-7 font-mono text-[12px]' value={btn.icon} onChange={(e) => updateBtn(i, { icon: e.target.value })} placeholder='ExternalLink' />
+                </div>
+              </div>
+              {btn.action === 'open-url' && (
+                <div className='space-y-2'>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-muted-foreground'>URL <span className='text-[10px] opacity-60'>({'{{input_key}} or absolute URL'})</span></Label>
+                    <Input className='h-7 font-mono text-[12px]' value={btn.url} onChange={(e) => updateBtn(i, { url: e.target.value })} placeholder='/collections/contacts/{{contact_id}}' />
+                  </div>
+                  <label className='flex cursor-pointer items-center gap-2 text-[12px] text-slate-600 dark:text-slate-400'>
+                    <input type='checkbox' checked={btn.new_tab} onChange={(e) => updateBtn(i, { new_tab: e.target.checked })} className='h-3.5 w-3.5 rounded' />
+                    Open in new tab
+                  </label>
+                </div>
+              )}
+              {btn.action === 'email' && (
+                <div className='space-y-2'>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-muted-foreground'>To <span className='text-[10px] opacity-60'>({'{{input_key}} or fixed address'})</span></Label>
+                    <Input className='h-7 font-mono text-[12px]' value={btn.email_to} onChange={(e) => updateBtn(i, { email_to: e.target.value })} placeholder='{{email}} or user@example.com' />
+                  </div>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-muted-foreground'>Subject <span className='text-[10px] opacity-60'>(optional, {'{{input_key}}'})</span></Label>
+                    <Input className='h-7 font-mono text-[12px]' value={btn.email_subject} onChange={(e) => updateBtn(i, { email_subject: e.target.value })} placeholder='Re: {{name}}' />
+                  </div>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-muted-foreground'>Body <span className='text-[10px] opacity-60'>(optional)</span></Label>
+                    <Input className='h-7 font-mono text-[12px]' value={btn.email_body} onChange={(e) => updateBtn(i, { email_body: e.target.value })} placeholder='Hi {{name}},' />
+                  </div>
+                </div>
+              )}
+              {btn.action === 'copy' && (
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-muted-foreground'>Input key to copy</Label>
+                  <Input className='h-7 font-mono text-[12px]' value={btn.copy_input} onChange={(e) => updateBtn(i, { copy_input: e.target.value })} placeholder='id' />
+                </div>
+              )}
+              {btn.action === 'open-sidebar' && (
+                <div className='grid grid-cols-2 gap-2'>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-muted-foreground'>Collection</Label>
+                    <PickCombobox value={btn.sidebar_collection} onChange={(v) => updateBtn(i, { sidebar_collection: v })} options={colOpts} placeholder='Select…' />
+                  </div>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
+                    <Input className='h-7 font-mono text-[12px]' value={btn.sidebar_id_input} onChange={(e) => updateBtn(i, { sidebar_id_input: e.target.value })} placeholder='contact_id' />
+                  </div>
+                </div>
+              )}
+              {btn.action === 'navigate' && (
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-muted-foreground'>Path <span className='text-[10px] opacity-60'>({'{{input_key}} — must start with /'})</span></Label>
+                  <Input className='h-7 font-mono text-[12px]' value={btn.ac_url} onChange={(e) => updateBtn(i, { ac_url: e.target.value })} placeholder='/collections/contacts/{{id}}' />
+                </div>
+              )}
+              {btn.action === 'flow' && (
+                <div className='space-y-2'>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-muted-foreground'>Trigger type</Label>
+                    <Input className='h-7 font-mono text-[12px]' value={btn.ac_trigger} onChange={(e) => updateBtn(i, { ac_trigger: e.target.value })} placeholder='my-custom-trigger' />
+                  </div>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-muted-foreground'>Payload JSON <span className='text-[10px] opacity-60'>(optional, {'{{input_key}}'})</span></Label>
+                    <Input className='h-7 font-mono text-[12px]' value={btn.ac_payload} onChange={(e) => updateBtn(i, { ac_payload: e.target.value })} placeholder='{}' />
+                  </div>
+                </div>
+              )}
+              {btn.action === 'field-update' && (
+                <div className='space-y-2'>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px] text-muted-foreground'>Collection</Label>
+                      <PickCombobox value={btn.ac_collection} onChange={(v) => updateBtn(i, { ac_collection: v })} options={colOpts} placeholder='Select…' />
+                    </div>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
+                      <Input className='h-7 font-mono text-[12px]' value={btn.ac_id_input} onChange={(e) => updateBtn(i, { ac_id_input: e.target.value })} placeholder='id' />
+                    </div>
+                  </div>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px] text-muted-foreground'>Field</Label>
+                      <Input className='h-7 font-mono text-[12px]' value={btn.ac_field} onChange={(e) => updateBtn(i, { ac_field: e.target.value })} placeholder='status' />
+                    </div>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px] text-muted-foreground'>Value <span className='text-[10px] opacity-60'>({'{{input_key}}'})</span></Label>
+                      <Input className='h-7 font-mono text-[12px]' value={btn.ac_value} onChange={(e) => updateBtn(i, { ac_value: e.target.value })} placeholder='approved' />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {btn.action === 'toggle' && (
+                <div className='space-y-3'>
+                  <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
+                    <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>State detection</p>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px] text-muted-foreground'>Input key <span className='text-[10px] opacity-60'>(field whose value determines current state)</span></Label>
+                      <Input className='h-7 font-mono text-[12px]' value={btn.toggle_input} onChange={(e) => updateBtn(i, { toggle_input: e.target.value })} placeholder='auto_reforecast' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <div className='space-y-1'>
+                        <Label className='text-[11px] text-muted-foreground'>ON value <span className='text-[10px] opacity-60'>(means enabled)</span></Label>
+                        <Input className='h-7 font-mono text-[12px]' value={btn.toggle_on_value} onChange={(e) => updateBtn(i, { toggle_on_value: e.target.value })} placeholder='1' />
+                      </div>
+                      <div className='space-y-1'>
+                        <Label className='text-[11px] text-muted-foreground'>OFF value <span className='text-[10px] opacity-60'>(means disabled)</span></Label>
+                        <Input className='h-7 font-mono text-[12px]' value={btn.toggle_off_value} onChange={(e) => updateBtn(i, { toggle_off_value: e.target.value })} placeholder='0' />
+                      </div>
+                    </div>
+                  </div>
+                  <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
+                    <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>When currently ON (click to disable)</p>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <div className='space-y-1'>
+                        <Label className='text-[11px] text-muted-foreground'>Label</Label>
+                        <Input className='h-7 text-[12px]' value={btn.label_on} onChange={(e) => updateBtn(i, { label_on: e.target.value })} placeholder='Disable Auto Reforecast' />
+                      </div>
+                      <div className='space-y-1'>
+                        <Label className='text-[11px] text-muted-foreground'>Variant</Label>
+                        <PickCombobox value={btn.variant_on} onChange={(v) => updateBtn(i, { variant_on: v })} options={BG_VARIANT_OPTS} widthClass='w-[160px]' />
+                      </div>
+                    </div>
+                  </div>
+                  <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
+                    <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>When currently OFF (click to enable)</p>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <div className='space-y-1'>
+                        <Label className='text-[11px] text-muted-foreground'>Label</Label>
+                        <Input className='h-7 text-[12px]' value={btn.label_off} onChange={(e) => updateBtn(i, { label_off: e.target.value })} placeholder='Enable Auto Reforecast' />
+                      </div>
+                      <div className='space-y-1'>
+                        <Label className='text-[11px] text-muted-foreground'>Variant</Label>
+                        <PickCombobox value={btn.variant_off} onChange={(v) => updateBtn(i, { variant_off: v })} options={BG_VARIANT_OPTS} widthClass='w-[160px]' />
+                      </div>
+                    </div>
+                  </div>
+                  <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
+                    <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>Field to update</p>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <div className='space-y-1'>
+                        <Label className='text-[11px] text-muted-foreground'>Collection</Label>
+                        <PickCombobox value={btn.toggle_collection} onChange={(v) => updateBtn(i, { toggle_collection: v })} options={colOpts} placeholder='Select…' />
+                      </div>
+                      <div className='space-y-1'>
+                        <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
+                        <Input className='h-7 font-mono text-[12px]' value={btn.toggle_id_input} onChange={(e) => updateBtn(i, { toggle_id_input: e.target.value })} placeholder='id' />
+                      </div>
+                    </div>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px] text-muted-foreground'>Field name</Label>
+                      <Input className='h-7 font-mono text-[12px]' value={btn.toggle_field} onChange={(e) => updateBtn(i, { toggle_field: e.target.value })} placeholder='auto_reforecast' />
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div className='flex justify-end'>
+                <Button size='sm' variant='ghost' className='h-7 px-2 text-[11px] text-destructive hover:text-destructive' onClick={() => removeBtn(i)}>
+                  <Trash2 className='mr-1 h-3 w-3' />Remove
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+      <Button size='sm' variant='outline' className='h-8 w-full text-[12px]' onClick={addBtn}>
+        <Plus className='mr-1.5 h-3.5 w-3.5' />Add button
+      </Button>
+    </div>
+  )
+}
+
 // ── shared sub-components
 
 function FilterRows({ rows, onChange }: { rows: FilterRow[]; onChange: (r: FilterRow[]) => void }) {
@@ -1012,9 +1398,9 @@ const ACTION_TYPE_OPTS = [
 function useCollectionOptions() {
   const q = useQuery({
     queryKey: ['widget-cfg-cols'],
-    queryFn: () => api.get<{ data: Array<{ name: string; label: string | null }> }>('/collections').then((r) => r.data.data)
+    queryFn: () => api.get<{ data: Array<{ collection: string; display_name: string | null }> }>('/collections').then((r) => r.data.data)
   })
-  return q.data?.map((c) => ({ value: c.name, label: c.label || c.name })) ?? []
+  return q.data?.map((c) => ({ value: c.collection, label: c.display_name || c.collection })) ?? []
 }
 
 function useFieldOptions(collection: string) {
@@ -1357,6 +1743,7 @@ function WidgetConfigEditor({
   const [cqCfg, setCqCfg] = useState<CQCfg>(() => rawToCQ(parsed))
   const [extApiCfg, setExtApiCfg] = useState<ExtApiCfg>(() => rawToExtApi(parsed))
   const [btnsCfg, setBtnsCfg] = useState<BtnsCfg>(() => rawToBtns(parsed))
+  const [btnGroupCfg, setBtnGroupCfg] = useState<BtnGroupCfg>(() => rawToBtnGroup(parsed))
   const [compactStyle, setCompactStyle] = useState<string>(() => String(parsed.compact_style ?? 'default'))
 
   function currentJson(overrideStyle?: string): string {
@@ -1367,6 +1754,7 @@ function WidgetConfigEditor({
       else if (type === 'custom-query') raw = cqToRaw(cqCfg)
       else if (type === 'external-api') raw = extApiToRaw(extApiCfg)
       else if (type === 'action-buttons') raw = btnsToRaw(btnsCfg)
+      else if (type === 'button-group') raw = btnGroupToRaw(btnGroupCfg)
       const style = overrideStyle ?? compactStyle
       if (style && style !== 'default') raw.compact_style = style
       return JSON.stringify(raw, null, 2)
@@ -1387,6 +1775,7 @@ function WidgetConfigEditor({
       setCqCfg(rawToCQ(raw))
       setExtApiCfg(rawToExtApi(raw))
       setBtnsCfg(rawToBtns(raw))
+      setBtnGroupCfg(rawToBtnGroup(raw))
       setCompactStyle(String(raw.compact_style ?? 'default'))
       onChange(rawText)
       setParseError(null)
@@ -1406,6 +1795,7 @@ function WidgetConfigEditor({
   function onCQChange(c: CQCfg) { setCqCfg(c); onChange(JSON.stringify({ ...cqToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) }, null, 2)) }
   function onExtApiChange(c: ExtApiCfg) { setExtApiCfg(c); onChange(JSON.stringify({ ...extApiToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) }, null, 2)) }
   function onBtnsChange(c: BtnsCfg) { setBtnsCfg(c); onChange(JSON.stringify({ ...btnsToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) }, null, 2)) }
+  function onBtnGroupChange(c: BtnGroupCfg) { setBtnGroupCfg(c); onChange(JSON.stringify(btnGroupToRaw(c), null, 2)) }
 
   return (
     <div className='space-y-2'>
@@ -1479,6 +1869,7 @@ function WidgetConfigEditor({
             {type === 'custom-query' && <CQConfigForm cfg={cqCfg} onChange={onCQChange} />}
             {type === 'external-api' && <ExtApiConfigForm cfg={extApiCfg} onChange={onExtApiChange} />}
             {type === 'action-buttons' && <ActionButtonsConfigForm cfg={btnsCfg} onChange={onBtnsChange} />}
+            {type === 'button-group' && <BtnGroupConfigForm cfg={btnGroupCfg} onChange={onBtnGroupChange} />}
           </div>
         </div>
       )}

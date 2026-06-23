@@ -1,4 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Button } from './ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from './ui/dropdown-menu'
 
 export interface InputBinding {
   key: string
@@ -88,6 +95,8 @@ interface WidgetSlotProps {
   apiBase?: string
   compact?: boolean
   strip?: boolean
+  onClientAction?: (action: ClientAction) => void
+  onWidgetType?: (type: string) => void
 }
 
 function resolveDraftPath(draft: Record<string, unknown>, path: string): unknown {
@@ -309,9 +318,7 @@ function ActionButtonsDisplay({ data, widgetId, inputs, apiBase, onAction }: {
       if (result?.redirect_url) {
         try {
           const u = new URL(result.redirect_url as string, window.location.origin)
-          if (u.protocol === 'http:' || u.protocol === 'https:') {
-            window.location.href = u.toString()
-          }
+          if (u.origin === window.location.origin) window.location.href = u.toString()
         } catch { /* invalid URL — ignore */ }
       }
       onAction?.(result)
@@ -346,6 +353,240 @@ function ActionButtonsDisplay({ data, widgetId, inputs, apiBase, onAction }: {
   )
 }
 
+export interface ClientAction {
+  type: 'open-sidebar'
+  collection: string
+  itemId: string
+}
+
+interface BtnGroupButton {
+  id?: string
+  label?: string
+  icon?: string
+  variant?: string
+  action?: string
+  // client: open-url
+  url?: string
+  new_tab?: boolean
+  // client: email
+  email_to?: string
+  email_subject?: string
+  email_body?: string
+  // client: copy
+  copy_value?: string
+  // client: open-sidebar
+  sidebar_collection?: string
+  sidebar_id?: string
+  // server: toggle
+  toggle_input?: string
+  label_on?: string
+  label_off?: string
+  variant_on?: string
+  variant_off?: string
+  toggle_on_value?: string
+  // server actions share action_config
+  action_config?: Record<string, unknown>
+}
+
+const SERVER_ACTIONS = new Set(['navigate', 'field-update', 'flow', 'toggle'])
+
+function ButtonGroupDisplay({
+  buttons,
+  layout,
+  widgetId,
+  inputs,
+  apiBase,
+  onClientAction
+}: {
+  buttons: BtnGroupButton[]
+  layout: string
+  widgetId: number
+  inputs: Record<string, unknown>
+  apiBase: string
+  onClientAction?: (action: ClientAction) => void
+}) {
+  const [copied, setCopied] = useState<string | null>(null)
+  const [serverLoading, setServerLoading] = useState<string | null>(null)
+  const [toggleOverrides, setToggleOverrides] = useState<Record<string, boolean>>({})
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function normBit(v: unknown): string {
+    if (v === true || v === 1) return '1'
+    if (v === false || v === 0) return '0'
+    return String(v ?? '')
+  }
+
+  function isToggleOn(btn: BtnGroupButton, idx: number): boolean {
+    const btnId = btn.id ?? String(idx)
+    if (toggleOverrides[btnId] !== undefined) return toggleOverrides[btnId]
+    return normBit(inputs[btn.toggle_input ?? '']) === normBit(btn.toggle_on_value ?? '1')
+  }
+
+  function safeUrl(u: string): string | null {
+    try {
+      if (u.startsWith('/') && !u.startsWith('//')) return u
+      const parsed = new URL(u, window.location.origin)
+      if (['http:', 'https:'].includes(parsed.protocol)) return parsed.toString()
+      return null
+    } catch { return null }
+  }
+
+  async function handleServerAction(btn: BtnGroupButton, idx: number) {
+    const btnId = btn.id ?? String(idx)
+    setServerLoading(btnId)
+    try {
+      const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
+      const res = await fetch(`${apiBase}/widgets-internal/${widgetId}/action`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(workspace ? { 'x-workspace': workspace } : {})
+        },
+        credentials: 'include',
+        body: JSON.stringify({ button_index: idx, inputs })
+      })
+      const json = await res.json() as { data: unknown }
+      const result = json.data as Record<string, unknown>
+      if (result?.redirect_url) {
+        try {
+          const u = new URL(result.redirect_url as string, window.location.origin)
+          if (u.origin === window.location.origin) window.location.href = u.toString()
+        } catch { /* invalid URL */ }
+      }
+    } finally {
+      setServerLoading(null)
+    }
+  }
+
+  function handleClick(btn: BtnGroupButton, idx: number) {
+    const action = btn.action ?? 'open-url'
+    if (SERVER_ACTIONS.has(action)) {
+      if (action === 'toggle') {
+        const btnId = btn.id ?? String(idx)
+        setToggleOverrides(prev => ({ ...prev, [btnId]: !isToggleOn(btn, idx) }))
+      }
+      handleServerAction(btn, idx)
+      return
+    }
+    if (action === 'open-url' && btn.url) {
+      const target = safeUrl(btn.url)
+      if (!target) return
+      if (btn.new_tab) {
+        window.open(target, '_blank', 'noopener,noreferrer')
+      } else {
+        window.location.href = target
+      }
+    } else if (action === 'email') {
+      const parts: string[] = []
+      if (btn.email_subject) parts.push(`subject=${encodeURIComponent(btn.email_subject)}`)
+      if (btn.email_body) parts.push(`body=${encodeURIComponent(btn.email_body)}`)
+      window.location.href = `mailto:${btn.email_to ?? ''}${parts.length ? `?${parts.join('&')}` : ''}`
+    } else if (action === 'copy') {
+      const val = btn.copy_value ?? ''
+      navigator.clipboard.writeText(val).then(() => {
+        setCopied(btn.id ?? String(idx))
+        if (copiedTimer.current) clearTimeout(copiedTimer.current)
+        copiedTimer.current = setTimeout(() => setCopied(null), 1800)
+      })
+    } else if (action === 'open-sidebar' && btn.sidebar_collection && btn.sidebar_id) {
+      onClientAction?.({ type: 'open-sidebar', collection: btn.sidebar_collection, itemId: btn.sidebar_id })
+    }
+  }
+
+  function renderBtn(btn: BtnGroupButton, idx: number, variant?: string) {
+    const btnId = btn.id ?? String(idx)
+    const isCopied = copied === btnId
+    const isLoading = serverLoading === btnId
+
+    let label = btn.label ?? 'Button'
+    let v = (variant ?? btn.variant ?? 'secondary') as 'default' | 'secondary' | 'destructive' | 'outline' | 'ghost'
+
+    if (btn.action === 'toggle' && btn.toggle_input) {
+      const on = isToggleOn(btn, idx)
+      label = on ? (btn.label_on ?? label) : (btn.label_off ?? label)
+      v = ((on ? (btn.variant_on ?? v) : (btn.variant_off ?? v)) as typeof v)
+    }
+
+    return (
+      <Button
+        key={btnId}
+        type='button'
+        variant={v}
+        size='sm'
+        className='h-7 gap-1.5 text-[12px]'
+        disabled={serverLoading !== null}
+        onClick={() => handleClick(btn, idx)}
+      >
+        {isLoading ? '…' : isCopied ? '✓ Copied' : label}
+      </Button>
+    )
+  }
+
+  if (buttons.length === 0) return null
+
+  if (layout === 'split' && buttons.length > 1) {
+    const [primary, ...rest] = buttons
+    const primaryId = primary.id ?? '0'
+    const primaryLoading = serverLoading === primaryId
+
+    let primaryLabel = primary.label ?? 'Button'
+    let primaryVariant = (primary.variant ?? 'default') as 'default' | 'secondary' | 'destructive' | 'outline' | 'ghost'
+    if (primary.action === 'toggle' && primary.toggle_input) {
+      const on = isToggleOn(primary, 0)
+      primaryLabel = on ? (primary.label_on ?? primaryLabel) : (primary.label_off ?? primaryLabel)
+      primaryVariant = ((on ? (primary.variant_on ?? primaryVariant) : (primary.variant_off ?? primaryVariant)) as typeof primaryVariant)
+    }
+
+    return (
+      <div className='flex items-center'>
+        <Button
+          type='button'
+          variant={primaryVariant}
+          size='sm'
+          className='h-7 rounded-r-none text-[12px] gap-1.5 border-r-0'
+          disabled={serverLoading !== null}
+          onClick={() => handleClick(primary, 0)}
+        >
+          {primaryLoading ? '…' : copied === primaryId ? '✓ Copied' : primaryLabel}
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type='button'
+              variant={(primary.variant ?? 'default') as 'default' | 'secondary' | 'destructive' | 'outline' | 'ghost'}
+              size='sm'
+              className='h-7 rounded-l-none px-1.5 text-[12px]'
+              disabled={serverLoading !== null}
+              aria-label='More actions'
+            >
+              <svg width='12' height='12' viewBox='0 0 12 12' fill='none' aria-hidden='true'>
+                <path d='M2 4L6 8L10 4' stroke='currentColor' strokeWidth='1.5' strokeLinecap='round' strokeLinejoin='round'/>
+              </svg>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='end' className='min-w-[140px]'>
+            {rest.map((btn, i) => (
+              <DropdownMenuItem
+                key={btn.id ?? i}
+                className='text-[12px]'
+                onSelect={() => handleClick(btn, i + 1)}
+              >
+                {btn.label ?? `Action ${i + 2}`}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    )
+  }
+
+  return (
+    <div className='flex flex-wrap items-center gap-1.5'>
+      {buttons.map((btn, i) => renderBtn(btn, i))}
+    </div>
+  )
+}
+
 export function WidgetSlot({
   widgetId,
   inputBindings = [],
@@ -356,7 +597,9 @@ export function WidgetSlot({
   defaultExpanded = true,
   apiBase = '/api',
   compact = false,
-  strip = false
+  strip = false,
+  onClientAction,
+  onWidgetType
 }: WidgetSlotProps) {
   const [open, setOpen] = useState(defaultExpanded)
   const [widget, setWidget] = useState<WidgetDef | null>(null)
@@ -366,7 +609,13 @@ export function WidgetSlot({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const inputs = resolveInputs(inputBindings, itemDraft)
+  // Auto-include scalar item draft fields so toggle/field-update actions work
+  // without requiring explicit input bindings for every field. Explicit bindings override.
+  const draftScalars: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(itemDraft)) {
+    if (v == null || typeof v !== 'object') draftScalars[k] = v
+  }
+  const inputs = { ...draftScalars, ...resolveInputs(inputBindings, itemDraft) }
   const inputsKey = JSON.stringify(inputs) + (itemCollection ?? '')
 
   useEffect(() => {
@@ -389,7 +638,7 @@ export function WidgetSlot({
         if (cancelled) return
         if (!defRes.ok) throw new Error('Widget not found')
         const defJson = await defRes.json() as { data: WidgetDef }
-        if (!cancelled) { setWidget(defJson.data); setDefLoading(false) }
+        if (!cancelled) { setWidget(defJson.data); setDefLoading(false); onWidgetType?.(defJson.data.widget_type) }
 
         const renderRes = await fetch(`${apiBase}/widgets-internal/${widgetId}/render`, {
           method: 'POST',
@@ -430,6 +679,25 @@ export function WidgetSlot({
           <div className='flex flex-col justify-center border-r border-slate-200 dark:border-border px-4 py-2.5 w-36'>
             <span className='animate-pulse h-2 w-10 rounded bg-slate-200 dark:bg-slate-700 mb-1' />
             <span className='animate-pulse h-3.5 w-20 rounded bg-slate-200 dark:bg-slate-700' />
+          </div>
+        )
+      }
+      // Button-group doesn't fit the stat cell model — render inline in the strip
+      if (widget!.widget_type === 'button-group') {
+        return (
+          <div className='h-full flex items-center px-3'>
+            {renderLoading ? (
+              <div className='animate-pulse h-7 w-24 rounded bg-slate-200 dark:bg-slate-700' />
+            ) : renderData && (
+              <ButtonGroupDisplay
+                buttons={(renderData.buttons ?? []) as BtnGroupButton[]}
+                layout={(renderData.layout as string) ?? 'flat'}
+                widgetId={widgetId}
+                inputs={inputs}
+                apiBase={apiBase}
+                onClientAction={onClientAction}
+              />
+            )}
           </div>
         )
       }
@@ -479,6 +747,16 @@ export function WidgetSlot({
               {widget.widget_type === 'action-buttons' && (
                 <ActionButtonsDisplay data={renderData} widgetId={widgetId} inputs={inputs} apiBase={apiBase} />
               )}
+              {widget.widget_type === 'button-group' && (
+                <ButtonGroupDisplay
+                  buttons={(renderData.buttons ?? []) as BtnGroupButton[]}
+                  layout={(renderData.layout as string) ?? 'flat'}
+                  widgetId={widgetId}
+                  inputs={inputs}
+                  apiBase={apiBase}
+                  onClientAction={onClientAction}
+                />
+              )}
             </>
           )
         )}
@@ -513,7 +791,17 @@ export function WidgetSlot({
                   apiBase={apiBase}
                 />
               )}
-              {!['stat', 'list', 'action-buttons', 'custom-query'].includes(widget.widget_type) && (
+              {widget.widget_type === 'button-group' && (
+                <ButtonGroupDisplay
+                  buttons={(renderData.buttons ?? []) as BtnGroupButton[]}
+                  layout={(renderData.layout as string) ?? 'flat'}
+                  widgetId={widgetId}
+                  inputs={inputs}
+                  apiBase={apiBase}
+                  onClientAction={onClientAction}
+                />
+              )}
+              {!['stat', 'list', 'action-buttons', 'custom-query', 'button-group'].includes(widget.widget_type) && (
                 <pre className='whitespace-pre-wrap text-[11px] text-slate-500'>{JSON.stringify(renderData, null, 2)}</pre>
               )}
             </>

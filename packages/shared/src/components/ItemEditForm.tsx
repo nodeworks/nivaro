@@ -338,6 +338,8 @@ export function ItemEditForm({
     staleTime: 60_000,
   })
 
+  const [headerWidgetTypes, setHeaderWidgetTypes] = useState<Record<string, string>>({})
+
   const [pdfLoading, setPdfLoading] = useState<number | null>(null)
   const [showPdfDropdown, setShowPdfDropdown] = useState(false)
   const [pdfAttaching, setPdfAttaching] = useState(false)
@@ -2521,6 +2523,7 @@ export function ItemEditForm({
 
                 if (item.type === 'widget') {
                   const w = item.data
+                  const isBtnGroup = headerWidgetTypes[w.field] === 'button-group'
                   return (
                     <div key={w.field} className='group relative self-stretch border-r border-slate-200 dark:border-border'>
                       <WidgetSlot
@@ -2532,8 +2535,9 @@ export function ItemEditForm({
                         compact={true}
                         strip={true}
                         apiBase='/api'
+                        onWidgetType={(t) => setHeaderWidgetTypes(prev => ({ ...prev, [w.field]: t }))}
                       />
-                      {copiedHeaderField === w.field
+                      {!isBtnGroup && (copiedHeaderField === w.field
                         ? <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
                         : (
                           <button
@@ -2544,7 +2548,7 @@ export function ItemEditForm({
                             <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
                           </button>
                         )
-                      }
+                      )}
                     </div>
                   )
                 }

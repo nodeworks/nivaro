@@ -10827,6 +10827,12 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
               <div className='flex gap-2'>
                 {availableWidgets.length > 0 && (
                   <Popover open={addingWidget} onOpenChange={setAddingWidget}>
+                    <PopoverTrigger asChild>
+                      <Button size='sm' variant='outline' className='h-7 text-[12px]'>
+                        <Plus className='mr-1 h-3 w-3' />
+                        Add Widget
+                      </Button>
+                    </PopoverTrigger>
                     <PopoverContent className='w-56 p-1' align='end'>
                       {availableWidgets.map(w => {
                         const key = `__widget_${w.id}__`
