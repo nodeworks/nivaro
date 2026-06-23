@@ -7,69 +7,85 @@ export function StepsBar({
   active,
   completed,
   errorSteps,
-  onStepClick
+  onStepClick,
+  embedded = false
 }: {
   steps: StepDef[]
   active: string
   completed: Set<string>
   errorSteps?: Set<string>
   onStepClick: (k: string) => void
+  embedded?: boolean
 }) {
   return (
-    <div className='w-full grid pt-5 pb-3' style={{ gridTemplateColumns: `repeat(${steps.length}, 1fr)` }}>
+    <div
+      className={cn(
+        'flex overflow-hidden',
+        embedded
+          ? 'border-b border-slate-200 dark:border-border'
+          : 'rounded-xl border border-slate-200 dark:border-border'
+      )}
+    >
       {steps.map((s, i) => {
         const isActive = s.key === active
         const isDone = completed.has(s.key) && !isActive
         const hasError = errorSteps?.has(s.key) && !isActive
+
         return (
-          <div key={s.key} className='relative flex flex-col items-center gap-2 px-1'>
-            {i < steps.length - 1 && (
-              <div
-                className='absolute top-4 left-1/2 w-full -translate-y-1/2'
-                style={{ right: 0 }}
-              >
-                <div
-                  className={cn(
-                    'h-0.5 w-full transition-colors duration-500',
-                    isDone ? 'bg-emerald-400' : 'bg-slate-200 dark:bg-slate-700'
-                  )}
-                />
-              </div>
+          <button
+            key={s.key}
+            type='button'
+            onClick={() => onStepClick(s.key)}
+            className={cn(
+              'group relative flex min-w-0 flex-1 items-center gap-2.5 px-4 py-3.5 text-left transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00ceff]',
+              i < steps.length - 1 && 'border-r',
+              isActive
+                ? 'border-r-[#172940]/20 bg-[#172940] dark:border-r-border dark:bg-[#00ceff]/[0.08]'
+                : hasError
+                  ? 'border-r-slate-200 bg-red-50/50 hover:bg-red-50 dark:border-r-border dark:bg-red-500/[0.04] dark:hover:bg-red-500/[0.07]'
+                  : 'border-r-slate-200 bg-white hover:bg-slate-50/80 dark:border-r-border dark:bg-card dark:hover:bg-white/[0.02]'
             )}
-            <button
-              type='button'
-              onClick={() => onStepClick(s.key)}
-              className={cn(
-                'relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00ceff] focus-visible:ring-offset-2',
-                isActive
-                  ? 'bg-[#00ceff] text-[#172940] shadow-[0_0_0_5px_rgba(0,206,255,0.16)]'
-                  : hasError
-                    ? 'bg-red-500 text-white'
-                    : isDone
-                      ? 'bg-emerald-500 text-white'
-                      : 'border-2 border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:text-slate-500 dark:border-slate-700 dark:bg-transparent dark:text-slate-500 dark:hover:border-slate-600'
-              )}
-            >
-              {isDone && !hasError
-                ? <Check className='h-3.5 w-3.5' strokeWidth={2.5} />
-                : <span className='text-[11px] font-bold'>{i + 1}</span>
-              }
-            </button>
+          >
+            {isActive && (
+              <span className='pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-[#00ceff]' />
+            )}
+
             <span
               className={cn(
-                'text-center text-[11px] leading-tight transition-colors duration-200',
+                'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-[10px] font-bold leading-none transition-colors duration-200',
                 isActive
-                  ? 'font-semibold text-slate-900 dark:text-slate-100'
-                  : hasError
-                    ? 'font-medium text-red-500'
-                    : isDone
-                      ? 'font-medium text-slate-400 dark:text-slate-500'
-                      : 'font-medium text-slate-400 dark:text-slate-500'
+                  ? 'bg-[#00ceff] text-[#172940]'
+                  : isDone
+                    ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400'
+                    : hasError
+                      ? 'bg-red-100 text-red-600 dark:bg-red-500/15 dark:text-red-400'
+                      : 'bg-slate-100 text-slate-400 dark:bg-white/[0.06] dark:text-slate-500'
+              )}
+            >
+              {isDone && !hasError ? (
+                <Check className='h-[10px] w-[10px]' strokeWidth={3} />
+              ) : hasError ? (
+                '!'
+              ) : (
+                i + 1
+              )}
+            </span>
+
+            <span
+              className={cn(
+                'min-w-0 truncate text-[12px] font-medium leading-none transition-colors duration-200',
+                isActive
+                  ? 'text-white dark:text-[#00ceff]'
+                  : isDone
+                    ? 'text-slate-400 dark:text-slate-500'
+                    : hasError
+                      ? 'font-semibold text-red-600 dark:text-red-400'
+                      : 'text-slate-500 group-hover:text-slate-700 dark:text-slate-400 dark:group-hover:text-slate-300'
               )}
             >
               {s.label}
             </span>
-          </div>
+          </button>
         )
       })}
     </div>

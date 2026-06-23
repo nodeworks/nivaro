@@ -1706,6 +1706,7 @@ export function ItemEditForm({
             completed={containerCompleted}
             errorSteps={containerErrors}
             onStepClick={(k) => setContainerTab(c, k)}
+            embedded
           />
         ) : (
           <div className='flex border-b border-slate-100'>
@@ -2216,19 +2217,17 @@ export function ItemEditForm({
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
           return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | string)}</div>
         })}
-        <div className='rounded-xl border border-slate-200 bg-white px-5 py-3'>
-          <StepsBar
-            steps={allSteps}
-            active={activeTab}
-            completed={completedSteps}
-            errorSteps={new Set(
-              allSteps
-                .filter((s) => (groupedMap[s.key] ?? []).some((f) => validationErrors[f.field]))
-                .map((s) => s.key)
-            )}
-            onStepClick={setActiveTab}
-          />
-        </div>
+        <StepsBar
+          steps={allSteps}
+          active={activeTab}
+          completed={completedSteps}
+          errorSteps={new Set(
+            allSteps
+              .filter((s) => (groupedMap[s.key] ?? []).some((f) => validationErrors[f.field]))
+              .map((s) => s.key)
+          )}
+          onStepClick={setActiveTab}
+        />
         {renderTabContent(activeTab, true)}
         {postTabItems.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
