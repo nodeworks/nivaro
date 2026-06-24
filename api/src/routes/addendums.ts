@@ -13,6 +13,62 @@ function parseJsonSafe(val: unknown): unknown {
   }
 }
 
+// Columns blocked on the nivaro_addendums table write path
+const RESERVED_COLUMNS = new Set([
+  'id', 'created_at', 'updated_at', 'created_by', 'status',
+  'parent_collection', 'parent_id', 'title', 'description',
+  'cost_impact', 'timeline_impact_days', 'workflow_template_id',
+  'addendum_layout_id', 'approved_by', 'approved_at',
+  'fields_schema', 'data'
+])
+
+// Columns blocked on the PARENT business table write path (apply-back on approve)
+const PARENT_WRITE_BLOCKED_COLUMNS = new Set([
+  'id', 'created_at', 'updated_at', 'created_by',
+  'password', 'password_hash', 'totp_secret', 'totp_enabled',
+  'static_token', 'admin_access', 'app_access',
+  'tenant_id', 'workspace_id', 'workspace', 'owner_id',
+  'deleted_at', 'is_deleted', 'is_redacted', 'redacted_at',
+  'external_id', 'role',
+])
+
+async function getAllowedAddendumFields(
+  collection: string,
+  addendumLayoutId: number | null | undefined
+): Promise<Set<string>> {
+  let layoutId = addendumLayoutId
+
+  if (layoutId) {
+    // Verify the provided layout belongs to this collection and is an addendum-type layout
+    const layout = await db('nivaro_collection_layouts')
+      .where({ id: layoutId })
+      .select('id', 'collection', 'layout_type')
+      .first() as { id: number; collection: string; layout_type: string } | undefined
+    if (!layout || layout.collection !== collection || layout.layout_type !== 'addendum') {
+      return new Set()
+    }
+  } else {
+    // Find the default addendum-type layout for this collection
+    const defaultLayout = await db('nivaro_collection_layouts')
+      .where({ collection, layout_type: 'addendum' })
+      .orderBy('sort', 'asc')
+      .first() as { id: number } | undefined
+    if (!defaultLayout) return new Set()
+    layoutId = defaultLayout.id
+  }
+
+  const assignments = await db('nivaro_layout_field_assignments')
+    .where({ layout_id: layoutId })
+    .select('field') as Array<{ field: string }>
+
+  // Exclude sentinel fields and reserved columns
+  return new Set(
+    assignments
+      .map((a) => a.field)
+      .filter((k) => !k.startsWith('__') && !RESERVED_COLUMNS.has(k))
+  )
+}
+
 function formatAddendum(row: Record<string, unknown>) {
   return {
     ...row,
@@ -87,6 +143,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
       data?: Record<string, unknown>
       cost_impact?: number | null
       timeline_impact_days?: number | null
+      addendum_layout_id?: number | null
     }
 
     if (!body.parent_collection || !body.parent_id || !body.title) {
@@ -95,32 +152,69 @@ export async function addendumsRoutes(app: FastifyInstance) {
 
     const col = (await db('nivaro_collections')
       .where({ collection: body.parent_collection })
-      .select('addendums_enabled', 'addendum_allowed_states')
-      .first()) as { addendums_enabled: number | boolean; addendum_allowed_states?: string | null } | undefined
+      .select('addendums_enabled', 'addendum_allowed_roles', 'addendum_allowed_states')
+      .first()) as { addendums_enabled: number | boolean; addendum_allowed_roles: string | null; addendum_allowed_states: string | null } | undefined
 
     const enabled = col?.addendums_enabled === 1 || col?.addendums_enabled === true
     if (!enabled) {
       return reply.code(403).send({ error: 'Addendums are not enabled for this collection' })
     }
 
-    // Enforce pipeline state restrictions if configured
-    const allowedStates = col?.addendum_allowed_states
-      ? (() => { try { return JSON.parse(col.addendum_allowed_states) } catch { return null } })()
-      : null
-    if (Array.isArray(allowedStates) && allowedStates.length > 0) {
-      for (const rule of allowedStates as Array<{ pipeline_id: string; state_keys: string[] }>) {
-        if (!rule.pipeline_id || !rule.state_keys?.length) continue
-        const instance = await db('nivaro_workflow_instances')
-          .where({ collection: body.parent_collection, item: String(body.parent_id), template: rule.pipeline_id })
-          .first() as { current_state: string } | undefined
-        if (!instance) {
-          return reply.code(403).send({ error: 'Item must be in an allowed pipeline state to create an addendum' })
-        }
-        const state = await db('nivaro_workflow_states').where({ id: instance.current_state }).first() as { key: string; label: string } | undefined
-        if (!state || !rule.state_keys.includes(state.key)) {
-          return reply.code(403).send({ error: `Addendums cannot be created in the current pipeline state "${state?.label ?? state?.key ?? 'unknown'}"` })
+    // Role restriction check
+    if (!req.isAdmin && col?.addendum_allowed_roles) {
+      const allowedRoles = parseJsonSafe(col.addendum_allowed_roles) as string[] | null
+      if (Array.isArray(allowedRoles) && allowedRoles.length > 0) {
+        const userRole = req.user?.role ?? null
+        if (!userRole || !allowedRoles.includes(userRole)) {
+          return reply.code(403).send({ error: 'Your role is not allowed to create addendums for this collection' })
         }
       }
+    }
+
+    // State restriction check
+    if (col?.addendum_allowed_states) {
+      const stateRules = parseJsonSafe(col.addendum_allowed_states) as Array<{ pipeline_id: string; state_keys: string[] }> | null
+      if (Array.isArray(stateRules) && stateRules.length > 0) {
+        // Find the pipeline instance for this item
+        const binding = await db('nivaro_workflow_bindings')
+          .whereIn('template', stateRules.map((r) => r.pipeline_id))
+          .where({ collection: body.parent_collection })
+          .first() as { template: string } | undefined
+        if (binding) {
+          const instance = await db('nivaro_workflow_instances')
+            .where({ collection: body.parent_collection, item: String(body.parent_id) })
+            .first() as { current_state: string | null } | undefined
+          const currentState = instance?.current_state ?? null
+          if (currentState) {
+            const stateRow = await db('nivaro_workflow_states').where({ id: currentState }).select('key').first() as { key: string } | undefined
+            const currentKey = stateRow?.key ?? null
+            const rule = stateRules.find((r) => r.pipeline_id === binding.template)
+            if (rule && rule.state_keys.length > 0 && currentKey && !rule.state_keys.includes(currentKey)) {
+              return reply.code(403).send({ error: 'Addendums cannot be created in the current pipeline state' })
+            }
+          }
+        }
+      }
+    }
+
+    // Validate that the provided addendum_layout_id belongs to this collection
+    if (body.addendum_layout_id != null) {
+      const layout = await db('nivaro_collection_layouts')
+        .where({ id: body.addendum_layout_id, collection: body.parent_collection, layout_type: 'addendum' })
+        .first()
+      if (!layout) {
+        return reply.code(400).send({ error: 'Invalid addendum_layout_id for this collection' })
+      }
+    }
+
+    // Sanitize data to only allowed fields from the addendum layout.
+    // Deny-all when no layout configured (no valid addendum layout = no writable fields).
+    let sanitizedData: Record<string, unknown> | null = null
+    if (body.data != null) {
+      const allowedFields = await getAllowedAddendumFields(body.parent_collection, body.addendum_layout_id ?? null)
+      sanitizedData = Object.fromEntries(
+        Object.entries(body.data).filter(([k]) => allowedFields.has(k))
+      )
     }
 
     const now = new Date()
@@ -132,9 +226,10 @@ export async function addendumsRoutes(app: FastifyInstance) {
         description: body.description ?? null,
         workflow_template_id: body.workflow_template_id ?? null,
         fields_schema: body.fields_schema != null ? JSON.stringify(body.fields_schema) : null,
-        data: body.data != null ? JSON.stringify(body.data) : null,
+        data: sanitizedData != null ? JSON.stringify(sanitizedData) : null,
         cost_impact: body.cost_impact ?? null,
         timeline_impact_days: body.timeline_impact_days ?? null,
+        addendum_layout_id: body.addendum_layout_id ?? null,
         status: 'draft',
         created_by: req.user!.id,
         created_at: now,
@@ -306,6 +401,55 @@ export async function addendumsRoutes(app: FastifyInstance) {
     }
 
     const now = new Date()
+
+    // Apply addendum data back to parent record
+    if (existing.data) {
+      const data = parseJsonSafe(existing.data) as Record<string, unknown> | null
+      if (data && typeof data === 'object') {
+        const allowedKeys = await getAllowedAddendumFields(
+          existing.parent_collection as string,
+          existing.addendum_layout_id as number | null
+        )
+        const fieldMeta = await db('nivaro_fields')
+          .where({ collection: existing.parent_collection as string })
+          .select('field', 'interface', 'type') as Array<{ field: string; interface: string | null; type: string | null }>
+        const subRowFields = new Set(
+          fieldMeta.filter((f) => f.interface === 'sub-rows' || f.type === 'o2m').map((f) => f.field)
+        )
+        const scalarPatch: Record<string, unknown> = {}
+        for (const [key, value] of Object.entries(data)) {
+          if (PARENT_WRITE_BLOCKED_COLUMNS.has(key)) continue
+          if (!allowedKeys.has(key)) continue
+          if (subRowFields.has(key)) {
+            const rows = Array.isArray(value) ? value : []
+            await db('nivaro_sub_rows')
+              .where({ parent_collection: existing.parent_collection, parent_id: existing.parent_id, sub_row_field: key })
+              .delete()
+            if (rows.length > 0) {
+              await db('nivaro_sub_rows').insert(
+                rows.map((row: unknown, idx: number) => ({
+                  parent_collection: existing.parent_collection,
+                  parent_id: existing.parent_id,
+                  sub_row_field: key,
+                  sort: idx,
+                  data: JSON.stringify(row),
+                  created_at: now,
+                  updated_at: now,
+                }))
+              )
+            }
+          } else {
+            scalarPatch[key] = value
+          }
+        }
+        if (Object.keys(scalarPatch).length > 0) {
+          await db(existing.parent_collection as string)
+            .where({ id: existing.parent_id })
+            .update({ ...scalarPatch, updated_at: now })
+        }
+      }
+    }
+
     await db('nivaro_addendums')
       .where({ id })
       .update({ status: 'approved', approved_by: req.user!.id, approved_at: now, updated_at: now })

@@ -32,7 +32,7 @@ import type {
   SummaryAggConfig,
   SummaryEntry
 } from './item-edit/types'
-import { CommentPanel, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
+import { AddendumPanel, CommentPanel, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
 import { WidgetSlot, type InputBinding } from './WidgetSlot'
 import type { PendingTask } from './panels/TaskPanel'
 import { Button } from './ui/button'
@@ -315,11 +315,11 @@ export function ItemEditForm({
     staleTime: 60_000
   })
 
-  const { data: colMeta } = useQuery<{ display_name?: string; singular?: string | null; display_template?: string | null; item_locking_enabled?: boolean }>({
+  const { data: colMeta } = useQuery<{ display_name?: string; singular?: string | null; display_template?: string | null; item_locking_enabled?: boolean; addendums_enabled?: boolean; addendum_allowed_roles?: string | null; addendum_allowed_states?: string | null }>({
     queryKey: ['col-meta', collection],
     queryFn: () =>
       client
-        .request<{ data: { display_name?: string; singular?: string | null; display_template?: string | null; item_locking_enabled?: boolean } }>(
+        .request<{ data: { display_name?: string; singular?: string | null; display_template?: string | null; item_locking_enabled?: boolean; addendums_enabled?: boolean; addendum_allowed_roles?: string | null; addendum_allowed_states?: string | null } }>(
           get(`/collections/${collection}`)
         )
         .then((r) => r.data),
@@ -682,12 +682,14 @@ export function ItemEditForm({
   // ── Lock condition data ────────────────────────────────────────────────────
   const hasLockConditions = assignments.some((a) => a.lock_conditions)
 
+  const addendumEnabled = !!colMeta?.addendums_enabled && !isNew
+
   const { data: currentUserData } = useQuery<{ role?: string | null } | null>({
     queryKey: ['current-user-me'],
     queryFn: () =>
       client.request<{ data: { role?: string | null } }>(get('/users/me')).then((r) => r.data ?? null),
     staleTime: 5 * 60_000,
-    enabled: hasLockConditions
+    enabled: hasLockConditions || addendumEnabled
   })
 
   const { data: pipelineInstanceData } = useQuery<{ instance?: { current_state?: string | null } | null; states?: Array<{ id: string; key: string }> } | null>({
@@ -697,8 +699,35 @@ export function ItemEditForm({
         .then((r) => r.data as { instance?: { current_state?: string | null } | null; states?: Array<{ id: string; key: string }> })
         .catch(() => null),
     staleTime: 30_000,
-    enabled: hasLockConditions && !isNew
+    enabled: (hasLockConditions || addendumEnabled) && !isNew
   })
+
+  const addendumCanCreate = useMemo(() => {
+    if (!addendumEnabled) return false
+    // Role check
+    if (colMeta?.addendum_allowed_roles) {
+      try {
+        const allowedRoles = JSON.parse(colMeta.addendum_allowed_roles) as string[]
+        if (Array.isArray(allowedRoles) && allowedRoles.length > 0) {
+          const userRole = currentUserData?.role ?? null
+          if (!userRole || !allowedRoles.includes(userRole)) return false
+        }
+      } catch { /* malformed JSON — allow */ }
+    }
+    // State check
+    if (colMeta?.addendum_allowed_states) {
+      try {
+        const stateRules = JSON.parse(colMeta.addendum_allowed_states) as Array<{ pipeline_id: string; state_keys: string[] }>
+        if (Array.isArray(stateRules) && stateRules.length > 0) {
+          const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
+          const currentStateKey = pipelineInstanceData?.states?.find((s) => s.id === currentStateId)?.key ?? null
+          const allowed = stateRules.some((rule) => rule.state_keys.length === 0 || (currentStateKey !== null && rule.state_keys.includes(currentStateKey)))
+          if (!allowed) return false
+        }
+      } catch { /* malformed JSON — allow */ }
+    }
+    return true
+  }, [addendumEnabled, colMeta?.addendum_allowed_roles, colMeta?.addendum_allowed_states, currentUserData?.role, pipelineInstanceData])
 
   // When a specific layout is requested by slug, only show fields explicitly
   // assigned to that layout — unassigned fields should not appear.
@@ -1959,6 +1988,14 @@ export function ItemEditForm({
           <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
+        {colMeta?.addendums_enabled && !isNew && (
+          <AddendumPanel
+            collection={collection}
+            item={itemId}
+            addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
+            canCreate={addendumCanCreate}
+          />
+        )}
       </div>
     )
   }
@@ -2127,6 +2164,14 @@ export function ItemEditForm({
           <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
+        {colMeta?.addendums_enabled && !isNew && (
+          <AddendumPanel
+            collection={collection}
+            item={itemId}
+            addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
+            canCreate={addendumCanCreate}
+          />
+        )}
       </div>
     )
   }
@@ -2245,6 +2290,14 @@ export function ItemEditForm({
           <CommentPanel collection={collection} item={itemId} defaultExpanded={false} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
+        {colMeta?.addendums_enabled && !isNew && (
+          <AddendumPanel
+            collection={collection}
+            item={itemId}
+            addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
+            canCreate={addendumCanCreate}
+          />
+        )}
         {stepNav}
       </div>
     )

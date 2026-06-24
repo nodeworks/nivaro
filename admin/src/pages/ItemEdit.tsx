@@ -33,8 +33,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
-import { type Addendum, api, type CMSField } from '@/lib/api'
+import { api, type CMSField } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, titleCase } from '@/lib/utils'
 import { ItemEditAuthContext, ItemEditForm, NavigationContext, NivaroProvider, WidgetSlot } from '@nivaro/shared'
@@ -147,100 +146,6 @@ function AttributeField({ def, onSave, saving }: { def: AttributeDef; onSave: (v
         <Button size='sm' className='h-7 text-[12px]' disabled={saving} onClick={() => onSave(draft)}>
           {saving ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Save'}
         </Button>
-      )}
-    </div>
-  )
-}
-
-// ─── AddendumPanel ────────────────────────────────────────────────────────────
-
-function AddendumPanel({ collection, itemId }: { collection: string; itemId: string }) {
-  const qc = useQueryClient()
-  const [adding, setAdding] = useState(false)
-  const [newTitle, setNewTitle] = useState('')
-  const [newDesc, setNewDesc] = useState('')
-  const [newCost, setNewCost] = useState('')
-  const [newDays, setNewDays] = useState('')
-
-  const { data: addendums = [] } = useQuery({
-    queryKey: ['addendums', collection, itemId],
-    queryFn: () => api.get<{ data: Addendum[] }>(`/addendums/${collection}/${itemId}`).then((r) => r.data.data)
-  })
-
-  const createMut = useMutation({
-    mutationFn: (body: { title: string; description?: string; cost_impact?: number; timeline_impact_days?: number }) =>
-      api.post('/addendums', { parent_collection: collection, parent_id: itemId, ...body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['addendums', collection, itemId] })
-      setAdding(false); setNewTitle(''); setNewDesc(''); setNewCost(''); setNewDays('')
-      toast.success('Addendum created')
-    },
-    onError: () => toast.error('Failed to create addendum')
-  })
-
-  const approveMut = useMutation({
-    mutationFn: (aId: string) => api.post(`/addendums/${aId}/approve`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['addendums', collection, itemId] }); toast.success('Addendum approved') }
-  })
-
-  const STATUS_COLORS: Record<string, string> = {
-    draft: 'bg-slate-100 text-slate-600',
-    review: 'bg-amber-100 text-amber-700',
-    approved: 'bg-emerald-100 text-emerald-700',
-    rejected: 'bg-red-100 text-red-600'
-  }
-
-  return (
-    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
-      <div className='flex items-center justify-between px-4 py-3 border-b border-slate-200'>
-        <h3 className='text-[13px] font-medium text-slate-700'>Addenda & Amendments</h3>
-        <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding(true)}>
-          + New Addendum
-        </Button>
-      </div>
-      {addendums.length === 0 && !adding ? (
-        <div className='px-4 py-6 text-center text-[12px] text-slate-400'>No addenda attached to this record</div>
-      ) : (
-        <div className='divide-y divide-slate-100'>
-          {addendums.map((a) => (
-            <div key={a.id} className='flex items-start gap-3 px-4 py-3'>
-              <div className='flex-1 min-w-0'>
-                <div className='flex items-center gap-2'>
-                  <span className='text-[13px] font-medium text-slate-800'>{a.title}</span>
-                  <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', STATUS_COLORS[a.status] ?? STATUS_COLORS.draft)}>{a.status}</span>
-                </div>
-                {a.description && <p className='mt-0.5 text-[12px] text-slate-500 line-clamp-2'>{a.description}</p>}
-                <div className='mt-1 flex items-center gap-3 text-[11px] text-slate-400'>
-                  {a.cost_impact != null && <span>Cost: {a.cost_impact >= 0 ? '+' : ''}{a.cost_impact}</span>}
-                  {a.timeline_impact_days != null && <span>Timeline: {a.timeline_impact_days >= 0 ? '+' : ''}{a.timeline_impact_days}d</span>}
-                </div>
-              </div>
-              {a.status === 'review' && (
-                <Button size='sm' className='h-7 shrink-0 bg-emerald-600 text-[11px] text-white hover:bg-emerald-700' onClick={() => approveMut.mutate(a.id)} disabled={approveMut.isPending}>
-                  Approve
-                </Button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-      {adding && (
-        <div className='border-t border-slate-200 bg-slate-50 p-4 space-y-3'>
-          <p className='text-[12px] font-medium text-slate-600'>New Addendum</p>
-          <div className='grid grid-cols-2 gap-3'>
-            <div className='col-span-2'><Label className='mb-1 block text-[11px]'>Title</Label><Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} className='h-7 text-[12px]' placeholder='Amendment title' /></div>
-            <div className='col-span-2'><Label className='mb-1 block text-[11px]'>Description</Label><Textarea value={newDesc} onChange={(e) => setNewDesc(e.target.value)} rows={2} className='text-[12px]' placeholder='Describe the amendment…' /></div>
-            <div><Label className='mb-1 block text-[11px]'>Cost Impact</Label><Input type='number' value={newCost} onChange={(e) => setNewCost(e.target.value)} className='h-7 text-[12px]' placeholder='0.00' /></div>
-            <div><Label className='mb-1 block text-[11px]'>Timeline (days)</Label><Input type='number' value={newDays} onChange={(e) => setNewDays(e.target.value)} className='h-7 text-[12px]' placeholder='0' /></div>
-          </div>
-          <div className='flex justify-end gap-2'>
-            <Button type='button' variant='outline' size='sm' className='h-7 text-[12px]' onClick={() => setAdding(false)}>Cancel</Button>
-            <Button type='button' size='sm' className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan-dark' disabled={!newTitle.trim() || createMut.isPending}
-              onClick={() => createMut.mutate({ title: newTitle.trim(), description: newDesc || undefined, cost_impact: newCost ? parseFloat(newCost) : undefined, timeline_impact_days: newDays ? parseInt(newDays, 10) : undefined })}>
-              {createMut.isPending ? 'Creating…' : 'Create Addendum'}
-            </Button>
-          </div>
-        </div>
       )}
     </div>
   )
@@ -540,9 +445,7 @@ export function ItemEditPage() {
           </CardContent>
         </Card>
       )}
-      {id && !isNew && colMeta?.addendums_enabled && (
-        <AddendumPanel collection={collection!} itemId={id} />
-      )}
+
     </>
   )
 

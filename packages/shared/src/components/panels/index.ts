@@ -1,3 +1,4 @@
+export { AddendumPanel } from './AddendumPanel'
 export { CommentPanel } from './CommentPanel'
 export { OwnersSlot } from './OwnersSlot'
 export type { LockHolder } from './ItemLockBanner'

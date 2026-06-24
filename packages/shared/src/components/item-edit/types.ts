@@ -78,6 +78,7 @@ export interface LayoutMeta {
   disable_clone?: boolean | number
   disable_delete?: boolean | number
   accordion_mode?: boolean | number
+  addendum_layout_id?: number | null
 }
 
 export interface ActiveLayoutData {

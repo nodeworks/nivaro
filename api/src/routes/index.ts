@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
+import { addendumConfigsRoutes } from './addendum-configs.js'
 import { aiRoutes } from './ai.js'
 import { aiSettingsRoutes } from './ai-settings.js'
 import { alertsRoutes } from './alerts.js'
@@ -164,6 +165,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(fieldTranslationsRoutes, { prefix: '/field-translations' })
   await app.register(subRowsRoutes, { prefix: '/sub-rows' })
   await app.register(addendumsRoutes, { prefix: '/addendums' })
+  await app.register(addendumConfigsRoutes, { prefix: '/addendum-configs' })
   await app.register(tasksRoutes, { prefix: '/tasks' })
   await app.register(approvalsRoutes, { prefix: '/approvals' })
   await app.register(itemLocksRoutes, { prefix: '/item-locks' })

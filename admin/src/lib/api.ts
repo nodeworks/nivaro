@@ -619,8 +619,24 @@ export interface Addendum {
   title: string
   description: string | null
   status: 'draft' | 'review' | 'approved' | 'rejected'
+  workflow_template_id: string | null
+  workflow_instance_id: string | null
+  data: Record<string, unknown> | null
+  fields_schema: unknown | null
   cost_impact: number | null
   timeline_impact_days: number | null
+  approved_by: string | null
+  approved_at: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AddendumConfig {
+  collection: string
+  fields: Array<{ field: string; label_override?: string | null }> | null
+  workflow_template_id: string | null
+  display_template: string | null
   created_at: string
   updated_at: string
 }

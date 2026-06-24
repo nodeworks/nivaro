@@ -3783,7 +3783,7 @@ function AddendumsSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta', tableName],
     queryFn: () =>
       api
-        .get<{ data: { addendums_enabled: boolean; addendum_allowed_states?: string | null } }>(`/collections/${tableName}`)
+        .get<{ data: { addendums_enabled: boolean; addendum_allowed_states?: string | null; addendum_allowed_roles?: string | null } }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
     enabled: !!tableName,
     staleTime: 10 * 60 * 1000
@@ -3845,6 +3845,41 @@ function AddendumsSection({ tableName }: { tableName: string }) {
     })
   }
 
+  // Role restrictions
+  const [allowedRoles, setAllowedRoles] = useState<string[]>([])
+  const [rolesInit, setRolesInit] = useState(false)
+
+  useEffect(() => {
+    if (col !== undefined && !rolesInit) {
+      try {
+        const parsed = col.addendum_allowed_roles ? JSON.parse(col.addendum_allowed_roles) : []
+        setAllowedRoles(Array.isArray(parsed) ? parsed : [])
+      } catch {
+        setAllowedRoles([])
+      }
+      setRolesInit(true)
+    }
+  }, [col, rolesInit])
+
+  const saveRolesMut = useMutation({
+    mutationFn: (roles: string[]) =>
+      api.patch(`/collections/${tableName}`, {
+        addendum_allowed_roles: roles.length ? JSON.stringify(roles) : null,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      toast.success('Role restrictions saved')
+    },
+    onError: () => toast.error('Failed to save role restrictions'),
+  })
+
+  const { data: allRoles = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['roles-list-addendum'],
+    queryFn: () => api.get('/roles').then((r) => r.data.data ?? []),
+    staleTime: 60_000,
+    enabled: enabled && !!tableName,
+  })
+
   return (
     <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
       <div className='flex items-center justify-between px-4 py-3'>
@@ -3894,6 +3929,46 @@ function AddendumsSection({ tableName }: { tableName: string }) {
               />
             ))
           )}
+
+          <div className='mt-4 border-t border-slate-100 dark:border-border pt-3'>
+            <div className='flex items-center justify-between mb-1'>
+              <div>
+                <p className='text-[12px] font-medium text-slate-700 dark:text-slate-300'>Role restrictions</p>
+                <p className='text-[11px] text-slate-500 dark:text-slate-400 mt-0.5'>
+                  Roles allowed to create addendums. Leave all unchecked to allow any role.
+                </p>
+              </div>
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-7 text-[11px] shrink-0 ml-4'
+                onClick={() => saveRolesMut.mutate(allowedRoles)}
+                disabled={saveRolesMut.isPending}
+              >
+                Save
+              </Button>
+            </div>
+            {allRoles.length === 0 ? (
+              <p className='mt-2 text-[11px] text-slate-400 italic'>No roles defined.</p>
+            ) : (
+              <div className='grid grid-cols-2 gap-x-4 gap-y-1 mt-2'>
+                {allRoles.map((role) => (
+                  <label key={role.id} className='flex items-center gap-1.5 text-[11px] cursor-pointer select-none'>
+                    <input
+                      type='checkbox'
+                      checked={allowedRoles.includes(role.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) setAllowedRoles((prev) => [...prev, role.id])
+                        else setAllowedRoles((prev) => prev.filter((r) => r !== role.id))
+                      }}
+                      className='rounded'
+                    />
+                    <span className='text-slate-700 dark:text-slate-300'>{role.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -8406,7 +8481,9 @@ interface CollectionLayout {
   allow_schedule?: boolean | number
   allow_disable_pickers?: boolean | number
   conditions?: { role_ids?: string[] } | null
-  layout_type?: 'grouped' | 'table' | 'file'
+  layout_type?: 'grouped' | 'table' | 'file' | 'addendum'
+  addendum_layout_id?: number | null
+  workflow_template_id?: string | null
   row_order_field?: string | null
   pdf_theme?: string | null
   pdf_template_id?: number | null
@@ -8417,6 +8494,58 @@ interface CollectionLayout {
   pdf_page_size?: string | null
   pdf_orientation?: string | null
   pdf_button_label?: string | null
+}
+
+function WorkflowCombobox({
+  value,
+  options,
+  onChange,
+}: {
+  value: string | null
+  options: Array<{ id: string; name: string }>
+  onChange: (val: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const selected = options.find((o) => o.id === value)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className='flex max-w-[140px] items-center justify-between gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+        >
+          <span className='truncate text-slate-700 dark:text-slate-200'>{selected?.name ?? 'None'}</span>
+          <ChevronsUpDown className='h-3 w-3 shrink-0 text-slate-400' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-48 p-0' align='end'>
+        <Command>
+          <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+          <CommandList>
+            <CommandItem
+              value='__none__'
+              onSelect={() => { onChange(null); setOpen(false) }}
+              className='text-[11px]'
+            >
+              <Check className={cn('mr-1.5 h-3 w-3', value == null ? 'opacity-100' : 'opacity-0')} />
+              None
+            </CommandItem>
+            {options.map((o) => (
+              <CommandItem
+                key={o.id}
+                value={o.name}
+                onSelect={() => { onChange(o.id); setOpen(false) }}
+                className='text-[11px]'
+              >
+                <Check className={cn('mr-1.5 h-3 w-3', value === o.id ? 'opacity-100' : 'opacity-0')} />
+                {o.name}
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 function LayoutVisibilitySection({
@@ -8512,6 +8641,17 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
     queryFn: () => api.get('/roles').then((r) => r.data.data ?? [])
   })
 
+  const { data: workflowTemplates = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['workflow-templates-list'],
+    queryFn: () => api.get('/pipelines').then((r) => r.data.data ?? [])
+  })
+
+  const { data: addendumLayouts = [] } = useQuery<Array<{ id: number; name: string }>>({
+    queryKey: ['addendum-layouts-list', tableName],
+    queryFn: () => api.get('/collection-layouts', { params: { collection: tableName, layout_type: 'addendum' } }).then((r) => r.data.data ?? []),
+    enabled: !!tableName
+  })
+
   // Auto-seed "Default" layout for collections that have none yet
   useEffect(() => {
     if (layoutsLoaded && layouts.length === 0 && tableName) {
@@ -8575,7 +8715,8 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
       'summary_hide_empty' | 'ai_enabled' | 'conditions' | 'allow_clone' |
       'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field' |
       'pdf_theme' | 'pdf_template_id' | 'pdf_cover_enabled' | 'pdf_cover_title_field' |
-      'pdf_cover_subtitle' | 'pdf_show_logo' | 'pdf_page_size' | 'pdf_orientation' | 'pdf_button_label' | 'is_active'
+      'pdf_cover_subtitle' | 'pdf_show_logo' | 'pdf_page_size' | 'pdf_orientation' | 'pdf_button_label' | 'is_active' |
+      'addendum_layout_id' | 'workflow_template_id'
     >>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
@@ -8627,11 +8768,22 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
               >
                 <button type='button' onClick={() => setSelectedId(l.id)} className='flex min-w-0 flex-1 items-center gap-1.5'>
                   {l.is_active ? (
-                    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', l.layout_type === 'file' ? 'bg-amber-400' : 'bg-nvr-cyan')} />
+                    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', l.layout_type === 'file' ? 'bg-amber-400' : l.layout_type === 'addendum' ? 'bg-violet-400' : 'bg-nvr-cyan')} />
                   ) : (
                     <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-transparent' />
                   )}
                   <span className='truncate'>{l.name}</span>
+                  {l.layout_type && l.layout_type !== 'grouped' && (
+                    <span className={cn(
+                      'shrink-0 rounded px-1 py-px text-[9px] font-medium uppercase tracking-wide',
+                      l.layout_type === 'addendum' ? 'bg-violet-100 text-violet-600 dark:bg-violet-900/40 dark:text-violet-400'
+                      : l.layout_type === 'file' ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400'
+                      : l.layout_type === 'table' ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400'
+                      : ''
+                    )}>
+                      {l.layout_type === 'addendum' ? 'addn' : l.layout_type}
+                    </span>
+                  )}
                 </button>
                 <button
                   type='button'
@@ -8812,7 +8964,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                 <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
                   <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Layout type</span>
                   <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
-                    {(['grouped', 'table', 'file'] as const).map((lt) => (
+                    {(['grouped', 'table', 'file', 'addendum'] as const).map((lt) => (
                       <button
                         key={lt}
                         type='button'
@@ -8824,11 +8976,35 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                             : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
                         )}
                       >
-                        {lt}
+                        {lt === 'addendum' ? 'Addendum Form' : lt}
                       </button>
                     ))}
                   </div>
                 </div>
+                {selected.layout_type === 'addendum' && (
+                  <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
+                    <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Workflow</span>
+                    <WorkflowCombobox
+                      value={selected.workflow_template_id ?? null}
+                      options={workflowTemplates}
+                      onChange={(val) => patchLayoutMut.mutate({ id: selected.id, workflow_template_id: val })}
+                    />
+                  </div>
+                )}
+                {(selected.layout_type == null || selected.layout_type === 'grouped') && (
+                  <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
+                    <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Addendum form</span>
+                    <select
+                      value={selected.addendum_layout_id ?? ''}
+                      onChange={(e) => patchLayoutMut.mutate({ id: selected.id, addendum_layout_id: e.target.value ? Number(e.target.value) : null })}
+                      className='max-w-[140px] rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                    >
+                      <option value=''>Collection default</option>
+                      {addendumLayouts.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                    </select>
+                  </div>
+                )}
+                {selected.layout_type !== 'addendum' && (<>
                 {(selected.layout_type ?? 'grouped') !== 'table' && (<>
                   <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
                     <label className='flex cursor-pointer items-center justify-between'>
@@ -9103,6 +9279,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                     onChange={(roleIds) => patchLayoutMut.mutate({ id: selected.id, conditions: roleIds.length > 0 ? { role_ids: roleIds } : null })}
                   />
                 </div>
+                </>)}
               </div>
             )}
           </div>
