@@ -9284,7 +9284,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
             )}
           </div>
         )}
-        <FieldGroupsTab tableName={tableName} dbColumns={dbColumns} layoutId={effectiveId} layoutType={selected?.layout_type === 'table' ? 'table' : 'grouped'} />
+        <FieldGroupsTab tableName={tableName} dbColumns={dbColumns} layoutId={effectiveId} layoutType={selected?.layout_type === 'table' ? 'table' : selected?.layout_type === 'addendum' ? 'addendum' : 'grouped'} />
       </div>
     </div>
   )
@@ -9632,7 +9632,7 @@ function InlineDisplaySection({
   )
 }
 
-function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'grouped' }: { tableName: string; dbColumns?: Array<{ name: string; data_type: string }>; layoutId: number | null; layoutType?: 'grouped' | 'table' }) {
+function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'grouped' }: { tableName: string; dbColumns?: Array<{ name: string; data_type: string }>; layoutId: number | null; layoutType?: 'grouped' | 'table' | 'addendum' }) {
   const qc = useQueryClient()
 
   const { data: groups = [], isLoading: groupsLoading } = useQuery<FieldGroup[]>({
@@ -10649,8 +10649,25 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         </div>
       )
     }
+    if (layoutType === 'addendum' && !f.startsWith('__')) {
+      const prefill = (localOverrides[f]?.prefill_from_parent as boolean | undefined) ?? true
+      return (
+        <div className='mt-1.5 flex items-center gap-1.5 border-t border-slate-100 pt-1.5 dark:border-border'>
+          <Switch
+            checked={prefill}
+            onCheckedChange={(v) => {
+              setLocalOverrides(prev => ({ ...prev, [f]: { ...(prev[f] ?? {}), prefill_from_parent: v } }))
+              hasLocalChangeRef.current = true
+              changeSeqRef.current++
+            }}
+            className='scale-75'
+          />
+          <span className='text-[10px] text-slate-500 dark:text-slate-400'>Prefill from current record</span>
+        </div>
+      )
+    }
     return undefined
-  }, [tableName, localOverrides, widgetSlotMeta, availableWidgets])
+  }, [tableName, layoutType, localOverrides, widgetSlotMeta, availableWidgets])
 
   const FORMAT_OPTIONS = [
     { value: 'text', label: 'Text (default)' },

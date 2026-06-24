@@ -26,6 +26,7 @@ interface LayoutAssignment {
   label_override: string | null
   is_visible: boolean | number
   sort: number
+  overrides: Record<string, unknown> | string | null
 }
 
 interface Addendum {
@@ -87,7 +88,9 @@ function AddendumCreateSheet({
   const [formData, setFormData] = useState<Record<string, unknown>>(() => {
     const pre: Record<string, unknown> = {}
     for (const a of configuredFields) {
-      pre[a.field] = parentData[a.field] ?? null
+      const ov = typeof a.overrides === 'string' ? (() => { try { return JSON.parse(a.overrides) } catch { return {} } })() : (a.overrides ?? {})
+      const prefill = (ov as Record<string, unknown>)?.prefill_from_parent !== false
+      pre[a.field] = prefill ? (parentData[a.field] ?? null) : null
     }
     return pre
   })
