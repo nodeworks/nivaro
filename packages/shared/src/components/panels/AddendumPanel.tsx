@@ -810,7 +810,7 @@ export function AddendumPanel({
   return (
     <>
       <div className={cn(
-        'overflow-hidden rounded-lg border bg-white dark:bg-card',
+        'overflow-hidden rounded-xl border bg-white dark:bg-card',
         activeCount > 0 ? 'border-amber-300 dark:border-amber-500/40' : 'border-slate-200 dark:border-border'
       )}>
         <div
@@ -821,7 +821,6 @@ export function AddendumPanel({
           onClick={() => setCollapsed(c => !c)}
         >
           <div className='flex items-center gap-2'>
-            <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150', collapsed && '-rotate-90')} />
             <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Addenda & Amendments</h3>
             {activeCount > 0 && (
               <span className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
@@ -830,16 +829,19 @@ export function AddendumPanel({
               </span>
             )}
           </div>
-          {canCreate && (!addendumLayout?.single_active_addendum || activeCount === 0) && (
-            <Button
-              size='sm'
-              variant='outline'
-              className='h-7 text-[12px]'
-              onClick={(e) => { e.stopPropagation(); setSheetOpen(true) }}
-            >
-              + New Addendum
-            </Button>
-          )}
+          <div className='flex items-center gap-2'>
+            {canCreate && (!addendumLayout?.single_active_addendum || activeCount === 0) && (
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-7 text-[12px]'
+                onClick={(e) => { e.stopPropagation(); setSheetOpen(true) }}
+              >
+                + New Addendum
+              </Button>
+            )}
+            <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150', collapsed && '-rotate-90')} />
+          </div>
         </div>
 
         {!collapsed && !addendumLayout && !isLoadingLayout && (
