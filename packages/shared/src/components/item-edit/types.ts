@@ -79,6 +79,7 @@ export interface LayoutMeta {
   disable_delete?: boolean | number
   accordion_mode?: boolean | number
   addendum_layout_id?: number | null
+  addendum_default_view?: boolean | number
 }
 
 export interface ActiveLayoutData {

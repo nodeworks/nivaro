@@ -90,7 +90,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'allow_disable_pickers', 'layout_type', 'row_order_field',
         'pdf_theme', 'pdf_template_id', 'pdf_cover_enabled', 'pdf_cover_title_field',
         'pdf_cover_subtitle', 'pdf_show_logo', 'pdf_page_size', 'pdf_orientation', 'pdf_button_label',
-        'addendum_layout_id', 'workflow_template_id'
+        'addendum_layout_id', 'workflow_template_id', 'single_active_addendum', 'addendum_default_view'
       )
     if (active === 'true') q = q.where({ is_active: 1 })
 
@@ -144,7 +144,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; is_active: boolean; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; addendum_layout_id: number | null; workflow_template_id: string | null }>
+    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; is_active: boolean; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; addendum_layout_id: number | null; workflow_template_id: string | null; single_active_addendum: boolean; addendum_default_view: boolean }>
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
     if (body.slug !== undefined) patch.slug = body.slug ?? null
@@ -164,6 +164,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.allow_disable_pickers !== undefined) patch.allow_disable_pickers = body.allow_disable_pickers ? 1 : 0
     if (body.addendum_layout_id !== undefined) patch.addendum_layout_id = body.addendum_layout_id ?? null
     if (body.workflow_template_id !== undefined) patch.workflow_template_id = body.workflow_template_id ?? null
+    if (body.single_active_addendum !== undefined) patch.single_active_addendum = body.single_active_addendum ? 1 : 0
+    if (body.addendum_default_view !== undefined) patch.addendum_default_view = body.addendum_default_view ? 1 : 0
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 

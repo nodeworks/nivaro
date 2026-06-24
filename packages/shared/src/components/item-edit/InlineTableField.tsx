@@ -22,6 +22,7 @@ import {
   SheetTitle
 } from '../ui/sheet'
 import { useO2MStaging } from './O2MStagingContext'
+import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { FieldRenderer } from './FieldRenderer'
 import { RelationCombobox } from './RelationCombobox'
 import { applyDisplayTemplate, parseJson, SENTINEL_FIELDS } from './helpers'
@@ -138,7 +139,8 @@ export function InlineTableField({
   uniqueBy,
   sortField,
   sortDir = 'asc',
-  prefillParentId
+  prefillParentId,
+  parentFieldKey
 }: {
   relatedCollection: string
   manyField: string
@@ -157,10 +159,12 @@ export function InlineTableField({
   sortField?: string
   sortDir?: 'asc' | 'desc'
   prefillParentId?: string
+  parentFieldKey?: string
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const staging = useO2MStaging()
+  const addendumO2MEntries = useAddendumO2M()[parentFieldKey ?? ''] ?? []
   const isNew = parentId === 'new'
   const parentDraftCtx = useParentDraft()
 
@@ -273,6 +277,7 @@ export function InlineTableField({
   useEffect(() => { editStateRef.current = editState }, [editState])
   const [saving, setSaving] = useState(false)
   const [uniqueError, setUniqueError] = useState<string | null>(null)
+  const activeView = useAddendumView()
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Auto-detect table-type layout for the related collection when no explicit layoutId is given.
@@ -488,20 +493,22 @@ export function InlineTableField({
     return map
   }, [displayCols, childRelations, relatedCollection])
 
-  // Collect unique FK ids per one_collection from all rows (incl. pending edits)
+  // Collect unique FK ids per one_collection from all rows (incl. pending edits + addendum rows)
   const m2oLookupIds = useMemo(() => {
     const result = new Map<string, string[]>()
     const allRows = [...rows, ...pendingRows]
     const pendingEditRows = [...pendingEdits.values()]
+    const addendumRows = addendumO2MEntries.flatMap(e => e.rows)
     for (const [field, rel] of m2oRelMap) {
       if (!rel.one_collection) continue
       const rowIds = allRows.map((r) => r[field]).filter((v) => v != null).map(String)
       const editIds = pendingEditRows.map((r) => r[field]).filter((v) => v != null).map(String)
-      const ids = [...new Set([...rowIds, ...editIds])].sort()
+      const addIds = addendumRows.map((r) => r[field]).filter((v) => v != null).map(String)
+      const ids = [...new Set([...rowIds, ...editIds, ...addIds])].sort()
       if (ids.length) result.set(rel.one_collection, ids)
     }
     return result
-  }, [rows, pendingRows, pendingEdits, m2oRelMap])
+  }, [rows, pendingRows, pendingEdits, m2oRelMap, addendumO2MEntries])
 
   // For relation-grouped fields, track which collection needs group/option expansion
   const m2oGroupedConfig = useMemo(() => {
@@ -1171,7 +1178,7 @@ export function InlineTableField({
           })}
 
           {/* Saved rows */}
-          {!isNew && rows.map((row, ri) => {
+          {!isNew && activeView === 'original' && rows.map((row, ri) => {
             const id = String(row.id)
             const isEditing = editState?.rowId === id
             const isDragging = dragIdx === ri
@@ -1363,8 +1370,53 @@ export function InlineTableField({
               </td>
             </tr>
           )}
+
+          {/* Addendum view rows */}
+          {!isNew && activeView !== 'original' && (() => {
+            const entry = addendumO2MEntries.find(e => e.addendumId === activeView)
+            const colCount =
+              (enableReorder && (rowOrderField || isPendingMode) ? 1 : 0) +
+              (showLineNumbers ? 1 : 0) +
+              (isPendingMode ? 1 : 0) +
+              displayCols.length + 1
+            if (!entry || entry.rows.length === 0) return (
+              <tr>
+                <td colSpan={colCount} className='px-3 py-8 text-center text-[11px] text-amber-500'>
+                  No proposed rows in this addendum
+                </td>
+              </tr>
+            )
+            return entry.rows.map((row, ri) => {
+              const origRow = rows.find(r => String(r.id) === String(row.id))
+              const isNewRow = !origRow
+              const changedFields = new Set(
+                isNewRow ? displayCols.map(c => c.field) :
+                displayCols.filter(c => String(row[c.field] ?? '') !== String(origRow![c.field] ?? '')).map(c => c.field)
+              )
+              const rowChanged = isNewRow || changedFields.size > 0
+              return (
+                <tr key={ri} className={rowChanged ? 'border-b border-amber-100 bg-amber-50/40' : 'border-b border-slate-100'}>
+                  {enableReorder && (rowOrderField || isPendingMode) && <td className='w-6' />}
+                  {showLineNumbers && <td className={`w-8 px-2 align-middle text-[11px] select-none ${rowChanged ? 'text-amber-400' : 'text-slate-400'}`}>{ri + 1}</td>}
+                  {isPendingMode && <td className='w-20' />}
+                  {displayCols.map((c) => (
+                    <td key={c.field} className={`px-2 py-1.5 text-[11px] ${changedFields.has(c.field) ? 'bg-amber-50 text-amber-900' : 'text-slate-700'}`}>
+                      {renderCell(c, row[c.field])}
+                    </td>
+                  ))}
+                  <td className='w-20 px-2 py-1.5 text-right'>
+                    {rowChanged && (
+                      <span className='text-[10px] font-medium uppercase tracking-wide text-amber-400'>
+                        {isNewRow ? 'New' : 'Modified'}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              )
+            })
+          })()}
         </tbody>
-        {(() => {
+        {activeView === 'original' && (() => {
           const aggCols = displayCols.filter(c => {
             const opts = c.options ? (typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown> : {}
             return !!opts.aggregate
@@ -1424,7 +1476,7 @@ export function InlineTableField({
           {uniqueError}
         </div>
       )}
-      {!isEditingNew && (
+      {activeView === 'original' && !isEditingNew && (
         <div className='border-t border-slate-100 px-3 py-1.5'>
           <button type='button' onClick={startNew}
             className='text-[11px] font-medium text-[#00ceff] hover:underline'>

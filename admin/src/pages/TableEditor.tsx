@@ -8519,6 +8519,8 @@ interface CollectionLayout {
   layout_type?: 'grouped' | 'table' | 'file' | 'addendum'
   addendum_layout_id?: number | null
   workflow_template_id?: string | null
+  single_active_addendum?: boolean
+  addendum_default_view?: boolean
   row_order_field?: string | null
   pdf_theme?: string | null
   pdf_template_id?: number | null
@@ -8751,7 +8753,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
       'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field' |
       'pdf_theme' | 'pdf_template_id' | 'pdf_cover_enabled' | 'pdf_cover_title_field' |
       'pdf_cover_subtitle' | 'pdf_show_logo' | 'pdf_page_size' | 'pdf_orientation' | 'pdf_button_label' | 'is_active' |
-      'addendum_layout_id' | 'workflow_template_id'
+      'addendum_layout_id' | 'workflow_template_id' | 'single_active_addendum' | 'addendum_default_view'
     >>) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
@@ -9017,16 +9019,30 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                   </div>
                 </div>
                 {selected.layout_type === 'addendum' && (
-                  <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
-                    <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Workflow</span>
-                    <WorkflowCombobox
-                      value={selected.workflow_template_id ?? null}
-                      options={workflowTemplates}
-                      onChange={(val) => patchLayoutMut.mutate({ id: selected.id, workflow_template_id: val })}
-                    />
+                  <div className='space-y-2'>
+                    <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
+                      <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Workflow</span>
+                      <WorkflowCombobox
+                        value={selected.workflow_template_id ?? null}
+                        options={workflowTemplates}
+                        onChange={(val) => patchLayoutMut.mutate({ id: selected.id, workflow_template_id: val })}
+                      />
+                    </div>
+                    <label className='flex cursor-pointer items-center justify-between'>
+                      <div>
+                        <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>One at a time</span>
+                        <p className='text-[10px] text-slate-400 dark:text-slate-500'>Block new addenda while one is active</p>
+                      </div>
+                      <input
+                        type='checkbox'
+                        checked={!!selected.single_active_addendum}
+                        onChange={(e) => patchLayoutMut.mutate({ id: selected.id, single_active_addendum: e.target.checked })}
+                        className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                      />
+                    </label>
                   </div>
                 )}
-                {(selected.layout_type == null || selected.layout_type === 'grouped') && (
+                {(selected.layout_type == null || selected.layout_type === 'grouped') && (<>
                   <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
                     <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Addendum form</span>
                     <select
@@ -9038,7 +9054,19 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                       {addendumLayouts.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
                     </select>
                   </div>
-                )}
+                  <label className='flex cursor-pointer items-center justify-between'>
+                    <div>
+                      <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Default to addendum view</span>
+                      <p className='text-[10px] text-slate-400 dark:text-slate-500'>Show active addendum changes first on item open</p>
+                    </div>
+                    <input
+                      type='checkbox'
+                      checked={!!selected.addendum_default_view}
+                      onChange={(e) => patchLayoutMut.mutate({ id: selected.id, addendum_default_view: e.target.checked })}
+                      className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                    />
+                  </label>
+                </>)}
                 {selected.layout_type !== 'addendum' && (<>
                 {(selected.layout_type ?? 'grouped') !== 'table' && (<>
                   <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>

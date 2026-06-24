@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
+import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { useO2MStaging } from './O2MStagingContext'
 import type { ActiveLayoutData, CMSField, FieldGroup } from './types'
 
@@ -21,23 +22,27 @@ export function InlineGridField({
   relatedCollection,
   manyField,
   parentId,
-  layoutSlug
+  layoutSlug,
+  parentFieldKey
 }: {
   relatedCollection: string
   manyField: string
   parentId: string
   layoutSlug?: string | null
+  parentFieldKey?: string
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const staging = useO2MStaging()
   const isNew = parentId === 'new'
+  const addendumO2MEntries = useAddendumO2M()[parentFieldKey ?? ''] ?? []
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<Record<string, unknown>>({})
   const [addingNew, setAddingNew] = useState(false)
   const [newDraft, setNewDraft] = useState<Record<string, unknown>>({})
   const [saving, setSaving] = useState(false)
+  const activeView = useAddendumView()
 
   // Layout data (for grouped edit form)
   const { data: activeLayoutData } = useQuery<ActiveLayoutData | null>({
@@ -324,7 +329,7 @@ export function InlineGridField({
   const useGroupedForm = !!fieldsByGroup && sectionGroups.length > 0
 
   return (
-    <div className='rounded-lg border border-slate-200 overflow-hidden text-[12px]'>
+    <div className='relative rounded-lg border border-slate-200 text-[12px]'>
       <table className='w-full'>
         <thead className='bg-slate-50 border-b border-slate-200'>
           <tr>
@@ -365,7 +370,7 @@ export function InlineGridField({
           ))}
 
           {/* Saved rows */}
-          {!isNew && rows.map((row, ri) => {
+          {!isNew && activeView === 'original' && rows.map((row, ri) => {
             const id = String(row.id)
             const isEditing = editingId === id && !useGroupedForm
             return (
@@ -432,8 +437,32 @@ export function InlineGridField({
             )
           })}
 
+          {/* Addendum view rows */}
+          {!isNew && activeView !== 'original' && (() => {
+            const entry = addendumO2MEntries.find(e => e.addendumId === activeView)
+            if (!entry || entry.rows.length === 0) return (
+              <tr>
+                <td colSpan={displayCols.length + 1} className='px-3 py-4 text-center text-[11px] text-amber-500'>
+                  No proposed rows in this addendum
+                </td>
+              </tr>
+            )
+            return entry.rows.map((row, ri) => (
+              <tr key={ri} className='border-b border-amber-100 bg-amber-50/60'>
+                {displayCols.map((c) => (
+                  <td key={c.field} className='px-3 py-1.5 text-[11px] text-amber-900'>
+                    {renderCell(c, row[c.field])}
+                  </td>
+                ))}
+                <td className='px-2 py-1.5 text-right'>
+                  <span className='text-[10px] font-medium uppercase tracking-wide text-amber-400'>Proposed</span>
+                </td>
+              </tr>
+            ))
+          })()}
+
           {/* Inline add-row (no layout) */}
-          {addingNew && !useGroupedForm && (
+          {activeView === 'original' && addingNew && !useGroupedForm && (
             <tr className='border-b border-slate-100 bg-nvr-cyan/5'>
               {isNew && <td className='px-3 py-1.5' />}
               {renderInlineEditCells(newDraft, (k, v) => setNewDraft((d) => ({ ...d, [k]: v })))}
@@ -459,7 +488,7 @@ export function InlineGridField({
             </tr>
           )}
 
-          {displayRows.length === 0 && !addingNew && (
+          {activeView === 'original' && displayRows.length === 0 && !addingNew && (
             <tr>
               <td colSpan={displayCols.length + (isNew ? 2 : 1)} className='px-3 py-4 text-center text-slate-400'>
                 {isNew ? 'No pending rows' : 'No rows'}
@@ -499,7 +528,7 @@ export function InlineGridField({
         </div>
       )}
 
-      {!addingNew && (
+      {activeView === 'original' && !addingNew && (
         <div className='border-t border-slate-100 px-3 py-1.5'>
           <button
             type='button'

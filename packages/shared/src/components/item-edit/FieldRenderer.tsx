@@ -269,7 +269,7 @@ export function FieldRenderer({
           : (field.options ?? {})
         const layoutSlug = (opts.layout_slug as string | null) ?? null
         return (
-          <InlineGridField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutSlug={layoutSlug} />
+          <InlineGridField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutSlug={layoutSlug} parentFieldKey={field.field} />
         )
       }
       return (
@@ -309,7 +309,7 @@ export function FieldRenderer({
         const sortField = typeof opts.sort_field === 'string' && opts.sort_field ? opts.sort_field : undefined
         const sortDir = opts.sort_dir === 'desc' ? 'desc' as const : 'asc' as const
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} prefillParentId={prefillParentId} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} prefillParentId={prefillParentId} parentFieldKey={field.field} />
         )
       }
     }

@@ -22,6 +22,7 @@ interface AddendumLayout {
   name: string
   layout_type: string
   workflow_template_id: string | null
+  single_active_addendum?: boolean | number
 }
 
 interface LayoutAssignment {
@@ -398,7 +399,7 @@ function AddendumCreateSheet({
       // Merge O2M staging rows into formData before submit
       const mergedData = { ...formData }
       for (const a of configuredFields) {
-        const rel = relations.find(r => r.one_collection === collection && r.one_field === a.field)
+        const rel = relations.find(r => r.one_collection === collection && !r.junction_field && (r.one_field === a.field || r.many_collection === a.field))
         if (rel?.many_collection && rel.many_field) {
           const rows = (pendingO2MRowsRef.current.get(`${rel.many_collection}.${rel.many_field}`) ?? [])
             .map(({ __prefilled: _, ...rest }) => rest)
@@ -499,10 +500,12 @@ function AddendumCard({
   addendum,
   configuredFields,
   onRefresh,
+  isActive,
 }: {
   addendum: Addendum
   configuredFields: LayoutAssignment[]
   onRefresh: () => void
+  isActive?: boolean
 }) {
   const client = useNivaroClient()
   const [expanded, setExpanded] = useState(false)
@@ -533,7 +536,12 @@ function AddendumCard({
   const changedFields = configuredFields.filter((a) => proposedData[a.field] !== undefined)
 
   return (
-    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white transition-shadow hover:shadow-sm dark:border-border dark:bg-card'>
+    <div className={cn(
+      'overflow-hidden rounded-lg border bg-white transition-shadow hover:shadow-sm dark:bg-card',
+      isActive
+        ? 'border-amber-300 dark:border-amber-500/40'
+        : 'border-slate-200 dark:border-border'
+    )}>
       <button
         type='button'
         className='flex w-full items-start gap-3 px-4 py-3 text-left'
@@ -649,11 +657,13 @@ export function AddendumPanel({
   item,
   addendumLayoutId,
   canCreate = true,
+  onActiveCountChange,
 }: {
   collection: string
   item: string
   addendumLayoutId?: number | null
   canCreate?: boolean
+  onActiveCountChange?: (count: number) => void
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -737,30 +747,48 @@ export function AddendumPanel({
   const configuredFields = assignments.filter(
     (a) => !String(a.field).startsWith('__') && (a.is_visible || a.is_visible === 1)
   )
-  const pendingCount = addendums.filter((a) => a.status === 'review').length
+  const activeCount = addendums.filter((a) => !['approved', 'rejected'].includes(a.status)).length
+
+  const onActiveCountChangeRef = useRef(onActiveCountChange)
+  onActiveCountChangeRef.current = onActiveCountChange
+  useEffect(() => {
+    onActiveCountChangeRef.current?.(activeCount)
+  }, [activeCount])
 
   return (
     <>
-      <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-border'>
-          <div>
+      <div className={cn(
+        'overflow-hidden rounded-lg border bg-white dark:bg-card',
+        activeCount > 0 ? 'border-amber-300 dark:border-amber-500/40' : 'border-slate-200 dark:border-border'
+      )}>
+        <div className={cn(
+          'flex items-center justify-between px-4 py-3 border-b',
+          activeCount > 0 ? 'border-amber-200 dark:border-amber-500/30' : 'border-slate-200 dark:border-border'
+        )}>
+          <div className='flex items-center gap-2'>
             <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Addenda & Amendments</h3>
-            {pendingCount > 0 && (
-              <p className='text-[11px] text-slate-400 dark:text-slate-500'>
-                {pendingCount} pending review
-              </p>
+            {activeCount > 0 && (
+              <span className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
+                <span className='h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse' />
+                {activeCount} in review
+              </span>
             )}
           </div>
-          {canCreate && (
-            <Button
-              size='sm'
-              variant='outline'
-              className='h-7 text-[12px]'
-              onClick={() => setSheetOpen(true)}
-            >
-              + New Addendum
-            </Button>
-          )}
+          {canCreate && (() => {
+            const blockedBySingle = !!addendumLayout?.single_active_addendum && activeCount > 0
+            return (
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-7 text-[12px]'
+                onClick={() => setSheetOpen(true)}
+                disabled={blockedBySingle}
+                title={blockedBySingle ? 'An addendum is already in progress' : undefined}
+              >
+                + New Addendum
+              </Button>
+            )
+          })()}
         </div>
 
         {!addendumLayout && !isLoadingLayout && (
@@ -793,6 +821,7 @@ export function AddendumPanel({
                   addendum={a}
                   configuredFields={configuredFields}
                   onRefresh={handleRefresh}
+                  isActive={!['approved', 'rejected'].includes(a.status)}
                 />
               ))}
             </div>

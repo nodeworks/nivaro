@@ -767,7 +767,8 @@ export function PipelinePanel({
   defaultExpanded,
   title,
   showApprovalChain,
-  onBeforeTransition
+  onBeforeTransition,
+  addendumPending,
 }: {
   collection: string
   item: string
@@ -775,6 +776,7 @@ export function PipelinePanel({
   title?: string
   showApprovalChain?: boolean
   onBeforeTransition?: () => boolean
+  addendumPending?: boolean
 }) {
   if (item === 'new') return null
   return (
@@ -785,6 +787,7 @@ export function PipelinePanel({
       title={title}
       showApprovalChain={showApprovalChain}
       onBeforeTransition={onBeforeTransition}
+      addendumPending={addendumPending}
     />
   )
 }
@@ -795,7 +798,8 @@ function PipelinePanelInner({
   defaultExpanded,
   title,
   showApprovalChain,
-  onBeforeTransition
+  onBeforeTransition,
+  addendumPending,
 }: {
   collection: string
   item: string
@@ -803,6 +807,7 @@ function PipelinePanelInner({
   title?: string
   showApprovalChain?: boolean
   onBeforeTransition?: () => boolean
+  addendumPending?: boolean
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
@@ -1042,6 +1047,12 @@ function PipelinePanelInner({
             </span>
           )}
           {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
+          {addendumPending && (
+            <span className='flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
+              <span className='h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse shrink-0' />
+              Addendum in review
+            </span>
+          )}
         </div>
         <div className='ml-auto flex items-center gap-2' onClick={(e) => e.stopPropagation()}>
           {!expanded && hasTransitions && (
@@ -1081,6 +1092,12 @@ function PipelinePanelInner({
       )}
       {expanded && (
         <div className='border-t border-slate-100 dark:border-border/60'>
+          {addendumPending && (
+            <div className='flex items-center gap-2 border-b border-amber-100 bg-amber-50 px-5 py-2.5 dark:border-amber-500/20 dark:bg-amber-500/10'>
+              <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />
+              <p className='text-[12px] text-amber-700 dark:text-amber-400'>An addendum is in review — coordinate transitions carefully.</p>
+            </div>
+          )}
           {!instance ? (
             <div className='flex items-center justify-between gap-4 px-5 py-4'>
               <p className='text-[13px] text-slate-500'>Pipeline not started for this record.</p>

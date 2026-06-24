@@ -15,6 +15,7 @@ import {
   SYSTEM_FIELDS
 } from './helpers'
 import { useM2MStaging } from './M2MStagingContext'
+import { useAddendumFields } from './AddendumFieldContext'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
 
 const NUMERIC_TYPES = new Set(['integer', 'float', 'decimal', 'bigInteger', 'number'])
@@ -188,6 +189,8 @@ export function FieldRow({
     ])
   )
 
+  const addendumHints = useAddendumFields()[field.field] ?? []
+
   if (!forceVisible && (!visible || (!field.layout_assigned && (field.hidden || SYSTEM_FIELDS.has(field.field))))) return null
   const value = draft[field.field] ?? null
   const label = field.label ?? titleCase(field.field)
@@ -327,11 +330,11 @@ export function FieldRow({
           onClear={handleCascadeClear}
         />
       )}
-      {label !== '' && <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
-        <Label className='text-sm font-medium'>
+      {(label !== '' || addendumHints.length > 0) && <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
+        {label !== '' && <Label className='text-sm font-medium'>
           {label}
           {field.required && <span className='ml-0.5 text-destructive'>*</span>}
-        </Label>
+        </Label>}
         {field.note && (
           <TooltipProvider delayDuration={100}>
             <Tooltip>
@@ -360,6 +363,24 @@ export function FieldRow({
           </button>
         )}
         {swapButton}
+        {addendumHints.length > 0 && (
+          <TooltipProvider delayDuration={100}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20 cursor-default'>
+                  <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />
+                  addendum
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side='top' className='max-w-[220px] text-[12px]'>
+                <p className='font-medium mb-1'>In active addendum{addendumHints.length > 1 ? 's' : ''}:</p>
+                {addendumHints.map((h) => (
+                  <p key={h.id} className='text-slate-400'>{h.title} <span className='capitalize'>({h.status})</span></p>
+                ))}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
         {locked && (
           <TooltipProvider delayDuration={200}>
             <Tooltip>

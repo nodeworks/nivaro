@@ -18,6 +18,7 @@ import { FieldRow } from './item-edit/FieldRow'
 import { GroupSection, InlineDisplay, OwnersInline, OwnersInlineCompact, StripFieldValue } from './item-edit/GroupSection'
 import { applyDisplayTemplate, isSentinelKey, resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
+import { AddendumFieldContext, AddendumO2MContext, AddendumViewContext, type AddendumFieldMap, type AddendumO2MMap } from './item-edit/AddendumFieldContext'
 import { O2MStagingContext, type O2MStagingCtx } from './item-edit/O2MStagingContext'
 import { StepsBar } from './item-edit/StepsBar'
 import { SummaryPanel } from './item-edit/SummaryPanel'
@@ -343,6 +344,9 @@ export function ItemEditForm({
   const [pdfLoading, setPdfLoading] = useState<number | null>(null)
   const [showPdfDropdown, setShowPdfDropdown] = useState(false)
   const [pdfAttaching, setPdfAttaching] = useState(false)
+  const [activeAddendumCount, setActiveAddendumCount] = useState(0)
+  const [addendumViewId, setAddendumViewId] = useState<string>('original')
+  const [addendumViewDropdownOpen, setAddendumViewDropdownOpen] = useState(false)
 
   const downloadPdf = useCallback(async (layoutId: number) => {
     if (!itemId || !collection) return
@@ -728,6 +732,70 @@ export function ItemEditForm({
     }
     return true
   }, [addendumEnabled, colMeta?.addendum_allowed_roles, colMeta?.addendum_allowed_states, currentUserData?.role, pipelineInstanceData])
+
+  type AddendumRecord = { id: string; title: string; status: string; fields_schema: string[] | null; data: Record<string, unknown> | null }
+
+  const { data: addendumData = [] } = useQuery<AddendumRecord[]>({
+    queryKey: ['addendums', collection, itemId],
+    queryFn: () =>
+      client.request<{ data: AddendumRecord[] }>(
+        get(`/addendums/${collection}/${itemId}`)
+      ).then((r) => r.data ?? []),
+    enabled: addendumEnabled,
+    staleTime: 30_000,
+  })
+
+  const addendumFieldMap = useMemo<AddendumFieldMap>(() => {
+    const map: AddendumFieldMap = {}
+    for (const a of addendumData) {
+      if (['approved', 'rejected'].includes(a.status)) continue
+      for (const key of (a.fields_schema ?? [])) {
+        if (!map[key]) map[key] = []
+        map[key].push({ id: a.id, title: a.title, status: a.status })
+      }
+    }
+    return map
+  }, [addendumData])
+
+  const activeAddendums = useMemo(
+    () => addendumData.filter(a => !['approved', 'rejected'].includes(a.status)),
+    [addendumData]
+  )
+
+  // Auto-select the most recent active addendum when the layout has addendum_default_view on
+  const defaultViewApplied = useRef(false)
+  useEffect(() => {
+    if (defaultViewApplied.current) return
+    if (!activeLayoutData || !activeAddendums.length) return
+    if (!activeLayoutData.layout?.addendum_default_view) return
+    defaultViewApplied.current = true
+    setAddendumViewId(activeAddendums[0].id)
+  }, [activeLayoutData, activeAddendums])
+
+  const addendumViewData = useMemo<Record<string, unknown> | null>(() => {
+    if (addendumViewId === 'original') return null
+    const a = addendumData.find(x => x.id === addendumViewId)
+    if (!a?.data) return null
+    return Object.fromEntries(Object.entries(a.data).filter(([, v]) => !Array.isArray(v)))
+  }, [addendumViewId, addendumData])
+
+  const effectiveDraft = useMemo(
+    () => addendumViewData ? { ...draft, ...addendumViewData } : draft,
+    [draft, addendumViewData]
+  )
+
+  const addendumO2MMap = useMemo<AddendumO2MMap>(() => {
+    const map: AddendumO2MMap = {}
+    for (const a of addendumData) {
+      if (['approved', 'rejected'].includes(a.status)) continue
+      for (const [key, val] of Object.entries(a.data ?? {})) {
+        if (!Array.isArray(val) || val.length === 0) continue
+        if (!map[key]) map[key] = []
+        map[key].push({ addendumId: a.id, addendumTitle: a.title, addendumStatus: a.status, rows: val as Array<Record<string, unknown>> })
+      }
+    }
+    return map
+  }, [addendumData])
 
   // When a specific layout is requested by slug, only show fields explicitly
   // assigned to that layout — unassigned fields should not appear.
@@ -1577,6 +1645,7 @@ export function ItemEditForm({
           defaultExpanded={pipelineSlot?.default_expanded ?? false}
           showApprovalChain={!!(pipelineSlot as unknown as Record<string, unknown>)?.show_approval_chain}
           onBeforeTransition={validateAll}
+          addendumPending={activeAddendumCount > 0 && !!colMeta?.addendums_enabled}
         />
       )
     }
@@ -1614,6 +1683,7 @@ export function ItemEditForm({
           item={itemId}
           addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
           canCreate={addendumCanCreate}
+          onActiveCountChange={setActiveAddendumCount}
         />
       )
     }
@@ -1685,14 +1755,14 @@ export function ItemEditForm({
               <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
                 <FieldRow
                   field={f}
-                  draft={draft}
+                  draft={effectiveDraft}
                   onChange={handleFieldChange}
                   relations={relations}
                   collection={collection}
                   itemId={itemId}
                   error={validationErrors[f.field]}
                   visible={true}
-                  locked={isReadOnly}
+                  locked={isReadOnly || addendumViewId !== 'original'}
                   layoutAiEnabled={layoutAiEnabled}
                   renderField={renderField}
                   onCountChange={handleM2MCountChange}
@@ -1817,7 +1887,7 @@ export function ItemEditForm({
                       <div key={af.field} style={{ gridColumn: `span ${a.width}` }}>
                         <FieldRow
                           field={af}
-                          draft={draft}
+                          draft={effectiveDraft}
                           onChange={handleFieldChange}
                           relations={relations}
                           collection={collection}
@@ -1825,7 +1895,7 @@ export function ItemEditForm({
                           error={validationErrors[af.field]}
                           visible={true}
                           forceVisible={true}
-                          locked={lockedFields.has(af.field)}
+                          locked={lockedFields.has(af.field) || addendumViewId !== 'original'}
                           layoutAiEnabled={layoutAiEnabled}
                           renderField={renderField}
                           onCountChange={handleM2MCountChange}
@@ -1840,14 +1910,14 @@ export function ItemEditForm({
                 <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
                   <FieldRow
                     field={f}
-                    draft={draft}
+                    draft={effectiveDraft}
                     onChange={handleFieldChange}
                     relations={relations}
                     collection={collection}
                     itemId={itemId}
                     error={validationErrors[f.field]}
                     visible={visibleFields.has(f.field) || !visibleFields.size}
-                    locked={lockedFields.has(f.field)}
+                    locked={lockedFields.has(f.field) || addendumViewId !== 'original'}
                     layoutAiEnabled={layoutAiEnabled}
                     renderField={renderField}
                     onCountChange={handleM2MCountChange}
@@ -1997,7 +2067,7 @@ export function ItemEditForm({
           return <div key={key ?? i}>{renderSectionItem(item)}</div>
         })}
         {!pipelineSlot && showPipeline && (
-          <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} />
+          <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} addendumPending={activeAddendumCount > 0 && !!colMeta?.addendums_enabled} />
         )}
         {!tasksSlot && effectiveShowTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
         {!commentsSlot && effectiveShowComments && (
@@ -2010,6 +2080,7 @@ export function ItemEditForm({
             item={itemId}
             addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
             canCreate={addendumCanCreate}
+            onActiveCountChange={setActiveAddendumCount}
           />
         )}
       </div>
@@ -2108,14 +2179,14 @@ export function ItemEditForm({
               <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
                 <FieldRow
                   field={f}
-                  draft={draft}
+                  draft={effectiveDraft}
                   onChange={handleFieldChange}
                   relations={relations}
                   collection={collection}
                   itemId={itemId}
                   error={validationErrors[f.field]}
                   visible={true}
-                  locked={isReadOnly}
+                  locked={isReadOnly || addendumViewId !== 'original'}
                   layoutAiEnabled={layoutAiEnabled}
                   renderField={renderField}
                   onCountChange={handleM2MCountChange}
@@ -2173,7 +2244,7 @@ export function ItemEditForm({
           .filter((item) => typeof item === 'string' && item !== '__ungrouped__')
           .map((item) => renderSentinel(item as string))}
         {!pipelineSlot && showPipeline && (
-          <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} />
+          <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} addendumPending={activeAddendumCount > 0 && !!colMeta?.addendums_enabled} />
         )}
         {!tasksSlot && effectiveShowTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
         {!commentsSlot && effectiveShowComments && (
@@ -2186,6 +2257,7 @@ export function ItemEditForm({
             item={itemId}
             addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
             canCreate={addendumCanCreate}
+            onActiveCountChange={setActiveAddendumCount}
           />
         )}
       </div>
@@ -2299,7 +2371,7 @@ export function ItemEditForm({
           return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | string)}</div>
         })}
         {!pipelineSlot && showPipeline && (
-          <PipelinePanel collection={collection} item={itemId} defaultExpanded={false} onBeforeTransition={validateAll} />
+          <PipelinePanel collection={collection} item={itemId} defaultExpanded={false} onBeforeTransition={validateAll} addendumPending={activeAddendumCount > 0 && !!colMeta?.addendums_enabled} />
         )}
         {!tasksSlot && effectiveShowTasks && (
           <TaskPanel collection={collection} item={itemId} defaultExpanded={false} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />
@@ -2314,6 +2386,7 @@ export function ItemEditForm({
             item={itemId}
             addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
             canCreate={addendumCanCreate}
+            onActiveCountChange={setActiveAddendumCount}
           />
         )}
         {stepNav}
@@ -2378,6 +2451,9 @@ export function ItemEditForm({
   const canDelete = !isNew && isAdmin && effectiveShowDelete
 
   return (
+    <AddendumO2MContext.Provider value={addendumO2MMap}>
+    <AddendumViewContext.Provider value={addendumViewId}>
+    <AddendumFieldContext.Provider value={addendumFieldMap}>
     <ParentDraftContext.Provider value={{ draft, collection }}>
     <O2MStagingContext.Provider value={o2mStagingCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
@@ -2718,6 +2794,50 @@ export function ItemEditForm({
                 isAdmin={isAdmin}
               />
             )}
+            {!isNew && addendumEnabled && activeAddendums.length > 0 && (
+              <div className='relative mb-3 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5'>
+                <span className='mr-2 shrink-0 text-[11px] text-slate-400'>Viewing:</span>
+                <button
+                  type='button'
+                  onClick={() => setAddendumViewDropdownOpen(o => !o)}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
+                    addendumViewId === 'original'
+                      ? 'text-slate-600 hover:text-slate-900'
+                      : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                  )}
+                >
+                  <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', addendumViewId === 'original' ? 'bg-slate-400' : 'bg-amber-400')} />
+                  {addendumViewId === 'original'
+                    ? 'Original'
+                    : (activeAddendums.find(a => a.id === addendumViewId)?.title ?? 'Addendum')}
+                  <ChevronDown className='h-3 w-3 opacity-60' />
+                </button>
+                {addendumViewDropdownOpen && (
+                  <div className='absolute left-3 top-full z-20 mt-0.5 min-w-[220px] rounded-md border border-slate-200 bg-white shadow-lg py-0.5'>
+                    <button
+                      type='button'
+                      onClick={() => { setAddendumViewId('original'); setAddendumViewDropdownOpen(false) }}
+                      className={cn('flex w-full items-center px-3 py-1.5 text-[11px] text-left hover:bg-slate-50 transition-colors', addendumViewId === 'original' && 'font-semibold text-slate-900')}
+                    >
+                      Original
+                    </button>
+                    {activeAddendums.map(a => (
+                      <button
+                        key={a.id}
+                        type='button'
+                        onClick={() => { setAddendumViewId(a.id); setAddendumViewDropdownOpen(false) }}
+                        className={cn('flex w-full items-center gap-2 px-3 py-1.5 text-[11px] text-left hover:bg-amber-50 transition-colors', addendumViewId === a.id && 'font-semibold text-amber-900')}
+                      >
+                        <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />
+                        <span className='flex-1'>{a.title}</span>
+                        <span className='capitalize text-[10px] text-amber-400'>{a.status}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {hasTabs ? (isStepsMode ? renderStepsMode() : renderTabMode()) : renderSectionMode()}
             {extraBottomContent}
           </div>
@@ -2796,5 +2916,8 @@ export function ItemEditForm({
     </M2MStagingContext.Provider>
     </O2MStagingContext.Provider>
     </ParentDraftContext.Provider>
+    </AddendumFieldContext.Provider>
+    </AddendumViewContext.Provider>
+    </AddendumO2MContext.Provider>
   )
 }
