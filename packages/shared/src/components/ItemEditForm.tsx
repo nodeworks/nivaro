@@ -1684,6 +1684,7 @@ export function ItemEditForm({
           addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
           canCreate={addendumCanCreate}
           onActiveCountChange={setActiveAddendumCount}
+          defaultExpanded={addendumSlot ? !!addendumSlot.default_expanded : true}
         />
       )
     }

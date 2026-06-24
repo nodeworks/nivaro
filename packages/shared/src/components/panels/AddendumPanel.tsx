@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -501,15 +501,53 @@ function AddendumCard({
   configuredFields,
   onRefresh,
   isActive,
+  relations = [],
+  parentCollection,
+  parentId,
+  fieldMap = {},
 }: {
   addendum: Addendum
   configuredFields: LayoutAssignment[]
   onRefresh: () => void
   isActive?: boolean
+  relations?: CMSRelation[]
+  parentCollection?: string
+  parentId?: string
+  fieldMap?: Record<string, CMSField>
 }) {
   const client = useNivaroClient()
   const [expanded, setExpanded] = useState(false)
   const styles = STATUS_STYLES[addendum.status] ?? STATUS_STYLES.draft
+
+  const proposedData = addendum.data ?? {}
+
+  // For each O2M field in the proposed data, find its relation and fetch original rows
+  const o2mFields = configuredFields.filter((a) => Array.isArray(proposedData[a.field]))
+  const o2mRelations = o2mFields.map((a) => {
+    const rel = relations.find((r) => r.one_collection === parentCollection && !r.junction_field && (r.one_field === a.field || r.many_collection === a.field))
+    return { field: a.field, rel }
+  }).filter((x) => x.rel?.many_collection && x.rel?.many_field)
+
+  const o2mOriginalQueries = useQueries({
+    queries: o2mRelations.map(({ rel }) => ({
+      queryKey: ['o2m-rows', rel!.many_collection, rel!.many_field, parentId],
+      queryFn: () =>
+        client
+          .request<{ data: Record<string, unknown>[] }>(
+            get(`/items/${rel!.many_collection}`, {
+              filter: JSON.stringify({ [rel!.many_field!]: { _eq: parentId } }),
+              limit: 200,
+            })
+          )
+          .then((r) => r.data ?? []),
+      staleTime: 30_000,
+      enabled: !!parentId,
+    })),
+  })
+
+  const originalO2MMap = Object.fromEntries(
+    o2mOriginalQueries.map((q: { data?: Record<string, unknown>[] | null }, i: number) => [o2mRelations[i].field, q.data ?? null])
+  )
 
   const approveMut = useMutation({
     mutationFn: () => client.request(post(`/addendums/${addendum.id}/approve`)),
@@ -532,7 +570,6 @@ function AddendumCard({
     onError: () => toast.error('Failed to submit'),
   })
 
-  const proposedData = addendum.data ?? {}
   const changedFields = configuredFields.filter((a) => proposedData[a.field] !== undefined)
 
   return (
@@ -551,9 +588,11 @@ function AddendumCard({
         <div className='flex-1 min-w-0'>
           <div className='flex items-center gap-2 flex-wrap'>
             <span className='text-[13px] font-semibold text-slate-800 dark:text-slate-100 truncate'>{addendum.title}</span>
-            <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium', styles.badge)}>
-              {addendum.status}
-            </span>
+            {!addendum.workflow_template_id && (
+              <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium', styles.badge)}>
+                {addendum.status}
+              </span>
+            )}
             {changedFields.length > 0 && (
               <span className='text-[11px] text-slate-400 dark:text-slate-500'>
                 {changedFields.length} field{changedFields.length !== 1 ? 's' : ''} changed
@@ -580,13 +619,22 @@ function AddendumCard({
                       ? '—'
                       : typeof rawVal === 'object'
                         ? Array.isArray(rawVal)
-                          ? `${rawVal.length} items`
+                          ? (() => {
+                              const origArr = originalO2MMap[a.field]
+                              if (!origArr) return `${rawVal.length} rows`
+                              const changed = rawVal.filter((row: Record<string, unknown>) => {
+                                const orig = origArr.find((o: Record<string, unknown>) => String(o.id) === String(row.id))
+                                if (!orig) return true
+                                return Object.keys(row).some(k => k !== 'id' && String(row[k] ?? '') !== String(orig[k] ?? ''))
+                              }).length
+                              return changed === 0 ? 'no changes' : `${changed} of ${rawVal.length} rows modified`
+                            })()
                           : JSON.stringify(rawVal).slice(0, 60)
                         : String(rawVal)
                   return (
                     <div key={a.field} className='flex items-baseline gap-2 text-[12px]'>
                       <span className='min-w-[80px] shrink-0 text-slate-500 dark:text-slate-400'>
-                        {a.label_override ?? a.field}
+                        {a.label_override ?? fieldMap[a.field]?.label ?? titleCase(a.field)}
                       </span>
                       <span className='font-mono text-[11px] text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-muted/50 rounded px-1.5 py-0.5 break-all'>
                         {displayVal}
@@ -606,7 +654,7 @@ function AddendumCard({
           )}
 
           <div className='flex items-center justify-end gap-2 border-t border-slate-100 dark:border-border px-4 py-2.5'>
-            {addendum.status === 'draft' && (
+            {addendum.status === 'draft' && !addendum.workflow_template_id && (
               <Button
                 size='sm'
                 variant='outline'
@@ -638,7 +686,7 @@ function AddendumCard({
                 </Button>
               </>
             )}
-            {(addendum.status === 'approved' || addendum.status === 'rejected') && (
+            {!addendum.workflow_template_id && (addendum.status === 'approved' || addendum.status === 'rejected') && (
               <span className='text-[11px] text-slate-400 dark:text-slate-500 italic'>
                 {addendum.status === 'approved' ? 'Changes applied to record' : 'No changes applied'}
               </span>
@@ -658,16 +706,19 @@ export function AddendumPanel({
   addendumLayoutId,
   canCreate = true,
   onActiveCountChange,
+  defaultExpanded = true,
 }: {
   collection: string
   item: string
   addendumLayoutId?: number | null
   canCreate?: boolean
   onActiveCountChange?: (count: number) => void
+  defaultExpanded?: boolean
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(!defaultExpanded)
 
   const { data: addendums = [], isLoading, refetch } = useQuery<Addendum[]>({
     queryKey: ['addendums', collection, item],
@@ -739,6 +790,7 @@ export function AddendumPanel({
     staleTime: 0,
   })
 
+
   const handleRefresh = () => {
     qc.invalidateQueries({ queryKey: ['addendums', collection, item] })
     refetch()
@@ -761,11 +813,15 @@ export function AddendumPanel({
         'overflow-hidden rounded-lg border bg-white dark:bg-card',
         activeCount > 0 ? 'border-amber-300 dark:border-amber-500/40' : 'border-slate-200 dark:border-border'
       )}>
-        <div className={cn(
-          'flex items-center justify-between px-4 py-3 border-b',
-          activeCount > 0 ? 'border-amber-200 dark:border-amber-500/30' : 'border-slate-200 dark:border-border'
-        )}>
+        <div
+          className={cn(
+            'flex items-center justify-between px-4 py-3 cursor-pointer select-none',
+            !collapsed && (activeCount > 0 ? 'border-b border-amber-200 dark:border-amber-500/30' : 'border-b border-slate-200 dark:border-border')
+          )}
+          onClick={() => setCollapsed(c => !c)}
+        >
           <div className='flex items-center gap-2'>
+            <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150', collapsed && '-rotate-90')} />
             <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Addenda & Amendments</h3>
             {activeCount > 0 && (
               <span className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
@@ -774,24 +830,19 @@ export function AddendumPanel({
               </span>
             )}
           </div>
-          {canCreate && (() => {
-            const blockedBySingle = !!addendumLayout?.single_active_addendum && activeCount > 0
-            return (
-              <Button
-                size='sm'
-                variant='outline'
-                className='h-7 text-[12px]'
-                onClick={() => setSheetOpen(true)}
-                disabled={blockedBySingle}
-                title={blockedBySingle ? 'An addendum is already in progress' : undefined}
-              >
-                + New Addendum
-              </Button>
-            )
-          })()}
+          {canCreate && (!addendumLayout?.single_active_addendum || activeCount === 0) && (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 text-[12px]'
+              onClick={(e) => { e.stopPropagation(); setSheetOpen(true) }}
+            >
+              + New Addendum
+            </Button>
+          )}
         </div>
 
-        {!addendumLayout && !isLoadingLayout && (
+        {!collapsed && !addendumLayout && !isLoadingLayout && (
           <div className='px-4 py-4 text-center'>
             <p className='text-[12px] text-slate-400'>No addendum form configured.</p>
             <p className='text-[11px] text-slate-300 dark:text-slate-600'>
@@ -800,7 +851,7 @@ export function AddendumPanel({
           </div>
         )}
 
-        {(addendumLayout || isLoadingLayout) && (
+        {!collapsed && (addendumLayout || isLoadingLayout) && (
           isLoading ? (
             <div className='p-4 space-y-2'>
               <Skeleton className='h-12 w-full' />
@@ -822,6 +873,10 @@ export function AddendumPanel({
                   configuredFields={configuredFields}
                   onRefresh={handleRefresh}
                   isActive={!['approved', 'rejected'].includes(a.status)}
+                  relations={relations}
+                  parentCollection={collection}
+                  parentId={item}
+                  fieldMap={Object.fromEntries(collectionFields.map((f) => [f.field, f]))}
                 />
               ))}
             </div>
