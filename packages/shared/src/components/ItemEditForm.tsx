@@ -1057,6 +1057,7 @@ export function ItemEditForm({
   const pipelineSlot = assignments.find((a) => a.field === '__pipeline__')
   const commentsSlot = assignments.find((a) => a.field === '__comments__')
   const tasksSlot = assignments.find((a) => a.field === '__tasks__')
+  const addendumSlot = assignments.find((a) => a.field === '__addendums__')
   const widgetSlots = assignments.filter((a) => a.field.startsWith('__widget_') && a.field.endsWith('__') && a.widget_id != null)
   const ownersSlot = assignments.find((a) => a.field === '__owners__')
   const pdfSlot = assignments.find((a) => a.field === '__pdf__')
@@ -1205,7 +1206,7 @@ export function ItemEditForm({
   const sectionOrder = useMemo(() => {
     const isVisible = (a: SlotAssignment | undefined) =>
       !(a && (a.is_visible === 0 || a.is_visible === false))
-    type Item = FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__' | '__pdf__' | string
+    type Item = FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__addendums__' | '__owners__' | '__pdf__' | string
     const entries: Array<{ item: Item; sort: number; tie: number }> = [
       ...sectionGroups.map((g) => ({ item: g as Item, sort: g.sort, tie: 0 })),
       // Container groups sit alongside section groups in the order
@@ -1238,6 +1239,8 @@ export function ItemEditForm({
       entries.push({ item: '__tasks__', sort: tasksSlot.sort, tie: 3 })
     if (effectiveShowComments && commentsSlot && isVisible(commentsSlot))
       entries.push({ item: '__comments__', sort: commentsSlot.sort, tie: 4 })
+    if (colMeta?.addendums_enabled && !isNew && addendumSlot && isVisible(addendumSlot))
+      entries.push({ item: '__addendums__', sort: addendumSlot.sort, tie: 7 })
     if (showPipeline && ownersSlot && isVisible(ownersSlot) && !ownersInGroup && ownersGroupKey !== '__header__')
       entries.push({ item: '__owners__', sort: ownersSlot.sort, tie: 5 })
     if (pdfSlot && isVisible(pdfSlot) && !isNew && !pdfInGroup)
@@ -1252,6 +1255,7 @@ export function ItemEditForm({
     pipelineSlot,
     commentsSlot,
     tasksSlot,
+    addendumSlot,
     ownersSlot,
     ownersInGroup,
     showPipeline,
@@ -1261,6 +1265,7 @@ export function ItemEditForm({
     pdfInGroup,
     isNew,
     subtitleFieldSet,
+    colMeta?.addendums_enabled,
     ungroupedFields,
     ownersGroupKey
   ])
@@ -1598,6 +1603,17 @@ export function ItemEditForm({
           defaultExpanded={tasksSlot?.default_expanded ?? false}
           queuedTasks={isNew ? pendingTasks : undefined}
           onQueueTask={isNew ? handleQueueTask : undefined}
+        />
+      )
+    }
+    if (key === '__addendums__' && colMeta?.addendums_enabled && !isNew) {
+      return (
+        <AddendumPanel
+          key='__addendums__'
+          collection={collection}
+          item={itemId}
+          addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
+          canCreate={addendumCanCreate}
         />
       )
     }
@@ -1988,7 +2004,7 @@ export function ItemEditForm({
           <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
-        {colMeta?.addendums_enabled && !isNew && (
+        {!addendumSlot && activeLayoutData !== undefined && colMeta?.addendums_enabled && !isNew && (
           <AddendumPanel
             collection={collection}
             item={itemId}
@@ -2164,7 +2180,7 @@ export function ItemEditForm({
           <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
-        {colMeta?.addendums_enabled && !isNew && (
+        {!addendumSlot && activeLayoutData !== undefined && colMeta?.addendums_enabled && !isNew && (
           <AddendumPanel
             collection={collection}
             item={itemId}
@@ -2247,6 +2263,7 @@ export function ItemEditForm({
       if (item === '__pipeline__') return !!(pipelineSlot && pipelineSlot.sort < minGroupSort)
       if (item === '__comments__') return !!(commentsSlot && commentsSlot.sort < minGroupSort)
       if (item === '__tasks__') return !!(tasksSlot && tasksSlot.sort < minGroupSort)
+      if (item === '__addendums__') return !!(addendumSlot && addendumSlot.sort < minGroupSort)
       return false
     })
     const postTabItems = sectionOrder.filter((item) => {
@@ -2255,6 +2272,7 @@ export function ItemEditForm({
       if (item === '__pipeline__') return !(pipelineSlot && pipelineSlot.sort < minGroupSort)
       if (item === '__comments__') return !(commentsSlot && commentsSlot.sort < minGroupSort)
       if (item === '__tasks__') return !(tasksSlot && tasksSlot.sort < minGroupSort)
+      if (item === '__addendums__') return !(addendumSlot && addendumSlot.sort < minGroupSort)
       return false
     })
 
@@ -2290,7 +2308,7 @@ export function ItemEditForm({
           <CommentPanel collection={collection} item={itemId} defaultExpanded={false} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
-        {colMeta?.addendums_enabled && !isNew && (
+        {!addendumSlot && activeLayoutData !== undefined && colMeta?.addendums_enabled && !isNew && (
           <AddendumPanel
             collection={collection}
             item={itemId}

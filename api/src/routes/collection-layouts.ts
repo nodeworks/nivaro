@@ -64,7 +64,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: layout.id })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded')
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'lock_conditions', 'overrides', 'show_row_revisions', 'show_approval_chain', 'widget_id', 'input_bindings', 'allow_revision_restore')
         .orderBy('sort', 'asc')
     ])
 
@@ -127,6 +127,15 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     await logActivity({ action: 'create', user: req.user?.id, collection: 'nivaro_collection_layouts', item: String(created.id), req })
     return reply.code(201).send({ data: created })
+  })
+
+  // GET /collection-layouts/:id
+  app.get('/:id', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const row = await db('nivaro_collection_layouts').where({ id }).first()
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    row.conditions = parseConditions(row.conditions)
+    return reply.send({ data: row })
   })
 
   // PATCH /collection-layouts/:id
@@ -288,7 +297,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!layout) return reply.code(404).send({ error: 'Not found' })
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded')
+      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'allow_revision_restore', 'lock_conditions', 'overrides', 'widget_id', 'input_bindings')
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })

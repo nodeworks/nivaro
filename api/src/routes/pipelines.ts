@@ -981,22 +981,28 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
       .first()
-    if (!binding) return reply.send({ data: null })
 
     const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
       .where({ collection, item })
       .first()
+
+    // No binding and no instance — nothing to show
+    if (!binding && !instance) return reply.send({ data: null })
+
+    // No binding but instance exists (e.g. addendums) — derive template from instance
+    const effectiveBinding = binding ?? ({ template: instance!.template, collection } as WorkflowBinding)
+
     if (!instance)
       return reply.send({
-        data: { instance: null, states: [], available_transitions: [], history: [], binding }
+        data: { instance: null, states: [], available_transitions: [], history: [], binding: effectiveBinding }
       })
 
     const states = await db<WorkflowState>('nivaro_workflow_states')
-      .where({ template: binding.template })
+      .where({ template: effectiveBinding.template })
       .orderBy('sort')
 
     const transitions = await db<WorkflowTransition>('nivaro_workflow_transitions')
-      .where({ template: binding.template })
+      .where({ template: effectiveBinding.template })
       .orderBy('sort')
 
     // Filter available transitions for this user
@@ -1064,7 +1070,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         available_transitions: availableTransitions,
         all_transitions: transitions.map(formatTransition),
         history,
-        binding
+        binding: effectiveBinding
       }
     })
   })

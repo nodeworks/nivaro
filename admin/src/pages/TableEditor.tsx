@@ -4690,7 +4690,7 @@ function AttributesTab({ tableName }: { tableName: string }) {
 // ─── Layout tab ──────────────────────────────────────────────────────────────
 
 // ── Page slot sentinels (special ItemEdit panels) ──
-type SlotKey = '__pipeline__' | '__comments__' | '__tasks__'
+type SlotKey = '__pipeline__' | '__comments__' | '__tasks__' | '__addendums__'
 interface SlotState {
   sort: number
   label_override: string | null
@@ -4698,11 +4698,12 @@ interface SlotState {
   default_expanded: boolean
   show_approval_chain: boolean
 }
-const SLOT_KEYS: SlotKey[] = ['__pipeline__', '__comments__', '__tasks__']
+const SLOT_KEYS: SlotKey[] = ['__pipeline__', '__comments__', '__tasks__', '__addendums__']
 const SLOT_META: Record<SlotKey, { name: string; defaultLabel: string; editable: boolean }> = {
   __pipeline__: { name: 'Pipeline', defaultLabel: 'Pipeline', editable: true },
   __comments__: { name: 'Comments', defaultLabel: 'Comments', editable: true },
   __tasks__: { name: 'Tasks', defaultLabel: 'Tasks', editable: true },
+  __addendums__: { name: 'Addenda & Amendments', defaultLabel: 'Addenda & Amendments', editable: true },
 }
 // PDF Button is a special draggable field chip (not a top-level slot card): placed in groups
 // like __owners__, persisted as a field-assignment row with field = '__pdf__'.
@@ -6480,6 +6481,8 @@ function FieldSettingsPopover({
   inlineDisplayConfig,
   onInlineDisplayChange,
   collection,
+  prefillFromParent,
+  onPrefillFromParentChange,
 }: {
   fieldName: string
   abstractType?: string
@@ -6499,6 +6502,8 @@ function FieldSettingsPopover({
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
   collection?: string
+  prefillFromParent?: boolean
+  onPrefillFromParentChange?: (v: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
   const [rowRulePortalContainer, setRowRulePortalContainer] = useState<HTMLDivElement | null>(null)
@@ -7255,6 +7260,14 @@ function FieldSettingsPopover({
                   )}
                 </div>
               )}
+
+              {/* Addendum: prefill from parent record */}
+              {onPrefillFromParentChange && (
+                <div className='flex items-center justify-between rounded-md border border-slate-200 px-3 py-2'>
+                  <span className='text-[12px] text-slate-700'>Prefill from current record</span>
+                  <Switch checked={prefillFromParent ?? true} onCheckedChange={onPrefillFromParentChange} className='scale-90' />
+                </div>
+              )}
             </div>
           )}
 
@@ -7358,6 +7371,8 @@ function FieldChip({
   onInlineDisplayChange,
   collection,
   compact,
+  prefillFromParent,
+  onPrefillFromParentChange,
 }: {
   fieldName: string
   displayName?: string
@@ -7387,6 +7402,8 @@ function FieldChip({
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
   collection?: string
   compact?: boolean
+  prefillFromParent?: boolean
+  onPrefillFromParentChange?: (v: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
   const widthLabel = WIDTH_OPTIONS.find(w => w.span === colSpan)?.label ?? 'Full'
@@ -7473,6 +7490,8 @@ function FieldChip({
           inlineDisplayConfig={inlineDisplayConfig}
           onInlineDisplayChange={onInlineDisplayChange}
           collection={collection}
+          prefillFromParent={prefillFromParent}
+          onPrefillFromParentChange={onPrefillFromParentChange}
         />
       )}
 
@@ -7567,6 +7586,8 @@ function SortableFieldChip({
   onInlineDisplayChange,
   collection,
   compact,
+  prefillFromParent,
+  onPrefillFromParentChange,
 }: {
   fieldName: string
   displayName?: string
@@ -7595,6 +7616,8 @@ function SortableFieldChip({
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
   collection?: string
   compact?: boolean
+  prefillFromParent?: boolean
+  onPrefillFromParentChange?: (v: boolean) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId ?? fieldName,
@@ -7638,6 +7661,8 @@ function SortableFieldChip({
         onInlineDisplayChange={onInlineDisplayChange}
         collection={collection}
         compact={compact}
+        prefillFromParent={prefillFromParent}
+        onPrefillFromParentChange={onPrefillFromParentChange}
       />
     </div>
   )
@@ -7658,7 +7683,7 @@ function parseSortableId(id: string): { container: string | null; fieldName: str
 
 // ── SortableUngroupedZone ─────────────────────────────────────────────────────
 
-function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll, isTableMode, getExtraControls, widgetSlotMeta, getInlineDisplay, onInlineDisplayChange, getLockConditions, onLockConditions, collection }: {
+function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll, isTableMode, getExtraControls, widgetSlotMeta, getInlineDisplay, onInlineDisplayChange, getLockConditions, onLockConditions, collection, getPrefillFromParent, onPrefillFromParent }: {
   localFieldOrder: Record<string, string[]>
   allFields: Array<{ field: string; type?: string; options?: string | null }>
   getColSpan: (f: string) => number
@@ -7680,6 +7705,8 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
   getLockConditions?: (f: string) => Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
   onLockConditions?: (f: string, v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
   collection?: string
+  getPrefillFromParent?: (f: string) => boolean
+  onPrefillFromParent?: (f: string, v: boolean) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'group:__ungrouped__' })
   const style = { transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0 : 1 }
@@ -7783,6 +7810,8 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
                   inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
                   onInlineDisplayChange={kind === 'M2O' && onInlineDisplayChange ? (config) => onInlineDisplayChange(f, config) : undefined}
                   collection={collection}
+                  prefillFromParent={getPrefillFromParent?.(f)}
+                  onPrefillFromParentChange={onPrefillFromParent ? v => onPrefillFromParent(f, v) : undefined}
                   inGrid
                 />
               )
@@ -7999,6 +8028,8 @@ function SortableGroupCard({
   getInlineDisplay,
   onInlineDisplayChange,
   collection,
+  getPrefillFromParent,
+  onPrefillFromParent,
 }: {
   group: FieldGroup
   fieldNames: string[]
@@ -8033,6 +8064,8 @@ function SortableGroupCard({
   getInlineDisplay?: (f: string) => InlineDisplayConfig | undefined
   onInlineDisplayChange?: (f: string, config: InlineDisplayConfig) => void
   collection?: string
+  getPrefillFromParent?: (f: string) => boolean
+  onPrefillFromParent?: (f: string, v: boolean) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [labelDraft, setLabelDraft] = useState(group.label)
@@ -8432,6 +8465,8 @@ function SortableGroupCard({
                   inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
                   onInlineDisplayChange={kind === 'M2O' && onInlineDisplayChange ? (config) => onInlineDisplayChange(f, config) : undefined}
                   collection={collection}
+                  prefillFromParent={getPrefillFromParent?.(f)}
+                  onPrefillFromParentChange={onPrefillFromParent ? v => onPrefillFromParent(f, v) : undefined}
                   inGrid
                 />
               )
@@ -9802,6 +9837,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     __pipeline__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
     __comments__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
     __tasks__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
+    __addendums__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
   }))
   const [editingSlot, setEditingSlot] = useState<SlotKey | null>(null)
   const [slotLabelDraft, setSlotLabelDraft] = useState('')
@@ -9969,6 +10005,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       __pipeline__: { sort: groups.length + 1, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
       __comments__: { sort: groups.length + 2, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
       __tasks__: { sort: groups.length + 3, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
+      __addendums__: { sort: groups.length + 4, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
     }
     for (const key of SLOT_KEYS) {
       const row = fieldConfig.find(fc => fc.field === key) as Record<string, unknown> | undefined
@@ -10649,25 +10686,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         </div>
       )
     }
-    if (layoutType === 'addendum' && !f.startsWith('__')) {
-      const prefill = (localOverrides[f]?.prefill_from_parent as boolean | undefined) ?? true
-      return (
-        <div className='mt-1.5 flex items-center gap-1.5 border-t border-slate-100 pt-1.5 dark:border-border'>
-          <Switch
-            checked={prefill}
-            onCheckedChange={(v) => {
-              setLocalOverrides(prev => ({ ...prev, [f]: { ...(prev[f] ?? {}), prefill_from_parent: v } }))
-              hasLocalChangeRef.current = true
-              changeSeqRef.current++
-            }}
-            className='scale-75'
-          />
-          <span className='text-[10px] text-slate-500 dark:text-slate-400'>Prefill from current record</span>
-        </div>
-      )
-    }
     return undefined
-  }, [tableName, layoutType, localOverrides, widgetSlotMeta, availableWidgets])
+  }, [tableName, localOverrides, widgetSlotMeta, availableWidgets])
 
   const FORMAT_OPTIONS = [
     { value: 'text', label: 'Text (default)' },
@@ -11370,7 +11390,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
             <div className='space-y-3'>
               {orderedItems.map(item => {
                 if (item === '__ungrouped__') return (
-                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} isTableMode={layoutType === 'table'} getExtraControls={getExtraControls} widgetSlotMeta={widgetSlotMeta} getInlineDisplay={(f) => inlineDisplayMeta[f]} onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }} getLockConditions={f => localLockConditions[f] ?? []} onLockConditions={(f, v) => { setLocalLockConditions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }} collection={tableName} />
+                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} isTableMode={layoutType === 'table'} getExtraControls={getExtraControls} widgetSlotMeta={widgetSlotMeta} getInlineDisplay={(f) => inlineDisplayMeta[f]} onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }} getLockConditions={f => localLockConditions[f] ?? []} onLockConditions={(f, v) => { setLocalLockConditions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }} collection={tableName} getPrefillFromParent={layoutType === 'addendum' ? f => (localOverrides[f]?.prefill_from_parent as boolean | undefined) ?? true : undefined} onPrefillFromParent={layoutType === 'addendum' ? (f, v) => { setLocalOverrides(prev => ({ ...prev, [f]: { ...(prev[f] ?? {}), prefill_from_parent: v } })); hasLocalChangeRef.current = true; changeSeqRef.current++ } : undefined} />
                 )
                 if (layoutType === 'table') return null
                 if (SLOT_KEYS.includes(item as SlotKey)) return (
@@ -11419,6 +11439,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                     getInlineDisplay={(f) => inlineDisplayMeta[f]}
                     onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                     collection={tableName}
+                    getPrefillFromParent={layoutType === 'addendum' ? f => (localOverrides[f]?.prefill_from_parent as boolean | undefined) ?? true : undefined}
+                    onPrefillFromParent={layoutType === 'addendum' ? (f, v) => { setLocalOverrides(prev => ({ ...prev, [f]: { ...(prev[f] ?? {}), prefill_from_parent: v } })); hasLocalChangeRef.current = true; changeSeqRef.current++ } : undefined}
                     />
                     {childTabs.length > 0 && (
                       <div className='ml-4 border-l-2 border-slate-200 pl-3 space-y-1.5'>
@@ -11457,6 +11479,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                             getInlineDisplay={(f) => inlineDisplayMeta[f]}
                             onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
                             collection={tableName}
+                            getPrefillFromParent={layoutType === 'addendum' ? f => (localOverrides[f]?.prefill_from_parent as boolean | undefined) ?? true : undefined}
+                            onPrefillFromParent={layoutType === 'addendum' ? (f, v) => { setLocalOverrides(prev => ({ ...prev, [f]: { ...(prev[f] ?? {}), prefill_from_parent: v } })); hasLocalChangeRef.current = true; changeSeqRef.current++ } : undefined}
                           />
                         ))}
                       </div>

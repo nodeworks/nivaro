@@ -414,12 +414,18 @@ export async function addendumsRoutes(app: FastifyInstance) {
           .where({ collection: existing.parent_collection as string })
           .select('field', 'interface', 'type') as Array<{ field: string; interface: string | null; type: string | null }>
         const subRowFields = new Set(
-          fieldMeta.filter((f) => f.interface === 'sub-rows' || f.type === 'o2m').map((f) => f.field)
+          fieldMeta.filter((f) => f.interface === 'sub-rows').map((f) => f.field)
         )
+        // O2M and M2M relations are stored in related tables — cannot be set as scalar columns; skip on apply-back
+        const relationFields = await db('nivaro_relations')
+          .where({ one_collection: existing.parent_collection as string })
+          .select('one_field') as Array<{ one_field: string | null }>
+        const relationFieldSet = new Set(relationFields.map((r) => r.one_field).filter(Boolean) as string[])
         const scalarPatch: Record<string, unknown> = {}
         for (const [key, value] of Object.entries(data)) {
           if (PARENT_WRITE_BLOCKED_COLUMNS.has(key)) continue
           if (!allowedKeys.has(key)) continue
+          if (relationFieldSet.has(key)) continue
           if (subRowFields.has(key)) {
             const rows = Array.isArray(value) ? value : []
             await db('nivaro_sub_rows')
@@ -458,14 +464,18 @@ export async function addendumsRoutes(app: FastifyInstance) {
     const existingOrder = await db('nivaro_addendum_approvals').where({ addendum_id: id }).first()
 
     if (!existingOrder) {
+      const approvalCount = await db('nivaro_addendum_approvals')
+        .where({ parent_collection: existing.parent_collection, parent_id: existing.parent_id })
+        .count('id as cnt')
+        .then((r) => Number((r[0] as { cnt: number }).cnt))
       await db('nivaro_addendum_approvals').insert({
         addendum_id: id,
         parent_collection: existing.parent_collection,
         parent_id: existing.parent_id,
+        order_number: approvalCount + 1,
         approved_by: req.user!.id,
         approved_at: now,
         created_at: now,
-        updated_at: now
       })
     }
 

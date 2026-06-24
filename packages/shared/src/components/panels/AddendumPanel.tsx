@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { titleCase } from '../../lib/utils'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
+import { O2MStagingContext } from '../item-edit/O2MStagingContext'
+import type { O2MStagingCtx } from '../item-edit/O2MStagingContext'
 import type { CMSField, CMSRelation } from '../item-edit/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -12,7 +14,6 @@ import { Label } from '../ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
 import { Textarea } from '../ui/textarea'
-import { WorkflowPanel } from './WorkflowPanel'
 
 interface AddendumLayout {
   id: number
@@ -50,6 +51,199 @@ const STATUS_STYLES: Record<string, { badge: string; dot: string }> = {
   review:   { badge: 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400', dot: 'bg-amber-400' },
   approved: { badge: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400', dot: 'bg-emerald-500' },
   rejected: { badge: 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400', dot: 'bg-red-500' },
+}
+
+// ─── ProposedChangesForm ───────────────────────────────────────────────────────
+// Isolated so title/description keystrokes don't re-render FieldRenderers.
+
+const ProposedChangesForm = memo(function ProposedChangesForm({
+  configuredFields,
+  fieldMap,
+  formData,
+  onFieldChange,
+  relations,
+  collection,
+  prefillParentId,
+}: {
+  configuredFields: LayoutAssignment[]
+  fieldMap: Record<string, CMSField>
+  formData: Record<string, unknown>
+  onFieldChange: (field: string, value: unknown) => void
+  relations: CMSRelation[]
+  collection: string
+  prefillParentId: string
+}) {
+  if (configuredFields.length === 0) {
+    return (
+      <div className='rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center dark:border-border dark:bg-muted/30'>
+        <p className='text-[12px] text-slate-400 dark:text-slate-500'>
+          No fields configured for addenda. Set up the field list in Data Model → Layouts → Addendum Form.
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className='border-t border-slate-100 dark:border-border pt-3'>
+      <p className='mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+        Proposed changes
+      </p>
+      <div className='space-y-3'>
+        {configuredFields.map((a) => {
+          const meta = fieldMap[a.field]
+          const label = a.label_override ?? titleCase(meta?.field ?? a.field)
+          if (!meta) {
+            return (
+              <div key={a.field}>
+                <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>{label}</Label>
+                <Input
+                  value={String(formData[a.field] ?? '')}
+                  onChange={(e) => onFieldChange(a.field, e.target.value)}
+                  className='h-8 text-[12px]'
+                />
+              </div>
+            )
+          }
+          return (
+            <div key={a.field}>
+              <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>{label}</Label>
+              <FieldRenderer
+                field={meta}
+                value={formData[a.field]}
+                onChange={(v) => onFieldChange(a.field, v)}
+                relations={relations}
+                collection={collection}
+                itemId='new'
+                prefillParentId={prefillParentId}
+              />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+})
+
+// ─── AddendumWorkflowPanel ────────────────────────────────────────────────────
+
+interface WfTransition { id: string; label: string; color: string | null; to_state: string; group_label: string | null }
+interface WfState { id: string; key: string; label: string; color: string | null; is_terminal: boolean }
+interface WfInstance { id: string; current_state: string; current_state_obj: WfState | null; completed_at: string | null }
+
+function AddendumWorkflowPanel({ addendumId, onRefresh }: { addendumId: string; onRefresh: () => void }) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [pending, setPending] = useState<string | null>(null)
+  const [comment, setComment] = useState('')
+
+  const instanceKey = ['pipeline-instance', 'nivaro_addendums', addendumId]
+
+  const { data: pd, isLoading } = useQuery<{ instance: WfInstance | null; available_transitions: WfTransition[] } | null>({
+    queryKey: instanceKey,
+    queryFn: () =>
+      client
+        .request<{ data: { instance: WfInstance | null; available_transitions: WfTransition[] } | null }>(
+          get(`/pipelines/instance/nivaro_addendums/${addendumId}`)
+        )
+        .then((r) => r.data),
+    staleTime: 10_000,
+  })
+
+  const transitionMut = useMutation({
+    mutationFn: ({ transitionId, note }: { transitionId: string; note?: string }) =>
+      client.request(post(`/workflows/instance/${pd?.instance?.id}/transition`, { transition_id: transitionId, comment: note })),
+    onSuccess: () => {
+      setPending(null)
+      setComment('')
+      qc.invalidateQueries({ queryKey: instanceKey })
+      onRefresh()
+      toast.success('Workflow advanced')
+    },
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Transition failed')
+    },
+  })
+
+  if (isLoading) return <Skeleton className='h-8 w-full' />
+  if (!pd?.instance) return <p className='text-[12px] text-slate-400 italic'>No workflow instance found.</p>
+
+  const { instance, available_transitions: transitions } = pd
+  const state = instance.current_state_obj
+  const pendingTx = transitions.find((t) => t.id === pending)
+
+  return (
+    <div className='space-y-3'>
+      {state && (
+        <div className='flex items-center gap-2'>
+          <span className='text-[11px] text-slate-500'>Current state:</span>
+          <span
+            className='inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium'
+            style={{ backgroundColor: state.color ? `${state.color}22` : '#f1f5f9', color: state.color ?? '#475569', border: `1px solid ${state.color ? `${state.color}44` : '#e2e8f0'}` }}
+          >
+            {state.label}
+          </span>
+        </div>
+      )}
+
+      {transitions.length > 0 && !instance.completed_at && (
+        <div className='flex flex-wrap gap-1.5'>
+          {transitions.map((tx) => (
+            <button
+              key={tx.id}
+              type='button'
+              onClick={() => setPending(pending === tx.id ? null : tx.id)}
+              className={cn(
+                'inline-flex items-center rounded-full px-3 py-1 text-[11px] font-medium transition-colors',
+                pending === tx.id
+                  ? 'bg-nvr-cyan text-white'
+                  : 'bg-white hover:bg-slate-50 border border-slate-200 text-slate-700'
+              )}
+              style={
+                tx.color && pending !== tx.id
+                  ? { borderColor: tx.color, color: tx.color }
+                  : tx.color && pending === tx.id
+                    ? { backgroundColor: tx.color, borderColor: tx.color }
+                    : undefined
+              }
+            >
+              {tx.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {pending && pendingTx && (
+        <div className='rounded-md border border-slate-200 bg-slate-50 p-2.5 space-y-2'>
+          <p className='text-[11px] text-slate-500'>Confirm: <strong>{pendingTx.label}</strong></p>
+          <input
+            type='text'
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder='Add a comment (optional)'
+            className='w-full rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[12px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
+          />
+          <div className='flex justify-end gap-2'>
+            <Button type='button' size='sm' variant='ghost' className='h-6 text-[11px]' onClick={() => { setPending(null); setComment('') }}>
+              Cancel
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              className='h-6 text-[11px]'
+              disabled={transitionMut.isPending}
+              onClick={() => transitionMut.mutate({ transitionId: pending, note: comment.trim() || undefined })}
+            >
+              Confirm
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {instance.completed_at && (
+        <p className='text-[11px] text-slate-400 italic'>Workflow complete.</p>
+      )}
+    </div>
+  )
 }
 
 // ─── AddendumCreateSheet ───────────────────────────────────────────────────────
@@ -101,9 +295,70 @@ function AddendumCreateSheet({
     return m
   }, [fields])
 
+  const handleFieldChange = useCallback((field: string, value: unknown) => {
+    setFormData((prev) => ({ ...prev, [field]: value }))
+  }, [])
+
+  // ── O2M staging context (prefill from parent) ─────────────────────────────
+  const [pendingO2MRows, setPendingO2MRows] = useState<Map<string, Record<string, unknown>[]>>(new Map())
+  const [pendingO2MEdits, setPendingO2MEdits] = useState<Map<string, Map<string, Record<string, unknown>>>>(new Map())
+  const [pendingO2MDeletes, setPendingO2MDeletes] = useState<Map<string, Set<string>>>(new Map())
+  const pendingO2MRowsRef = useRef(pendingO2MRows)
+  useEffect(() => { pendingO2MRowsRef.current = pendingO2MRows }, [pendingO2MRows])
+
+  const o2mStagingCtx = useMemo<O2MStagingCtx>(() => ({
+    getPendingRows: (rc, mf) => pendingO2MRows.get(`${rc}.${mf}`) ?? [],
+    queueRow: (rc, mf, data) => setPendingO2MRows(prev => {
+      const next = new Map(prev); const key = `${rc}.${mf}`
+      next.set(key, [...(next.get(key) ?? []), data]); return next
+    }),
+    removeRow: (rc, mf, idx) => setPendingO2MRows(prev => {
+      const next = new Map(prev); const key = `${rc}.${mf}`
+      const arr = [...(next.get(key) ?? [])]; arr.splice(idx, 1); next.set(key, arr); return next
+    }),
+    updateRow: (rc, mf, idx, data) => setPendingO2MRows(prev => {
+      const next = new Map(prev); const key = `${rc}.${mf}`
+      const arr = [...(next.get(key) ?? [])]; arr[idx] = { ...arr[idx], ...data }; next.set(key, arr); return next
+    }),
+    reorderRows: (rc, mf, fromIdx, toIdx) => setPendingO2MRows(prev => {
+      const next = new Map(prev); const key = `${rc}.${mf}`
+      const arr = [...(next.get(key) ?? [])]; const [moved] = arr.splice(fromIdx, 1)
+      arr.splice(toIdx, 0, moved); next.set(key, arr); return next
+    }),
+    getPendingEdits: (rc, mf) => pendingO2MEdits.get(`${rc}.${mf}`) ?? new Map(),
+    getPendingDeletes: (rc, mf) => pendingO2MDeletes.get(`${rc}.${mf}`) ?? new Set(),
+    queueEdit: (rc, mf, rowId, changes) => setPendingO2MEdits(prev => {
+      const next = new Map(prev); const key = `${rc}.${mf}`
+      const inner = new Map(next.get(key) ?? []); inner.set(rowId, { ...(inner.get(rowId) ?? {}), ...changes })
+      next.set(key, inner); return next
+    }),
+    queueDelete: (rc, mf, rowId) => setPendingO2MDeletes(prev => {
+      const next = new Map(prev); const key = `${rc}.${mf}`
+      next.set(key, new Set([...(next.get(key) ?? []), rowId])); return next
+    }),
+    cancelPendingEdit: (rc, mf, rowId) => setPendingO2MEdits(prev => {
+      const next = new Map(prev); const key = `${rc}.${mf}`
+      const inner = new Map(next.get(key) ?? []); inner.delete(rowId); next.set(key, inner); return next
+    }),
+    cancelPendingDelete: (rc, mf, rowId) => setPendingO2MDeletes(prev => {
+      const next = new Map(prev); const key = `${rc}.${mf}`
+      const s = new Set(next.get(key) ?? []); s.delete(rowId); next.set(key, s); return next
+    }),
+  }), [pendingO2MRows, pendingO2MEdits, pendingO2MDeletes])
+
   const createMut = useMutation({
-    mutationFn: () =>
-      client.request(
+    mutationFn: () => {
+      // Merge O2M staging rows into formData before submit
+      const mergedData = { ...formData }
+      for (const a of configuredFields) {
+        const rel = relations.find(r => r.one_collection === collection && r.one_field === a.field)
+        if (rel?.many_collection && rel.many_field) {
+          const rows = (pendingO2MRowsRef.current.get(`${rel.many_collection}.${rel.many_field}`) ?? [])
+            .map(({ __prefilled: _, ...rest }) => rest)
+          if (rows.length > 0) mergedData[a.field] = rows
+        }
+      }
+      return client.request(
         post('/addendums', {
           parent_collection: collection,
           parent_id: itemId,
@@ -111,10 +366,11 @@ function AddendumCreateSheet({
           description: description.trim() || undefined,
           workflow_template_id: workflowTemplateId ?? undefined,
           addendum_layout_id: resolvedLayoutId,
-          data: formData,
+          data: mergedData,
           fields_schema: configuredFields.map((a) => a.field),
         })
-      ),
+      )
+    },
     onSuccess: () => {
       toast.success('Addendum created')
       onCreated()
@@ -124,6 +380,7 @@ function AddendumCreateSheet({
   })
 
   return (
+    <O2MStagingContext.Provider value={o2mStagingCtx}>
     <div className='flex h-full flex-col'>
       <SheetHeader className='shrink-0 border-b border-slate-200 px-5 py-4 dark:border-border'>
         <SheetTitle className='text-[14px] font-semibold text-slate-900 dark:text-slate-100'>
@@ -160,52 +417,15 @@ function AddendumCreateSheet({
           </div>
         </div>
 
-        {configuredFields.length > 0 && (
-          <div className='border-t border-slate-100 dark:border-border pt-3'>
-            <p className='mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
-              Proposed changes
-            </p>
-            <div className='space-y-3'>
-              {configuredFields.map((a) => {
-                const meta = fieldMap[a.field]
-                const label = a.label_override ?? titleCase(meta?.field ?? a.field)
-                if (!meta) {
-                  return (
-                    <div key={a.field}>
-                      <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>{label}</Label>
-                      <Input
-                        value={String(formData[a.field] ?? '')}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, [a.field]: e.target.value }))}
-                        className='h-8 text-[12px]'
-                      />
-                    </div>
-                  )
-                }
-                return (
-                  <div key={a.field}>
-                    <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>{label}</Label>
-                    <FieldRenderer
-                      field={meta}
-                      value={formData[a.field]}
-                      onChange={(v) => setFormData((prev) => ({ ...prev, [a.field]: v }))}
-                      relations={relations}
-                      collection={collection}
-                      itemId='new'
-                    />
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )}
-
-        {configuredFields.length === 0 && (
-          <div className='rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center dark:border-border dark:bg-muted/30'>
-            <p className='text-[12px] text-slate-400 dark:text-slate-500'>
-              No fields configured for addenda. Set up the field list in Data Model → Layouts → Addendum Form.
-            </p>
-          </div>
-        )}
+        <ProposedChangesForm
+          configuredFields={configuredFields}
+          fieldMap={fieldMap}
+          formData={formData}
+          onFieldChange={handleFieldChange}
+          relations={relations}
+          collection={collection}
+          prefillParentId={itemId}
+        />
       </div>
 
       <div className='shrink-0 flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-border'>
@@ -222,6 +442,7 @@ function AddendumCreateSheet({
         </Button>
       </div>
     </div>
+    </O2MStagingContext.Provider>
   )
 }
 
@@ -325,7 +546,7 @@ function AddendumCard({
           {addendum.workflow_template_id && (
             <div className='border-t border-slate-100 dark:border-border px-4 py-3'>
               <p className='mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>Workflow</p>
-              <WorkflowPanel collection='nivaro_addendums' item={addendum.id} />
+              <AddendumWorkflowPanel addendumId={addendum.id} onRefresh={onRefresh} />
             </div>
           )}
 
@@ -341,7 +562,7 @@ function AddendumCard({
                 {submitMut.isPending ? 'Submitting…' : 'Submit for Review'}
               </Button>
             )}
-            {addendum.status === 'review' && (
+            {addendum.status === 'review' && !addendum.workflow_template_id && (
               <>
                 <Button
                   size='sm'
@@ -433,11 +654,12 @@ export function AddendumPanel({
   })
 
   const { data: collectionFields = [] } = useQuery<CMSField[]>({
-    queryKey: ['collection-fields', collection],
+    queryKey: ['collection-fields', collection, resolvedLayoutId],
     queryFn: () =>
       client
-        .request<{ data: CMSField[] }>(get(`/field-config/${collection}`))
+        .request<{ data: CMSField[] }>(get(`/field-config/${collection}`, resolvedLayoutId ? { layout_id: String(resolvedLayoutId) } : undefined))
         .then((r) => r.data ?? []),
+    enabled: resolvedLayoutId != null,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -450,7 +672,7 @@ export function AddendumPanel({
     staleTime: 5 * 60 * 1000,
   })
 
-  const { data: parentItem } = useQuery<Record<string, unknown>>({
+  const { data: parentItem, isLoading: isParentLoading } = useQuery<Record<string, unknown>>({
     queryKey: ['item', collection, item],
     queryFn: () =>
       client
@@ -533,7 +755,15 @@ export function AddendumPanel({
 
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent side='right' className='w-[80vw] sm:max-w-[80vw] p-0 flex flex-col'>
-          {sheetOpen && (
+          {sheetOpen && isParentLoading ? (
+            <div className='flex flex-col gap-3 p-6'>
+              <Skeleton className='h-6 w-48' />
+              <Skeleton className='h-9 w-full' />
+              <Skeleton className='h-9 w-full' />
+              <Skeleton className='h-9 w-full' />
+              <Skeleton className='h-9 w-3/4' />
+            </div>
+          ) : sheetOpen && parentItem ? (
             <AddendumCreateSheet
               collection={collection}
               itemId={item}
@@ -542,11 +772,11 @@ export function AddendumPanel({
               resolvedLayoutId={resolvedLayoutId}
               fields={collectionFields}
               relations={relations}
-              parentData={parentItem ?? {}}
+              parentData={parentItem}
               onClose={() => setSheetOpen(false)}
               onCreated={handleRefresh}
             />
-          )}
+          ) : null}
         </SheetContent>
       </Sheet>
     </>

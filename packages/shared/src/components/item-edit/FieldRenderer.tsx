@@ -23,7 +23,8 @@ export function FieldRenderer({
   cascadeFilter,
   requiredParentLabel,
   onCountChange,
-  displayOnly
+  displayOnly,
+  prefillParentId
 }: {
   field: CMSField
   value: unknown
@@ -35,6 +36,7 @@ export function FieldRenderer({
   requiredParentLabel?: string | null
   onCountChange?: (count: number) => void
   displayOnly?: boolean
+  prefillParentId?: string
 }) {
   const iface = field.interface ?? ''
   const isRelIface =
@@ -307,7 +309,7 @@ export function FieldRenderer({
         const sortField = typeof opts.sort_field === 'string' && opts.sort_field ? opts.sort_field : undefined
         const sortDir = opts.sort_dir === 'desc' ? 'desc' as const : 'asc' as const
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} prefillParentId={prefillParentId} />
         )
       }
     }

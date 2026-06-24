@@ -137,7 +137,8 @@ export function InlineTableField({
   parentContextFields,
   uniqueBy,
   sortField,
-  sortDir = 'asc'
+  sortDir = 'asc',
+  prefillParentId
 }: {
   relatedCollection: string
   manyField: string
@@ -155,12 +156,35 @@ export function InlineTableField({
   uniqueBy?: string[]
   sortField?: string
   sortDir?: 'asc' | 'desc'
+  prefillParentId?: string
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const staging = useO2MStaging()
   const isNew = parentId === 'new'
   const parentDraftCtx = useParentDraft()
+
+  // Prefill: when rendering inside addendum create form (isNew + prefillParentId),
+  // seed staging with the parent record's existing rows once on mount.
+  const hasPrefilled = useRef(false)
+  const [isPrefilling, setIsPrefilling] = useState(isNew && !!prefillParentId)
+  useEffect(() => {
+    // hasPrefilled guard: already fetching/fetched — don't touch isPrefilling, let the in-flight fetch resolve it
+    if (hasPrefilled.current) return
+    if (!isNew || !prefillParentId || !staging) { setIsPrefilling(false); return }
+    hasPrefilled.current = true
+    client.request<{ data: Record<string, unknown>[] }>(
+      get(`/items/${relatedCollection}`, {
+        filter: JSON.stringify({ [manyField]: { _eq: prefillParentId } }),
+        limit: 200
+      })
+    ).then((r) => {
+      for (const row of r.data ?? []) staging.queueRow(relatedCollection, manyField, { __prefilled: true, ...row })
+      setIsPrefilling(false)
+    }).catch(() => setIsPrefilling(false))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // appended to mutation URLs so the API can log activity on the parent record
   const pCtx = parentCollection && !isNew
     ? `?parent_collection=${encodeURIComponent(parentCollection)}&parent_id=${encodeURIComponent(parentId)}`
@@ -645,7 +669,11 @@ export function InlineTableField({
     try {
       if (editState.rowId.startsWith('pending:')) {
         const ri = parseInt(editState.rowId.split(':')[1], 10)
+        const existingRow = pendingRows[ri]
         staging?.updateRow(relatedCollection, manyField, ri, editState.draft)
+        if (existingRow?.__prefilled && existingRow?.id != null) {
+          setEditedPendingIds(prev => new Set([...prev, existingRow.id as string | number]))
+        }
         setEditState(null)
         setSaving(false)
         return
@@ -691,6 +719,7 @@ export function InlineTableField({
     }
   }
 
+  const [editedPendingIds, setEditedPendingIds] = useState<Set<string | number>>(new Set())
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [dropIdx, setDropIdx] = useState<number | null>(null)
   const [reordering, setReordering] = useState(false)
@@ -953,7 +982,14 @@ export function InlineTableField({
         </div>
       )}
 
-    <div className='relative rounded-lg border border-slate-200 text-[12px]'>
+    {isPrefilling && (
+      <div className='rounded-lg border border-slate-200 p-3 space-y-1.5'>
+        <div className='h-8 rounded bg-slate-100 animate-pulse' />
+        <div className='h-8 rounded bg-slate-100 animate-pulse' />
+        <div className='h-8 rounded bg-slate-100 animate-pulse' />
+      </div>
+    )}
+    <div className={isPrefilling ? 'hidden' : 'relative rounded-lg border border-slate-200 text-[12px]'}>
       {reordering && (
         <div className='absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px]'>
           <div className='flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 shadow-sm text-[12px] text-slate-500'>
@@ -1016,6 +1052,7 @@ export function InlineTableField({
             const isEditing = editState?.rowId === pendingRowId
             const isPDragging = dragIdx === ri
             const isPDropTarget = dropIdx === ri && dragIdx !== ri
+            const isPrefilled = !!row.__prefilled
             return (
               <tr key={ri}
                 draggable={enableReorder && !isEditing}
@@ -1043,7 +1080,7 @@ export function InlineTableField({
                   isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
                   isEditing
                     ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
-                    : 'bg-amber-50/40 hover:bg-amber-50/70 cursor-pointer'
+                    : isPrefilled ? 'hover:bg-slate-50 cursor-pointer' : 'bg-amber-50/40 hover:bg-amber-50/70 cursor-pointer'
                 )}>
                 {enableReorder && (
                   <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
@@ -1052,8 +1089,11 @@ export function InlineTableField({
                 )}
                 {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{ri + 1}</td>}
                 <td className='px-3 py-1 align-middle w-16'>
-                  {!isEditing && (
+                  {!isEditing && !isPrefilled && (
                     <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5'>Pending</span>
+                  )}
+                  {!isEditing && isPrefilled && row.id != null && editedPendingIds.has(row.id as string | number) && (
+                    <span className='inline-flex text-[10px] font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5'>Edited</span>
                   )}
                 </td>
                 {displayCols.map((c) => {
@@ -1110,11 +1150,20 @@ export function InlineTableField({
                       </button>
                     </div>
                   ) : (
-                    <button type='button'
-                      onClick={(e) => { e.stopPropagation(); staging?.removeRow(relatedCollection, manyField, ri) }}
-                      className='rounded p-0.5 text-slate-400 hover:text-red-500'>
-                      <X className='h-3 w-3' />
-                    </button>
+                    <div className='flex items-center justify-end gap-0.5'>
+                      {showRowRevisions && isPrefilled && row.id != null && (
+                        <button type='button' title='Row history'
+                          onClick={(e) => { e.stopPropagation(); setHistoryRow(row) }}
+                          className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'>
+                          <History className='h-3 w-3' />
+                        </button>
+                      )}
+                      <button type='button'
+                        onClick={(e) => { e.stopPropagation(); staging?.removeRow(relatedCollection, manyField, ri) }}
+                        className='rounded p-0.5 text-slate-400 hover:text-red-500'>
+                        <X className='h-3 w-3' />
+                      </button>
+                    </div>
                   )}
                 </td>
               </tr>
