@@ -174,13 +174,12 @@ function AddendumWorkflowPanel({ addendumId, onRefresh }: { addendumId: string; 
   const pendingTx = transitions.find((t) => t.id === pending)
   const stateById = new Map(states.map((s) => [s.id, s]))
 
-  // Group by group_label; ungrouped transitions use their own id as key
+  // Group by tx.label (same as PipelinePanel) — transitions with same label collapse into one dropdown
   const groups = new Map<string, WfTransition[]>()
   for (const tx of transitions) {
-    const key = tx.group_label ?? tx.id
-    const existing = groups.get(key) ?? []
+    const existing = groups.get(tx.label) ?? []
     existing.push(tx)
-    groups.set(key, existing)
+    groups.set(tx.label, existing)
   }
 
   function txColorStyle(tx: WfTransition, isActive: boolean) {
@@ -206,15 +205,14 @@ function AddendumWorkflowPanel({ addendumId, onRefresh }: { addendumId: string; 
 
       {transitions.length > 0 && !instance.completed_at && (
         <div className='flex flex-wrap gap-1.5'>
-          {[...groups.entries()].map(([groupKey, txs]) => {
-            const label = txs[0].group_label ?? txs[0].label
+          {[...groups.entries()].map(([label, txs]) => {
             const representativeColor = txs[0].color
             const isActive = txs.some((tx) => tx.id === pending)
             if (txs.length === 1) {
               const tx = txs[0]
               return (
                 <button
-                  key={groupKey}
+                  key={label}
                   type='button'
                   onClick={() => setPending(pending === tx.id ? null : tx.id)}
                   className={cn(
@@ -228,7 +226,7 @@ function AddendumWorkflowPanel({ addendumId, onRefresh }: { addendumId: string; 
               )
             }
             return (
-              <DropdownMenu key={groupKey}>
+              <DropdownMenu key={label}>
                 <DropdownMenuTrigger asChild>
                   <button
                     type='button'
