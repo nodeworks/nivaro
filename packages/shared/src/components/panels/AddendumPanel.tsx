@@ -8,7 +8,9 @@ import { FieldRenderer } from '../item-edit/FieldRenderer'
 import { O2MStagingContext } from '../item-edit/O2MStagingContext'
 import type { O2MStagingCtx } from '../item-edit/O2MStagingContext'
 import type { CMSField, CMSRelation } from '../item-edit/types'
+import { ChevronDown } from 'lucide-react'
 import { Button } from '../ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
@@ -137,11 +139,11 @@ function AddendumWorkflowPanel({ addendumId, onRefresh }: { addendumId: string; 
 
   const instanceKey = ['pipeline-instance', 'nivaro_addendums', addendumId]
 
-  const { data: pd, isLoading } = useQuery<{ instance: WfInstance | null; available_transitions: WfTransition[] } | null>({
+  const { data: pd, isLoading } = useQuery<{ instance: WfInstance | null; available_transitions: WfTransition[]; states: WfState[] } | null>({
     queryKey: instanceKey,
     queryFn: () =>
       client
-        .request<{ data: { instance: WfInstance | null; available_transitions: WfTransition[] } | null }>(
+        .request<{ data: { instance: WfInstance | null; available_transitions: WfTransition[]; states: WfState[] } | null }>(
           get(`/pipelines/instance/nivaro_addendums/${addendumId}`)
         )
         .then((r) => r.data),
@@ -167,9 +169,26 @@ function AddendumWorkflowPanel({ addendumId, onRefresh }: { addendumId: string; 
   if (isLoading) return <Skeleton className='h-8 w-full' />
   if (!pd?.instance) return <p className='text-[12px] text-slate-400 italic'>No workflow instance found.</p>
 
-  const { instance, available_transitions: transitions } = pd
+  const { instance, available_transitions: transitions, states = [] } = pd
   const state = instance.current_state_obj
   const pendingTx = transitions.find((t) => t.id === pending)
+  const stateById = new Map(states.map((s) => [s.id, s]))
+
+  // Group by group_label; ungrouped transitions use their own id as key
+  const groups = new Map<string, WfTransition[]>()
+  for (const tx of transitions) {
+    const key = tx.group_label ?? tx.id
+    const existing = groups.get(key) ?? []
+    existing.push(tx)
+    groups.set(key, existing)
+  }
+
+  function txColorStyle(tx: WfTransition, isActive: boolean) {
+    if (!tx.color) return undefined
+    return isActive
+      ? { backgroundColor: tx.color, borderColor: tx.color, color: '#fff' }
+      : { borderColor: tx.color, color: tx.color }
+  }
 
   return (
     <div className='space-y-3'>
@@ -187,28 +206,58 @@ function AddendumWorkflowPanel({ addendumId, onRefresh }: { addendumId: string; 
 
       {transitions.length > 0 && !instance.completed_at && (
         <div className='flex flex-wrap gap-1.5'>
-          {transitions.map((tx) => (
-            <button
-              key={tx.id}
-              type='button'
-              onClick={() => setPending(pending === tx.id ? null : tx.id)}
-              className={cn(
-                'inline-flex items-center rounded-full px-3 py-1 text-[11px] font-medium transition-colors',
-                pending === tx.id
-                  ? 'bg-nvr-cyan text-white'
-                  : 'bg-white hover:bg-slate-50 border border-slate-200 text-slate-700'
-              )}
-              style={
-                tx.color && pending !== tx.id
-                  ? { borderColor: tx.color, color: tx.color }
-                  : tx.color && pending === tx.id
-                    ? { backgroundColor: tx.color, borderColor: tx.color }
-                    : undefined
-              }
-            >
-              {tx.label}
-            </button>
-          ))}
+          {[...groups.entries()].map(([groupKey, txs]) => {
+            const label = txs[0].group_label ?? txs[0].label
+            const representativeColor = txs[0].color
+            const isActive = txs.some((tx) => tx.id === pending)
+            if (txs.length === 1) {
+              const tx = txs[0]
+              return (
+                <button
+                  key={groupKey}
+                  type='button'
+                  onClick={() => setPending(pending === tx.id ? null : tx.id)}
+                  className={cn(
+                    'inline-flex items-center rounded-full px-3 py-1 text-[11px] font-medium transition-colors border',
+                    isActive ? 'bg-nvr-cyan border-nvr-cyan text-white' : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
+                  )}
+                  style={txColorStyle(tx, isActive)}
+                >
+                  {label}
+                </button>
+              )
+            }
+            return (
+              <DropdownMenu key={groupKey}>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type='button'
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-medium transition-colors border',
+                      isActive ? 'bg-nvr-cyan border-nvr-cyan text-white' : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
+                    )}
+                    style={representativeColor && !isActive ? { borderColor: representativeColor, color: representativeColor } : undefined}
+                  >
+                    {label}
+                    <ChevronDown className='h-3 w-3' />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align='start'>
+                  {txs.map((tx) => {
+                    const targetState = stateById.get(tx.to_state)
+                    return (
+                      <DropdownMenuItem key={tx.id} onSelect={() => setPending(tx.id)}>
+                        {tx.color && (
+                          <span className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full' style={{ backgroundColor: tx.color }} />
+                        )}
+                        {targetState?.label ?? tx.to_state}
+                      </DropdownMenuItem>
+                    )
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )
+          })}
         </div>
       )}
 
