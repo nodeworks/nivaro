@@ -289,4 +289,114 @@ export async function queuesRoutes(app: FastifyInstance) {
     const result = await fetchQueueItems(id, req.user!, scope as QueueScope)
     return reply.send({ data: result.items, stats: result.stats })
   })
+
+  // POST /:id/claim — self-assign an item within this queue; write-through to the
+  // real pipeline instance-owner table when the item has a live workflow instance.
+  app.post('/:id/claim', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = req.body as { source_collection?: string; item_id?: string }
+    if (!body.source_collection || !body.item_id) {
+      return reply.code(400).send({ error: 'source_collection and item_id are required' })
+    }
+
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    const existing = await db('nivaro_queue_claims')
+      .where({ queue_id: id, source_collection: body.source_collection, item_id: body.item_id })
+      .first()
+    if (!existing) {
+      await db('nivaro_queue_claims').insert({
+        queue_id: id,
+        source_collection: body.source_collection,
+        item_id: body.item_id,
+        claimed_by: req.user!.id,
+        claimed_at: new Date()
+      })
+    }
+
+    // Write-through: for collection-backed items with a live workflow instance, also
+    // add the caller as a pipeline instance owner — same self-add rule the Pipeline
+    // Owners panel already uses (POST /pipelines/instance/:collection/:item/owners).
+    // Tasks/approvals have no safe self-claim path on their own endpoints today, so
+    // those stay queue-local-only (claim still works — just doesn't also grant
+    // pipeline ownership, since there is no pipeline ownership to grant).
+    if (body.source_collection !== 'tasks' && body.source_collection !== 'approvals') {
+      const instance = await db('nivaro_workflow_instances')
+        .where({ collection: body.source_collection, item: body.item_id })
+        .first()
+      if (instance) {
+        const alreadyOwner = await db('nivaro_pipeline_instance_owners')
+          .where({ instance: instance.id, user: req.user!.id })
+          .first()
+        if (!alreadyOwner) {
+          await db('nivaro_pipeline_instance_owners').insert({
+            instance: instance.id,
+            state: null,
+            user: req.user!.id,
+            added_by: req.user!.id,
+            added_at: new Date()
+          })
+        }
+      }
+    }
+
+    await logActivity({
+      action: 'create',
+      user: req.user?.id,
+      collection: 'nivaro_queue_claims',
+      item: `${body.source_collection}:${body.item_id}`,
+      comment: id,
+      req
+    })
+
+    return reply.code(201).send({ data: { claimed: true } })
+  })
+
+  // POST /:id/release — undo a claim, removing the write-through owner grant too
+  // (only the grant this claim itself added — added_by=self guards against removing
+  // ownership that came from an owner group).
+  app.post('/:id/release', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = req.body as { source_collection?: string; item_id?: string }
+    if (!body.source_collection || !body.item_id) {
+      return reply.code(400).send({ error: 'source_collection and item_id are required' })
+    }
+
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    await db('nivaro_queue_claims')
+      .where({
+        queue_id: id,
+        source_collection: body.source_collection,
+        item_id: body.item_id,
+        claimed_by: req.user!.id
+      })
+      .delete()
+
+    if (body.source_collection !== 'tasks' && body.source_collection !== 'approvals') {
+      const instance = await db('nivaro_workflow_instances')
+        .where({ collection: body.source_collection, item: body.item_id })
+        .first()
+      if (instance) {
+        await db('nivaro_pipeline_instance_owners')
+          .where({ instance: instance.id, user: req.user!.id, added_by: req.user!.id })
+          .delete()
+      }
+    }
+
+    await logActivity({
+      action: 'delete',
+      user: req.user?.id,
+      collection: 'nivaro_queue_claims',
+      item: `${body.source_collection}:${body.item_id}`,
+      comment: id,
+      req
+    })
+
+    return reply.code(204).send()
+  })
 }
