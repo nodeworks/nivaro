@@ -125,7 +125,7 @@ function round1(n: number): number {
  * three queries per item. Items without an instance, state, active rule,
  * or history entry are omitted from the result map.
  */
-async function computeStatusBatch(
+export async function computeStatusBatch(
   collection: string,
   ids: string[]
 ): Promise<Record<string, SlaBatchEntry>> {

@@ -16,7 +16,7 @@ interface AtRiskCondition {
   value?: unknown
 }
 
-interface AtRiskRuleRow {
+export interface AtRiskRuleRow {
   id: number
   collection: string
   name: string
@@ -76,7 +76,7 @@ function validateConditions(raw: unknown): string | null {
 }
 
 /** All column names a set of conditions reads (condition fields + {{refs}} in values). */
-function referencedFields(conditions: AtRiskCondition[]): string[] {
+export function referencedFields(conditions: AtRiskCondition[]): string[] {
   const fields = new Set<string>()
   for (const c of conditions) {
     if (typeof c.field === 'string' && IDENTIFIER_RE.test(c.field)) fields.add(c.field)
@@ -184,14 +184,14 @@ function formatRule(row: AtRiskRuleRow) {
   }
 }
 
-interface ParsedRule {
+export interface ParsedRule {
   id: number
   name: string
   color: 'red' | 'amber'
   conditions: AtRiskCondition[]
 }
 
-function parseActiveRules(rows: AtRiskRuleRow[]): ParsedRule[] {
+export function parseActiveRules(rows: AtRiskRuleRow[]): ParsedRule[] {
   const rules: ParsedRule[] = []
   for (const row of rows) {
     const conditions = parseConditions(row.conditions)
@@ -207,7 +207,7 @@ function parseActiveRules(rows: AtRiskRuleRow[]): ParsedRule[] {
 }
 
 /** Evaluate rows against rules — returns map of id → first matching rule result. */
-function evaluateRows(
+export function evaluateRows(
   rows: Record<string, unknown>[],
   rules: ParsedRule[]
 ): Record<string, { at_risk: true; rule: string; color: 'red' | 'amber' }> {
