@@ -84,6 +84,7 @@ interface OwnerGroup {
   sort: number
   is_default: boolean
   priority: number
+  max_wip: number | null
 }
 
 interface OwnerGroupUser {
@@ -1496,6 +1497,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       is_default?: boolean
       sort?: number
       priority?: number
+      max_wip?: number | null
     }
     await db('nivaro_pipeline_owner_groups')
       .where({ id: groupId })
@@ -1504,7 +1506,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         filters: body.filters !== undefined ? toJsonStr(body.filters) : existing.filters,
         is_default: body.is_default !== undefined ? (body.is_default ? 1 : 0) : existing.is_default,
         sort: body.sort ?? existing.sort,
-        priority: body.priority !== undefined ? body.priority : existing.priority
+        priority: body.priority !== undefined ? body.priority : existing.priority,
+        max_wip: body.max_wip !== undefined ? body.max_wip : existing.max_wip
       })
 
     const group = await db<OwnerGroup>('nivaro_pipeline_owner_groups')
