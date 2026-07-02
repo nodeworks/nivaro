@@ -39,7 +39,10 @@ export interface Column<T = Record<string, unknown>> {
 export interface FilterDef {
   key: string
   placeholder: string
-  options: { label: string; value: string }[]
+  /** Defaults to 'select' — every existing FilterDef without this field keeps its current dropdown behavior unchanged. */
+  type?: 'select' | 'text' | 'range'
+  /** Required when type is 'select' or omitted; ignored for 'text'/'range'. */
+  options?: { label: string; value: string }[]
 }
 
 export interface DataTableProps<T = Record<string, unknown>> {
@@ -171,6 +174,42 @@ export function DataTable<T = Record<string, unknown>>({
 
             {filterDefs?.map((def) => {
               const currentVal = filterValues[def.key] ?? ''
+
+              if (def.type === 'text') {
+                return (
+                  <Input
+                    key={def.key}
+                    className='h-8 w-40 border-slate-200 bg-slate-50 text-[13px]'
+                    placeholder={def.placeholder}
+                    value={currentVal}
+                    onChange={(e) => onFilterChange?.(def.key, e.target.value)}
+                  />
+                )
+              }
+
+              if (def.type === 'range') {
+                const [minVal, maxVal] = currentVal.split(':')
+                return (
+                  <div key={def.key} className='flex items-center gap-1'>
+                    <Input
+                      type='number'
+                      className='h-8 w-20 border-slate-200 bg-slate-50 text-[13px]'
+                      placeholder='Min'
+                      value={minVal ?? ''}
+                      onChange={(e) => onFilterChange?.(def.key, `${e.target.value}:${maxVal ?? ''}`)}
+                    />
+                    <span className='text-[12px] text-slate-400'>–</span>
+                    <Input
+                      type='number'
+                      className='h-8 w-20 border-slate-200 bg-slate-50 text-[13px]'
+                      placeholder='Max'
+                      value={maxVal ?? ''}
+                      onChange={(e) => onFilterChange?.(def.key, `${minVal ?? ''}:${e.target.value}`)}
+                    />
+                  </div>
+                )
+              }
+
               // Radix crashes on empty string value — use __all__ as sentinel
               const selectVal = currentVal === '' ? '__all__' : currentVal
 
@@ -187,7 +226,7 @@ export function DataTable<T = Record<string, unknown>>({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value='__all__'>{def.placeholder}</SelectItem>
-                    {def.options.map((opt) => (
+                    {(def.options ?? []).map((opt) => (
                       <SelectItem key={opt.value} value={opt.value}>
                         {opt.label}
                       </SelectItem>
