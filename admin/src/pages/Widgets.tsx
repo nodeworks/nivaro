@@ -98,7 +98,8 @@ interface WidgetFeed {
   id: number
   name: string
   token: string
-  collection: string
+  collection: string | null
+  queue_id: string | null
   fields: string[]
   filters: Record<string, string> | null
   limit_count: number
@@ -108,14 +109,23 @@ interface WidgetFeed {
   created_at: string
 }
 
+type FeedSourceType = 'collection' | 'queue'
+
 interface FeedFormData {
   name: string
+  sourceType: FeedSourceType
   collection: string
+  queue_id: string
   fields: string[]
   filters: { field: string; value: string }[]
   limit_count: number
   sort: string
   is_active: boolean
+}
+
+interface QueueOption {
+  id: string
+  name: string
 }
 
 interface SubmissionForm {
@@ -127,7 +137,9 @@ interface SubmissionForm {
 
 const FORM_DEFAULTS: FeedFormData = {
   name: '',
+  sourceType: 'collection',
   collection: '',
+  queue_id: '',
   fields: [],
   filters: [],
   limit_count: 20,
@@ -138,7 +150,9 @@ const FORM_DEFAULTS: FeedFormData = {
 function feedToForm(feed: WidgetFeed): FeedFormData {
   return {
     name: feed.name,
-    collection: feed.collection,
+    sourceType: feed.queue_id ? 'queue' : 'collection',
+    collection: feed.collection ?? '',
+    queue_id: feed.queue_id ?? '',
     fields: feed.fields ?? [],
     filters: Object.entries(feed.filters ?? {}).map(([field, value]) => ({
       field,
@@ -285,6 +299,13 @@ function FeedForm({
     staleTime: 30_000
   })
 
+  const { data: queues = [] } = useQuery({
+    queryKey: ['queues'],
+    queryFn: () => api.get<{ data: QueueOption[] }>('/queues').then((r) => r.data.data),
+    staleTime: 30_000
+  })
+  const queueOptions = queues.map((q) => ({ value: q.id, label: q.name }))
+
   const allFields = (colMeta?.fields ?? []).filter((f) => !f.hidden)
   const fieldOptions = allFields.map((f) => ({ value: f.field, label: `${f.field} (${f.type})` }))
   const availableFieldOptions = fieldOptions.filter((o) => !form.fields.includes(o.value))
@@ -295,19 +316,32 @@ function FeedForm({
 
   const saveMut = useMutation({
     mutationFn: async () => {
-      const filters: Record<string, string> = {}
-      for (const row of form.filters) {
-        if (row.field.trim()) filters[row.field.trim()] = row.value
-      }
-      const body = {
+      const base = {
         name: form.name.trim(),
-        collection: form.collection,
-        fields: form.fields,
-        filters: Object.keys(filters).length > 0 ? filters : null,
         limit_count: form.limit_count,
-        sort: form.sort.trim() || null,
         is_active: form.is_active
       }
+      // Queue-backed and collection-backed feeds are mutually exclusive on the
+      // server (`exactly one of collection or queue_id`) — omit the other
+      // mode's keys entirely rather than sending them as null/empty, since
+      // PATCH treats any *present* collection/fields/filters key on a
+      // queue-backed feed as an error.
+      const body =
+        form.sourceType === 'queue'
+          ? { ...base, queue_id: form.queue_id }
+          : (() => {
+              const filters: Record<string, string> = {}
+              for (const row of form.filters) {
+                if (row.field.trim()) filters[row.field.trim()] = row.value
+              }
+              return {
+                ...base,
+                collection: form.collection,
+                fields: form.fields,
+                filters: Object.keys(filters).length > 0 ? filters : null,
+                sort: form.sort.trim() || null
+              }
+            })()
       const res = feed
         ? await api.patch<{ data: WidgetFeed }>(`/widget/${feed.id}`, body)
         : await api.post<{ data: WidgetFeed }>('/widget', body)
@@ -322,10 +356,41 @@ function FeedForm({
       toast.error(err.response?.data?.error ?? 'Failed to save feed')
   })
 
-  const isValid = form.name.trim() !== '' && form.collection !== '' && form.fields.length > 0
+  const isValid =
+    form.name.trim() !== '' &&
+    (form.sourceType === 'queue'
+      ? form.queue_id !== ''
+      : form.collection !== '' && form.fields.length > 0)
 
   return (
     <div className='space-y-4'>
+      <div className='space-y-1'>
+        <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>Source</Label>
+        <div className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+          {(['collection', 'queue'] as const).map((t) => (
+            <button
+              key={t}
+              type='button'
+              disabled={!!feed}
+              onClick={() => set('sourceType', t)}
+              className={cn(
+                'rounded px-3 py-1 text-[12px] font-medium capitalize transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                form.sourceType === t
+                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                  : 'text-slate-500 hover:text-slate-700 dark:text-muted-foreground dark:hover:text-slate-300'
+              )}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        {feed && (
+          <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+            Source type is locked after creation.
+          </p>
+        )}
+      </div>
+
       <div className='grid grid-cols-2 gap-4'>
         <div className='space-y-1'>
           <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>Name</Label>
@@ -336,125 +401,142 @@ function FeedForm({
             placeholder='e.g. Latest news'
           />
         </div>
-        <div className='space-y-1'>
-          <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-            Collection
-          </Label>
-          <PickCombobox
-            value={form.collection}
-            onChange={(v) => {
-              set('collection', v)
-              set('fields', [])
-              set('filters', [])
-              set('sort', '')
-            }}
-            options={collections
-              .filter((c) => !c.collection.startsWith('nivaro_'))
-              .map((c) => ({ value: c.collection, label: c.collection }))}
-            placeholder='Select collection…'
-          />
-        </div>
-      </div>
-
-      <div className='space-y-1'>
-        <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-          Exposed fields
-        </Label>
-        <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
-          Only these columns are ever returned by the public feed.
-        </p>
-        <div className='flex flex-wrap items-center gap-1.5'>
-          {form.fields.map((f) => (
-            <Badge key={f} className='gap-1 font-mono text-[11px]'>
-              {f}
-              <button
-                type='button'
-                aria-label={`Remove ${f}`}
-                onClick={() =>
-                  set(
-                    'fields',
-                    form.fields.filter((x) => x !== f)
-                  )
-                }
-                className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
-              >
-                <X className='h-3 w-3' />
-              </button>
-            </Badge>
-          ))}
-          <div className='w-[220px]'>
+        {form.sourceType === 'queue' ? (
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>Queue</Label>
             <PickCombobox
-              value=''
-              onChange={(v) => {
-                if (v && !form.fields.includes(v)) set('fields', [...form.fields, v])
-              }}
-              options={availableFieldOptions}
-              placeholder={form.collection ? 'Add field…' : 'Select collection first'}
-              disabled={!form.collection}
+              value={form.queue_id}
+              onChange={(v) => set('queue_id', v)}
+              options={queueOptions}
+              placeholder='Select queue…'
+              disabled={!!feed}
             />
           </div>
-        </div>
+        ) : (
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+              Collection
+            </Label>
+            <PickCombobox
+              value={form.collection}
+              onChange={(v) => {
+                set('collection', v)
+                set('fields', [])
+                set('filters', [])
+                set('sort', '')
+              }}
+              options={collections
+                .filter((c) => !c.collection.startsWith('nivaro_'))
+                .map((c) => ({ value: c.collection, label: c.collection }))}
+              placeholder='Select collection…'
+            />
+          </div>
+        )}
       </div>
 
-      <div className='space-y-1'>
-        <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-          Equality filters
-        </Label>
-        <div className='space-y-2'>
-          {form.filters.map((row, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: filter rows are positional with no stable id
-            <div key={`filter-${i}`} className='flex items-center gap-2'>
+      {form.sourceType === 'collection' && (
+        <>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+              Exposed fields
+            </Label>
+            <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+              Only these columns are ever returned by the public feed.
+            </p>
+            <div className='flex flex-wrap items-center gap-1.5'>
+              {form.fields.map((f) => (
+                <Badge key={f} className='gap-1 font-mono text-[11px]'>
+                  {f}
+                  <button
+                    type='button'
+                    aria-label={`Remove ${f}`}
+                    onClick={() =>
+                      set(
+                        'fields',
+                        form.fields.filter((x) => x !== f)
+                      )
+                    }
+                    className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
+                  >
+                    <X className='h-3 w-3' />
+                  </button>
+                </Badge>
+              ))}
               <div className='w-[220px]'>
                 <PickCombobox
-                  value={row.field}
+                  value=''
                   onChange={(v) => {
-                    const next = [...form.filters]
-                    next[i] = { ...next[i], field: v }
-                    set('filters', next)
+                    if (v && !form.fields.includes(v)) set('fields', [...form.fields, v])
                   }}
-                  options={fieldOptions}
-                  placeholder='Field…'
+                  options={availableFieldOptions}
+                  placeholder={form.collection ? 'Add field…' : 'Select collection first'}
                   disabled={!form.collection}
                 />
               </div>
-              <Input
-                className='h-8 flex-1 font-mono text-[12px]'
-                value={row.value}
-                onChange={(e) => {
-                  const next = [...form.filters]
-                  next[i] = { ...next[i], value: e.target.value }
-                  set('filters', next)
-                }}
-                placeholder='Value'
-              />
+            </div>
+          </div>
+
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+              Equality filters
+            </Label>
+            <div className='space-y-2'>
+              {form.filters.map((row, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: filter rows are positional with no stable id
+                <div key={`filter-${i}`} className='flex items-center gap-2'>
+                  <div className='w-[220px]'>
+                    <PickCombobox
+                      value={row.field}
+                      onChange={(v) => {
+                        const next = [...form.filters]
+                        next[i] = { ...next[i], field: v }
+                        set('filters', next)
+                      }}
+                      options={fieldOptions}
+                      placeholder='Field…'
+                      disabled={!form.collection}
+                    />
+                  </div>
+                  <Input
+                    className='h-8 flex-1 font-mono text-[12px]'
+                    value={row.value}
+                    onChange={(e) => {
+                      const next = [...form.filters]
+                      next[i] = { ...next[i], value: e.target.value }
+                      set('filters', next)
+                    }}
+                    placeholder='Value'
+                  />
+                  <Button
+                    size='icon'
+                    variant='ghost'
+                    className='h-7 w-7 shrink-0'
+                    aria-label='Remove filter'
+                    onClick={() =>
+                      set(
+                        'filters',
+                        form.filters.filter((_, idx) => idx !== i)
+                      )
+                    }
+                  >
+                    <X className='h-3.5 w-3.5' />
+                  </Button>
+                </div>
+              ))}
               <Button
-                size='icon'
-                variant='ghost'
-                className='h-7 w-7 shrink-0'
-                aria-label='Remove filter'
-                onClick={() =>
-                  set(
-                    'filters',
-                    form.filters.filter((_, idx) => idx !== i)
-                  )
-                }
+                size='sm'
+                variant='outline'
+                className='h-7 text-[12px]'
+                disabled={!form.collection}
+                onClick={() => set('filters', [...form.filters, { field: '', value: '' }])}
               >
-                <X className='h-3.5 w-3.5' />
+                <Plus className='mr-1 h-3 w-3' />
+                Add filter
               </Button>
             </div>
-          ))}
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-7 text-[12px]'
-            disabled={!form.collection}
-            onClick={() => set('filters', [...form.filters, { field: '', value: '' }])}
-          >
-            <Plus className='mr-1 h-3 w-3' />
-            Add filter
-          </Button>
-        </div>
-      </div>
+          </div>
+        </>
+      )}
 
       <div className='grid grid-cols-3 gap-4'>
         <div className='space-y-1'>
@@ -689,7 +771,8 @@ function FeedDetail({ feed, onDeleted }: { feed: WidgetFeed; onDeleted: () => vo
         <div>
           <h2 className='text-[15px] font-semibold'>{feed.name}</h2>
           <p className='font-mono text-[12px] text-slate-400 dark:text-muted-foreground'>
-            {feed.collection} · created {formatDate(feed.created_at)}
+            {feed.queue_id ? 'queue-backed' : feed.collection} · created{' '}
+            {formatDate(feed.created_at)}
           </p>
         </div>
         {confirmDelete ? (
@@ -2523,7 +2606,7 @@ function EmbedFeedsTab() {
                       )}
                     </div>
                     <p className='truncate font-mono text-[11px] text-slate-400 dark:text-muted-foreground'>
-                      {feed.collection}
+                      {feed.queue_id ? 'queue-backed' : feed.collection}
                     </p>
                   </button>
                 </li>
