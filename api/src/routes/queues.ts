@@ -3,7 +3,8 @@ import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
-import type { QueueRow, QueueSourceRow, QueueSourceType } from '../services/queues.js'
+import type { QueueRow, QueueScope, QueueSourceRow, QueueSourceType } from '../services/queues.js'
+import { fetchQueueItems } from '../services/queues.js'
 
 function formatQueue(row: QueueRow) {
   return {
@@ -253,5 +254,23 @@ export async function queuesRoutes(app: FastifyInstance) {
     })
 
     return reply.send({ data: sources.map(formatSource) })
+  })
+
+  // GET /:id/items?scope=mine|unowned|all — fan-out worklist
+  app.get('/:id/items', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { scope = 'all' } = req.query as { scope?: string }
+    if (!['mine', 'unowned', 'all'].includes(scope)) {
+      return reply.code(400).send({ error: 'scope must be mine, unowned, or all' })
+    }
+
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+
+    const result = await fetchQueueItems(id, req.user!, scope as QueueScope)
+    return reply.send({ data: result.items, stats: result.stats })
   })
 }
