@@ -39,6 +39,7 @@ export interface QueueSourceRow {
   collection: string | null
   filters: string | null
   state_values: string | null
+  sla_filter: string | null
   sort: number
 }
 
@@ -129,6 +130,15 @@ export function computeStats(items: QueueItem[]): QueueStats {
     if (item.owners.length === 0) unowned++
   }
   return { total: items.length, by_state, unowned }
+}
+
+export function filterBySlaStatus(
+  ids: string[],
+  slaMap: Record<string, { status: string }>,
+  filter: string | null
+): string[] {
+  if (!filter) return ids
+  return ids.filter((id) => slaMap[id]?.status === filter)
 }
 
 export interface ConditionBuilder {
@@ -321,6 +331,7 @@ export async function resolveCollectionSource(
   }
 
   const slaMap = ids.length ? await computeStatusBatch(source.collection, ids) : {}
+  ids = filterBySlaStatus(ids, slaMap, source.sla_filter)
 
   const ruleRows = (await db('nivaro_at_risk_rules')
     .where({ collection: source.collection, is_active: true })

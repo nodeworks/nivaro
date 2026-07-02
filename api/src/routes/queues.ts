@@ -220,6 +220,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         collection?: string | null
         filters?: unknown
         state_values?: unknown
+        sla_filter?: string | null
         sort?: number
       }>
     }
@@ -238,6 +239,9 @@ export async function queuesRoutes(app: FastifyInstance) {
       if (s.type === 'collection' && !s.collection) {
         return reply.code(400).send({ error: 'collection is required for type=collection sources' })
       }
+      if (s.sla_filter && s.sla_filter !== 'warning' && s.sla_filter !== 'breached') {
+        return reply.code(400).send({ error: `invalid sla_filter: ${s.sla_filter}` })
+      }
     }
 
     await db.transaction(async (trx) => {
@@ -249,6 +253,7 @@ export async function queuesRoutes(app: FastifyInstance) {
           collection: s.collection ?? null,
           filters: toJsonStr(s.filters),
           state_values: toJsonStr(s.state_values),
+          sla_filter: s.sla_filter ?? null,
           sort: s.sort ?? i
         }))
       )

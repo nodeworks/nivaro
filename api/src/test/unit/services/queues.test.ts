@@ -5,6 +5,7 @@ import {
   attachClaims,
   type ConditionBuilder,
   computeStats,
+  filterBySlaStatus,
   mergeSourceResults,
   type QueueItem,
   type QueueScope
@@ -100,6 +101,34 @@ describe('computeStats', () => {
 
   it('returns zeroed stats for an empty list', () => {
     expect(computeStats([])).toEqual({ total: 0, by_state: {}, unowned: 0 })
+  })
+})
+
+describe('filterBySlaStatus', () => {
+  const slaMap = {
+    '1': { status: 'breached' },
+    '2': { status: 'warning' },
+    '3': { status: 'ok' }
+  }
+
+  it('returns all ids unchanged when filter is null', () => {
+    expect(filterBySlaStatus(['1', '2', '3'], slaMap, null)).toEqual(['1', '2', '3'])
+  })
+
+  it('narrows to only breached ids when filter is "breached"', () => {
+    expect(filterBySlaStatus(['1', '2', '3'], slaMap, 'breached')).toEqual(['1'])
+  })
+
+  it('narrows to only warning ids when filter is "warning"', () => {
+    expect(filterBySlaStatus(['1', '2', '3'], slaMap, 'warning')).toEqual(['2'])
+  })
+
+  it('excludes ids with no SLA entry at all (no active rule for that state)', () => {
+    expect(filterBySlaStatus(['1', '4'], slaMap, 'breached')).toEqual(['1'])
+  })
+
+  it('returns an empty array when nothing matches', () => {
+    expect(filterBySlaStatus(['3'], slaMap, 'breached')).toEqual([])
   })
 })
 
