@@ -4,6 +4,8 @@ import fp from 'fastify-plugin'
 import { Redis } from 'ioredis'
 import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
+import { can } from '../services/permissions.js'
+import type { User } from '../types.js'
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -33,16 +35,21 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   io.on('connection', (socket) => {
     app.log.debug({ socketId: socket.id }, 'Socket connected')
 
+    // Set once `auth` succeeds below; gates authenticated-only handlers
+    // (e.g. collection:join) for the lifetime of this socket connection.
+    let authenticatedUser: User | null = null
+
     // Authenticate the socket via the user's static token and join their
     // personal room so real-time notifications can be targeted to them.
     socket.on('auth', async (payload: { token?: string }) => {
       const token = payload?.token?.trim()
       if (!token) return
       try {
-        const user = await db('nivaro_users')
+        const user = await db<User>('nivaro_users')
           .where({ static_token: token, status: 'active' })
-          .first('id')
+          .first()
         if (user) {
+          authenticatedUser = user
           socket.join(`user:${user.id}`)
           socket.emit('auth:ok', { userId: user.id })
         }
@@ -64,10 +71,23 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.on('presence:leave', (roomId: string) => {
       socket.leave(`presence:${roomId}`)
     })
-    socket.on('collection:join', (payload: { collection?: string }) => {
+    // Requires an authenticated socket (via `auth` above) AND read access to
+    // the specific collection — mirrors the `can(user, 'read', collection)`
+    // check every REST/GraphQL/items read path already enforces. Rejects
+    // silently (no error emit) to match this handler's existing minimal-
+    // feedback style; the client just never receives collection:update events.
+    socket.on('collection:join', async (payload: { collection?: string }) => {
       const collection = payload?.collection
-      if (typeof collection === 'string' && collection.length > 0) {
-        socket.join(`collection:${collection}`)
+      if (typeof collection !== 'string' || collection.length === 0) return
+      const user = authenticatedUser
+      if (!user) return
+      try {
+        const allowed = await can(user, 'read', collection)
+        if (allowed) {
+          socket.join(`collection:${collection}`)
+        }
+      } catch (err) {
+        app.log.warn({ err, collection }, 'collection:join permission check failed')
       }
     })
     socket.on('collection:leave', (payload: { collection?: string }) => {
