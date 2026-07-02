@@ -69,6 +69,15 @@ export const queuesGuide: DocSection = {
         "The Workload view groups a queue's items by owner and shows each owner's current count against their most restrictive WIP limit (the lowest max_wip across every pipeline owner group they belong to that sets one) — the badge turns red when an owner is over limit. Set max_wip per owner group in the Owner Matrix editor (Pipelines → a state cell → Max WIP, blank = unlimited).",
         'An item with multiple owners is counted once per owner in the Workload view, matching how ownership already displays everywhere else in Queues.'
       ]
+    },
+    { type: 'h3', text: 'Live refresh, digest, and embedding' },
+    {
+      type: 'ul',
+      items: [
+        "Every queue view live-refreshes: the browser joins a Socket.io room per collection among the queue's active sources, and re-fetches items/workload whenever any item in one of those collections is created, updated, transitioned, claimed, or released — anywhere in the app, not just from this queue view.",
+        'Subscribe to a daily or weekly email digest instead of watching a queue live — the digest email includes a current snapshot (total, unowned, per-state counts) resolved fresh each time it sends, not a log of individual changes.',
+        "A queue can back a public embeddable widget the same way a single collection can (Widgets page) — the embed shows the queue's current items to anyone with the link, resolved using the feed creator's read access, not the viewer's (matching how every other widget feed already works)."
+      ]
     }
   ]
 }
