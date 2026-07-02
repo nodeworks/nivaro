@@ -2,6 +2,7 @@
 import type { Browser } from 'puppeteer'
 import puppeteer from 'puppeteer'
 import { db } from '../db/index.js'
+import { resolveDisplayValue } from './display-value.js'
 import { classicTheme, escHtml, executiveTheme, minimalTheme } from './pdf-layout-themes.js'
 import type { PdfLayoutData } from './pdf-layout-themes.js'
 
@@ -34,32 +35,9 @@ interface RelationRow {
   junction_field: string | null
 }
 
-const LABEL_FALLBACK = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
-
 // Mirrors FieldGroupsTab logic: alias = one_field unless it's 'id'/null, then fall back to many_collection
 function getVirtualAlias(r: RelationRow): string {
   return (r.one_field && r.one_field !== 'id') ? r.one_field : r.many_collection
-}
-
-function resolveDisplayValue(record: Record<string, unknown>, template?: string | null): string {
-  if (template) {
-    return template.replace(/\{\{([\w.]+)\}\}/g, (_, key) => {
-      const parts = key.split('.')
-      let val: unknown = record
-      for (const p of parts) {
-        if (val == null || typeof val !== 'object') { val = null; break }
-        val = (val as Record<string, unknown>)[p]
-      }
-      return String(val ?? '')
-    }).trim()
-  }
-  if (record.first_name != null || record.last_name != null) {
-    return [record.first_name, record.last_name].filter(Boolean).join(' ').trim() || String(record.id ?? '')
-  }
-  for (const f of LABEL_FALLBACK) {
-    if (record[f] != null && record[f] !== '') return String(record[f])
-  }
-  return String(record.id ?? '')
 }
 
 async function enrichRelationValues(
