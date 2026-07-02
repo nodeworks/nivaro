@@ -31,7 +31,7 @@ function formatSource(row: QueueSourceRow) {
  * would have excluded (role-scoped shared queues are not "public to any
  * authenticated user" just because is_shared=true).
  */
-function canReadQueue(queue: QueueRow, req: FastifyRequest): boolean {
+export function canReadQueue(queue: QueueRow, req: FastifyRequest): boolean {
   if (req.isAdmin) return true
   if (queue.owner === req.user!.id) return true
   if (!queue.is_shared) return false

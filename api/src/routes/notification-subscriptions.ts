@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { canReadQueue } from './queues.js'
 import { logActivity } from '../services/activity.js'
+import type { QueueRow } from '../services/queues.js'
 
 const VALID_EVENT_TYPES = ['create', 'update', 'delete', 'all'] as const
 type EventType = (typeof VALID_EVENT_TYPES)[number]
@@ -13,7 +15,8 @@ function serialize(row: Record<string, unknown>) {
   return {
     id: row.id,
     user: row.user,
-    collection: row.collection,
+    collection: row.collection ?? null,
+    queue_id: row.queue_id ?? null,
     event_type: row.event_type,
     filter_field: row.filter_field ?? null,
     filter_value: row.filter_value ?? null,
@@ -51,6 +54,7 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
     const userId = req.user!.id
     const body = req.body as {
       collection?: string
+      queue_id?: string
       event_type?: string
       filter_field?: string
       filter_value?: string
@@ -59,14 +63,14 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       digest_frequency?: string
     }
 
-    if (!body.collection?.trim()) {
-      return reply.code(400).send({ error: 'collection is required' })
-    }
-    if (!body.event_type || !(VALID_EVENT_TYPES as readonly string[]).includes(body.event_type)) {
+    const hasCollection = !!body.collection?.trim()
+    const hasQueue = !!body.queue_id?.trim()
+    if (hasCollection === hasQueue) {
       return reply
         .code(400)
-        .send({ error: `event_type must be one of: ${VALID_EVENT_TYPES.join(', ')}` })
+        .send({ error: 'exactly one of collection or queue_id is required' })
     }
+
     if (
       body.digest_frequency !== undefined &&
       !(VALID_DIGEST_FREQUENCIES as readonly string[]).includes(body.digest_frequency)
@@ -76,21 +80,52 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
         .send({ error: `digest_frequency must be one of: ${VALID_DIGEST_FREQUENCIES.join(', ')}` })
     }
 
-    const collection = body.collection.trim()
-    const event_type = body.event_type as EventType
-    const filter_field = body.filter_field?.trim() || null
-    const filter_value = body.filter_value?.trim() || null
+    let queue: QueueRow | undefined
+    if (hasQueue) {
+      queue = await db('nivaro_queues').where({ id: body.queue_id }).first<QueueRow>()
+      if (!queue) return reply.code(404).send({ error: 'Queue not found' })
+      if (!canReadQueue(queue, req)) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      if (body.digest_frequency === 'instant') {
+        return reply
+          .code(400)
+          .send({ error: 'queue subscriptions only support daily or weekly digest_frequency' })
+      }
+      if (body.event_type && body.event_type !== 'all') {
+        return reply.code(400).send({ error: 'queue subscriptions must use event_type "all"' })
+      }
+    } else {
+      if (!body.event_type || !(VALID_EVENT_TYPES as readonly string[]).includes(body.event_type)) {
+        return reply
+          .code(400)
+          .send({ error: `event_type must be one of: ${VALID_EVENT_TYPES.join(', ')}` })
+      }
+    }
+
+    const collection = hasCollection ? body.collection!.trim() : null
+    const queueId = hasQueue ? body.queue_id!.trim() : null
+    const event_type = (hasQueue ? 'all' : (body.event_type as EventType)) as EventType
+    const filter_field = hasQueue ? null : body.filter_field?.trim() || null
+    const filter_value = hasQueue ? null : body.filter_value?.trim() || null
 
     // Prevent exact duplicates
-    const existing = await db('nivaro_notification_subscriptions')
-      .where({
-        user: userId,
-        collection,
-        event_type,
-        filter_field: filter_field ?? null,
-        filter_value: filter_value ?? null
-      })
-      .first('id')
+    const existing = hasQueue
+      ? await db('nivaro_notification_subscriptions')
+          .where({
+            user: userId,
+            queue_id: queueId
+          })
+          .first('id')
+      : await db('nivaro_notification_subscriptions')
+          .where({
+            user: userId,
+            collection,
+            event_type,
+            filter_field: filter_field ?? null,
+            filter_value: filter_value ?? null
+          })
+          .first('id')
 
     if (existing) {
       return reply.code(409).send({ error: 'A subscription with these settings already exists' })
@@ -100,6 +135,7 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       .insert({
         user: userId,
         collection,
+        queue_id: queueId,
         event_type,
         filter_field,
         filter_value,
@@ -115,7 +151,7 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       user: userId,
       collection: 'nivaro_notification_subscriptions',
       item: String(row.id),
-      comment: collection,
+      comment: collection ?? `queue:${queueId}`,
       req
     })
 
@@ -149,6 +185,11 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       return reply
         .code(400)
         .send({ error: `digest_frequency must be one of: ${VALID_DIGEST_FREQUENCIES.join(', ')}` })
+    }
+    if (existing.queue_id && body.digest_frequency === 'instant') {
+      return reply
+        .code(400)
+        .send({ error: 'queue subscriptions only support daily or weekly digest_frequency' })
     }
 
     const updates: Record<string, unknown> = {}
