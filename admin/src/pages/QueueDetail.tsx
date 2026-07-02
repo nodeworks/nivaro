@@ -42,11 +42,12 @@ interface QueueMeta {
   description: string | null
 }
 
-type Scope = 'mine' | 'unowned' | 'all'
+type Scope = 'mine' | 'unowned' | 'all' | 'claimed'
 
 const SCOPE_TABS: { value: Scope; label: string }[] = [
   { value: 'mine', label: 'My Items' },
   { value: 'unowned', label: 'No Owners' },
+  { value: 'claimed', label: 'Claimed by me' },
   { value: 'all', label: 'All Items' }
 ]
 
@@ -126,6 +127,26 @@ export function QueueDetailPage() {
     }
   })
 
+  const claimMut = useMutation({
+    mutationFn: (item: QueueItemRow) =>
+      api.post(`/queues/${id}/claim`, {
+        source_collection: item.collection,
+        item_id: item.item_id
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['queue-items', id, scope] }),
+    onError: () => toast.error('Failed to claim item')
+  })
+
+  const releaseMut = useMutation({
+    mutationFn: (item: QueueItemRow) =>
+      api.post(`/queues/${id}/release`, {
+        source_collection: item.collection,
+        item_id: item.item_id
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['queue-items', id, scope] }),
+    onError: () => toast.error('Failed to release item')
+  })
+
   const items = data?.data ?? []
   const stats = data?.stats
   const stateEntries = stats ? Object.entries(stats.by_state) : []
@@ -179,6 +200,34 @@ export function QueueDetailPage() {
       key: 'at_risk',
       header: 'Risk',
       render: (row) => (row.at_risk ? <span className='text-red-500'>⚑ At risk</span> : null)
+    },
+    {
+      key: 'claim',
+      header: '',
+      render: (row) =>
+        row.claimed_by ? (
+          <button
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              releaseMut.mutate(row)
+            }}
+            className='text-[11px] text-slate-400 underline hover:text-slate-600'
+          >
+            Release
+          </button>
+        ) : (
+          <button
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              claimMut.mutate(row)
+            }}
+            className='text-[11px] font-medium text-nvr-navy underline dark:text-nvr-cyan'
+          >
+            Claim
+          </button>
+        )
     }
   ]
 
@@ -288,6 +337,8 @@ export function QueueDetailPage() {
             items={items}
             onCardClick={(row) => navigate(row.url)}
             onDrop={(item, targetState) => transitionMut.mutate({ item, targetState })}
+            onClaim={(row) => claimMut.mutate(row)}
+            onRelease={(row) => releaseMut.mutate(row)}
           />
         )}
       </div>

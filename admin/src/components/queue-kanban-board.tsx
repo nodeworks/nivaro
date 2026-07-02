@@ -44,10 +44,14 @@ const NO_STATE = '__no_state__'
 
 function KanbanCard({
   item,
-  onCardClick
+  onCardClick,
+  onClaim,
+  onRelease
 }: {
   item: QueueItemRow
   onCardClick: (item: QueueItemRow) => void
+  onClaim: (item: QueueItemRow) => void
+  onRelease: (item: QueueItemRow) => void
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `${item.collection}:${item.item_id}`,
@@ -55,32 +59,42 @@ function KanbanCard({
   })
 
   return (
-    <button
-      type='button'
+    <div
       ref={setNodeRef}
       {...listeners}
       {...attributes}
-      onClick={() => onCardClick(item)}
       className={cn(
         'w-full rounded-md border border-slate-200 bg-white p-2.5 text-left shadow-sm dark:border-border dark:bg-card',
         isDragging && 'opacity-40'
       )}
     >
-      <p className='mb-1.5 truncate text-[12px] font-medium text-slate-800 dark:text-slate-100'>
-        {item.label}
-      </p>
-      <div className='flex items-center justify-between text-[11px] text-slate-400'>
-        <span className='truncate'>
-          {item.claimed_by
-            ? `Claimed: ${item.claimed_by.name}`
-            : item.owners.length
-              ? item.owners.map((o) => o.name).join(', ')
-              : 'No owners'}
-        </span>
-        <span className='shrink-0'>{formatAging(item.aging_hours)}</span>
-      </div>
-      {item.at_risk && <span className='mt-1 block text-[10px] text-red-500'>⚑ At risk</span>}
-    </button>
+      <button type='button' onClick={() => onCardClick(item)} className='block w-full text-left'>
+        <p className='mb-1.5 truncate text-[12px] font-medium text-slate-800 dark:text-slate-100'>
+          {item.label}
+        </p>
+        <div className='flex items-center justify-between text-[11px] text-slate-400'>
+          <span className='truncate'>
+            {item.claimed_by
+              ? `Claimed: ${item.claimed_by.name}`
+              : item.owners.length
+                ? item.owners.map((o) => o.name).join(', ')
+                : 'No owners'}
+          </span>
+          <span className='shrink-0'>{formatAging(item.aging_hours)}</span>
+        </div>
+        {item.at_risk && <span className='mt-1 block text-[10px] text-red-500'>⚑ At risk</span>}
+      </button>
+      <button
+        type='button'
+        onClick={(e) => {
+          e.stopPropagation()
+          item.claimed_by ? onRelease(item) : onClaim(item)
+        }}
+        className='mt-1.5 text-[11px] font-medium text-nvr-navy underline dark:text-nvr-cyan'
+      >
+        {item.claimed_by ? 'Release' : 'Claim'}
+      </button>
+    </div>
   )
 }
 
@@ -89,13 +103,17 @@ function KanbanColumn({
   label,
   color,
   items,
-  onCardClick
+  onCardClick,
+  onClaim,
+  onRelease
 }: {
   stateKey: string
   label: string
   color: string | null
   items: QueueItemRow[]
   onCardClick: (item: QueueItemRow) => void
+  onClaim: (item: QueueItemRow) => void
+  onRelease: (item: QueueItemRow) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stateKey })
 
@@ -125,6 +143,8 @@ function KanbanColumn({
             key={`${item.collection}:${item.item_id}`}
             item={item}
             onCardClick={onCardClick}
+            onClaim={onClaim}
+            onRelease={onRelease}
           />
         ))}
         {items.length === 0 && (
@@ -138,11 +158,15 @@ function KanbanColumn({
 export function QueueKanbanBoard({
   items,
   onDrop,
-  onCardClick
+  onCardClick,
+  onClaim,
+  onRelease
 }: {
   items: QueueItemRow[]
   onDrop: (item: QueueItemRow, targetState: string) => void
   onCardClick: (item: QueueItemRow) => void
+  onClaim: (item: QueueItemRow) => void
+  onRelease: (item: QueueItemRow) => void
 }) {
   const [activeItem, setActiveItem] = useState<QueueItemRow | null>(null)
 
@@ -191,6 +215,8 @@ export function QueueKanbanBoard({
             color={col.color}
             items={items.filter((i) => (i.state ?? NO_STATE) === col.key)}
             onCardClick={onCardClick}
+            onClaim={onClaim}
+            onRelease={onRelease}
           />
         ))}
         {columns.length === 0 && (
