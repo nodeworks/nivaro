@@ -48,6 +48,15 @@ export const queuesGuide: DocSection = {
       type: 'p',
       text: 'Open Queues in the Automation nav section. Click New Queue, then add sources — for a collection source, pick the target collection and (optionally) restrict to specific state keys. Toggle "Shared with everyone" to make a queue visible to all users rather than just its owner.'
     },
+    { type: 'h3', text: 'Kanban view and claiming' },
+    {
+      type: 'ul',
+      items: [
+        "Toggle Table/Kanban at the top of a queue worklist. Kanban columns are the union of workflow state keys present among the queue's current items — dragging a card to another column resolves and executes the matching transition via the same endpoint PipelinePanel uses, so RBAC (required_roles) and condition_rules revalidate exactly as they do anywhere else. A drop with no valid transition toasts an error and the card stays put.",
+        'Any viewer of a queue can Claim an unclaimed item (self-assign, support-ticket style) or Release their own claim — claiming is gated by the same visibility rule as reading the queue, not by queue ownership. For collection sources with a live workflow instance, claiming also adds the user as a pipeline instance owner (removed again on release); Tasks and Approvals sources track claims queue-locally only.',
+        'A 4th scope tab, "Claimed by me", filters to items the current user has claimed in this queue.'
+      ]
+    },
     {
       type: 'note',
       text: 'Row scans per source are capped at 1000, matching the existing at-risk summary and SLA batch caps — a queue never performs an unbounded table scan.'
