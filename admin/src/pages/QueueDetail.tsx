@@ -98,7 +98,9 @@ export function QueueDetailPage() {
         states: Array<{ id: string; key: string }>
         available_transitions: Array<{ id: string; to_state: string }>
       } | null
-      if (!instanceData) throw new Error('This item has no workflow instance')
+      if (!instanceData || instanceData.states.length === 0) {
+        throw new Error('This item has no workflow instance')
+      }
 
       const targetStateRow = instanceData.states.find((s) => s.key === targetState)
       if (!targetStateRow) throw new Error('Target state not found')
@@ -116,7 +118,9 @@ export function QueueDetailPage() {
       qc.invalidateQueries({ queryKey: ['queue-items', id, scope] })
     },
     onError: (err: unknown) => {
-      const message = err instanceof Error ? err.message : 'Failed to move item'
+      const resp = (err as { response?: { data?: { error?: string } } })?.response
+      const message =
+        resp?.data?.error ?? (err instanceof Error ? err.message : 'Failed to move item')
       toast.error(message)
       qc.invalidateQueries({ queryKey: ['queue-items', id, scope] })
     }
