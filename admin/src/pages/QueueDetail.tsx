@@ -1,5 +1,15 @@
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  useSensor,
+  useSensors
+} from '@dnd-kit/core'
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { SlidersHorizontal } from 'lucide-react'
+import { GripVertical, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
@@ -92,6 +102,37 @@ function formatColumnHeader(path: string): string {
     .split('.')
     .map((seg) => seg.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
     .join(' → ')
+}
+
+function SortableColumnToggle({
+  id,
+  label,
+  checked,
+  onCheckedChange
+}: {
+  id: string
+  label: string
+  checked: boolean
+  onCheckedChange: () => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }
+  const inputId = `col-toggle-${id}`
+  return (
+    <div ref={setNodeRef} style={style} className='flex items-center gap-2 text-[12px]'>
+      <span
+        {...attributes}
+        {...listeners}
+        className='cursor-grab text-slate-300 hover:text-slate-500 dark:text-muted-foreground'
+      >
+        <GripVertical className='h-3.5 w-3.5' />
+      </span>
+      <Checkbox id={inputId} checked={checked} onCheckedChange={onCheckedChange} />
+      <Label htmlFor={inputId} className='cursor-pointer text-[12px] font-normal'>
+        {label}
+      </Label>
+    </div>
+  )
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -458,9 +499,36 @@ export function QueueDetailPage() {
 
   const effectiveVisible = new Set(visibleColumns ?? DEFAULT_VISIBLE_COLUMNS)
 
+  // Render order of the middle (toggleable) columns follows visible_columns'
+  // actual array order (the viewer's saved drag-reorder), falling back to
+  // TOGGLEABLE_KEYS' order for any column not yet toggled on — so the
+  // Customize Columns popover shows a stable, sensible position for a column
+  // before it's ever been visible.
+  const orderedToggleableKeys = [
+    ...(visibleColumns ?? []).filter((k) => TOGGLEABLE_KEYS.includes(k)),
+    ...TOGGLEABLE_KEYS.filter((k) => !(visibleColumns ?? []).includes(k))
+  ]
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIdx = orderedToggleableKeys.indexOf(String(active.id))
+    const newIdx = orderedToggleableKeys.indexOf(String(over.id))
+    if (oldIdx === -1 || newIdx === -1) return
+    setVisibleColumns(arrayMove(orderedToggleableKeys, oldIdx, newIdx).filter((k) => effectiveVisible.has(k)))
+  }
+
+  const labelColumn = baseColumns.find((c) => c.key === 'label') as Column<QueueItemRow>
+  const allToggleable = [...baseColumns, ...extraColumns]
+
   const columns: Column<QueueItemRow>[] = [
-    ...baseColumns.filter((c) => c.key === 'label' || effectiveVisible.has(c.key)),
-    ...extraColumns.filter((c) => effectiveVisible.has(c.key)),
+    labelColumn,
+    ...orderedToggleableKeys
+      .filter((k) => effectiveVisible.has(k))
+      .map((k) => allToggleable.find((c) => c.key === k))
+      .filter((c): c is Column<QueueItemRow> => c !== undefined),
     claimColumn
   ]
 
@@ -627,24 +695,24 @@ export function QueueDetailPage() {
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-[220px] p-2' align='end'>
-                <div className='space-y-1.5'>
-                  {TOGGLEABLE_KEYS.map((key) => {
-                    const col = [...baseColumns, ...extraColumns].find((c) => c.key === key)
-                    const inputId = `col-toggle-${key}`
-                    return (
-                      <div key={key} className='flex items-center gap-2 text-[12px]'>
-                        <Checkbox
-                          id={inputId}
-                          checked={effectiveVisible.has(key)}
-                          onCheckedChange={() => handleToggleColumn(key)}
-                        />
-                        <Label htmlFor={inputId} className='cursor-pointer text-[12px] font-normal'>
-                          {typeof col?.header === 'string' ? col.header : key}
-                        </Label>
-                      </div>
-                    )
-                  })}
-                </div>
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                  <SortableContext items={orderedToggleableKeys} strategy={verticalListSortingStrategy}>
+                    <div className='space-y-1.5'>
+                      {orderedToggleableKeys.map((key) => {
+                        const col = allToggleable.find((c) => c.key === key)
+                        return (
+                          <SortableColumnToggle
+                            key={key}
+                            id={key}
+                            label={typeof col?.header === 'string' ? col.header : key}
+                            checked={effectiveVisible.has(key)}
+                            onCheckedChange={() => handleToggleColumn(key)}
+                          />
+                        )
+                      })}
+                    </div>
+                  </SortableContext>
+                </DndContext>
               </PopoverContent>
             </Popover>
           )}
