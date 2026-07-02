@@ -196,7 +196,9 @@ export function DataTable<T = Record<string, unknown>>({
                       className='h-8 w-20 border-slate-200 bg-slate-50 text-[13px]'
                       placeholder='Min'
                       value={minVal ?? ''}
-                      onChange={(e) => onFilterChange?.(def.key, `${e.target.value}:${maxVal ?? ''}`)}
+                      onChange={(e) =>
+                        onFilterChange?.(def.key, `${e.target.value}:${maxVal ?? ''}`)
+                      }
                     />
                     <span className='text-[12px] text-slate-400'>–</span>
                     <Input
@@ -204,7 +206,9 @@ export function DataTable<T = Record<string, unknown>>({
                       className='h-8 w-20 border-slate-200 bg-slate-50 text-[13px]'
                       placeholder='Max'
                       value={maxVal ?? ''}
-                      onChange={(e) => onFilterChange?.(def.key, `${minVal ?? ''}:${e.target.value}`)}
+                      onChange={(e) =>
+                        onFilterChange?.(def.key, `${minVal ?? ''}:${e.target.value}`)
+                      }
                     />
                   </div>
                 )

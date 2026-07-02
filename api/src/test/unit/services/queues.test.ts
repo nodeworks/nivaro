@@ -582,13 +582,24 @@ describe('sortItems', () => {
   })
 
   it('sorts sla_status by severity ordinal (ok < warning < breached), not alphabetically', () => {
-    const items = [item({ sla_status: 'breached' }), item({ sla_status: 'ok' }), item({ sla_status: 'warning' })]
-    expect(sortItems(items, 'sla_status').map((i) => i.sla_status)).toEqual(['ok', 'warning', 'breached'])
+    const items = [
+      item({ sla_status: 'breached' }),
+      item({ sla_status: 'ok' }),
+      item({ sla_status: 'warning' })
+    ]
+    expect(sortItems(items, 'sla_status').map((i) => i.sla_status)).toEqual([
+      'ok',
+      'warning',
+      'breached'
+    ])
   })
 
   it('sorts by an extra.<path> key against the resolved value', () => {
     const items = [item({ extra: { priority: 'Low' } }), item({ extra: { priority: 'High' } })]
-    expect(sortItems(items, 'extra.priority').map((i) => i.extra?.priority)).toEqual(['High', 'Low'])
+    expect(sortItems(items, 'extra.priority').map((i) => i.extra?.priority)).toEqual([
+      'High',
+      'Low'
+    ])
   })
 })
 
@@ -624,7 +635,10 @@ describe('computeAvailableValues', () => {
   })
 
   it('excludes null states, returns empty arrays for no items', () => {
-    expect(computeAvailableValues([item({ state: null })])).toEqual({ collection: ['articles'], state: [] })
+    expect(computeAvailableValues([item({ state: null })])).toEqual({
+      collection: ['articles'],
+      state: []
+    })
     expect(computeAvailableValues([])).toEqual({ collection: [], state: [] })
   })
 })

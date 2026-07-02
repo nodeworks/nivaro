@@ -153,10 +153,7 @@ export function applyColumnFilters(
       if (key === 'collection' && item.collection !== value) return false
       else if (key === 'state' && item.state !== value) return false
       else if (key === 'sla_status' && item.sla_status !== value) return false
-      else if (
-        key === 'label' &&
-        !item.label.toLowerCase().includes(String(value).toLowerCase())
-      )
+      else if (key === 'label' && !item.label.toLowerCase().includes(String(value).toLowerCase()))
         return false
       else if (key === 'owners') {
         const names = item.owners.map((o) => o.name.toLowerCase()).join(' ')

@@ -377,7 +377,11 @@ export async function queuesRoutes(app: FastifyInstance) {
   // GET /:id/items?scope=mine|unowned|all|claimed&sort=&filters= — fan-out worklist
   app.get('/:id/items', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const { scope = 'all', sort = '', filters } = req.query as {
+    const {
+      scope = 'all',
+      sort = '',
+      filters
+    } = req.query as {
       scope?: string
       sort?: string
       filters?: string
