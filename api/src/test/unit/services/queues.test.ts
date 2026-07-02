@@ -3,10 +3,11 @@ import {
   applyQueueConditions,
   applyScopeFilter,
   attachClaims,
+  type ConditionBuilder,
   computeStats,
   mergeSourceResults,
-  type ConditionBuilder,
-  type QueueItem
+  type QueueItem,
+  type QueueScope
 } from '../../../services/queues.js'
 
 function item(overrides: Partial<QueueItem> = {}): QueueItem {
@@ -227,5 +228,15 @@ describe('applyScopeFilter — claimed scope', () => {
   it('scope=claimed returns empty when the user claimed nothing', () => {
     const others = item({ item_id: '2', claimed_by: { id: 'u2', name: 'Bob' } })
     expect(applyScopeFilter([others], 'claimed', 'u1')).toEqual([])
+  })
+})
+
+describe('QueueScope whitelist parity', () => {
+  it('documents the exact set of valid scope values the route must accept', () => {
+    // If this list changes, the whitelist in GET /queues/:id/items
+    // (api/src/routes/queues.ts) must be updated to match, or new scopes
+    // will silently 400 at the route layer despite being supported here.
+    const validScopes: QueueScope[] = ['mine', 'unowned', 'all', 'claimed']
+    expect(validScopes).toHaveLength(4)
   })
 })

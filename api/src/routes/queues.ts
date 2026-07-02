@@ -270,12 +270,12 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({ data: sources.map(formatSource) })
   })
 
-  // GET /:id/items?scope=mine|unowned|all — fan-out worklist
+  // GET /:id/items?scope=mine|unowned|all|claimed — fan-out worklist
   app.get('/:id/items', async (req, reply) => {
     const { id } = req.params as { id: string }
     const { scope = 'all' } = req.query as { scope?: string }
-    if (!['mine', 'unowned', 'all'].includes(scope)) {
-      return reply.code(400).send({ error: 'scope must be mine, unowned, or all' })
+    if (!['mine', 'unowned', 'all', 'claimed'].includes(scope)) {
+      return reply.code(400).send({ error: 'scope must be mine, unowned, all, or claimed' })
     }
 
     const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as

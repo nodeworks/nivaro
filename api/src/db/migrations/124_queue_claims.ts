@@ -7,7 +7,7 @@ export async function up(knex: Knex): Promise<void> {
     t.string('source_collection', 255).notNullable()
     t.string('item_id', 255).notNullable()
     t.uuid('claimed_by').notNullable().references('id').inTable('nivaro_users')
-    t.datetime('claimed_at').notNullable().defaultTo(knex.fn.now())
+    t.datetime('claimed_at').notNullable().defaultTo(knex.raw('getutcdate()'))
     t.unique(['queue_id', 'source_collection', 'item_id'])
   })
 }
