@@ -17,11 +17,6 @@ import {
 } from '@/lib/api'
 import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from '@/lib/relations'
 
-// max_wip is returned by the API (nivaro_pipeline_owner_groups.max_wip via `select('og.*')`) but
-// isn't yet declared on the shared PipelineOwnerGroup type in lib/api.ts — widen it locally here
-// only, rather than editing the shared type file.
-type OwnerGroupWithWip = PipelineOwnerGroup & { max_wip: number | null }
-
 // ─── Filter combobox ──────────────────────────────────────────────────────────
 
 function sortOptions(options: { value: string; label: string }[]) {
@@ -904,17 +899,15 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                   <input
                                     type='number'
                                     key={`${group.id}-wip`}
-                                    defaultValue={(group as OwnerGroupWithWip).max_wip ?? ''}
+                                    defaultValue={group.max_wip ?? ''}
                                     min={0}
                                     placeholder='—'
                                     className='h-6 w-14 rounded border border-slate-200 px-1 text-[12px] text-center focus:border-nvr-cyan/50 focus:outline-none'
                                     onBlur={(e) => {
                                       const raw = e.target.value.trim()
                                       const val = raw === '' ? null : Number.parseInt(raw, 10)
-                                      const currentMaxWip =
-                                        (group as OwnerGroupWithWip).max_wip ?? null
+                                      const currentMaxWip = group.max_wip ?? null
                                       if (
-                                        val !== undefined &&
                                         (val === null || !Number.isNaN(val)) &&
                                         val !== currentMaxWip
                                       ) {

@@ -283,6 +283,7 @@ export type PipelineOwnerGroup = {
   sort: number
   is_default: boolean
   priority: number
+  max_wip: number | null
   users: PipelineOwnerGroupUser[]
 }
 
