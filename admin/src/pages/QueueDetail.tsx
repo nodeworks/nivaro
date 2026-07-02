@@ -206,6 +206,33 @@ export function QueueDetailPage() {
     onError: () => toast.error('Failed to release item')
   })
 
+  const { data: subs } = useQuery<{
+    data: Array<{ id: number; queue_id: string | null; digest_frequency: string }>
+  }>({
+    queryKey: ['notification-subscriptions'],
+    queryFn: () => api.get('/notification-subscriptions').then((r) => r.data)
+  })
+  const mySub = subs?.data.find((s) => s.queue_id === id)
+
+  const subscribeMut = useMutation({
+    mutationFn: (frequency: 'daily' | 'weekly') =>
+      api.post('/notification-subscriptions', { queue_id: id, digest_frequency: frequency }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['notification-subscriptions'] })
+      toast.success('Subscribed to digest')
+    },
+    onError: () => toast.error('Failed to subscribe')
+  })
+
+  const unsubscribeMut = useMutation({
+    mutationFn: (subId: number) => api.delete(`/notification-subscriptions/${subId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['notification-subscriptions'] })
+      toast.success('Unsubscribed')
+    },
+    onError: () => toast.error('Failed to unsubscribe')
+  })
+
   const items = data?.data ?? []
   const stats = data?.stats
   const stateEntries = stats ? Object.entries(stats.by_state) : []
@@ -392,6 +419,23 @@ export function QueueDetailPage() {
           >
             Workload
           </button>
+          {mySub ? (
+            <button
+              type='button'
+              onClick={() => unsubscribeMut.mutate(mySub.id)}
+              className='ml-auto rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+            >
+              Subscribed ({mySub.digest_frequency}) · Unsubscribe
+            </button>
+          ) : (
+            <button
+              type='button'
+              onClick={() => subscribeMut.mutate('daily')}
+              className='ml-auto rounded-md px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
+            >
+              Get daily digest
+            </button>
+          )}
         </div>
 
         {view === 'table' ? (
