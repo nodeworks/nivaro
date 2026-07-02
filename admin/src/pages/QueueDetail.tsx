@@ -1,7 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { toast } from 'sonner'
 import { type Column, DataTable } from '@/components/data-table'
+import { QueueKanbanBoard } from '@/components/queue-kanban-board'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
@@ -14,7 +16,7 @@ interface QueueOwner {
   name: string
 }
 
-interface QueueItemRow {
+export interface QueueItemRow {
   collection: string
   item_id: string
   label: string
@@ -24,6 +26,7 @@ interface QueueItemRow {
   sla_status: 'ok' | 'warning' | 'breached' | null
   at_risk: boolean
   aging_hours: number | null
+  claimed_by: QueueOwner | null
   url: string
 }
 
@@ -70,8 +73,10 @@ function SlaPill({ status }: { status: QueueItemRow['sla_status'] }) {
 export function QueueDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const [scope, setScope] = useState<Scope>('all')
   const [page, setPage] = useState(1)
+  const [view, setView] = useState<'table' | 'kanban'>('table')
   const limit = 25
 
   const { data: queue } = useQuery<QueueMeta>({
@@ -84,6 +89,37 @@ export function QueueDetailPage() {
     queryKey: ['queue-items', id, scope],
     queryFn: () => api.get(`/queues/${id}/items`, { params: { scope } }).then((r) => r.data),
     enabled: !!id
+  })
+
+  const transitionMut = useMutation({
+    mutationFn: async ({ item, targetState }: { item: QueueItemRow; targetState: string }) => {
+      const instanceRes = await api.get(`/pipelines/instance/${item.collection}/${item.item_id}`)
+      const instanceData = instanceRes.data.data as {
+        states: Array<{ id: string; key: string }>
+        available_transitions: Array<{ id: string; to_state: string }>
+      } | null
+      if (!instanceData) throw new Error('This item has no workflow instance')
+
+      const targetStateRow = instanceData.states.find((s) => s.key === targetState)
+      if (!targetStateRow) throw new Error('Target state not found')
+
+      const transition = instanceData.available_transitions.find(
+        (t) => t.to_state === targetStateRow.id
+      )
+      if (!transition) throw new Error('No transition available to move this item here')
+
+      await api.post(`/pipelines/instance/${item.collection}/${item.item_id}/transition`, {
+        transition_id: transition.id
+      })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['queue-items', id, scope] })
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : 'Failed to move item'
+      toast.error(message)
+      qc.invalidateQueries({ queryKey: ['queue-items', id, scope] })
+    }
   })
 
   const items = data?.data ?? []
@@ -207,18 +243,49 @@ export function QueueDetailPage() {
           ))}
         </div>
 
-        <DataTable<QueueItemRow>
-          columns={columns}
-          rows={pageItems}
-          rowKey={(row) => `${row.collection}:${row.item_id}`}
-          total={items.length}
-          page={page}
-          limit={limit}
-          isLoading={isLoading}
-          onPageChange={setPage}
-          onRowClick={(row) => navigate(row.url)}
-          emptyMessage='Nothing in this queue.'
-        />
+        <div className='mb-4 flex items-center gap-1'>
+          <button
+            type='button'
+            onClick={() => setView('table')}
+            className={cn(
+              'rounded-md px-3 py-1.5 text-[12px] font-medium',
+              view === 'table' ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'text-slate-500'
+            )}
+          >
+            Table
+          </button>
+          <button
+            type='button'
+            onClick={() => setView('kanban')}
+            className={cn(
+              'rounded-md px-3 py-1.5 text-[12px] font-medium',
+              view === 'kanban' ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'text-slate-500'
+            )}
+          >
+            Kanban
+          </button>
+        </div>
+
+        {view === 'table' ? (
+          <DataTable<QueueItemRow>
+            columns={columns}
+            rows={pageItems}
+            rowKey={(row) => `${row.collection}:${row.item_id}`}
+            total={items.length}
+            page={page}
+            limit={limit}
+            isLoading={isLoading}
+            onPageChange={setPage}
+            onRowClick={(row) => navigate(row.url)}
+            emptyMessage='Nothing in this queue.'
+          />
+        ) : (
+          <QueueKanbanBoard
+            items={items}
+            onCardClick={(row) => navigate(row.url)}
+            onDrop={(item, targetState) => transitionMut.mutate({ item, targetState })}
+          />
+        )}
       </div>
     </div>
   )
