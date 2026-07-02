@@ -1,4 +1,3 @@
-import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { evaluateRows, parseActiveRules, referencedFields, type AtRiskRuleRow } from '../routes/at-risk.js'
 import { resolveStepApprovers, type ApprovalChainStep } from '../routes/approvals.js'
