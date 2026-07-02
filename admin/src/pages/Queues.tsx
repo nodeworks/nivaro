@@ -221,7 +221,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     queryKey: ['queue', queueId],
     queryFn: () => api.get(`/queues/${queueId}`).then((r) => r.data.data)
   })
-  const { data: collections = [] } = useQuery<Array<{ name: string }>>({
+  const { data: collections = [] } = useQuery<Array<{ collection: string }>>({
     queryKey: ['collections'],
     queryFn: () => api.get('/collections').then((r) => r.data.data)
   })
@@ -240,7 +240,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     setLoadedFor(queue.id)
   }
 
-  const collectionOptions = collections.map((c) => ({ value: c.name, label: c.name }))
+  const collectionOptions = collections.map((c) => ({ value: c.collection, label: c.collection }))
 
   const saveMetaMut = useMutation({
     mutationFn: () => api.patch(`/queues/${queueId}`, { name, description, is_shared: isShared }),
@@ -248,7 +248,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
       qc.invalidateQueries({ queryKey: ['queues'] })
       qc.invalidateQueries({ queryKey: ['queue', queueId] })
       toast.success('Queue saved')
-    }
+    },
+    onError: () => toast.error('Failed to save queue')
   })
 
   const saveSourcesMut = useMutation({
@@ -259,7 +260,9 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queue', queueId] })
       toast.success('Sources saved')
-    }
+    },
+    onError: () =>
+      toast.error('Failed to save sources — check each source has a collection selected')
   })
 
   const deleteMut = useMutation({
@@ -268,7 +271,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
       qc.invalidateQueries({ queryKey: ['queues'] })
       toast.success('Queue deleted')
       onDeleted()
-    }
+    },
+    onError: () => toast.error('Failed to delete queue')
   })
 
   if (!queue) return <div className='p-6 text-[13px] text-slate-400'>Loading…</div>
@@ -374,7 +378,8 @@ export function QueuesPage() {
       qc.invalidateQueries({ queryKey: ['queues'] })
       setSelectedId(queue.id)
       toast.success('Queue created')
-    }
+    },
+    onError: () => toast.error('Failed to create queue')
   })
 
   return (
