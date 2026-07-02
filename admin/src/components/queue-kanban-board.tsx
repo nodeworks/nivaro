@@ -86,6 +86,7 @@ function KanbanCard({
       </button>
       <button
         type='button'
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation()
           item.claimed_by ? onRelease(item) : onClaim(item)
