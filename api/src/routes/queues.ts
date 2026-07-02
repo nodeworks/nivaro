@@ -4,7 +4,7 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
 import type { QueueRow, QueueScope, QueueSourceRow, QueueSourceType } from '../services/queues.js'
-import { fetchQueueItems } from '../services/queues.js'
+import { fetchQueueItems, fetchQueueWorkload } from '../services/queues.js'
 
 function formatQueue(row: QueueRow) {
   return {
@@ -293,6 +293,18 @@ export async function queuesRoutes(app: FastifyInstance) {
 
     const result = await fetchQueueItems(id, req.user!, scope as QueueScope)
     return reply.send({ data: result.items, stats: result.stats })
+  })
+
+  // GET /:id/workload — items grouped by owner, with each owner's most
+  // restrictive max_wip (MIN across every owner-group they belong to that sets one)
+  app.get('/:id/workload', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    const workload = await fetchQueueWorkload(id, req.user!)
+    return reply.send({ data: workload })
   })
 
   // POST /:id/claim — self-assign an item within this queue; write-through to the

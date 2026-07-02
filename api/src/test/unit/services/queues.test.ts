@@ -6,6 +6,7 @@ import {
   type ConditionBuilder,
   computeStats,
   filterBySlaStatus,
+  groupByOwner,
   mergeSourceResults,
   type QueueItem,
   type QueueScope
@@ -267,5 +268,51 @@ describe('QueueScope whitelist parity', () => {
     // will silently 400 at the route layer despite being supported here.
     const validScopes: QueueScope[] = ['mine', 'unowned', 'all', 'claimed']
     expect(validScopes).toHaveLength(4)
+  })
+})
+
+describe('groupByOwner', () => {
+  function item(overrides: Partial<QueueItem> = {}): QueueItem {
+    return {
+      collection: 'articles',
+      item_id: '1',
+      label: 'Test item',
+      state: 'draft',
+      state_color: null,
+      owners: [],
+      sla_status: null,
+      at_risk: false,
+      aging_hours: null,
+      claimed_by: null,
+      url: '/collections/articles/1',
+      ...overrides
+    }
+  }
+
+  it('groups items under each of their owners', () => {
+    const alice = { id: 'u1', name: 'Alice' }
+    const items = [
+      item({ item_id: '1', owners: [alice] }),
+      item({ item_id: '2', owners: [alice] })
+    ]
+    const groups = groupByOwner(items)
+    expect(groups.get('u1')).toEqual({ owner: alice, count: 2 })
+  })
+
+  it('counts an item once per owner when it has multiple owners', () => {
+    const alice = { id: 'u1', name: 'Alice' }
+    const bob = { id: 'u2', name: 'Bob' }
+    const groups = groupByOwner([item({ owners: [alice, bob] })])
+    expect(groups.get('u1')).toEqual({ owner: alice, count: 1 })
+    expect(groups.get('u2')).toEqual({ owner: bob, count: 1 })
+  })
+
+  it('buckets unowned items under a sentinel key with a null owner', () => {
+    const groups = groupByOwner([item({ owners: [] })])
+    expect(groups.get('__unassigned__')).toEqual({ owner: null, count: 1 })
+  })
+
+  it('returns an empty map for no items', () => {
+    expect(groupByOwner([]).size).toBe(0)
   })
 })

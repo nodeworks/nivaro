@@ -83,6 +83,12 @@ export interface QueueStats {
   unowned: number
 }
 
+export interface WorkloadRow {
+  owner: QueueOwner | null
+  count: number
+  max_wip: number | null
+}
+
 export type QueueScope = 'mine' | 'unowned' | 'all' | 'claimed'
 
 export const SOURCE_ROW_CAP = 1000
@@ -130,6 +136,28 @@ export function computeStats(items: QueueItem[]): QueueStats {
     if (item.owners.length === 0) unowned++
   }
   return { total: items.length, by_state, unowned }
+}
+
+const UNASSIGNED_KEY = '__unassigned__'
+
+export function groupByOwner(
+  items: QueueItem[]
+): Map<string, { owner: QueueOwner | null; count: number }> {
+  const groups = new Map<string, { owner: QueueOwner | null; count: number }>()
+  for (const item of items) {
+    if (item.owners.length === 0) {
+      const existing = groups.get(UNASSIGNED_KEY) ?? { owner: null, count: 0 }
+      existing.count++
+      groups.set(UNASSIGNED_KEY, existing)
+      continue
+    }
+    for (const owner of item.owners) {
+      const existing = groups.get(owner.id) ?? { owner, count: 0 }
+      existing.count++
+      groups.set(owner.id, existing)
+    }
+  }
+  return groups
 }
 
 export function filterBySlaStatus(
@@ -572,4 +600,35 @@ export async function fetchQueueItems(
   const withClaims = attachClaims(merged, claims)
   const scoped = applyScopeFilter(withClaims, scope, user.id)
   return { items: scoped, stats: computeStats(scoped) }
+}
+
+export async function getWipLimits(ownerIds: string[]): Promise<Map<string, number>> {
+  if (ownerIds.length === 0) return new Map()
+  const rows = (await db('nivaro_pipeline_owner_group_users as gu')
+    .join('nivaro_pipeline_owner_groups as g', 'gu.group', 'g.id')
+    .whereIn('gu.user', ownerIds)
+    .whereNotNull('g.max_wip')
+    .select('gu.user', 'g.max_wip')) as Array<{ user: string; max_wip: number }>
+
+  const out = new Map<string, number>()
+  for (const r of rows) {
+    const current = out.get(r.user)
+    if (current === undefined || r.max_wip < current) out.set(r.user, r.max_wip)
+  }
+  return out
+}
+
+export async function fetchQueueWorkload(queueId: string, user: User): Promise<WorkloadRow[]> {
+  const { items } = await fetchQueueItems(queueId, user, 'all')
+  const groups = groupByOwner(items)
+  const ownerIds = [...groups.values()]
+    .map((g) => g.owner?.id)
+    .filter((id): id is string => !!id)
+  const limits = await getWipLimits(ownerIds)
+
+  return [...groups.values()].map((g) => ({
+    owner: g.owner,
+    count: g.count,
+    max_wip: g.owner ? (limits.get(g.owner.id) ?? null) : null
+  }))
 }
