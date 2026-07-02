@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { type Column, DataTable } from '@/components/data-table'
 import { QueueKanbanBoard } from '@/components/queue-kanban-board'
+import { QueueWorkloadView } from '@/components/queue-workload-view'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
@@ -77,7 +78,7 @@ export function QueueDetailPage() {
   const qc = useQueryClient()
   const [scope, setScope] = useState<Scope>('all')
   const [page, setPage] = useState(1)
-  const [view, setView] = useState<'table' | 'kanban'>('table')
+  const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
   const limit = 25
 
   const { data: queue } = useQuery<QueueMeta>({
@@ -321,6 +322,18 @@ export function QueueDetailPage() {
           >
             Kanban
           </button>
+          <button
+            type='button'
+            onClick={() => setView('workload')}
+            className={cn(
+              'rounded-md px-3 py-1.5 text-[12px] font-medium',
+              view === 'workload'
+                ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                : 'text-slate-500'
+            )}
+          >
+            Workload
+          </button>
         </div>
 
         {view === 'table' ? (
@@ -336,7 +349,7 @@ export function QueueDetailPage() {
             onRowClick={(row) => navigate(row.url)}
             emptyMessage='Nothing in this queue.'
           />
-        ) : (
+        ) : view === 'kanban' ? (
           <QueueKanbanBoard
             items={items}
             onCardClick={(row) => navigate(row.url)}
@@ -344,6 +357,8 @@ export function QueueDetailPage() {
             onClaim={(row) => claimMut.mutate(row)}
             onRelease={(row) => releaseMut.mutate(row)}
           />
+        ) : (
+          <QueueWorkloadView queueId={id!} />
         )}
       </div>
     </div>

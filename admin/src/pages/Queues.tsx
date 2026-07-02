@@ -31,6 +31,7 @@ interface QueueSource {
   collection: string | null
   filters: unknown
   state_values: string[] | null
+  sla_filter: string | null
   sort: number
 }
 
@@ -210,6 +211,20 @@ function SourceRow({
           />
         </div>
       )}
+      {source.type === 'collection' && (
+        <div className='w-40 shrink-0'>
+          <FieldCombobox
+            value={source.sla_filter ?? ''}
+            onChange={(v) => onChange({ ...source, sla_filter: v || null })}
+            options={[
+              { value: 'breached', label: 'SLA: Breached' },
+              { value: 'warning', label: 'SLA: Warning' }
+            ]}
+            placeholder='No SLA filter'
+            disabled={!canEdit}
+          />
+        </div>
+      )}
       {canEdit && (
         <Button
           variant='ghost'
@@ -363,6 +378,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                     collection: null,
                     filters: null,
                     state_values: null,
+                    sla_filter: null,
                     sort: sources.length
                   }
                 ])
