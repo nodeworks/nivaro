@@ -87,6 +87,13 @@ function SlaPill({ status }: { status: QueueItemRow['sla_status'] }) {
   return <span className={cn('rounded px-1.5 py-0.5 text-[11px] font-medium', cls)}>{status}</span>
 }
 
+function formatColumnHeader(path: string): string {
+  return path
+    .split('.')
+    .map((seg) => seg.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
+    .join(' → ')
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function QueueDetailPage() {
@@ -375,7 +382,7 @@ export function QueueDetailPage() {
 
   const extraColumns: Column<QueueItemRow>[] = extraFieldKeys.map((field) => ({
     key: `extra.${field}`,
-    header: field,
+    header: formatColumnHeader(field),
     render: (row) => {
       const value = row.extra?.[field]
       return value == null || value === '' ? (
