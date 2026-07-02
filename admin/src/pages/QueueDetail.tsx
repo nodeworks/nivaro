@@ -251,13 +251,21 @@ export function QueueDetailPage() {
   // effect causes visibleColumns to change on the NEXT render, which would
   // otherwise make the save effect's dependency-changed check pass immediately
   // (loadedFromServerRef is already true by then) and re-PUT the data we just
-  // loaded. This flag makes the save effect skip exactly that one transition.
+  // loaded. This flag makes the save effect skip exactly that one transition —
+  // but only when there's a real previously-saved value to redundantly resave.
+  // When visible_columns is null (user has never customized this queue),
+  // setVisibleColumns(null) is a no-op against the initial `useState(null)`, so
+  // no render/effect re-run ever happens to consume the flag — leaving it
+  // `true` for the user's actual first toggle and silently dropping that save.
+  // Only arm the guard when there's a non-null loaded value to protect.
   const skipNextSaveRef = useRef(false)
 
   useEffect(() => {
     if (!columnPrefs) return
     loadedFromServerRef.current = true
-    skipNextSaveRef.current = true
+    if (columnPrefs.data.visible_columns !== null) {
+      skipNextSaveRef.current = true
+    }
     setVisibleColumns(columnPrefs.data.visible_columns)
   }, [columnPrefs])
 
