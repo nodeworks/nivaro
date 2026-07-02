@@ -131,6 +131,99 @@ export function attachClaims(items: QueueItem[], claims: Map<string, QueueOwner>
   }))
 }
 
+export function applyColumnFilters(
+  items: QueueItem[],
+  filters: Record<string, unknown>
+): QueueItem[] {
+  return items.filter((item) => {
+    for (const [key, value] of Object.entries(filters)) {
+      if (value == null || value === '') continue
+
+      if (key === 'aging_hours') {
+        const range = value as { min?: number; max?: number }
+        if (item.aging_hours == null) return false
+        if (range.min != null && item.aging_hours < range.min) return false
+        if (range.max != null && item.aging_hours > range.max) return false
+        continue
+      }
+      if (key === 'at_risk') {
+        if (item.at_risk !== (value === 'yes')) return false
+        continue
+      }
+      if (key === 'collection' && item.collection !== value) return false
+      else if (key === 'state' && item.state !== value) return false
+      else if (key === 'sla_status' && item.sla_status !== value) return false
+      else if (
+        key === 'label' &&
+        !item.label.toLowerCase().includes(String(value).toLowerCase())
+      )
+        return false
+      else if (key === 'owners') {
+        const names = item.owners.map((o) => o.name.toLowerCase()).join(' ')
+        if (!names.includes(String(value).toLowerCase())) return false
+      } else if (key.startsWith('extra.')) {
+        const path = key.slice('extra.'.length)
+        const v = item.extra?.[path]
+        if (v == null || !String(v).toLowerCase().includes(String(value).toLowerCase())) {
+          return false
+        }
+      }
+    }
+    return true
+  })
+}
+
+const SLA_SEVERITY: Record<string, number> = { ok: 0, warning: 1, breached: 2 }
+
+function sortValue(item: QueueItem, key: string): string | number | null {
+  if (key === 'collection') return item.collection
+  if (key === 'label') return item.label
+  if (key === 'state') return item.state
+  if (key === 'owners') return item.owners.map((o) => o.name).join(', ')
+  if (key === 'aging_hours') return item.aging_hours
+  if (key === 'sla_status') return item.sla_status ? (SLA_SEVERITY[item.sla_status] ?? null) : null
+  if (key === 'at_risk') return item.at_risk ? 1 : 0
+  if (key.startsWith('extra.')) {
+    const v = item.extra?.[key.slice('extra.'.length)]
+    return v == null ? null : String(v)
+  }
+  return null
+}
+
+export function sortItems(items: QueueItem[], sort: string): QueueItem[] {
+  if (!sort) return items
+  const desc = sort.startsWith('-')
+  const key = desc ? sort.slice(1) : sort
+  // Nulls always sort last, in BOTH directions — only the relative order of
+  // non-null values flips with direction. A plain ascending-sort-then-reverse
+  // would incorrectly push nulls to the front on descending sorts.
+  return [...items].sort((a, b) => {
+    const av = sortValue(a, key)
+    const bv = sortValue(b, key)
+    if (av == null && bv == null) return 0
+    if (av == null) return 1
+    if (bv == null) return -1
+    const cmp =
+      typeof av === 'number' && typeof bv === 'number'
+        ? av - bv
+        : String(av).localeCompare(String(bv))
+    return desc ? -cmp : cmp
+  })
+}
+
+export function computeAvailableValues(items: QueueItem[]): {
+  collection: string[]
+  state: string[]
+} {
+  const collections = new Set<string>()
+  const states = new Set<string>()
+  for (const item of items) {
+    collections.add(item.collection)
+    if (item.state) states.add(item.state)
+  }
+  return { collection: [...collections].sort(), state: [...states].sort() }
+}
+
 export function computeStats(items: QueueItem[]): QueueStats {
   const by_state: Record<string, number> = {}
   let unowned = 0

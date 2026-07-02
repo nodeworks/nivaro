@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyColumnFilters,
   applyQueueConditions,
   applyScopeFilter,
   attachClaims,
   type ConditionBuilder,
   classifyRelationSegment,
   computeAvailableExtraFields,
+  computeAvailableValues,
   computeStats,
   filterBySlaStatus,
   formatMultiValueCell,
@@ -13,7 +15,8 @@ import {
   mergeSourceResults,
   type QueueItem,
   type QueueScope,
-  type QueueSourceRow
+  type QueueSourceRow,
+  sortItems
 } from '../../../services/queues.js'
 import type { CMSRelation } from '../../../types.js'
 
@@ -446,5 +449,182 @@ describe('formatMultiValueCell', () => {
 
   it('respects a custom cap', () => {
     expect(formatMultiValueCell(['A', 'B'], 3, 1)).toBe('A +2 more')
+  })
+})
+
+describe('applyColumnFilters', () => {
+  function item(overrides: Partial<QueueItem> = {}): QueueItem {
+    return {
+      collection: 'articles',
+      item_id: '1',
+      label: 'Test item',
+      state: 'draft',
+      state_color: null,
+      owners: [],
+      sla_status: null,
+      at_risk: false,
+      aging_hours: null,
+      claimed_by: null,
+      extra: {},
+      url: '/collections/articles/1',
+      ...overrides
+    }
+  }
+
+  it('returns all items when filters is empty', () => {
+    const items = [item(), item({ item_id: '2' })]
+    expect(applyColumnFilters(items, {})).toEqual(items)
+  })
+
+  it('filters by exact collection match', () => {
+    const items = [item({ collection: 'articles' }), item({ collection: 'tickets' })]
+    expect(applyColumnFilters(items, { collection: 'tickets' })).toHaveLength(1)
+  })
+
+  it('filters by exact state match', () => {
+    const items = [item({ state: 'draft' }), item({ state: 'review' })]
+    expect(applyColumnFilters(items, { state: 'review' })).toHaveLength(1)
+  })
+
+  it('filters by exact sla_status match', () => {
+    const items = [item({ sla_status: 'ok' }), item({ sla_status: 'breached' })]
+    expect(applyColumnFilters(items, { sla_status: 'breached' })).toHaveLength(1)
+  })
+
+  it('filters by at_risk boolean via "yes"/"no" string', () => {
+    const items = [item({ at_risk: true }), item({ at_risk: false })]
+    expect(applyColumnFilters(items, { at_risk: 'yes' })).toHaveLength(1)
+  })
+
+  it('filters aging_hours by a min/max range object', () => {
+    const items = [item({ aging_hours: 5 }), item({ aging_hours: 50 }), item({ aging_hours: 500 })]
+    expect(applyColumnFilters(items, { aging_hours: { min: 10, max: 100 } })).toHaveLength(1)
+  })
+
+  it('filters label by case-insensitive substring', () => {
+    const items = [item({ label: 'Node Splits' }), item({ label: 'Other Thing' })]
+    expect(applyColumnFilters(items, { label: 'node' })).toHaveLength(1)
+  })
+
+  it('filters owners by case-insensitive substring across all owner names', () => {
+    const items = [
+      item({ owners: [{ id: 'u1', name: 'Ada Lovelace' }] }),
+      item({ owners: [{ id: 'u2', name: 'Grace Hopper' }] })
+    ]
+    expect(applyColumnFilters(items, { owners: 'ada' })).toHaveLength(1)
+  })
+
+  it('filters an extra.<path> key by case-insensitive substring against the resolved value', () => {
+    const items = [
+      item({ extra: { 'project.owner.name': 'Ada Lovelace' } }),
+      item({ extra: { 'project.owner.name': 'Grace Hopper' } })
+    ]
+    expect(applyColumnFilters(items, { 'extra.project.owner.name': 'grace' })).toHaveLength(1)
+  })
+
+  it('combines multiple active filters with AND semantics', () => {
+    const items = [
+      item({ collection: 'articles', state: 'draft' }),
+      item({ collection: 'articles', state: 'review' }),
+      item({ collection: 'tickets', state: 'draft' })
+    ]
+    expect(applyColumnFilters(items, { collection: 'articles', state: 'draft' })).toHaveLength(1)
+  })
+
+  it('ignores a filter key whose value is empty string or null', () => {
+    const items = [item(), item({ item_id: '2' })]
+    expect(applyColumnFilters(items, { collection: '', state: null })).toEqual(items)
+  })
+})
+
+describe('sortItems', () => {
+  function item(overrides: Partial<QueueItem> = {}): QueueItem {
+    return {
+      collection: 'articles',
+      item_id: '1',
+      label: 'B',
+      state: null,
+      state_color: null,
+      owners: [],
+      sla_status: null,
+      at_risk: false,
+      aging_hours: null,
+      claimed_by: null,
+      extra: {},
+      url: '/collections/articles/1',
+      ...overrides
+    }
+  }
+
+  it('returns items unchanged when sort is empty', () => {
+    const items = [item({ label: 'B' }), item({ label: 'A' })]
+    expect(sortItems(items, '')).toEqual(items)
+  })
+
+  it('sorts ascending by a plain field name', () => {
+    const items = [item({ label: 'B' }), item({ label: 'A' })]
+    expect(sortItems(items, 'label').map((i) => i.label)).toEqual(['A', 'B'])
+  })
+
+  it('sorts descending with a -prefixed field name', () => {
+    const items = [item({ label: 'A' }), item({ label: 'B' })]
+    expect(sortItems(items, '-label').map((i) => i.label)).toEqual(['B', 'A'])
+  })
+
+  it('sorts numerically by aging_hours, nulls last', () => {
+    const items = [item({ aging_hours: null }), item({ aging_hours: 5 }), item({ aging_hours: 1 })]
+    expect(sortItems(items, 'aging_hours').map((i) => i.aging_hours)).toEqual([1, 5, null])
+  })
+
+  it('sorts numerically descending by aging_hours, nulls still last (not first)', () => {
+    const items = [item({ aging_hours: null }), item({ aging_hours: 5 }), item({ aging_hours: 1 })]
+    expect(sortItems(items, '-aging_hours').map((i) => i.aging_hours)).toEqual([5, 1, null])
+  })
+
+  it('sorts sla_status by severity ordinal (ok < warning < breached), not alphabetically', () => {
+    const items = [item({ sla_status: 'breached' }), item({ sla_status: 'ok' }), item({ sla_status: 'warning' })]
+    expect(sortItems(items, 'sla_status').map((i) => i.sla_status)).toEqual(['ok', 'warning', 'breached'])
+  })
+
+  it('sorts by an extra.<path> key against the resolved value', () => {
+    const items = [item({ extra: { priority: 'Low' } }), item({ extra: { priority: 'High' } })]
+    expect(sortItems(items, 'extra.priority').map((i) => i.extra?.priority)).toEqual(['High', 'Low'])
+  })
+})
+
+describe('computeAvailableValues', () => {
+  function item(overrides: Partial<QueueItem> = {}): QueueItem {
+    return {
+      collection: 'articles',
+      item_id: '1',
+      label: 'Test',
+      state: 'draft',
+      state_color: null,
+      owners: [],
+      sla_status: null,
+      at_risk: false,
+      aging_hours: null,
+      claimed_by: null,
+      extra: {},
+      url: '/collections/articles/1',
+      ...overrides
+    }
+  }
+
+  it('returns the distinct, sorted collection and state values across items', () => {
+    const items = [
+      item({ collection: 'articles', state: 'draft' }),
+      item({ collection: 'tickets', state: 'review' }),
+      item({ collection: 'articles', state: 'draft' })
+    ]
+    expect(computeAvailableValues(items)).toEqual({
+      collection: ['articles', 'tickets'],
+      state: ['draft', 'review']
+    })
+  })
+
+  it('excludes null states, returns empty arrays for no items', () => {
+    expect(computeAvailableValues([item({ state: null })])).toEqual({ collection: ['articles'], state: [] })
+    expect(computeAvailableValues([])).toEqual({ collection: [], state: [] })
   })
 })
