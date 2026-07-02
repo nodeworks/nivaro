@@ -303,6 +303,13 @@ export async function queuesRoutes(app: FastifyInstance) {
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
 
+    const { items } = await fetchQueueItems(id, req.user!, 'all')
+    const targetKey = `${body.source_collection}:${body.item_id}`
+    const found = items.some((i) => `${i.collection}:${i.item_id}` === targetKey)
+    if (!found) {
+      return reply.code(404).send({ error: 'Item not found in this queue' })
+    }
+
     const existing = await db('nivaro_queue_claims')
       .where({ queue_id: id, source_collection: body.source_collection, item_id: body.item_id })
       .first()
@@ -367,6 +374,13 @@ export async function queuesRoutes(app: FastifyInstance) {
     const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    const { items } = await fetchQueueItems(id, req.user!, 'all')
+    const targetKey = `${body.source_collection}:${body.item_id}`
+    const found = items.some((i) => `${i.collection}:${i.item_id}` === targetKey)
+    if (!found) {
+      return reply.code(404).send({ error: 'Item not found in this queue' })
+    }
 
     await db('nivaro_queue_claims')
       .where({
