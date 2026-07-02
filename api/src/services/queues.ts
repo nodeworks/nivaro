@@ -7,7 +7,9 @@ import {
   referencedFields
 } from '../routes/at-risk.js'
 import { computeStatusBatch } from '../routes/sla.js'
-import type { User } from '../types.js'
+import type { CMSRelation, User } from '../types.js'
+import { getRelations } from './collections.js'
+import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { can } from './permissions.js'
 import { parseJson, resolveStateOwners } from './pipeline-engine.js'
 
@@ -186,6 +188,78 @@ export function computeAvailableExtraFields(sources: QueueSourceRow[]): string[]
   return out
 }
 
+export interface RelationSegmentInfo {
+  type: 'm2o' | 'm2m' | 'o2m'
+  relatedCollection: string
+  manyField?: string
+  junction?: string
+  junctionFkToParent?: string
+  junctionFkToOther?: string
+}
+
+export function classifyRelationSegment(
+  collection: string,
+  segment: string,
+  relations: CMSRelation[]
+): RelationSegmentInfo | null {
+  const m2o = relations.find(
+    (r) =>
+      r.many_collection === collection &&
+      r.many_field === segment &&
+      r.junction_field === null &&
+      r.one_collection
+  )
+  if (m2o) return { type: 'm2o', relatedCollection: m2o.one_collection as string }
+
+  const m2mParent = relations.find(
+    (r) =>
+      r.one_collection === collection &&
+      r.one_field === segment &&
+      r.junction_field !== null &&
+      r.many_collection
+  )
+  if (m2mParent) {
+    const target = relations.find(
+      (r) =>
+        r.many_collection === m2mParent.many_collection &&
+        r.many_field === m2mParent.junction_field &&
+        r.one_collection
+    )
+    if (target?.one_collection) {
+      return {
+        type: 'm2m',
+        relatedCollection: target.one_collection,
+        junction: m2mParent.many_collection,
+        junctionFkToParent: m2mParent.many_field,
+        junctionFkToOther: m2mParent.junction_field as string
+      }
+    }
+  }
+
+  const o2m = relations.find(
+    (r) =>
+      r.one_collection === collection &&
+      r.one_field === segment &&
+      r.junction_field === null &&
+      r.many_collection
+  )
+  if (o2m)
+    return {
+      type: 'o2m',
+      relatedCollection: o2m.many_collection,
+      manyField: o2m.many_field as string
+    }
+
+  return null
+}
+
+export function formatMultiValueCell(values: string[], totalCount: number, cap = 3): string {
+  if (totalCount === 0) return ''
+  const shown = values.slice(0, cap)
+  const remaining = totalCount - shown.length
+  return remaining > 0 ? `${shown.join(', ')} +${remaining} more` : shown.join(', ')
+}
+
 export interface ConditionBuilder {
   where(field: string, value: unknown): ConditionBuilder
   where(field: string, op: string, value: unknown): ConditionBuilder
@@ -300,6 +374,143 @@ function userDisplayName(row: {
   return name || row.email || 'Unknown'
 }
 
+// ─── Relation path resolution ──────────────────────────────────────────────────
+
+async function resolvePathValues(
+  collection: string,
+  ids: string[],
+  segments: string[],
+  relationsCache: Map<string, CMSRelation[]>
+): Promise<Map<string, string>> {
+  if (ids.length === 0 || segments.length === 0) return new Map()
+
+  let relations = relationsCache.get(collection)
+  if (!relations) {
+    relations = await getRelations(collection)
+    relationsCache.set(collection, relations)
+  }
+
+  const [head, ...rest] = segments
+  const classified = classifyRelationSegment(collection, head, relations)
+
+  if (!classified) {
+    const rows = (await db(collection).whereIn('id', ids).select(['id', head])) as Array<
+      Record<string, unknown>
+    >
+    const out = new Map<string, string>()
+    for (const row of rows) {
+      const v = row[head]
+      out.set(String(row.id), v == null ? '' : String(v))
+    }
+    return out
+  }
+
+  if (classified.type === 'm2o') {
+    const rows = (await db(collection).whereIn('id', ids).select(['id', head])) as Array<
+      Record<string, unknown>
+    >
+    const fkByRowId = new Map<string, string>()
+    const relatedIds = new Set<string>()
+    for (const row of rows) {
+      if (row[head] == null) continue
+      const fk = String(row[head])
+      fkByRowId.set(String(row.id), fk)
+      relatedIds.add(fk)
+    }
+    if (relatedIds.size === 0) return new Map()
+
+    if (rest.length > 0) {
+      const nested = await resolvePathValues(
+        classified.relatedCollection,
+        [...relatedIds],
+        rest,
+        relationsCache
+      )
+      const out = new Map<string, string>()
+      for (const [rowId, fk] of fkByRowId) {
+        const v = nested.get(fk)
+        if (v !== undefined) out.set(rowId, v)
+      }
+      return out
+    }
+
+    const relatedCol = await db('nivaro_collections')
+      .where({ collection: classified.relatedCollection })
+      .first('display_template')
+    const template = (relatedCol?.display_template as string | null) ?? null
+    const selectFields = extractTemplateFields(template)
+    const relatedRows = (await db(classified.relatedCollection)
+      .whereIn('id', [...relatedIds])
+      .select(selectFields)) as Array<Record<string, unknown>>
+    const displayById = new Map<string, string>()
+    for (const r of relatedRows) displayById.set(String(r.id), resolveDisplayValue(r, template))
+    const out = new Map<string, string>()
+    for (const [rowId, fk] of fkByRowId) {
+      const v = displayById.get(fk)
+      if (v !== undefined) out.set(rowId, v)
+    }
+    return out
+  }
+
+  // M2M / O2M — always resolved as a leaf (multi-value), regardless of remaining
+  // segments. Chaining a path through a multi-valued relation into another field
+  // is out of scope (see docs/superpowers/specs/2026-07-02-queue-extra-field-relations-design.md)
+  // — a queue-owner path that does this simply resolves as if it ended here.
+  const relatedCol = await db('nivaro_collections')
+    .where({ collection: classified.relatedCollection })
+    .first('display_template')
+  const template = (relatedCol?.display_template as string | null) ?? null
+  const selectFields = extractTemplateFields(template)
+
+  if (classified.type === 'o2m') {
+    const manyField = classified.manyField as string
+    const relatedRows = (await db(classified.relatedCollection)
+      .whereIn(manyField, ids)
+      .select([manyField, ...selectFields])) as Array<Record<string, unknown>>
+    const grouped = new Map<string, Record<string, unknown>[]>()
+    for (const row of relatedRows) {
+      const parentId = String(row[manyField])
+      const list = grouped.get(parentId) ?? []
+      list.push(row)
+      grouped.set(parentId, list)
+    }
+    const out = new Map<string, string>()
+    for (const rowId of ids) {
+      const related = grouped.get(rowId) ?? []
+      const values = related.slice(0, 3).map((r) => resolveDisplayValue(r, template))
+      out.set(rowId, formatMultiValueCell(values, related.length))
+    }
+    return out
+  }
+
+  // m2m
+  const junctionRows = (await db(`${classified.junction} as _j`)
+    .whereIn(`_j.${classified.junctionFkToParent}`, ids)
+    .join(
+      `${classified.relatedCollection} as _rel`,
+      '_rel.id',
+      `_j.${classified.junctionFkToOther}`
+    )
+    .select([
+      `_j.${classified.junctionFkToParent} as __parent_id`,
+      ...selectFields.map((f) => `_rel.${f}`)
+    ])) as Array<Record<string, unknown>>
+  const grouped = new Map<string, Record<string, unknown>[]>()
+  for (const row of junctionRows) {
+    const parentId = String(row.__parent_id)
+    const list = grouped.get(parentId) ?? []
+    list.push(row)
+    grouped.set(parentId, list)
+  }
+  const out = new Map<string, string>()
+  for (const rowId of ids) {
+    const related = grouped.get(rowId) ?? []
+    const values = related.slice(0, 3).map((r) => resolveDisplayValue(r, template))
+    out.set(rowId, formatMultiValueCell(values, related.length))
+  }
+  return out
+}
+
 // ─── Source resolvers ───────────────────────────────────────────────────────────
 
 export async function resolveCollectionSource(
@@ -378,22 +589,29 @@ export async function resolveCollectionSource(
   const slaMap = ids.length ? await computeStatusBatch(source.collection, ids) : {}
   ids = filterBySlaStatus(ids, slaMap, source.sla_filter)
 
-  const extraFieldNames = (parseJson(source.extra_fields) as string[] | null) ?? []
+  const extraFieldPaths = (parseJson(source.extra_fields) as string[] | null) ?? []
   const extraById = new Map<string, Record<string, unknown>>()
-  if (extraFieldNames.length && ids.length) {
-    try {
-      const extraRows = (await db(source.collection)
-        .whereIn('id', ids)
-        .select(['id', ...extraFieldNames])) as Record<string, unknown>[]
-      for (const row of extraRows) {
-        const rowId = String(row.id)
-        const extra: Record<string, unknown> = {}
-        for (const field of extraFieldNames) extra[field] = row[field]
-        extraById.set(rowId, extra)
+  if (extraFieldPaths.length && ids.length) {
+    const relationsCache = new Map<string, CMSRelation[]>()
+    for (const path of extraFieldPaths) {
+      try {
+        const segments = path.split('.')
+        const valuesByRowId = await resolvePathValues(
+          source.collection,
+          ids,
+          segments,
+          relationsCache
+        )
+        for (const [rowId, value] of valuesByRowId) {
+          const extra = extraById.get(rowId) ?? {}
+          extra[path] = value
+          extraById.set(rowId, extra)
+        }
+      } catch {
+        // Degrade gracefully — a stale/deleted/relational field config must not
+        // break the whole queue's item list, and must not prevent OTHER extra
+        // field paths on the same source from resolving.
       }
-    } catch {
-      // Degrade gracefully: leave extraById empty so rows fall back to `extra: {}`
-      // rather than letting a broken/renamed extra field 500 the whole queue.
     }
   }
 

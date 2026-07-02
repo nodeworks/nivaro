@@ -4,15 +4,18 @@ import {
   applyScopeFilter,
   attachClaims,
   type ConditionBuilder,
+  classifyRelationSegment,
   computeAvailableExtraFields,
   computeStats,
   filterBySlaStatus,
+  formatMultiValueCell,
   groupByOwner,
   mergeSourceResults,
   type QueueItem,
   type QueueScope,
   type QueueSourceRow
 } from '../../../services/queues.js'
+import type { CMSRelation } from '../../../types.js'
 
 function item(overrides: Partial<QueueItem> = {}): QueueItem {
   return {
@@ -357,5 +360,91 @@ describe('computeAvailableExtraFields', () => {
 
   it('returns an empty array when no source configures extra_fields', () => {
     expect(computeAvailableExtraFields([source()])).toEqual([])
+  })
+})
+
+describe('classifyRelationSegment', () => {
+  function rel(overrides: Partial<CMSRelation> = {}): CMSRelation {
+    return {
+      id: 1,
+      many_collection: '',
+      many_field: '',
+      one_collection: null,
+      one_field: null,
+      one_collection_field: null,
+      one_allowed_collections: null,
+      junction_field: null,
+      sort_field: null,
+      one_deselect_action: 'nullify',
+      ...overrides
+    }
+  }
+
+  it('classifies a direct M2O field', () => {
+    const relations = [
+      rel({ many_collection: 'workflows', many_field: 'project', one_collection: 'projects' })
+    ]
+    expect(classifyRelationSegment('workflows', 'project', relations)).toEqual({
+      type: 'm2o',
+      relatedCollection: 'projects'
+    })
+  })
+
+  it('classifies an O2M field (viewed from the one side)', () => {
+    const relations = [
+      rel({
+        many_collection: 'tasks',
+        many_field: 'project',
+        one_collection: 'projects',
+        one_field: 'tasks'
+      })
+    ]
+    expect(classifyRelationSegment('projects', 'tasks', relations)).toEqual({
+      type: 'o2m',
+      relatedCollection: 'tasks',
+      manyField: 'project'
+    })
+  })
+
+  it('classifies an M2M field via its junction table', () => {
+    const relations = [
+      rel({
+        many_collection: 'projects_tags',
+        many_field: 'project_id',
+        one_collection: 'projects',
+        one_field: 'tags',
+        junction_field: 'tag_id'
+      }),
+      rel({ many_collection: 'projects_tags', many_field: 'tag_id', one_collection: 'tags' })
+    ]
+    expect(classifyRelationSegment('projects', 'tags', relations)).toEqual({
+      type: 'm2m',
+      relatedCollection: 'tags',
+      junction: 'projects_tags',
+      junctionFkToParent: 'project_id',
+      junctionFkToOther: 'tag_id'
+    })
+  })
+
+  it('returns null for a plain scalar field with no matching relation', () => {
+    expect(classifyRelationSegment('projects', 'name', [])).toBeNull()
+  })
+})
+
+describe('formatMultiValueCell', () => {
+  it('joins values with no suffix when the total fits under the cap', () => {
+    expect(formatMultiValueCell(['A', 'B'], 2)).toBe('A, B')
+  })
+
+  it('appends a +N more suffix when the total exceeds the cap', () => {
+    expect(formatMultiValueCell(['A', 'B', 'C'], 5)).toBe('A, B, C +2 more')
+  })
+
+  it('returns an empty string for zero total', () => {
+    expect(formatMultiValueCell([], 0)).toBe('')
+  })
+
+  it('respects a custom cap', () => {
+    expect(formatMultiValueCell(['A', 'B'], 3, 1)).toBe('A +2 more')
   })
 })
