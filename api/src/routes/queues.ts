@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -19,6 +19,22 @@ function formatSource(row: QueueSourceRow) {
     filters: parseJson(row.filters),
     state_values: parseJson(row.state_values)
   }
+}
+
+/**
+ * Read visibility for a single queue: admin, owner, or a shared queue whose
+ * role_id is either unset (shared with everyone) or matches the viewer's
+ * role. Mirrors the GET / list query's WHERE clause exactly — GET /:id and
+ * GET /:id/items must never be reachable for a queue the list endpoint
+ * would have excluded (role-scoped shared queues are not "public to any
+ * authenticated user" just because is_shared=true).
+ */
+function canReadQueue(queue: QueueRow, req: FastifyRequest): boolean {
+  if (req.isAdmin) return true
+  if (queue.owner === req.user!.id) return true
+  if (!queue.is_shared) return false
+  const userRole = req.user!.role ?? null
+  return queue.role_id === null || queue.role_id === userRole
 }
 
 const SOURCE_TYPES: QueueSourceType[] = ['collection', 'tasks', 'approvals', 'owned_by_me']
@@ -51,7 +67,7 @@ export async function queuesRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && queue.owner !== req.user!.id && !queue.is_shared) {
+    if (!canReadQueue(queue, req)) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
@@ -95,8 +111,8 @@ export async function queuesRoutes(app: FastifyInstance) {
       queue_id: queue.id,
       type: 'owned_by_me',
       collection: null,
-      filters: null,
-      state_values: null,
+      filters: toJsonStr(null),
+      state_values: toJsonStr(null),
       sort: 0
     })
 
