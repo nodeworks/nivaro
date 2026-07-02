@@ -85,7 +85,8 @@ export const queuesGuide: DocSection = {
       items: [
         'Each collection-type source can expose up to 5 extra fields from its collection as table columns (Queues builder → source row → "Extra columns"). Rows from a different source that didn\'t configure a given field simply show a blank cell for it — there\'s no special handling for mixed-collection queues beyond that.',
         'Every viewer can independently choose which columns are visible (Table view → "Columns" control, top right) — the choice is saved per user per queue and persists across devices. Item and Claim/Release always stay visible regardless of customization.',
-        'A viewer who has never customized sees a computed default: all base columns plus the first 2 configured extra fields, so the table starts reasonably compact without any setup.'
+        'A viewer who has never customized sees a computed default: all base columns plus the first 2 configured extra fields, so the table starts reasonably compact without any setup.',
+        "An extra column can be a relation, not just a plain field — the builder's field picker lets you drill through up to 3 hops (e.g. an M2O chain like Project → Owner → Name). M2O columns show the related record's configured display template; O2M/M2M columns show up to 3 related records' display values with a \"+N more\" suffix when there are more. Relation display values are always resolved fresh from the live schema, never cached."
       ]
     }
   ]
