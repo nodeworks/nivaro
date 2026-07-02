@@ -3,6 +3,10 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import type { QueueRow } from '../services/queues.js'
+import { fetchQueueItems } from '../services/queues.js'
+import type { User } from '../types.js'
+import { canReadQueue } from './queues.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -356,6 +360,42 @@ export async function widgetRoutes(app: FastifyInstance) {
       const feed = await db('nivaro_widget_feeds').where({ token }).first()
       if (!feed?.is_active) return reply.code(404).send({ error: 'Feed not found' })
 
+      if (feed.queue_id) {
+        // Queue-backed feed: resolved using the FEED CREATOR's identity, not
+        // the anonymous public viewer's — there is no viewer to check
+        // permissions against on a public route. This matches how
+        // collection-backed feeds already work: the creator configures the
+        // feed once at creation time (canReadQueue gated there), and it is
+        // then served identically to every public viewer forever after, with
+        // zero per-request RBAC re-check.
+        const creator = (await db('nivaro_users').where({ id: feed.created_by }).first()) as
+          | User
+          | undefined
+        if (!creator) return reply.code(404).send({ error: 'Feed not found' })
+
+        try {
+          const { items } = await fetchQueueItems(feed.queue_id, creator, 'all')
+          const stored = Number(feed.limit_count) || 20
+          const qLimit = req.query.limit ? Number(req.query.limit) : NaN
+          const limit = Math.min(
+            100,
+            Math.max(1, Number.isFinite(qLimit) && qLimit > 0 ? Math.min(qLimit, stored) : stored)
+          )
+          const fields = ['id', 'label', 'state', 'sla_status', 'aging_hours']
+          const rows = items.slice(0, limit).map((it) => ({
+            id: it.item_id,
+            label: it.label,
+            state: it.state ?? '',
+            sla_status: it.sla_status ?? '',
+            aging_hours: it.aging_hours ?? ''
+          }))
+          return reply.send({ data: rows, fields, total: rows.length })
+        } catch (err) {
+          app.log.error({ err, feed: feed.id }, 'widget queue feed failed')
+          return reply.code(500).send({ error: 'Feed unavailable' })
+        }
+      }
+
       const fields = (parseJson<string[]>(feed.fields) ?? []).filter((f) => FIELD_NAME_RE.test(f))
       if (fields.length === 0) return reply.code(404).send({ error: 'Feed not found' })
 
@@ -407,6 +447,7 @@ export async function widgetRoutes(app: FastifyInstance) {
     const body = req.body as {
       name?: string
       collection?: string
+      queue_id?: string
       fields?: string[]
       filters?: Record<string, unknown> | null
       limit_count?: number
@@ -416,26 +457,42 @@ export async function widgetRoutes(app: FastifyInstance) {
 
     if (!body.name?.trim()) return reply.code(400).send({ error: 'name is required' })
 
-    const collection = body.collection?.trim() ?? ''
-    const colErr = await validateCollection(collection)
-    if (colErr) return reply.code(400).send({ error: colErr })
+    const hasCollection = !!body.collection?.trim()
+    const hasQueue = !!body.queue_id?.trim()
+    if (hasCollection === hasQueue) {
+      return reply.code(400).send({ error: 'exactly one of collection or queue_id is required' })
+    }
 
-    const fieldsErr = validateFields(body.fields)
-    if (fieldsErr) return reply.code(400).send({ error: fieldsErr })
+    let collection = ''
+    if (hasCollection) {
+      collection = body.collection?.trim() ?? ''
+      const colErr = await validateCollection(collection)
+      if (colErr) return reply.code(400).send({ error: colErr })
 
-    const filtersErr = validateFilters(body.filters)
-    if (filtersErr) return reply.code(400).send({ error: filtersErr })
+      const fieldsErr = validateFields(body.fields)
+      if (fieldsErr) return reply.code(400).send({ error: fieldsErr })
+
+      const filtersErr = validateFilters(body.filters)
+      if (filtersErr) return reply.code(400).send({ error: filtersErr })
+    } else {
+      const queue = await db('nivaro_queues').where({ id: body.queue_id }).first()
+      if (!queue) return reply.code(404).send({ error: 'Queue not found' })
+      if (!canReadQueue(queue as QueueRow, req)) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+    }
 
     const token = generateToken()
     const [inserted] = await db('nivaro_widget_feeds')
       .insert({
         name: body.name.trim(),
         token,
-        collection,
-        fields: toJsonStr(body.fields),
-        filters: body.filters != null ? toJsonStr(body.filters) : null,
+        collection: hasCollection ? collection : null,
+        queue_id: hasQueue ? body.queue_id : null,
+        fields: hasCollection ? toJsonStr(body.fields) : null,
+        filters: hasCollection && body.filters != null ? toJsonStr(body.filters) : null,
         limit_count: Math.min(100, Math.max(1, Number(body.limit_count) || 20)),
-        sort: body.sort?.trim() || null,
+        sort: hasCollection ? body.sort?.trim() || null : null,
         is_active: body.is_active !== false ? 1 : 0,
         created_by: req.user?.id,
         created_at: new Date()
@@ -473,6 +530,19 @@ export async function widgetRoutes(app: FastifyInstance) {
         limit_count?: number
         sort?: string | null
         is_active?: boolean
+      }
+
+      // queue_id is immutable post-creation (not accepted here at all) — a
+      // queue-backed feed can never be converted into a collection-backed
+      // one (or vice versa) via PATCH, keeping the "exactly one of
+      // collection/queue_id" invariant enforced at creation intact.
+      if (
+        existing.queue_id &&
+        (body.collection !== undefined || body.fields !== undefined || body.filters !== undefined)
+      ) {
+        return reply
+          .code(400)
+          .send({ error: 'collection, fields, and filters cannot be set on a queue-backed feed' })
       }
 
       const patch: Record<string, unknown> = {}
