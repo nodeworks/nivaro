@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
@@ -7,6 +8,9 @@ import { type Column, DataTable } from '@/components/data-table'
 import { QueueKanbanBoard } from '@/components/queue-kanban-board'
 import { QueueWorkloadView } from '@/components/queue-workload-view'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -32,6 +36,7 @@ export interface QueueItemRow {
   at_risk: boolean
   aging_hours: number | null
   claimed_by: QueueOwner | null
+  extra?: Record<string, unknown>
   url: string
 }
 
@@ -52,6 +57,7 @@ interface QueueMeta {
   name: string
   description: string | null
   sources?: QueueSource[]
+  available_extra_fields?: string[]
 }
 
 type Scope = 'mine' | 'unowned' | 'all' | 'claimed'
@@ -233,13 +239,52 @@ export function QueueDetailPage() {
     onError: () => toast.error('Failed to unsubscribe')
   })
 
+  const { data: columnPrefs } = useQuery<{ data: { visible_columns: string[] | null } }>({
+    queryKey: ['queue-column-prefs', id],
+    queryFn: () => api.get(`/queues/${id}/column-prefs`).then((r) => r.data),
+    enabled: !!id
+  })
+
+  const [visibleColumns, setVisibleColumns] = useState<string[] | null>(null)
+  const loadedFromServerRef = useRef(false)
+  // Consumed by the debounced-save effect below: setVisibleColumns() in the load
+  // effect causes visibleColumns to change on the NEXT render, which would
+  // otherwise make the save effect's dependency-changed check pass immediately
+  // (loadedFromServerRef is already true by then) and re-PUT the data we just
+  // loaded. This flag makes the save effect skip exactly that one transition.
+  const skipNextSaveRef = useRef(false)
+
+  useEffect(() => {
+    if (!columnPrefs) return
+    loadedFromServerRef.current = true
+    skipNextSaveRef.current = true
+    setVisibleColumns(columnPrefs.data.visible_columns)
+  }, [columnPrefs])
+
+  const saveColumnPrefsMut = useMutation({
+    mutationFn: (cols: string[]) => api.put(`/queues/${id}/column-prefs`, { visible_columns: cols })
+  })
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only re-run on visibleColumns change; saveColumnPrefsMut is stable per mount and including it would refire on every render
+  useEffect(() => {
+    if (!loadedFromServerRef.current || visibleColumns === null) return
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false
+      return
+    }
+    const timer = setTimeout(() => {
+      saveColumnPrefsMut.mutate(visibleColumns)
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [visibleColumns])
+
   const items = data?.data ?? []
   const stats = data?.stats
   const stateEntries = stats ? Object.entries(stats.by_state) : []
   const start = (page - 1) * limit
   const pageItems = items.slice(start, start + limit)
 
-  const columns: Column<QueueItemRow>[] = [
+  const baseColumns: Column<QueueItemRow>[] = [
     {
       key: 'collection',
       header: 'Collection',
@@ -286,36 +331,87 @@ export function QueueDetailPage() {
       key: 'at_risk',
       header: 'Risk',
       render: (row) => (row.at_risk ? <span className='text-red-500'>⚑ At risk</span> : null)
-    },
-    {
-      key: 'claim',
-      header: '',
-      render: (row) =>
-        row.claimed_by ? (
-          <button
-            type='button'
-            onClick={(e) => {
-              e.stopPropagation()
-              releaseMut.mutate(row)
-            }}
-            className='text-[11px] text-slate-400 underline hover:text-slate-600'
-          >
-            Release
-          </button>
-        ) : (
-          <button
-            type='button'
-            onClick={(e) => {
-              e.stopPropagation()
-              claimMut.mutate(row)
-            }}
-            className='text-[11px] font-medium text-nvr-navy underline dark:text-nvr-cyan'
-          >
-            Claim
-          </button>
-        )
     }
   ]
+
+  const claimColumn: Column<QueueItemRow> = {
+    key: 'claim',
+    header: '',
+    render: (row) =>
+      row.claimed_by ? (
+        <button
+          type='button'
+          onClick={(e) => {
+            e.stopPropagation()
+            releaseMut.mutate(row)
+          }}
+          className='text-[11px] text-slate-400 underline hover:text-slate-600'
+        >
+          Release
+        </button>
+      ) : (
+        <button
+          type='button'
+          onClick={(e) => {
+            e.stopPropagation()
+            claimMut.mutate(row)
+          }}
+          className='text-[11px] font-medium text-nvr-navy underline dark:text-nvr-cyan'
+        >
+          Claim
+        </button>
+      )
+  }
+
+  const extraFieldKeys = queue?.available_extra_fields ?? []
+
+  const extraColumns: Column<QueueItemRow>[] = extraFieldKeys.map((field) => ({
+    key: `extra.${field}`,
+    header: field,
+    render: (row) => {
+      const value = row.extra?.[field]
+      return value == null || value === '' ? (
+        <span className='text-slate-300'>—</span>
+      ) : (
+        <span className='text-[12px]'>{String(value)}</span>
+      )
+    }
+  }))
+
+  const TOGGLEABLE_KEYS = [
+    'collection',
+    'state',
+    'owners',
+    'aging_hours',
+    'sla_status',
+    'at_risk',
+    ...extraFieldKeys.map((f) => `extra.${f}`)
+  ]
+
+  const DEFAULT_VISIBLE_COLUMNS = [
+    'collection',
+    'state',
+    'owners',
+    'aging_hours',
+    'sla_status',
+    'at_risk',
+    ...extraFieldKeys.slice(0, 2).map((f) => `extra.${f}`)
+  ]
+
+  const effectiveVisible = new Set(visibleColumns ?? DEFAULT_VISIBLE_COLUMNS)
+
+  const columns: Column<QueueItemRow>[] = [
+    ...baseColumns.filter((c) => c.key === 'label' || effectiveVisible.has(c.key)),
+    ...extraColumns.filter((c) => effectiveVisible.has(c.key)),
+    claimColumn
+  ]
+
+  function handleToggleColumn(key: string) {
+    const current = new Set(effectiveVisible)
+    if (current.has(key)) current.delete(key)
+    else current.add(key)
+    setVisibleColumns([...current])
+  }
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
@@ -419,11 +515,47 @@ export function QueueDetailPage() {
           >
             Workload
           </button>
+          {view === 'table' && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  className='ml-auto flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                >
+                  <SlidersHorizontal className='h-3.5 w-3.5' />
+                  Columns
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-[220px] p-2' align='end'>
+                <div className='space-y-1.5'>
+                  {TOGGLEABLE_KEYS.map((key) => {
+                    const col = [...baseColumns, ...extraColumns].find((c) => c.key === key)
+                    const inputId = `col-toggle-${key}`
+                    return (
+                      <div key={key} className='flex items-center gap-2 text-[12px]'>
+                        <Checkbox
+                          id={inputId}
+                          checked={effectiveVisible.has(key)}
+                          onCheckedChange={() => handleToggleColumn(key)}
+                        />
+                        <Label htmlFor={inputId} className='cursor-pointer text-[12px] font-normal'>
+                          {typeof col?.header === 'string' ? col.header : key}
+                        </Label>
+                      </div>
+                    )
+                  })}
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
           {mySub ? (
             <button
               type='button'
               onClick={() => unsubscribeMut.mutate(mySub.id)}
-              className='ml-auto rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+              className={cn(
+                'rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground',
+                view !== 'table' && 'ml-auto'
+              )}
             >
               Subscribed ({mySub.digest_frequency}) · Unsubscribe
             </button>
@@ -431,7 +563,10 @@ export function QueueDetailPage() {
             <button
               type='button'
               onClick={() => subscribeMut.mutate('daily')}
-              className='ml-auto rounded-md px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
+              className={cn(
+                'rounded-md px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan',
+                view !== 'table' && 'ml-auto'
+              )}
             >
               Get daily digest
             </button>
