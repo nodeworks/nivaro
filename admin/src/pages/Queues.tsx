@@ -3,6 +3,7 @@ import { Check, ChevronsUpDown, Inbox, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { CollectionFieldPicker, type PickedField } from '@/components/field-picker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -14,7 +15,6 @@ import {
   CommandItem,
   CommandList
 } from '@/components/ui/command'
-import { CollectionFieldPicker, type PickedField } from '@/components/field-picker'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
