@@ -3,8 +3,8 @@ import {
   applyQueueConditions,
   applyScopeFilter,
   attachClaims,
-  computeAvailableExtraFields,
   type ConditionBuilder,
+  computeAvailableExtraFields,
   computeStats,
   filterBySlaStatus,
   groupByOwner,
@@ -293,10 +293,7 @@ describe('groupByOwner', () => {
 
   it('groups items under each of their owners', () => {
     const alice = { id: 'u1', name: 'Alice' }
-    const items = [
-      item({ item_id: '1', owners: [alice] }),
-      item({ item_id: '2', owners: [alice] })
-    ]
+    const items = [item({ item_id: '1', owners: [alice] }), item({ item_id: '2', owners: [alice] })]
     const groups = groupByOwner(items)
     expect(groups.get('u1')).toEqual({ owner: alice, count: 2 })
   })
