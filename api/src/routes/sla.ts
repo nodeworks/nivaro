@@ -53,7 +53,7 @@ async function computeStatus(collection: string, item: string) {
     .orderBy('started_at', 'desc')
     .first()
 
-  if (!instance || !instance.current_state) {
+  if (!instance?.current_state) {
     return { status: 'none' }
   }
 
@@ -125,7 +125,7 @@ function round1(n: number): number {
  * three queries per item. Items without an instance, state, active rule,
  * or history entry are omitted from the result map.
  */
-async function computeStatusBatch(
+export async function computeStatusBatch(
   collection: string,
   ids: string[]
 ): Promise<Record<string, SlaBatchEntry>> {

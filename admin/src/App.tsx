@@ -207,10 +207,12 @@ const TasksPage = lazy(() => import('@/pages/Tasks').then((m) => ({ default: m.T
 const ApprovalsPage = lazy(() =>
   import('@/pages/Approvals').then((m) => ({ default: m.ApprovalsPage }))
 )
-const AtRiskPage = lazy(() => import('@/pages/AtRisk').then((m) => ({ default: m.AtRiskPage })))
-const AccountPage = lazy(() =>
-  import('@/pages/Account').then((m) => ({ default: m.AccountPage }))
+const QueuesPage = lazy(() => import('@/pages/Queues').then((m) => ({ default: m.QueuesPage })))
+const QueueDetailPage = lazy(() =>
+  import('@/pages/QueueDetail').then((m) => ({ default: m.QueueDetailPage }))
 )
+const AtRiskPage = lazy(() => import('@/pages/AtRisk').then((m) => ({ default: m.AtRiskPage })))
+const AccountPage = lazy(() => import('@/pages/Account').then((m) => ({ default: m.AccountPage })))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -386,6 +388,8 @@ export default function App() {
                 <Route path='erp-submissions' element={<ErpSubmissionsPage />} />
                 <Route path='tasks' element={<TasksPage />} />
                 <Route path='approvals' element={<ApprovalsPage />} />
+                <Route path='queues' element={<QueuesPage />} />
+                <Route path='queues/:id' element={<QueueDetailPage />} />
                 <Route path='at-risk' element={<AtRiskPage />} />
                 <Route path='account' element={<AccountPage />} />
                 <Route

@@ -59,6 +59,7 @@ import { pickerExclusionRoutes } from './picker-exclusions.js'
 import { pipelinesRoutes } from './pipelines.js'
 import { buildScript, presenceAdminRoutes } from './presence.js'
 import { presetsRoutes } from './presets.js'
+import { queuesRoutes } from './queues.js'
 import { recordTemplatesRoutes } from './record-templates.js'
 import { reportsRoutes } from './reports.js'
 import { retentionRoutes } from './retention.js'
@@ -168,6 +169,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(addendumConfigsRoutes, { prefix: '/addendum-configs' })
   await app.register(tasksRoutes, { prefix: '/tasks' })
   await app.register(approvalsRoutes, { prefix: '/approvals' })
+  await app.register(queuesRoutes, { prefix: '/queues' })
   await app.register(itemLocksRoutes, { prefix: '/item-locks' })
   // No auth hook — callbacks are HMAC-token-authenticated and must be reachable from Teams/Slack
   await app.register(messageActionsRoutes, { prefix: '/message-actions' })

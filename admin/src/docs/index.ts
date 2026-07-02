@@ -18,6 +18,7 @@ export * from './sections/monitoring.js'
 export * from './sections/observability.js'
 export * from './sections/overview.js'
 export * from './sections/platform.js'
+export * from './sections/queues.js'
 export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
@@ -73,7 +74,7 @@ import {
   contentOpsTranslations,
   contentOpsValidationRules,
   contentOpsVirtualCollections,
-  pickerExclusionsGuide, 
+  pickerExclusionsGuide,
   pickerFilterGuide
 } from './sections/content-ops.js'
 import {
@@ -221,6 +222,7 @@ import {
   zapierMake,
   zeroDowntimeMigrations
 } from './sections/platform.js'
+import { queuesGuide } from './sections/queues.js'
 import {
   apiCollections,
   apiFiles,
@@ -370,7 +372,8 @@ export const navSections: NavGroup[] = [
       pipelineDimensions,
       pipelineOwnerMatrix,
       pipelineSpecificity,
-      pipelineBranching
+      pipelineBranching,
+      queuesGuide
     ]
   },
   {

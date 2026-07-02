@@ -25,6 +25,7 @@ import {
   Globe,
   HeartPulse,
   House,
+  Inbox,
   KeyRound,
   LayoutGrid,
   Link2,
@@ -63,7 +64,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useCloudPlugins, useExtensionPlugins } from '@/extensions/store'
 import type { NavSidebarSlot } from '@/extensions/types'
-import { api, WORKSPACE_KEY, type Workspace } from "@/lib/api"
+import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
@@ -120,6 +121,7 @@ export const navCategories: NavCategory[] = [
       { icon: Workflow, label: 'Workflows', to: '/workflows' },
       { icon: SlidersHorizontal, label: 'Flows', to: '/flows' },
       { icon: ThumbsUp, label: 'Approvals', to: '/approvals' },
+      { icon: Inbox, label: 'Queues', to: '/queues' },
       { icon: Webhook, label: 'Webhooks', to: '/webhooks' },
       { icon: ListFilter, label: 'Rules', to: '/rules' },
       { icon: CalendarOff, label: 'Blackout Dates', to: '/blackout-dates' },
@@ -320,7 +322,7 @@ export function AppLayout() {
   const { data: settings } = useSettings()
   useQuery({
     queryKey: ['health'],
-    queryFn: () => api.get<{ cloud?: boolean }>('/health').then(r => r.data),
+    queryFn: () => api.get<{ cloud?: boolean }>('/health').then((r) => r.data),
     staleTime: Number.POSITIVE_INFINITY,
     retry: false
   })
@@ -389,10 +391,12 @@ export function AppLayout() {
 
   const disabledPaths = useUiPermissions()
 
-  const visibleCategories = navCategories.map((cat) => ({
-    ...cat,
-    items: cat.items.filter((item) => !disabledPaths.has(item.to))
-  })).filter((cat) => cat.items.length > 0)
+  const visibleCategories = navCategories
+    .map((cat) => ({
+      ...cat,
+      items: cat.items.filter((item) => !disabledPaths.has(item.to))
+    }))
+    .filter((cat) => cat.items.length > 0)
 
   const activeCat = visibleCategories.find((c) => c.id === activeCategory) ?? visibleCategories[0]
 
@@ -415,13 +419,17 @@ export function AppLayout() {
   return (
     <TooltipProvider delayDuration={150}>
       {/* User extension app-components */}
-      {extensionPlugins.flatMap(p =>
-        p.slots?.['app-component'] ? [p.slots['app-component'].component] : []
-      ).map((Comp, i) => <Comp key={`ext-${i}`} />)}
+      {extensionPlugins
+        .flatMap((p) => (p.slots?.['app-component'] ? [p.slots['app-component'].component] : []))
+        .map((Comp, i) => (
+          <Comp key={`ext-${i}`} />
+        ))}
       {/* Cloud extension app-components — rendered separately, always present */}
-      {cloudPlugins.flatMap(p =>
-        p.slots?.['app-component'] ? [p.slots['app-component'].component] : []
-      ).map((Comp, i) => <Comp key={`cloud-${i}`} />)}
+      {cloudPlugins
+        .flatMap((p) => (p.slots?.['app-component'] ? [p.slots['app-component'].component] : []))
+        .map((Comp, i) => (
+          <Comp key={`cloud-${i}`} />
+        ))}
       <div className='flex h-screen overflow-hidden bg-secondary'>
         <a
           href='#main-content'

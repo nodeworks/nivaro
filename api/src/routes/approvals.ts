@@ -16,7 +16,7 @@ interface ApprovalChain {
   created_at: Date
 }
 
-interface ApprovalChainStep {
+export interface ApprovalChainStep {
   id: number
   chain: number
   step_order: number
@@ -58,7 +58,7 @@ async function getOrderedSteps(chainId: number): Promise<ApprovalChainStep[]> {
 }
 
 /** Resolve the users who may decide a step: direct approver, or everyone holding the role. */
-async function resolveStepApprovers(step: ApprovalChainStep): Promise<string[]> {
+export async function resolveStepApprovers(step: ApprovalChainStep): Promise<string[]> {
   if (step.approver) return [step.approver]
   if (step.approver_role) {
     const users = (await db('nivaro_users')
