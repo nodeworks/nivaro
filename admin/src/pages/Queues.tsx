@@ -14,6 +14,7 @@ import {
   CommandItem,
   CommandList
 } from '@/components/ui/command'
+import { CollectionFieldPicker, type PickedField } from '@/components/field-picker'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -186,22 +187,7 @@ function SourceRow({
   onRemove: () => void
   canEdit: boolean
 }) {
-  const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', source.collection],
-    queryFn: () =>
-      api
-        .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(
-          `/collections/${source.collection}`
-        )
-        .then((r) => r.data.data),
-    enabled: !!source.collection && source.type === 'collection',
-    staleTime: 30_000
-  })
-
-  const allFields = (colMeta?.fields ?? []).filter((f) => !f.hidden)
-  const fieldOptions = allFields.map((f) => ({ value: f.field, label: `${f.field} (${f.type})` }))
   const currentExtraFields = source.extra_fields ?? []
-  const availableFieldOptions = fieldOptions.filter((o) => !currentExtraFields.includes(o.value))
 
   return (
     <div className='flex flex-col gap-2 rounded-md border border-slate-200 p-2 dark:border-border'>
@@ -278,18 +264,18 @@ function SourceRow({
                 </button>
               </Badge>
             ))}
-            {canEdit && currentExtraFields.length < 5 && (
-              <div className='w-[200px]'>
-                <FieldCombobox
+            {canEdit && currentExtraFields.length < 5 && source.collection && (
+              <div className='w-[220px]'>
+                <CollectionFieldPicker
+                  collection={source.collection}
                   value=''
-                  onChange={(v) => {
-                    if (v && !currentExtraFields.includes(v)) {
-                      onChange({ ...source, extra_fields: [...currentExtraFields, v] })
+                  onChange={(picked: PickedField) => {
+                    const path = picked.path.join('.')
+                    if (!currentExtraFields.includes(path)) {
+                      onChange({ ...source, extra_fields: [...currentExtraFields, path] })
                     }
                   }}
-                  options={availableFieldOptions}
-                  placeholder={source.collection ? 'Add column…' : 'Select collection first'}
-                  disabled={!source.collection}
+                  placeholder='Add column…'
                 />
               </div>
             )}
