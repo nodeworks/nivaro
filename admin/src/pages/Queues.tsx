@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronsUpDown, Inbox, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronsUpDown, Inbox, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -32,6 +33,7 @@ interface QueueSource {
   filters: unknown
   state_values: string[] | null
   sla_filter: string | null
+  extra_fields: string[] | null
   sort: number
 }
 
@@ -184,56 +186,115 @@ function SourceRow({
   onRemove: () => void
   canEdit: boolean
 }) {
+  const { data: colMeta } = useQuery({
+    queryKey: ['collection-meta', source.collection],
+    queryFn: () =>
+      api
+        .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(
+          `/collections/${source.collection}`
+        )
+        .then((r) => r.data.data),
+    enabled: !!source.collection && source.type === 'collection',
+    staleTime: 30_000
+  })
+
+  const allFields = (colMeta?.fields ?? []).filter((f) => !f.hidden)
+  const fieldOptions = allFields.map((f) => ({ value: f.field, label: `${f.field} (${f.type})` }))
+  const currentExtraFields = source.extra_fields ?? []
+  const availableFieldOptions = fieldOptions.filter((o) => !currentExtraFields.includes(o.value))
+
   return (
-    <div className='flex items-start gap-2 rounded-md border border-slate-200 p-2 dark:border-border'>
-      <div className='w-44 shrink-0'>
-        <FieldCombobox
-          value={source.type}
-          onChange={(v) =>
-            onChange({
-              ...source,
-              type: v as SourceType,
-              collection: v === 'collection' ? source.collection : null
-            })
-          }
-          options={SOURCE_TYPE_OPTIONS}
-          disabled={!canEdit}
-        />
+    <div className='flex flex-col gap-2 rounded-md border border-slate-200 p-2 dark:border-border'>
+      <div className='flex items-start gap-2'>
+        <div className='w-44 shrink-0'>
+          <FieldCombobox
+            value={source.type}
+            onChange={(v) =>
+              onChange({
+                ...source,
+                type: v as SourceType,
+                collection: v === 'collection' ? source.collection : null
+              })
+            }
+            options={SOURCE_TYPE_OPTIONS}
+            disabled={!canEdit}
+          />
+        </div>
+        {source.type === 'collection' && (
+          <div className='flex-1'>
+            <FieldCombobox
+              value={source.collection ?? ''}
+              onChange={(v) => onChange({ ...source, collection: v || null })}
+              options={collectionOptions}
+              placeholder='Select collection…'
+              disabled={!canEdit}
+            />
+          </div>
+        )}
+        {source.type === 'collection' && (
+          <div className='w-40 shrink-0'>
+            <FieldCombobox
+              value={source.sla_filter ?? ''}
+              onChange={(v) => onChange({ ...source, sla_filter: v || null })}
+              options={[
+                { value: 'breached', label: 'SLA: Breached' },
+                { value: 'warning', label: 'SLA: Warning' }
+              ]}
+              placeholder='No SLA filter'
+              disabled={!canEdit}
+            />
+          </div>
+        )}
+        {canEdit && (
+          <Button
+            variant='ghost'
+            size='sm'
+            className='h-8 w-8 shrink-0 p-0 text-slate-400 hover:text-red-500'
+            onClick={onRemove}
+          >
+            <Trash2 className='h-3.5 w-3.5' />
+          </Button>
+        )}
       </div>
       {source.type === 'collection' && (
-        <div className='flex-1'>
-          <FieldCombobox
-            value={source.collection ?? ''}
-            onChange={(v) => onChange({ ...source, collection: v || null })}
-            options={collectionOptions}
-            placeholder='Select collection…'
-            disabled={!canEdit}
-          />
+        <div className='space-y-1 pl-1'>
+          <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+            Extra columns
+          </Label>
+          <div className='flex flex-wrap items-center gap-1.5'>
+            {currentExtraFields.map((f) => (
+              <Badge key={f} className='gap-1 font-mono text-[11px]'>
+                {f}
+                <button
+                  type='button'
+                  aria-label={`Remove ${f}`}
+                  onClick={() =>
+                    onChange({ ...source, extra_fields: currentExtraFields.filter((x) => x !== f) })
+                  }
+                  className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
+                  disabled={!canEdit}
+                >
+                  <X className='h-3 w-3' />
+                </button>
+              </Badge>
+            ))}
+            {canEdit && currentExtraFields.length < 5 && (
+              <div className='w-[200px]'>
+                <FieldCombobox
+                  value=''
+                  onChange={(v) => {
+                    if (v && !currentExtraFields.includes(v)) {
+                      onChange({ ...source, extra_fields: [...currentExtraFields, v] })
+                    }
+                  }}
+                  options={availableFieldOptions}
+                  placeholder={source.collection ? 'Add column…' : 'Select collection first'}
+                  disabled={!source.collection}
+                />
+              </div>
+            )}
+          </div>
         </div>
-      )}
-      {source.type === 'collection' && (
-        <div className='w-40 shrink-0'>
-          <FieldCombobox
-            value={source.sla_filter ?? ''}
-            onChange={(v) => onChange({ ...source, sla_filter: v || null })}
-            options={[
-              { value: 'breached', label: 'SLA: Breached' },
-              { value: 'warning', label: 'SLA: Warning' }
-            ]}
-            placeholder='No SLA filter'
-            disabled={!canEdit}
-          />
-        </div>
-      )}
-      {canEdit && (
-        <Button
-          variant='ghost'
-          size='sm'
-          className='h-8 w-8 shrink-0 p-0 text-slate-400 hover:text-red-500'
-          onClick={onRemove}
-        >
-          <Trash2 className='h-3.5 w-3.5' />
-        </Button>
       )}
     </div>
   )
@@ -379,6 +440,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                     filters: null,
                     state_values: null,
                     sla_filter: null,
+                    extra_fields: [],
                     sort: sources.length
                   }
                 ])
