@@ -3,7 +3,6 @@ import { getCloudPlugins, getExtensionPlugins } from '@/extensions/store'
 
 export const WORKSPACE_KEY = 'nivaro_workspace'
 
-
 export const api = axios.create({
   baseURL: '/api',
   withCredentials: true,
@@ -20,9 +19,12 @@ api.interceptors.response.use(
   (res) => res,
   (err) => {
     const status = err.response?.status
-    const data = err.response?.data ?? {}
 
-    if (status === 401 && window.location.pathname !== '/login' && !window.location.pathname.startsWith('/setup')) {
+    if (
+      status === 401 &&
+      window.location.pathname !== '/login' &&
+      !window.location.pathname.startsWith('/setup')
+    ) {
       localStorage.removeItem('control_token')
       localStorage.removeItem('control_email')
       const redirect = window.location.pathname + window.location.search
@@ -34,7 +36,11 @@ api.interceptors.response.use(
     for (const plugin of getExtensionPlugins()) {
       const interceptor = plugin.slots?.['response-interceptor']
       if (interceptor) {
-        const handled = interceptor.handler(status, err.response?.data ?? {}, err.response?.headers ?? {})
+        const handled = interceptor.handler(
+          status,
+          err.response?.data ?? {},
+          err.response?.headers ?? {}
+        )
         if (handled) break
       }
     }
@@ -725,7 +731,12 @@ export interface CloudAccountInfo {
   plan: string
   status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'unpaid'
   email: string
-  limits: { records: number | null; users: number | null; workspaces: number | null; storage_gb: number | null }
+  limits: {
+    records: number | null
+    users: number | null
+    workspaces: number | null
+    storage_gb: number | null
+  }
   subscription: { stripe_status: string; current_period_end: string | null } | null
 }
 
@@ -770,12 +781,18 @@ export const cloudAccount = {
   info: () => api.get<CloudAccountInfo>('/cloud/account/info').then((r) => r.data),
   usage: () => api.get<CloudAccountUsage>('/cloud/account/usage').then((r) => r.data),
   billing: () => api.get<CloudBilling>('/cloud/account/billing').then((r) => r.data),
-  invoices: () => api.get<{ data: CloudInvoice[] } | CloudInvoice[]>('/cloud/account/invoices').then((r) =>
-    Array.isArray(r.data) ? r.data : ((r.data as { data: CloudInvoice[] }).data ?? [])
-  ),
-  plans: () => api.get<Record<string, Omit<CloudPlan, 'planKey'>>>('/cloud/account/plans').then((r) =>
-    Object.entries(r.data).map(([planKey, val]) => ({ planKey, ...val })) as CloudPlan[]
-  ),
+  invoices: () =>
+    api
+      .get<{ data: CloudInvoice[] } | CloudInvoice[]>('/cloud/account/invoices')
+      .then((r) =>
+        Array.isArray(r.data) ? r.data : ((r.data as { data: CloudInvoice[] }).data ?? [])
+      ),
+  plans: () =>
+    api
+      .get<Record<string, Omit<CloudPlan, 'planKey'>>>('/cloud/account/plans')
+      .then(
+        (r) => Object.entries(r.data).map(([planKey, val]) => ({ planKey, ...val })) as CloudPlan[]
+      ),
   createPortal: (return_url: string) =>
     api.post<{ url: string }>('/cloud/account/portal', { return_url }).then((r) => r.data),
   createCheckout: (price_id: string) =>

@@ -60,6 +60,15 @@ export const queuesGuide: DocSection = {
     {
       type: 'note',
       text: 'Row scans per source are capped at 1000, matching the existing at-risk summary and SLA batch caps — a queue never performs an unbounded table scan.'
+    },
+    { type: 'h3', text: 'SLA escalation and workload' },
+    {
+      type: 'ul',
+      items: [
+        'A collection source can be scoped to only "Breached" or "Warning" SLA items, using the same computeStatusBatch data CollectionBrowser\'s SLA column already shows. There is no separate "Escalated" queue type — build one by creating a normal queue, adding a collection source with the SLA filter set to Breached, and sharing it with the team.',
+        "The Workload view groups a queue's items by owner and shows each owner's current count against their most restrictive WIP limit (the lowest max_wip across every pipeline owner group they belong to that sets one) — the badge turns red when an owner is over limit. Set max_wip per owner group in the Owner Matrix editor (Pipelines → a state cell → Max WIP, blank = unlimited).",
+        'An item with multiple owners is counted once per owner in the Workload view, matching how ownership already displays everywhere else in Queues.'
+      ]
     }
   ]
 }

@@ -621,9 +621,7 @@ export async function getWipLimits(ownerIds: string[]): Promise<Map<string, numb
 export async function fetchQueueWorkload(queueId: string, user: User): Promise<WorkloadRow[]> {
   const { items } = await fetchQueueItems(queueId, user, 'all')
   const groups = groupByOwner(items)
-  const ownerIds = [...groups.values()]
-    .map((g) => g.owner?.id)
-    .filter((id): id is string => !!id)
+  const ownerIds = [...groups.values()].map((g) => g.owner?.id).filter((id): id is string => !!id)
   const limits = await getWipLimits(ownerIds)
 
   return [...groups.values()].map((g) => ({

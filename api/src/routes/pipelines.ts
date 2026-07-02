@@ -64,17 +64,6 @@ interface WorkflowInstance {
   completed_at: Date | null
 }
 
-interface WorkflowHistory {
-  id: number
-  instance: string
-  transition: string | null
-  from_state: string | null
-  to_state: string
-  user: string | null
-  comment: string | null
-  timestamp: Date
-}
-
 interface OwnerGroup {
   id: string
   template: string
@@ -905,7 +894,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const template = await db<WorkflowTemplate>('nivaro_workflow_templates').where({ id }).first()
     if (!template) return reply.code(404).send({ error: 'Template not found' })
 
-    const body = req.body as { collection: string; state_field?: string; auto_start?: boolean | number; auto_start_state?: string | null }
+    const body = req.body as {
+      collection: string
+      state_field?: string
+      auto_start?: boolean | number
+      auto_start_state?: string | null
+    }
     if (!body.collection?.trim()) return reply.code(400).send({ error: 'collection is required' })
 
     // Upsert: update if binding for this collection already exists
@@ -919,8 +913,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         .update({
           template: id,
           state_field: body.state_field ?? existing.state_field,
-          auto_start: body.auto_start !== undefined ? (body.auto_start ? 1 : 0) : existing.auto_start,
-          auto_start_state: body.auto_start_state !== undefined ? (body.auto_start_state || null) : existing.auto_start_state
+          auto_start:
+            body.auto_start !== undefined ? (body.auto_start ? 1 : 0) : existing.auto_start,
+          auto_start_state:
+            body.auto_start_state !== undefined
+              ? body.auto_start_state || null
+              : existing.auto_start_state
         })
     } else {
       await db('nivaro_workflow_bindings').insert({
@@ -961,15 +959,27 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   app.patch('/bindings/:bindingId', { preHandler: requireAdmin }, async (req, reply) => {
     const { bindingId } = req.params as { bindingId: string }
-    const body = req.body as Partial<Pick<WorkflowBinding, 'state_field' | 'auto_start' | 'auto_start_state'>>
-    const existing = await db<WorkflowBinding>('nivaro_workflow_bindings').where({ id: bindingId }).first()
+    const body = req.body as Partial<
+      Pick<WorkflowBinding, 'state_field' | 'auto_start' | 'auto_start_state'>
+    >
+    const existing = await db<WorkflowBinding>('nivaro_workflow_bindings')
+      .where({ id: bindingId })
+      .first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
-    await db('nivaro_workflow_bindings').where({ id: bindingId }).update({
-      state_field: body.state_field !== undefined ? (body.state_field || null) : existing.state_field,
-      auto_start: body.auto_start !== undefined ? (body.auto_start ? 1 : 0) : existing.auto_start,
-      auto_start_state: body.auto_start_state !== undefined ? (body.auto_start_state || null) : existing.auto_start_state
-    })
-    const updated = await db<WorkflowBinding>('nivaro_workflow_bindings').where({ id: bindingId }).first()
+    await db('nivaro_workflow_bindings')
+      .where({ id: bindingId })
+      .update({
+        state_field:
+          body.state_field !== undefined ? body.state_field || null : existing.state_field,
+        auto_start: body.auto_start !== undefined ? (body.auto_start ? 1 : 0) : existing.auto_start,
+        auto_start_state:
+          body.auto_start_state !== undefined
+            ? body.auto_start_state || null
+            : existing.auto_start_state
+      })
+    const updated = await db<WorkflowBinding>('nivaro_workflow_bindings')
+      .where({ id: bindingId })
+      .first()
     return reply.send({ data: { ...updated, auto_start: coerceBool(updated?.auto_start) } })
   })
 
@@ -991,11 +1001,18 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     if (!binding && !instance) return reply.send({ data: null })
 
     // No binding but instance exists (e.g. addendums) — derive template from instance
-    const effectiveBinding = binding ?? ({ template: instance!.template, collection } as WorkflowBinding)
+    const effectiveBinding =
+      binding ?? ({ template: instance!.template, collection } as WorkflowBinding)
 
     if (!instance)
       return reply.send({
-        data: { instance: null, states: [], available_transitions: [], history: [], binding: effectiveBinding }
+        data: {
+          instance: null,
+          states: [],
+          available_transitions: [],
+          history: [],
+          binding: effectiveBinding
+        }
       })
 
     const states = await db<WorkflowState>('nivaro_workflow_states')
@@ -1843,42 +1860,42 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const { ownerId } = req.params as { ownerId: string }
 
     try {
-    // Load the row and join to its instance so we can authorize the caller.
-    const ownerRow = (await db('nivaro_pipeline_instance_owners as io')
-      .join('nivaro_workflow_instances as wi', 'io.instance', 'wi.id')
-      .where('io.id', ownerId)
-      .select('io.id', 'io.user', 'io.added_by', 'wi.collection', 'wi.item', 'io.instance')
-      .first()) as
-      | {
-          id: number
-          user: string
-          added_by: string | null
-          collection: string
-          item: string
-          instance: string
+      // Load the row and join to its instance so we can authorize the caller.
+      const ownerRow = (await db('nivaro_pipeline_instance_owners as io')
+        .join('nivaro_workflow_instances as wi', 'io.instance', 'wi.id')
+        .where('io.id', ownerId)
+        .select('io.id', 'io.user', 'io.added_by', 'wi.collection', 'wi.item', 'io.instance')
+        .first()) as
+        | {
+            id: number
+            user: string
+            added_by: string | null
+            collection: string
+            item: string
+            instance: string
+          }
+        | undefined
+
+      if (!ownerRow) return reply.code(404).send({ error: 'Not found' })
+
+      // Non-admins may only remove: (a) themselves, or (b) rows they added.
+      if (!req.isAdmin) {
+        const isSelf = ownerRow.user === req.user!.id
+        const isAdder = ownerRow.added_by === req.user!.id
+        if (!isSelf && !isAdder) {
+          return reply.code(403).send({ error: 'Forbidden' })
         }
-      | undefined
-
-    if (!ownerRow) return reply.code(404).send({ error: 'Not found' })
-
-    // Non-admins may only remove: (a) themselves, or (b) rows they added.
-    if (!req.isAdmin) {
-      const isSelf = ownerRow.user === req.user!.id
-      const isAdder = ownerRow.added_by === req.user!.id
-      if (!isSelf && !isAdder) {
-        return reply.code(403).send({ error: 'Forbidden' })
       }
-    }
 
-    await db('nivaro_pipeline_instance_owners').where({ id: ownerId }).delete()
-    await logActivity({
-      action: 'delete',
-      collection: 'nivaro_pipeline_instance_owners',
-      item: ownerId,
-      user: req.user?.id,
-      req
-    })
-    return reply.send({ success: true })
+      await db('nivaro_pipeline_instance_owners').where({ id: ownerId }).delete()
+      await logActivity({
+        action: 'delete',
+        collection: 'nivaro_pipeline_instance_owners',
+        item: ownerId,
+        user: req.user?.id,
+        req
+      })
+      return reply.send({ success: true })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       req.log.error({ err }, 'delete instance-owner failed')
