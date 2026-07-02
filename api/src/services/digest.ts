@@ -1,7 +1,9 @@
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { CronManager } from '../plugins/cron.js'
+import type { User } from '../types.js'
 import { sendRawMail } from './mail.js'
+import { fetchQueueItems, type QueueStats } from './queues.js'
 
 /**
  * Digest emails — batch nivaro_notifications into one daily/weekly email per
@@ -49,12 +51,28 @@ function formatRelative(date: Date, now: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
+export function buildQueueSummaryHtml(
+  queueName: string,
+  stats: QueueStats,
+  queueUrl: string
+): string {
+  const stateLine = Object.entries(stats.by_state)
+    .map(([state, count]) => `${escapeHtml(state)}: ${count}`)
+    .join(' · ')
+  return `<h3 style="margin:20px 0 8px 0;font-size:14px;color:#0f172a;border-bottom:1px solid #e2e8f0;padding-bottom:4px;">
+    <a href="${queueUrl}" style="color:#0e7490;text-decoration:none;">${escapeHtml(queueName)}</a>
+  </h3>
+  <p style="margin:0 0 4px 0;font-size:13px;color:#0f172a;"><strong>${stats.total}</strong> item${stats.total === 1 ? '' : 's'} total, <strong>${stats.unowned}</strong> unowned</p>
+  ${stateLine ? `<p style="margin:0 0 12px 0;font-size:12px;color:#64748b;">${stateLine}</p>` : ''}`
+}
+
 function buildDigestHtml(
   firstName: string | null,
   frequency: 'daily' | 'weekly',
   grouped: Map<string, NotificationRow[]>,
   total: number,
-  now: Date
+  now: Date,
+  queueSections: string[] = []
 ): string {
   const sections: string[] = []
 
@@ -91,6 +109,7 @@ function buildDigestHtml(
     <h2 style="margin:0 0 4px 0;font-size:18px;color:#0f172a;">Your ${frequency} Nivaro digest</h2>
     <p style="margin:0 0 16px 0;color:#475569;font-size:13px;">${greeting} here ${total === 1 ? 'is the update' : `are the ${total} updates`} since your last digest.</p>
     ${sections.join('\n')}
+    ${queueSections.join('\n')}
     <p style="margin:24px 0 0 0;font-size:12px;color:#94a3b8;">You receive this because one of your notification subscriptions is set to ${frequency} digest delivery.</p>
   </div>
 </body>
@@ -131,8 +150,43 @@ export async function runDigests(frequency: 'daily' | 'weekly'): Promise<void> {
         .limit(MAX_NOTIFICATIONS)
         .select('id', 'subject', 'message', 'collection', 'item', 'timestamp')) as NotificationRow[]
 
+      // Queue-scoped subscriptions: same table, rows with queue_id set instead of collection.
+      const queueSubs = (await db('nivaro_notification_subscriptions as ns')
+        .join('nivaro_queues as q', 'ns.queue_id', 'q.id')
+        .where({ 'ns.user': user.id, 'ns.is_active': true, 'ns.digest_frequency': frequency })
+        .whereNotNull('ns.queue_id')
+        .select('q.id as queue_id', 'q.name as queue_name')) as Array<{
+        queue_id: string
+        queue_name: string
+      }>
+
+      const queueSections: string[] = []
+      if (queueSubs.length > 0) {
+        // fetchQueueItems needs a full User (id/role at minimum, via can() + resolveStateOwners) —
+        // the lightweight DigestUser above isn't enough, so fetch the real row.
+        const fullUser = (await db('nivaro_users').where({ id: user.id }).first()) as
+          | User
+          | undefined
+        if (fullUser) {
+          for (const sub of queueSubs) {
+            try {
+              const { stats } = await fetchQueueItems(sub.queue_id, fullUser, 'all')
+              queueSections.push(
+                buildQueueSummaryHtml(
+                  sub.queue_name,
+                  stats,
+                  `${config.ADMIN_URL}/queues/${sub.queue_id}`
+                )
+              )
+            } catch (err) {
+              console.warn(`[digest] failed to build queue summary for ${sub.queue_id}:`, err)
+            }
+          }
+        }
+      }
+
       // Nothing new — skip (and leave the watermark so old items roll into the next digest)
-      if (notifications.length === 0) continue
+      if (notifications.length === 0 && queueSections.length === 0) continue
 
       // Group by collection (uncategorized notifications go last)
       const grouped = new Map<string, NotificationRow[]>()
@@ -143,12 +197,14 @@ export async function runDigests(frequency: 'daily' | 'weekly'): Promise<void> {
         grouped.set(key, list)
       }
 
+      const totalCount = notifications.length + queueSections.length
+
       if (user.email) {
-        const subject = `Your ${frequency} Nivaro digest — ${notifications.length} update${notifications.length === 1 ? '' : 's'}`
+        const subject = `Your ${frequency} Nivaro digest — ${totalCount} update${totalCount === 1 ? '' : 's'}`
         await sendRawMail({
           to: user.email,
           subject,
-          html: buildDigestHtml(user.first_name, frequency, grouped, notifications.length, now)
+          html: buildDigestHtml(user.first_name, frequency, grouped, totalCount, now, queueSections)
         })
       }
 
