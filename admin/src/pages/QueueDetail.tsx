@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
-import { type Column, DataTable } from '@/components/data-table'
+import { type Column, DataTable, type FilterDef } from '@/components/data-table'
 import { QueueKanbanBoard } from '@/components/queue-kanban-board'
 import { QueueWorkloadView } from '@/components/queue-workload-view'
 import { Badge } from '@/components/ui/badge'
@@ -103,6 +103,8 @@ export function QueueDetailPage() {
   const [scope, setScope] = useState<Scope>('all')
   const [page, setPage] = useState(1)
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
+  const [sort, setSort] = useState('')
+  const [filterValues, setFilterValues] = useState<Record<string, string>>({})
   const limit = 25
 
   const { data: queue } = useQuery<QueueMeta>({
@@ -158,9 +160,35 @@ export function QueueDetailPage() {
     }
   }, [id, queue?.sources, user?.static_token, qc])
 
-  const { data, isLoading } = useQuery<{ data: QueueItemRow[]; stats: QueueStats }>({
-    queryKey: ['queue-items', id, scope],
-    queryFn: () => api.get(`/queues/${id}/items`, { params: { scope } }).then((r) => r.data),
+  const apiFilters = (() => {
+    const out: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(filterValues)) {
+      if (!value) continue
+      if (key === 'aging_hours') {
+        const [min, max] = value.split(':')
+        const range: { min?: number; max?: number } = {}
+        if (min) range.min = Number(min)
+        if (max) range.max = Number(max)
+        if (range.min !== undefined || range.max !== undefined) out[key] = range
+        continue
+      }
+      out[key] = value
+    }
+    return out
+  })()
+
+  const { data, isLoading } = useQuery<{
+    data: QueueItemRow[]
+    stats: QueueStats
+    available_values: { collection: string[]; state: string[] }
+  }>({
+    queryKey: ['queue-items', id, scope, sort, filterValues],
+    queryFn: () =>
+      api
+        .get(`/queues/${id}/items`, {
+          params: { scope, sort, filters: JSON.stringify(apiFilters) }
+        })
+        .then((r) => r.data),
     enabled: !!id
   })
 
@@ -303,6 +331,7 @@ export function QueueDetailPage() {
     {
       key: 'collection',
       header: 'Collection',
+      sortable: true,
       render: (row) => <Badge variant='outline'>{row.collection}</Badge>
     },
     {
@@ -313,6 +342,7 @@ export function QueueDetailPage() {
     {
       key: 'state',
       header: 'State',
+      sortable: true,
       render: (row) =>
         row.state ? (
           <span
@@ -331,6 +361,7 @@ export function QueueDetailPage() {
     {
       key: 'owners',
       header: 'Owners',
+      sortable: true,
       render: (row) =>
         row.owners.length ? (
           <span className='text-[12px] text-slate-600 dark:text-slate-300'>
@@ -340,11 +371,22 @@ export function QueueDetailPage() {
           <span className='text-slate-300'>No owners</span>
         )
     },
-    { key: 'aging_hours', header: 'Aging', render: (row) => formatAging(row.aging_hours) },
-    { key: 'sla_status', header: 'SLA', render: (row) => <SlaPill status={row.sla_status} /> },
+    {
+      key: 'aging_hours',
+      header: 'Aging',
+      sortable: true,
+      render: (row) => formatAging(row.aging_hours)
+    },
+    {
+      key: 'sla_status',
+      header: 'SLA',
+      sortable: true,
+      render: (row) => <SlaPill status={row.sla_status} />
+    },
     {
       key: 'at_risk',
       header: 'Risk',
+      sortable: true,
       render: (row) => (row.at_risk ? <span className='text-red-500'>⚑ At risk</span> : null)
     }
   ]
@@ -383,6 +425,7 @@ export function QueueDetailPage() {
   const extraColumns: Column<QueueItemRow>[] = extraFieldKeys.map((field) => ({
     key: `extra.${field}`,
     header: formatColumnHeader(field),
+    sortable: true,
     render: (row) => {
       const value = row.extra?.[field]
       return value == null || value === '' ? (
@@ -420,6 +463,48 @@ export function QueueDetailPage() {
     ...extraColumns.filter((c) => effectiveVisible.has(c.key)),
     claimColumn
   ]
+
+  const filterDefs: FilterDef[] = [
+    {
+      key: 'collection',
+      placeholder: 'Collection',
+      type: 'select' as const,
+      options: (data?.available_values.collection ?? []).map((c) => ({ label: c, value: c }))
+    },
+    {
+      key: 'state',
+      placeholder: 'State',
+      type: 'select' as const,
+      options: (data?.available_values.state ?? []).map((s) => ({ label: s, value: s }))
+    },
+    {
+      key: 'sla_status',
+      placeholder: 'SLA',
+      type: 'select' as const,
+      options: [
+        { label: 'OK', value: 'ok' },
+        { label: 'Warning', value: 'warning' },
+        { label: 'Breached', value: 'breached' }
+      ]
+    },
+    {
+      key: 'at_risk',
+      placeholder: 'At risk',
+      type: 'select' as const,
+      options: [
+        { label: 'Yes', value: 'yes' },
+        { label: 'No', value: 'no' }
+      ]
+    },
+    { key: 'aging_hours', placeholder: 'Aging (hours)', type: 'range' as const },
+    { key: 'label', placeholder: 'Search item…', type: 'text' as const },
+    { key: 'owners', placeholder: 'Search owners…', type: 'text' as const },
+    ...extraFieldKeys.map((f) => ({
+      key: `extra.${f}`,
+      placeholder: `Search ${formatColumnHeader(f)}…`,
+      type: 'text' as const
+    }))
+  ].filter((def) => effectiveVisible.has(def.key) || def.key === 'label' || def.key === 'owners')
 
   function handleToggleColumn(key: string) {
     const current = new Set(effectiveVisible)
@@ -600,6 +685,17 @@ export function QueueDetailPage() {
             onPageChange={setPage}
             onRowClick={(row) => navigate(row.url)}
             emptyMessage='Nothing in this queue.'
+            sort={sort}
+            onSortChange={(next) => {
+              setSort(next)
+              setPage(1)
+            }}
+            filterDefs={filterDefs}
+            filterValues={filterValues}
+            onFilterChange={(key, value) => {
+              setFilterValues((prev) => ({ ...prev, [key]: value }))
+              setPage(1)
+            }}
           />
         ) : view === 'kanban' ? (
           <QueueKanbanBoard
