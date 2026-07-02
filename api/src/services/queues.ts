@@ -8,7 +8,7 @@ import {
 } from '../routes/at-risk.js'
 import { computeStatusBatch } from '../routes/sla.js'
 import type { CMSRelation, User } from '../types.js'
-import { getRelations } from './collections.js'
+import { getCollection, getRelations } from './collections.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { can } from './permissions.js'
 import { parseJson, resolveStateOwners } from './pipeline-engine.js'
@@ -434,11 +434,9 @@ async function resolvePathValues(
       return out
     }
 
-    const relatedCol = await db('nivaro_collections')
-      .where({ collection: classified.relatedCollection })
-      .first('display_template')
-    const template = (relatedCol?.display_template as string | null) ?? null
-    const selectFields = extractTemplateFields(template)
+    const relatedCol = await getCollection(classified.relatedCollection)
+    const template = relatedCol?.display_template ?? null
+    const selectFields = template ? extractTemplateFields(template) : ['*']
     const relatedRows = (await db(classified.relatedCollection)
       .whereIn('id', [...relatedIds])
       .select(selectFields)) as Array<Record<string, unknown>>
@@ -456,11 +454,9 @@ async function resolvePathValues(
   // segments. Chaining a path through a multi-valued relation into another field
   // is out of scope (see docs/superpowers/specs/2026-07-02-queue-extra-field-relations-design.md)
   // — a queue-owner path that does this simply resolves as if it ended here.
-  const relatedCol = await db('nivaro_collections')
-    .where({ collection: classified.relatedCollection })
-    .first('display_template')
-  const template = (relatedCol?.display_template as string | null) ?? null
-  const selectFields = extractTemplateFields(template)
+  const relatedCol = await getCollection(classified.relatedCollection)
+  const template = relatedCol?.display_template ?? null
+  const selectFields = template ? extractTemplateFields(template) : ['*']
 
   if (classified.type === 'o2m') {
     const manyField = classified.manyField as string
