@@ -374,12 +374,25 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({ data: { visible_columns: body.visible_columns } })
   })
 
-  // GET /:id/items?scope=mine|unowned|all|claimed — fan-out worklist
+  // GET /:id/items?scope=mine|unowned|all|claimed&sort=&filters= — fan-out worklist
   app.get('/:id/items', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const { scope = 'all' } = req.query as { scope?: string }
+    const { scope = 'all', sort = '', filters } = req.query as {
+      scope?: string
+      sort?: string
+      filters?: string
+    }
     if (!['mine', 'unowned', 'all', 'claimed'].includes(scope)) {
       return reply.code(400).send({ error: 'scope must be mine, unowned, all, or claimed' })
+    }
+
+    let parsedFilters: Record<string, unknown> = {}
+    if (filters) {
+      try {
+        parsedFilters = JSON.parse(filters)
+      } catch {
+        return reply.code(400).send({ error: 'filters must be valid JSON' })
+      }
     }
 
     const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
@@ -390,8 +403,15 @@ export async function queuesRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
-    const result = await fetchQueueItems(id, req.user!, scope as QueueScope)
-    return reply.send({ data: result.items, stats: result.stats })
+    const result = await fetchQueueItems(id, req.user!, scope as QueueScope, {
+      sort,
+      filters: parsedFilters
+    })
+    return reply.send({
+      data: result.items,
+      stats: result.stats,
+      available_values: result.availableValues
+    })
   })
 
   // GET /:id/workload — items grouped by owner, with each owner's most
