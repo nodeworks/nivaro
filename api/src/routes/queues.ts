@@ -268,10 +268,23 @@ export async function queuesRoutes(app: FastifyInstance) {
             .code(400)
             .send({ error: 'extra_fields must be an array of at most 5 field names' })
         }
-        if (s.extra_fields.some((f) => typeof f !== 'string' || !FIELD_NAME_RE.test(f))) {
-          return reply.code(400).send({
-            error: 'extra_fields must contain only valid field names (letters, numbers, underscore)'
-          })
+        for (const f of s.extra_fields) {
+          if (typeof f !== 'string') {
+            return reply.code(400).send({
+              error: 'extra_fields must contain only valid field names (letters, numbers, underscore)'
+            })
+          }
+          const segments = f.split('.')
+          if (segments.length === 0 || segments.length > 3) {
+            return reply
+              .code(400)
+              .send({ error: `extra_fields path must have 1-3 segments: ${f}` })
+          }
+          if (segments.some((seg) => !FIELD_NAME_RE.test(seg))) {
+            return reply.code(400).send({
+              error: `extra_fields must contain only valid field names (letters, numbers, underscore): ${f}`
+            })
+          }
         }
       }
     }
