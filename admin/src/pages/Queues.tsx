@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -173,12 +174,14 @@ function SourceRow({
   source,
   collectionOptions,
   onChange,
-  onRemove
+  onRemove,
+  canEdit
 }: {
   source: QueueSource
   collectionOptions: { value: string; label: string }[]
   onChange: (next: QueueSource) => void
   onRemove: () => void
+  canEdit: boolean
 }) {
   return (
     <div className='flex items-start gap-2 rounded-md border border-slate-200 p-2 dark:border-border'>
@@ -193,6 +196,7 @@ function SourceRow({
             })
           }
           options={SOURCE_TYPE_OPTIONS}
+          disabled={!canEdit}
         />
       </div>
       {source.type === 'collection' && (
@@ -202,17 +206,20 @@ function SourceRow({
             onChange={(v) => onChange({ ...source, collection: v || null })}
             options={collectionOptions}
             placeholder='Select collection…'
+            disabled={!canEdit}
           />
         </div>
       )}
-      <Button
-        variant='ghost'
-        size='sm'
-        className='h-8 w-8 shrink-0 p-0 text-slate-400 hover:text-red-500'
-        onClick={onRemove}
-      >
-        <Trash2 className='h-3.5 w-3.5' />
-      </Button>
+      {canEdit && (
+        <Button
+          variant='ghost'
+          size='sm'
+          className='h-8 w-8 shrink-0 p-0 text-slate-400 hover:text-red-500'
+          onClick={onRemove}
+        >
+          <Trash2 className='h-3.5 w-3.5' />
+        </Button>
+      )}
     </div>
   )
 }
@@ -221,6 +228,8 @@ function SourceRow({
 
 function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () => void }) {
   const qc = useQueryClient()
+  const { user } = useAuth()
+  const isAdmin = user?.is_admin ?? false
 
   const { data: queue } = useQuery<QueueDetailData>({
     queryKey: ['queue', queueId],
@@ -282,6 +291,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
 
   if (!queue) return <div className='p-6 text-[13px] text-slate-400'>Loading…</div>
 
+  const canEdit = isAdmin || queue.owner === user?.id
+
   return (
     <div className='mx-auto max-w-2xl space-y-6 p-6'>
       <div className='flex items-center justify-between'>
@@ -293,9 +304,18 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
         </Link>
       </div>
 
+      {!canEdit && (
+        <p className='text-[11px] text-slate-400'>You do not own this queue — read only</p>
+      )}
+
       <div className='space-y-1'>
         <Label className='text-[11px] text-slate-500'>Name</Label>
-        <Input value={name} onChange={(e) => setName(e.target.value)} className='h-9 text-[13px]' />
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className='h-9 text-[13px]'
+          disabled={!canEdit}
+        />
       </div>
 
       <div className='space-y-1'>
@@ -305,42 +325,52 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
           onChange={(e) => setDescription(e.target.value)}
           className='text-[13px]'
           rows={2}
+          disabled={!canEdit}
         />
       </div>
 
       <div className='flex items-center gap-2'>
-        <Checkbox checked={isShared} onCheckedChange={(v) => setIsShared(!!v)} id='is-shared' />
+        <Checkbox
+          checked={isShared}
+          onCheckedChange={(v) => setIsShared(!!v)}
+          id='is-shared'
+          disabled={!canEdit}
+        />
         <Label htmlFor='is-shared' className='text-[12px] text-slate-600'>
           Shared with everyone
         </Label>
       </div>
 
-      <Button size='sm' onClick={() => saveMetaMut.mutate()} disabled={saveMetaMut.isPending}>
-        Save Details
-      </Button>
+      {canEdit && (
+        <Button size='sm' onClick={() => saveMetaMut.mutate()} disabled={saveMetaMut.isPending}>
+          Save Details
+        </Button>
+      )}
 
       <div className='border-t border-slate-100 pt-4 dark:border-border'>
         <div className='mb-2 flex items-center justify-between'>
           <Label className='text-[11px] text-slate-500'>Sources</Label>
-          <Button
-            variant='outline'
-            size='sm'
-            className='h-7 gap-1 text-[11px]'
-            onClick={() =>
-              setSources([
-                ...sources,
-                {
-                  type: 'collection',
-                  collection: null,
-                  filters: null,
-                  state_values: null,
-                  sort: sources.length
-                }
-              ])
-            }
-          >
-            <Plus className='h-3 w-3' /> Add source
-          </Button>
+          {canEdit && (
+            <Button
+              variant='outline'
+              size='sm'
+              className='h-7 gap-1 text-[11px]'
+              onClick={() =>
+                setSources([
+                  ...sources,
+                  {
+                    type: 'collection',
+                    collection: null,
+                    filters: null,
+                    state_values: null,
+                    sort: sources.length
+                  }
+                ])
+              }
+            >
+              <Plus className='h-3 w-3' /> Add source
+            </Button>
+          )}
         </div>
         <div className='space-y-2'>
           {sources.map((s, i) => (
@@ -350,29 +380,34 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
               collectionOptions={collectionOptions}
               onChange={(next) => setSources(sources.map((x, xi) => (xi === i ? next : x)))}
               onRemove={() => setSources(sources.filter((_, xi) => xi !== i))}
+              canEdit={canEdit}
             />
           ))}
         </div>
-        <Button
-          size='sm'
-          className='mt-3'
-          onClick={() => saveSourcesMut.mutate()}
-          disabled={saveSourcesMut.isPending}
-        >
-          Save Sources
-        </Button>
+        {canEdit && (
+          <Button
+            size='sm'
+            className='mt-3'
+            onClick={() => saveSourcesMut.mutate()}
+            disabled={saveSourcesMut.isPending}
+          >
+            Save Sources
+          </Button>
+        )}
       </div>
 
-      <div className='border-t border-slate-100 pt-4 dark:border-border'>
-        <Button
-          variant='destructive'
-          size='sm'
-          onClick={() => deleteMut.mutate()}
-          disabled={deleteMut.isPending}
-        >
-          Delete Queue
-        </Button>
-      </div>
+      {canEdit && (
+        <div className='border-t border-slate-100 pt-4 dark:border-border'>
+          <Button
+            variant='destructive'
+            size='sm'
+            onClick={() => deleteMut.mutate()}
+            disabled={deleteMut.isPending}
+          >
+            Delete Queue
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

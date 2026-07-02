@@ -39,6 +39,7 @@ function canReadQueue(queue: QueueRow, req: FastifyRequest): boolean {
 }
 
 const SOURCE_TYPES: QueueSourceType[] = ['collection', 'tasks', 'approvals', 'owned_by_me']
+const MAX_SOURCES_PER_QUEUE = 10
 
 export async function queuesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
@@ -224,6 +225,11 @@ export async function queuesRoutes(app: FastifyInstance) {
     }
     if (!Array.isArray(body.sources) || body.sources.length === 0) {
       return reply.code(400).send({ error: 'sources[] is required and cannot be empty' })
+    }
+    if (body.sources.length > MAX_SOURCES_PER_QUEUE) {
+      return reply
+        .code(400)
+        .send({ error: `A queue can have at most ${MAX_SOURCES_PER_QUEUE} sources` })
     }
     for (const s of body.sources) {
       if (!s.type || !SOURCE_TYPES.includes(s.type as QueueSourceType)) {
