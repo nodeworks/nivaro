@@ -381,14 +381,19 @@ export async function resolveCollectionSource(
   const extraFieldNames = (parseJson(source.extra_fields) as string[] | null) ?? []
   const extraById = new Map<string, Record<string, unknown>>()
   if (extraFieldNames.length && ids.length) {
-    const extraRows = (await db(source.collection)
-      .whereIn('id', ids)
-      .select(['id', ...extraFieldNames])) as Record<string, unknown>[]
-    for (const row of extraRows) {
-      const rowId = String(row.id)
-      const extra: Record<string, unknown> = {}
-      for (const field of extraFieldNames) extra[field] = row[field]
-      extraById.set(rowId, extra)
+    try {
+      const extraRows = (await db(source.collection)
+        .whereIn('id', ids)
+        .select(['id', ...extraFieldNames])) as Record<string, unknown>[]
+      for (const row of extraRows) {
+        const rowId = String(row.id)
+        const extra: Record<string, unknown> = {}
+        for (const field of extraFieldNames) extra[field] = row[field]
+        extraById.set(rowId, extra)
+      }
+    } catch {
+      // Degrade gracefully: leave extraById empty so rows fall back to `extra: {}`
+      // rather than letting a broken/renamed extra field 500 the whole queue.
     }
   }
 
