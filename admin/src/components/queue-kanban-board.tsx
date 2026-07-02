@@ -4,8 +4,8 @@ import {
   DragOverlay,
   type DragStartEvent,
   KeyboardSensor,
-  pointerWithin,
   PointerSensor,
+  pointerWithin,
   useDraggable,
   useDroppable,
   useSensor,
@@ -44,14 +44,12 @@ const NO_STATE = '__no_state__'
 
 function KanbanCard({
   item,
-  onCardClick,
-  dragging
+  onCardClick
 }: {
   item: QueueItemRow
   onCardClick: (item: QueueItemRow) => void
-  dragging?: boolean
 }) {
-  const { attributes, listeners, setNodeRef, transform } = useDraggable({
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `${item.collection}:${item.item_id}`,
     data: item
   })
@@ -63,14 +61,9 @@ function KanbanCard({
       {...listeners}
       {...attributes}
       onClick={() => onCardClick(item)}
-      style={
-        transform
-          ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
-          : undefined
-      }
       className={cn(
         'w-full rounded-md border border-slate-200 bg-white p-2.5 text-left shadow-sm dark:border-border dark:bg-card',
-        dragging && 'opacity-40'
+        isDragging && 'opacity-40'
       )}
     >
       <p className='mb-1.5 truncate text-[12px] font-medium text-slate-800 dark:text-slate-100'>
@@ -128,7 +121,11 @@ function KanbanColumn({
       </div>
       <div className='flex-1 space-y-2 overflow-y-auto p-2' style={{ maxHeight: '70vh' }}>
         {items.map((item) => (
-          <KanbanCard key={`${item.collection}:${item.item_id}`} item={item} onCardClick={onCardClick} />
+          <KanbanCard
+            key={`${item.collection}:${item.item_id}`}
+            item={item}
+            onCardClick={onCardClick}
+          />
         ))}
         {items.length === 0 && (
           <p className='py-6 text-center text-[11px] text-slate-300'>Nothing here</p>
