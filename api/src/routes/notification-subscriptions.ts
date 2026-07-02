@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
-import { canReadQueue } from './queues.js'
 import { logActivity } from '../services/activity.js'
 import type { QueueRow } from '../services/queues.js'
+import { canReadQueue } from './queues.js'
 
 const VALID_EVENT_TYPES = ['create', 'update', 'delete', 'all'] as const
 type EventType = (typeof VALID_EVENT_TYPES)[number]
@@ -66,9 +66,7 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
     const hasCollection = !!body.collection?.trim()
     const hasQueue = !!body.queue_id?.trim()
     if (hasCollection === hasQueue) {
-      return reply
-        .code(400)
-        .send({ error: 'exactly one of collection or queue_id is required' })
+      return reply.code(400).send({ error: 'exactly one of collection or queue_id is required' })
     }
 
     if (
