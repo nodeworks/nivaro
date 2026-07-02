@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
+import { broadcastCollectionUpdate } from '../services/realtime.js'
 
 // ─── Types (mirrors routes/pipelines.ts — same underlying tables) ─────────────
 
@@ -634,6 +635,8 @@ export async function workflowsRoutes(app: FastifyInstance) {
       req,
       comment: `${instance.collection}:${instance.item}`
     })
+
+    broadcastCollectionUpdate(app.io, instance.collection, instance.item)
 
     // If this branch just reached a terminal state, check whether the parent can join.
     let joined: Awaited<ReturnType<typeof checkJoin>> = null

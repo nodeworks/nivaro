@@ -11,6 +11,7 @@ import { getCollection, getFields, getRelations } from './collections.js'
 import { decryptItemFields, encryptItemFields } from './encryption.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
+import { broadcastCollectionUpdate } from './realtime.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
 
@@ -1700,6 +1701,8 @@ export async function createOne(
 
   await hooks.trigger('after', { ...ctx, keys: [returnedId as string | number], result })
 
+  broadcastCollectionUpdate(req?.server?.io, collection, returnedId as string | number)
+
   return result
 }
 
@@ -1781,6 +1784,8 @@ export async function updateOne(
   )
 
   await hooks.trigger('after', { ...ctx, result, previousData })
+
+  broadcastCollectionUpdate(req?.server?.io, collection, id)
 
   return result
 }

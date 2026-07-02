@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
 import type { QueueRow, QueueScope, QueueSourceRow, QueueSourceType } from '../services/queues.js'
 import { fetchQueueItems, fetchQueueWorkload } from '../services/queues.js'
+import { broadcastCollectionUpdate } from '../services/realtime.js'
 
 function formatQueue(row: QueueRow) {
   return {
@@ -380,6 +381,8 @@ export async function queuesRoutes(app: FastifyInstance) {
       req
     })
 
+    broadcastCollectionUpdate(app.io, body.source_collection, body.item_id)
+
     return reply.code(201).send({ data: { claimed: true } })
   })
 
@@ -440,6 +443,8 @@ export async function queuesRoutes(app: FastifyInstance) {
       comment: id,
       req
     })
+
+    broadcastCollectionUpdate(app.io, body.source_collection, body.item_id)
 
     return reply.code(204).send()
   })

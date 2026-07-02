@@ -64,6 +64,18 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.on('presence:leave', (roomId: string) => {
       socket.leave(`presence:${roomId}`)
     })
+    socket.on('collection:join', (payload: { collection?: string }) => {
+      const collection = payload?.collection
+      if (typeof collection === 'string' && collection.length > 0) {
+        socket.join(`collection:${collection}`)
+      }
+    })
+    socket.on('collection:leave', (payload: { collection?: string }) => {
+      const collection = payload?.collection
+      if (typeof collection === 'string' && collection.length > 0) {
+        socket.leave(`collection:${collection}`)
+      }
+    })
     socket.on('disconnect', () => {
       app.log.debug({ socketId: socket.id }, 'Socket disconnected')
     })
