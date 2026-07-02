@@ -4,8 +4,19 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
 import type { QueueRow, QueueScope, QueueSourceRow, QueueSourceType } from '../services/queues.js'
-import { fetchQueueItems, fetchQueueWorkload } from '../services/queues.js'
+import {
+  computeAvailableExtraFields,
+  fetchQueueItems,
+  fetchQueueWorkload
+} from '../services/queues.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
+
+// Format-only validation for extra_fields entries used as SQL column identifiers in
+// resolveCollectionSource's .select(['id', ...extraFieldNames]) — mirrors
+// api/src/routes/widget.ts's FIELD_NAME_RE/validateFields exactly. Declared locally
+// rather than imported from widget.ts to avoid a circular import (widget.ts already
+// imports canReadQueue from this file).
+const FIELD_NAME_RE = /^[a-zA-Z0-9_]+$/
 
 function formatQueue(row: QueueRow) {
   return {
@@ -19,7 +30,8 @@ function formatSource(row: QueueSourceRow) {
   return {
     ...row,
     filters: parseJson(row.filters),
-    state_values: parseJson(row.state_values)
+    state_values: parseJson(row.state_values),
+    extra_fields: parseJson(row.extra_fields)
   }
 }
 
@@ -80,7 +92,13 @@ export async function queuesRoutes(app: FastifyInstance) {
       .where({ queue_id: id })
       .orderBy('sort')) as QueueSourceRow[]
 
-    return reply.send({ data: { ...formatQueue(queue), sources: sources.map(formatSource) } })
+    return reply.send({
+      data: {
+        ...formatQueue(queue),
+        sources: sources.map(formatSource),
+        available_extra_fields: computeAvailableExtraFields(sources)
+      }
+    })
   })
 
   // POST / — create a queue owned by the current user, seeded with an owned_by_me source
@@ -222,6 +240,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         filters?: unknown
         state_values?: unknown
         sla_filter?: string | null
+        extra_fields?: unknown
         sort?: number
       }>
     }
@@ -243,6 +262,18 @@ export async function queuesRoutes(app: FastifyInstance) {
       if (s.sla_filter && s.sla_filter !== 'warning' && s.sla_filter !== 'breached') {
         return reply.code(400).send({ error: `invalid sla_filter: ${s.sla_filter}` })
       }
+      if (s.extra_fields !== undefined) {
+        if (!Array.isArray(s.extra_fields) || s.extra_fields.length > 5) {
+          return reply
+            .code(400)
+            .send({ error: 'extra_fields must be an array of at most 5 field names' })
+        }
+        if (s.extra_fields.some((f) => typeof f !== 'string' || !FIELD_NAME_RE.test(f))) {
+          return reply.code(400).send({
+            error: 'extra_fields must contain only valid field names (letters, numbers, underscore)'
+          })
+        }
+      }
     }
 
     await db.transaction(async (trx) => {
@@ -255,6 +286,7 @@ export async function queuesRoutes(app: FastifyInstance) {
           filters: toJsonStr(s.filters),
           state_values: toJsonStr(s.state_values),
           sla_filter: s.sla_filter ?? null,
+          extra_fields: toJsonStr(s.extra_fields ?? []),
           sort: s.sort ?? i
         }))
       )
@@ -274,6 +306,60 @@ export async function queuesRoutes(app: FastifyInstance) {
     })
 
     return reply.send({ data: sources.map(formatSource) })
+  })
+
+  // GET /:id/column-prefs — current user's saved visible-columns for this queue
+  app.get('/:id/column-prefs', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    const pref = await db('nivaro_queue_column_prefs')
+      .where({ queue_id: id, user: req.user!.id })
+      .first()
+
+    return reply.send({
+      data: { visible_columns: pref ? (parseJson(pref.visible_columns) as string[]) : null }
+    })
+  })
+
+  // PUT /:id/column-prefs — upsert current user's visible-columns for this queue
+  app.put('/:id/column-prefs', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    const body = req.body as { visible_columns?: unknown }
+    if (
+      !Array.isArray(body.visible_columns) ||
+      body.visible_columns.some((c) => typeof c !== 'string')
+    ) {
+      return reply.code(400).send({ error: 'visible_columns must be an array of strings' })
+    }
+
+    const existing = await db('nivaro_queue_column_prefs')
+      .where({ queue_id: id, user: req.user!.id })
+      .first('id')
+
+    if (existing) {
+      await db('nivaro_queue_column_prefs')
+        .where({ id: existing.id })
+        .update({ visible_columns: toJsonStr(body.visible_columns) })
+    } else {
+      await db('nivaro_queue_column_prefs').insert({
+        queue_id: id,
+        user: req.user!.id,
+        visible_columns: toJsonStr(body.visible_columns)
+      })
+    }
+
+    return reply.send({ data: { visible_columns: body.visible_columns } })
   })
 
   // GET /:id/items?scope=mine|unowned|all|claimed — fan-out worklist
