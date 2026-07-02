@@ -325,13 +325,14 @@ export async function queuesRoutes(app: FastifyInstance) {
       })
     }
 
-    // Write-through: for collection-backed items with a live workflow instance, also
-    // add the caller as a pipeline instance owner — same self-add rule the Pipeline
-    // Owners panel already uses (POST /pipelines/instance/:collection/:item/owners).
-    // Tasks/approvals have no safe self-claim path on their own endpoints today, so
-    // those stay queue-local-only (claim still works — just doesn't also grant
-    // pipeline ownership, since there is no pipeline ownership to grant).
-    if (body.source_collection !== 'tasks' && body.source_collection !== 'approvals') {
+    // Write-through: for sources pointing at a real collection record (everything
+    // except 'tasks', whose item_id is a task's own PK, not a business record id),
+    // also add the caller as a pipeline instance owner when a live workflow instance
+    // exists — same self-add rule the Pipeline Owners panel already uses (POST
+    // /pipelines/instance/:collection/:item/owners). Approvals sources point at a
+    // real collection+item just like collection sources do, so they get the same
+    // treatment, not an exclusion.
+    if (body.source_collection !== 'tasks') {
       const instance = await db('nivaro_workflow_instances')
         .where({ collection: body.source_collection, item: body.item_id })
         .first()
@@ -395,7 +396,13 @@ export async function queuesRoutes(app: FastifyInstance) {
       })
       .delete()
 
-    if (body.source_collection !== 'tasks' && body.source_collection !== 'approvals') {
+    // Write-through: remove the write-through owner grant for sources pointing at a
+    // real collection record (everything except 'tasks', whose item_id is a task's
+    // own PK, not a business record id) — same self-remove rule the Pipeline Owners
+    // panel already uses (DELETE /pipelines/instance/:collection/:item/owners).
+    // Approvals sources point at a real collection+item just like collection sources
+    // do, so they get the same treatment, not an exclusion.
+    if (body.source_collection !== 'tasks') {
       const instance = await db('nivaro_workflow_instances')
         .where({ collection: body.source_collection, item: body.item_id })
         .first()
