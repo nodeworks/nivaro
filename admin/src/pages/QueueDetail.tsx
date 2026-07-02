@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
 import { type Column, DataTable } from '@/components/data-table'
 import { QueueKanbanBoard } from '@/components/queue-kanban-board'
@@ -8,7 +9,10 @@ import { QueueWorkloadView } from '@/components/queue-workload-view'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn, formatNumber } from '@/lib/utils'
+
+const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -37,10 +41,17 @@ interface QueueStats {
   unowned: number
 }
 
+interface QueueSource {
+  id: number
+  type: 'collection' | 'tasks' | 'approvals' | 'owned_by_me'
+  collection: string | null
+}
+
 interface QueueMeta {
   id: string
   name: string
   description: string | null
+  sources?: QueueSource[]
 }
 
 type Scope = 'mine' | 'unowned' | 'all' | 'claimed'
@@ -86,6 +97,53 @@ export function QueueDetailPage() {
     queryFn: () => api.get(`/queues/${id}`).then((r) => r.data.data),
     enabled: !!id
   })
+
+  const { user } = useAuth()
+  const socketRef = useRef<Socket | null>(null)
+
+  // Live-refresh: join a collection:* room per distinct collection-type source
+  // and invalidate this queue's item/workload queries on collection:update, so
+  // claims/releases/transitions made by other viewers show up without a manual
+  // reload. collection:join is server-gated on a completed `auth` handshake
+  // (see api/src/plugins/socketio.ts) — joins are emitted only after we
+  // receive `auth:ok`, never synchronously after `connect`/`auth`, or the
+  // server silently drops the join and collection:update is never received.
+  useEffect(() => {
+    if (!id || !queue?.sources) return
+
+    const collections = [
+      ...new Set(
+        queue.sources
+          .filter((s) => s.type === 'collection' && s.collection)
+          .map((s) => s.collection as string)
+      )
+    ]
+    if (collections.length === 0) return
+
+    const socket = io(API_URL, { transports: ['websocket', 'polling'], withCredentials: true })
+    socketRef.current = socket
+
+    socket.on('connect', () => {
+      const token = user?.static_token
+      if (token) socket.emit('auth', { token })
+    })
+
+    socket.on('auth:ok', () => {
+      for (const collection of collections) {
+        socket.emit('collection:join', { collection })
+      }
+    })
+
+    socket.on('collection:update', () => {
+      qc.invalidateQueries({ queryKey: ['queue-items', id] })
+      qc.invalidateQueries({ queryKey: ['queue-workload', id] })
+    })
+
+    return () => {
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [id, queue?.sources, user?.static_token, qc])
 
   const { data, isLoading } = useQuery<{ data: QueueItemRow[]; stats: QueueStats }>({
     queryKey: ['queue-items', id, scope],
