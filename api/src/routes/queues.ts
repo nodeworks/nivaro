@@ -66,7 +66,9 @@ export async function queuesRoutes(app: FastifyInstance) {
   // GET /:id — single queue + its sources
   app.get('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!canReadQueue(queue, req)) {
       return reply.code(403).send({ error: 'Forbidden' })
@@ -132,7 +134,9 @@ export async function queuesRoutes(app: FastifyInstance) {
   // PATCH /:id — update queue metadata (owner or admin)
   app.patch('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!req.isAdmin && queue.owner !== req.user!.id) {
       return reply.code(403).send({ error: 'Forbidden' })
@@ -179,7 +183,9 @@ export async function queuesRoutes(app: FastifyInstance) {
   // DELETE /:id — delete queue (owner or admin); sources cascade via FK
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!req.isAdmin && queue.owner !== req.user!.id) {
       return reply.code(403).send({ error: 'Forbidden' })
@@ -199,7 +205,9 @@ export async function queuesRoutes(app: FastifyInstance) {
   // PATCH /:id/sources — bulk-replace all sources for this queue
   app.patch('/:id/sources', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!req.isAdmin && queue.owner !== req.user!.id) {
       return reply.code(403).send({ error: 'Forbidden' })
@@ -264,7 +272,9 @@ export async function queuesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'scope must be mine, unowned, or all' })
     }
 
-    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!canReadQueue(queue, req)) {
       return reply.code(403).send({ error: 'Forbidden' })

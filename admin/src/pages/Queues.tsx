@@ -107,7 +107,10 @@ function FieldCombobox({
                   className='text-[12px]'
                 >
                   <Check
-                    className={cn('mr-2 h-3 w-3', value === opt.value ? 'opacity-100' : 'opacity-0')}
+                    className={cn(
+                      'mr-2 h-3 w-3',
+                      value === opt.value ? 'opacity-100' : 'opacity-0'
+                    )}
                   />
                   {opt.label}
                 </CommandItem>
@@ -138,7 +141,9 @@ function QueueListItem({
         onClick={onSelect}
         className={cn(
           'block w-full px-4 py-3 text-left transition-colors',
-          selected ? 'bg-nvr-cyan/10 dark:bg-nvr-cyan/[0.07]' : 'hover:bg-slate-50 dark:hover:bg-muted/50'
+          selected
+            ? 'bg-nvr-cyan/10 dark:bg-nvr-cyan/[0.07]'
+            : 'hover:bg-slate-50 dark:hover:bg-muted/50'
         )}
       >
         <div className='flex items-center gap-2'>
@@ -324,7 +329,13 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
             onClick={() =>
               setSources([
                 ...sources,
-                { type: 'collection', collection: null, filters: null, state_values: null, sort: sources.length }
+                {
+                  type: 'collection',
+                  collection: null,
+                  filters: null,
+                  state_values: null,
+                  sort: sources.length
+                }
               ])
             }
           >
@@ -353,7 +364,12 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
       </div>
 
       <div className='border-t border-slate-100 pt-4 dark:border-border'>
-        <Button variant='destructive' size='sm' onClick={() => deleteMut.mutate()} disabled={deleteMut.isPending}>
+        <Button
+          variant='destructive'
+          size='sm'
+          onClick={() => deleteMut.mutate()}
+          disabled={deleteMut.isPending}
+        >
           Delete Queue
         </Button>
       </div>

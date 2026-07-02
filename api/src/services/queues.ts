@@ -1,10 +1,15 @@
 import { db } from '../db/index.js'
-import { evaluateRows, parseActiveRules, referencedFields, type AtRiskRuleRow } from '../routes/at-risk.js'
-import { resolveStepApprovers, type ApprovalChainStep } from '../routes/approvals.js'
+import { type ApprovalChainStep, resolveStepApprovers } from '../routes/approvals.js'
+import {
+  type AtRiskRuleRow,
+  evaluateRows,
+  parseActiveRules,
+  referencedFields
+} from '../routes/at-risk.js'
 import { computeStatusBatch } from '../routes/sla.js'
-import { parseJson, resolveStateOwners } from './pipeline-engine.js'
-import { can } from './permissions.js'
 import type { User } from '../types.js'
+import { can } from './permissions.js'
+import { parseJson, resolveStateOwners } from './pipeline-engine.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -203,7 +208,10 @@ function userDisplayName(row: {
 
 // ─── Source resolvers ───────────────────────────────────────────────────────────
 
-export async function resolveCollectionSource(source: QueueSourceRow, user: User): Promise<QueueItem[]> {
+export async function resolveCollectionSource(
+  source: QueueSourceRow,
+  user: User
+): Promise<QueueItem[]> {
   if (!source.collection) return []
   if (!(await can(user, 'read', source.collection))) return []
   const conditions = (parseJson(source.filters) as QueueCondition[] | null) ?? []
@@ -222,9 +230,9 @@ export async function resolveCollectionSource(source: QueueSourceRow, user: User
 
   const labels = await getLabels(new Map([[source.collection, new Set(ids)]]))
 
-  const binding = (await db('nivaro_workflow_bindings').where({ collection: source.collection }).first()) as
-    | { id: number; template: string }
-    | undefined
+  const binding = (await db('nivaro_workflow_bindings')
+    .where({ collection: source.collection })
+    .first()) as { id: number; template: string } | undefined
 
   const stateById = new Map<string, { key: string; color: string | null }>()
   const ownersById = new Map<string, QueueOwner[]>()
@@ -283,10 +291,9 @@ export async function resolveCollectionSource(source: QueueSourceRow, user: User
   if (rules.length && ids.length) {
     const fields = new Set<string>(['id'])
     for (const rule of rules) for (const f of referencedFields(rule.conditions)) fields.add(f)
-    const riskRows = (await db(source.collection).whereIn('id', ids).select([...fields])) as Record<
-      string,
-      unknown
-    >[]
+    const riskRows = (await db(source.collection)
+      .whereIn('id', ids)
+      .select([...fields])) as Record<string, unknown>[]
     atRiskMap = evaluateRows(riskRows, rules)
   }
 
@@ -361,7 +368,14 @@ export async function resolveApprovalsSource(): Promise<QueueItem[]> {
     .where('i.status', 'pending')
     .orderBy('i.created_at', 'asc')
     .limit(SOURCE_ROW_CAP)
-    .select('i.id', 'i.collection', 'i.item', 'i.created_at', 'i.current_step', 'i.chain')) as Array<{
+    .select(
+      'i.id',
+      'i.collection',
+      'i.item',
+      'i.created_at',
+      'i.current_step',
+      'i.chain'
+    )) as Array<{
     id: number
     collection: string
     item: string
@@ -372,11 +386,15 @@ export async function resolveApprovalsSource(): Promise<QueueItem[]> {
   if (rows.length === 0) return []
 
   const stepRows = (await db('nivaro_approval_chain_steps')
-    .whereIn(
+    .whereIn('chain', [...new Set(rows.map((r) => r.chain))])
+    .select(
+      'id',
       'chain',
-      [...new Set(rows.map((r) => r.chain))]
-    )
-    .select('id', 'chain', 'step_order', 'approver', 'approver_role', 'label')) as ApprovalChainStep[]
+      'step_order',
+      'approver',
+      'approver_role',
+      'label'
+    )) as ApprovalChainStep[]
 
   const byCollection = new Map<string, Set<string>>()
   for (const r of rows) {
@@ -452,7 +470,12 @@ export async function resolveOwnedByMeSource(userId: string): Promise<QueueItem[
 
   const out: QueueItem[] = []
   for (const inst of instances) {
-    const owners = await resolveStateOwners(inst.current_state, inst.instance_id, inst.collection, inst.item)
+    const owners = await resolveStateOwners(
+      inst.current_state,
+      inst.instance_id,
+      inst.collection,
+      inst.item
+    )
     if (!owners.some((o) => o.id === userId)) continue
     out.push({
       collection: inst.collection,

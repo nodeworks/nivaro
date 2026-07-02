@@ -40,8 +40,8 @@ import {
   ScrollText,
   Settings,
   Shield,
-  ShieldOff,
   ShieldCheck,
+  ShieldOff,
   SlidersHorizontal,
   Terminal,
   ThumbsUp,
@@ -61,9 +61,9 @@ import { ThemeSwitcher } from '@/components/theme-switcher'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { useExtensionPlugins, useCloudPlugins } from '@/extensions/store'
+import { useCloudPlugins, useExtensionPlugins } from '@/extensions/store'
 import type { NavSidebarSlot } from '@/extensions/types'
-import { api, WORKSPACE_KEY, type Workspace } from "@/lib/api"
+import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
@@ -289,14 +289,14 @@ function PanelNavItem({ icon: Icon, label, to }: NavItem) {
 export function AppLayout() {
   const { user } = useAuth()
   const { data: settings } = useSettings()
-  const { data: health } = useQuery({
+  useQuery({
     queryKey: ['health'],
-    queryFn: () => api.get<{ cloud?: boolean }>('/health').then(r => r.data),
+    queryFn: () => api.get<{ cloud?: boolean }>('/health').then((r) => r.data),
     staleTime: Number.POSITIVE_INFINITY,
     retry: false
   })
 
-const projectName = settings?.project_name ?? 'Nivaro'
+  const projectName = settings?.project_name ?? 'Nivaro'
 
   const location = useLocation()
   const extensionPlugins = useExtensionPlugins()
@@ -353,10 +353,12 @@ const projectName = settings?.project_name ?? 'Nivaro'
 
   const disabledPaths = useUiPermissions()
 
-  const visibleCategories = navCategories.map((cat) => ({
-    ...cat,
-    items: cat.items.filter((item) => !disabledPaths.has(item.to))
-  })).filter((cat) => cat.items.length > 0)
+  const visibleCategories = navCategories
+    .map((cat) => ({
+      ...cat,
+      items: cat.items.filter((item) => !disabledPaths.has(item.to))
+    }))
+    .filter((cat) => cat.items.length > 0)
 
   const activeCat = visibleCategories.find((c) => c.id === activeCategory) ?? visibleCategories[0]
 
@@ -379,13 +381,17 @@ const projectName = settings?.project_name ?? 'Nivaro'
   return (
     <TooltipProvider delayDuration={150}>
       {/* User extension app-components */}
-      {extensionPlugins.flatMap(p =>
-        p.slots?.['app-component'] ? [p.slots['app-component'].component] : []
-      ).map((Comp, i) => <Comp key={`ext-${i}`} />)}
+      {extensionPlugins
+        .flatMap((p) => (p.slots?.['app-component'] ? [p.slots['app-component'].component] : []))
+        .map((Comp, i) => (
+          <Comp key={`ext-${i}`} />
+        ))}
       {/* Cloud extension app-components — rendered separately, always present */}
-      {cloudPlugins.flatMap(p =>
-        p.slots?.['app-component'] ? [p.slots['app-component'].component] : []
-      ).map((Comp, i) => <Comp key={`cloud-${i}`} />)}
+      {cloudPlugins
+        .flatMap((p) => (p.slots?.['app-component'] ? [p.slots['app-component'].component] : []))
+        .map((Comp, i) => (
+          <Comp key={`cloud-${i}`} />
+        ))}
       <div className='flex h-screen overflow-hidden bg-secondary'>
         <a
           href='#main-content'
@@ -561,7 +567,8 @@ const projectName = settings?.project_name ?? 'Nivaro'
         {/* ─── Main area ───────────────────────────────────────────── */}
         <main id='main-content' className='flex flex-1 flex-col overflow-hidden bg-secondary'>
           <Suspense fallback={null}>
-            {disabledPaths.size > 0 && [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
+            {disabledPaths.size > 0 &&
+            [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
               <Navigate to='/' replace />
             ) : (
               <div

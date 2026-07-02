@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { Column, DataTable } from '@/components/data-table'
+import { type Column, DataTable } from '@/components/data-table'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
@@ -149,17 +149,23 @@ export function QueueDetailPage() {
           {queue?.name ?? 'Queue'}
         </h1>
         {queue?.description && (
-          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>{queue.description}</p>
+          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            {queue.description}
+          </p>
         )}
       </div>
 
       <div className='flex-1 overflow-y-auto p-6'>
         <div
           className='mb-4 grid gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'
-          style={{ gridTemplateColumns: `repeat(${Math.min(stateEntries.length + 1, 6)}, minmax(0, 1fr))` }}
+          style={{
+            gridTemplateColumns: `repeat(${Math.min(stateEntries.length + 1, 6)}, minmax(0, 1fr))`
+          }}
         >
           <div className='bg-white px-4 py-3.5 dark:bg-card'>
-            <p className='mb-1 text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>Total</p>
+            <p className='mb-1 text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>
+              Total
+            </p>
             {isLoading ? (
               <Skeleton className='h-6 w-16 rounded' />
             ) : (
@@ -170,7 +176,9 @@ export function QueueDetailPage() {
           </div>
           {stateEntries.map(([state, count]) => (
             <div key={state} className='bg-white px-4 py-3.5 dark:bg-card'>
-              <p className='mb-1 text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>{state}</p>
+              <p className='mb-1 text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>
+                {state}
+              </p>
               <p className='text-[22px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
                 {formatNumber(count)}
               </p>

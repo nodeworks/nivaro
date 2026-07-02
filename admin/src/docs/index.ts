@@ -49,6 +49,7 @@ import {
 } from './sections/collaboration.js'
 import {
   contentOpsAddendums,
+  contentOpsCascadeFilters,
   contentOpsCloneItem,
   contentOpsCollectionPresets,
   contentOpsComputedDefaults,
@@ -56,7 +57,6 @@ import {
   contentOpsDataExport,
   contentOpsDatetimeAuto,
   contentOpsDraftPublish,
-  contentOpsCascadeFilters,
   contentOpsFieldDependencies,
   contentOpsFieldGroups,
   contentOpsFieldHistory,
@@ -74,8 +74,8 @@ import {
   contentOpsTranslations,
   contentOpsValidationRules,
   contentOpsVirtualCollections,
-  pickerFilterGuide,
-  pickerExclusionsGuide
+  pickerExclusionsGuide,
+  pickerFilterGuide
 } from './sections/content-ops.js'
 import {
   devexCdcStream,
@@ -122,8 +122,8 @@ import {
   columnPresets,
   commentsApiDoc,
   dashboardsApiDoc,
-  externalApisApiDoc,
   externalApiSpecImportDoc,
+  externalApisApiDoc,
   presenceGuide,
   presetsApiDoc,
   reportsApiDoc,

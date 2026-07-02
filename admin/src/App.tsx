@@ -200,9 +200,7 @@ const QueueDetailPage = lazy(() =>
   import('@/pages/QueueDetail').then((m) => ({ default: m.QueueDetailPage }))
 )
 const AtRiskPage = lazy(() => import('@/pages/AtRisk').then((m) => ({ default: m.AtRiskPage })))
-const AccountPage = lazy(() =>
-  import('@/pages/Account').then((m) => ({ default: m.AccountPage }))
-)
+const AccountPage = lazy(() => import('@/pages/Account').then((m) => ({ default: m.AccountPage })))
 
 const queryClient = new QueryClient({
   defaultOptions: {

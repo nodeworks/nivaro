@@ -53,7 +53,7 @@ async function computeStatus(collection: string, item: string) {
     .orderBy('started_at', 'desc')
     .first()
 
-  if (!instance || !instance.current_state) {
+  if (!instance?.current_state) {
     return { status: 'none' }
   }
 

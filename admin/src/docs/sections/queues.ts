@@ -18,10 +18,19 @@ export const queuesGuide: DocSection = {
       type: 'table',
       head: ['Type', 'What it pulls in'],
       rows: [
-        ['collection', 'Rows from one collection, optionally filtered by field conditions and restricted to specific workflow/pipeline states'],
+        [
+          'collection',
+          'Rows from one collection, optionally filtered by field conditions and restricted to specific workflow/pipeline states'
+        ],
         ['tasks', 'Open nivaro_tasks assigned to any user, deep-linked to the underlying record'],
-        ['approvals', 'Pending nivaro_approval_instances, with owners resolved from the current step’s approver or approver role'],
-        ['owned_by_me', 'Zero-config: every record across every pipeline/workflow-bound collection where the current user resolves as an owner']
+        [
+          'approvals',
+          'Pending nivaro_approval_instances, with owners resolved from the current step’s approver or approver role'
+        ],
+        [
+          'owned_by_me',
+          'Zero-config: every record across every pipeline/workflow-bound collection where the current user resolves as an owner'
+        ]
       ]
     },
     { type: 'h3', text: 'How it works' },
