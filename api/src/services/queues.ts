@@ -40,6 +40,7 @@ export interface QueueSourceRow {
   filters: string | null
   state_values: string | null
   sla_filter: string | null
+  extra_fields: string | null
   sort: number
 }
 
@@ -74,6 +75,7 @@ export interface QueueItem {
   at_risk: boolean
   aging_hours: number | null
   claimed_by: QueueOwner | null
+  extra?: Record<string, unknown>
   url: string
 }
 
@@ -167,6 +169,21 @@ export function filterBySlaStatus(
 ): string[] {
   if (!filter) return ids
   return ids.filter((id) => slaMap[id]?.status === filter)
+}
+
+export function computeAvailableExtraFields(sources: QueueSourceRow[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const source of sources) {
+    if (source.type !== 'collection') continue
+    const fields = (parseJson(source.extra_fields) as string[] | null) ?? []
+    for (const field of fields) {
+      if (seen.has(field)) continue
+      seen.add(field)
+      out.push(field)
+    }
+  }
+  return out
 }
 
 export interface ConditionBuilder {
@@ -361,6 +378,20 @@ export async function resolveCollectionSource(
   const slaMap = ids.length ? await computeStatusBatch(source.collection, ids) : {}
   ids = filterBySlaStatus(ids, slaMap, source.sla_filter)
 
+  const extraFieldNames = (parseJson(source.extra_fields) as string[] | null) ?? []
+  const extraById = new Map<string, Record<string, unknown>>()
+  if (extraFieldNames.length && ids.length) {
+    const extraRows = (await db(source.collection)
+      .whereIn('id', ids)
+      .select(['id', ...extraFieldNames])) as Record<string, unknown>[]
+    for (const row of extraRows) {
+      const rowId = String(row.id)
+      const extra: Record<string, unknown> = {}
+      for (const field of extraFieldNames) extra[field] = row[field]
+      extraById.set(rowId, extra)
+    }
+  }
+
   const ruleRows = (await db('nivaro_at_risk_rules')
     .where({ collection: source.collection, is_active: true })
     .orderBy('id')) as AtRiskRuleRow[]
@@ -386,6 +417,7 @@ export async function resolveCollectionSource(
     at_risk: !!atRiskMap[id]?.at_risk,
     aging_hours: slaMap[id]?.elapsed_hours ?? null,
     claimed_by: null,
+    extra: extraById.get(id) ?? {},
     url: `/collections/${source.collection}/${id}`
   }))
 }

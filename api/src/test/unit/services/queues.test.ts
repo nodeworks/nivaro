@@ -3,13 +3,15 @@ import {
   applyQueueConditions,
   applyScopeFilter,
   attachClaims,
+  computeAvailableExtraFields,
   type ConditionBuilder,
   computeStats,
   filterBySlaStatus,
   groupByOwner,
   mergeSourceResults,
   type QueueItem,
-  type QueueScope
+  type QueueScope,
+  type QueueSourceRow
 } from '../../../services/queues.js'
 
 function item(overrides: Partial<QueueItem> = {}): QueueItem {
@@ -314,5 +316,49 @@ describe('groupByOwner', () => {
 
   it('returns an empty map for no items', () => {
     expect(groupByOwner([]).size).toBe(0)
+  })
+})
+
+describe('computeAvailableExtraFields', () => {
+  function source(overrides: Partial<QueueSourceRow> = {}): QueueSourceRow {
+    return {
+      id: 1,
+      queue_id: 'q1',
+      type: 'collection',
+      collection: 'articles',
+      filters: null,
+      state_values: null,
+      sla_filter: null,
+      extra_fields: null,
+      sort: 0,
+      ...overrides
+    }
+  }
+
+  it('returns the union of extra_fields across collection sources, in source order', () => {
+    const sources = [
+      source({ id: 1, extra_fields: JSON.stringify(['author', 'wordCount']) }),
+      source({ id: 2, extra_fields: JSON.stringify(['priority']) })
+    ]
+    expect(computeAvailableExtraFields(sources)).toEqual(['author', 'wordCount', 'priority'])
+  })
+
+  it('dedupes a field configured on multiple sources', () => {
+    const sources = [
+      source({ id: 1, extra_fields: JSON.stringify(['priority']) }),
+      source({ id: 2, extra_fields: JSON.stringify(['priority', 'customer']) })
+    ]
+    expect(computeAvailableExtraFields(sources)).toEqual(['priority', 'customer'])
+  })
+
+  it('ignores non-collection sources entirely', () => {
+    const sources = [
+      source({ type: 'tasks', collection: null, extra_fields: JSON.stringify(['whatever']) })
+    ]
+    expect(computeAvailableExtraFields(sources)).toEqual([])
+  })
+
+  it('returns an empty array when no source configures extra_fields', () => {
+    expect(computeAvailableExtraFields([source()])).toEqual([])
   })
 })
