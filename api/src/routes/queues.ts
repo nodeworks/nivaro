@@ -299,7 +299,9 @@ export async function queuesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'source_collection and item_id are required' })
     }
 
-    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
 
@@ -371,7 +373,9 @@ export async function queuesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'source_collection and item_id are required' })
     }
 
-    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow | undefined
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
 

@@ -302,7 +302,9 @@ export function QueueDetailPage() {
             onClick={() => setView('table')}
             className={cn(
               'rounded-md px-3 py-1.5 text-[12px] font-medium',
-              view === 'table' ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'text-slate-500'
+              view === 'table'
+                ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                : 'text-slate-500'
             )}
           >
             Table
@@ -312,7 +314,9 @@ export function QueueDetailPage() {
             onClick={() => setView('kanban')}
             className={cn(
               'rounded-md px-3 py-1.5 text-[12px] font-medium',
-              view === 'kanban' ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'text-slate-500'
+              view === 'kanban'
+                ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                : 'text-slate-500'
             )}
           >
             Kanban
