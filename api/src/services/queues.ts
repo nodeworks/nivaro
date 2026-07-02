@@ -72,6 +72,7 @@ export interface QueueItem {
   sla_status: 'ok' | 'warning' | 'breached' | null
   at_risk: boolean
   aging_hours: number | null
+  claimed_by: QueueOwner | null
   url: string
 }
 
@@ -81,7 +82,7 @@ export interface QueueStats {
   unowned: number
 }
 
-export type QueueScope = 'mine' | 'unowned' | 'all'
+export type QueueScope = 'mine' | 'unowned' | 'all' | 'claimed'
 
 export const SOURCE_ROW_CAP = 1000
 
@@ -108,7 +109,15 @@ export function applyScopeFilter(
 ): QueueItem[] {
   if (scope === 'all') return items
   if (scope === 'unowned') return items.filter((i) => i.owners.length === 0)
+  if (scope === 'claimed') return items.filter((i) => i.claimed_by?.id === userId)
   return items.filter((i) => i.owners.some((o) => o.id === userId))
+}
+
+export function attachClaims(items: QueueItem[], claims: Map<string, QueueOwner>): QueueItem[] {
+  return items.map((item) => ({
+    ...item,
+    claimed_by: claims.get(`${item.collection}:${item.item_id}`) ?? null
+  }))
 }
 
 export function computeStats(items: QueueItem[]): QueueStats {
@@ -195,6 +204,36 @@ export async function getLabels(
     }
   }
   return labels
+}
+
+export async function getClaims(queueId: string): Promise<Map<string, QueueOwner>> {
+  const rows = (await db('nivaro_queue_claims as c')
+    .join('nivaro_users as u', 'c.claimed_by', 'u.id')
+    .where('c.queue_id', queueId)
+    .select(
+      'c.source_collection',
+      'c.item_id',
+      'u.id',
+      'u.first_name',
+      'u.last_name',
+      'u.email'
+    )) as Array<{
+    source_collection: string
+    item_id: string
+    id: string
+    first_name: string | null
+    last_name: string | null
+    email: string
+  }>
+
+  const out = new Map<string, QueueOwner>()
+  for (const r of rows) {
+    out.set(`${r.source_collection}:${r.item_id}`, {
+      id: r.id,
+      name: userDisplayName({ first_name: r.first_name, last_name: r.last_name, email: r.email })
+    })
+  }
+  return out
 }
 
 function userDisplayName(row: {
@@ -307,6 +346,7 @@ export async function resolveCollectionSource(
     sla_status: slaMap[id]?.status ?? null,
     at_risk: !!atRiskMap[id]?.at_risk,
     aging_hours: slaMap[id]?.elapsed_hours ?? null,
+    claimed_by: null,
     url: `/collections/${source.collection}/${id}`
   }))
 }
@@ -359,6 +399,7 @@ export async function resolveTasksSource(): Promise<QueueItem[]> {
     sla_status: null,
     at_risk: false,
     aging_hours: Math.max(0, (now - new Date(r.created_at).getTime()) / (1000 * 60 * 60)),
+    claimed_by: null,
     url: `/collections/${r.target_collection}/${r.target_item}`
   }))
 }
@@ -431,6 +472,7 @@ export async function resolveApprovalsSource(): Promise<QueueItem[]> {
       sla_status: null,
       at_risk: false,
       aging_hours: Math.max(0, (now - new Date(r.created_at).getTime()) / (1000 * 60 * 60)),
+      claimed_by: null,
       url: `/collections/${r.collection}/${r.item}`
     })
   }
@@ -487,6 +529,7 @@ export async function resolveOwnedByMeSource(userId: string): Promise<QueueItem[
       sla_status: null,
       at_risk: false,
       aging_hours: null,
+      claimed_by: null,
       url: `/collections/${inst.collection}/${inst.item}`
     })
   }
@@ -514,6 +557,8 @@ export async function fetchQueueItems(
   )
 
   const merged = mergeSourceResults(batches)
-  const scoped = applyScopeFilter(merged, scope, user.id)
+  const claims = await getClaims(queueId)
+  const withClaims = attachClaims(merged, claims)
+  const scoped = applyScopeFilter(withClaims, scope, user.id)
   return { items: scoped, stats: computeStats(scoped) }
 }

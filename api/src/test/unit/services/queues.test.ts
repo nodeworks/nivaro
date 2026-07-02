@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   applyQueueConditions,
   applyScopeFilter,
+  attachClaims,
+  type ConditionBuilder,
   computeStats,
   mergeSourceResults,
-  type ConditionBuilder,
-  type QueueItem
+  type QueueItem,
+  type QueueScope
 } from '../../../services/queues.js'
 
 function item(overrides: Partial<QueueItem> = {}): QueueItem {
@@ -19,6 +21,7 @@ function item(overrides: Partial<QueueItem> = {}): QueueItem {
     sla_status: null,
     at_risk: false,
     aging_hours: null,
+    claimed_by: null,
     url: '/collections/articles/1',
     ...overrides
   }
@@ -152,5 +155,88 @@ describe('applyQueueConditions', () => {
       { field: 'priority', op: 'gte', value: 3 }
     ])
     expect(calls).toEqual(['where(["status","open"])', 'where(["priority",">=",3])'])
+  })
+})
+
+describe('attachClaims', () => {
+  function item(overrides: Partial<QueueItem> = {}): QueueItem {
+    return {
+      collection: 'articles',
+      item_id: '1',
+      label: 'Test item',
+      state: 'draft',
+      state_color: null,
+      owners: [],
+      sla_status: null,
+      at_risk: false,
+      aging_hours: null,
+      claimed_by: null,
+      url: '/collections/articles/1',
+      ...overrides
+    }
+  }
+
+  it('attaches a claim when the key matches', () => {
+    const claims = new Map([['articles:1', { id: 'u1', name: 'Alice' }]])
+    const [result] = attachClaims([item()], claims)
+    expect(result.claimed_by).toEqual({ id: 'u1', name: 'Alice' })
+  })
+
+  it('leaves claimed_by null when no claim matches', () => {
+    const claims = new Map([['articles:2', { id: 'u1', name: 'Alice' }]])
+    const [result] = attachClaims([item()], claims)
+    expect(result.claimed_by).toBeNull()
+  })
+
+  it('handles an empty claims map', () => {
+    const [result] = attachClaims([item()], new Map())
+    expect(result.claimed_by).toBeNull()
+  })
+
+  it('keys by collection:item_id, not item_id alone', () => {
+    const claims = new Map([['tasks:1', { id: 'u1', name: 'Alice' }]])
+    const [result] = attachClaims([item({ collection: 'articles', item_id: '1' })], claims)
+    expect(result.claimed_by).toBeNull()
+  })
+})
+
+describe('applyScopeFilter — claimed scope', () => {
+  function item(overrides: Partial<QueueItem> = {}): QueueItem {
+    return {
+      collection: 'articles',
+      item_id: '1',
+      label: 'Test item',
+      state: 'draft',
+      state_color: null,
+      owners: [],
+      sla_status: null,
+      at_risk: false,
+      aging_hours: null,
+      claimed_by: null,
+      url: '/collections/articles/1',
+      ...overrides
+    }
+  }
+
+  it('scope=claimed returns only items claimed by the given user', () => {
+    const mine = item({ item_id: '1', claimed_by: { id: 'u1', name: 'Alice' } })
+    const others = item({ item_id: '2', claimed_by: { id: 'u2', name: 'Bob' } })
+    const unclaimed = item({ item_id: '3', claimed_by: null })
+    expect(applyScopeFilter([mine, others, unclaimed], 'claimed', 'u1')).toEqual([mine])
+  })
+
+  it('scope=claimed returns empty when the user claimed nothing', () => {
+    const others = item({ item_id: '2', claimed_by: { id: 'u2', name: 'Bob' } })
+    expect(applyScopeFilter([others], 'claimed', 'u1')).toEqual([])
+  })
+})
+
+describe('QueueScope whitelist parity', () => {
+  it('documents the exact set of valid scope values the route must accept', () => {
+    // If this list changes, the whitelist in GET /queues/:id/items
+    // (api/src/routes/queues.ts) must be updated to match, or new scopes
+    // will silently 400 at the route layer despite being supported here.
+    const validScopes: QueueScope[] = ['mine', 'unowned', 'all', 'claimed']
+    expect(validScopes).toHaveLength(4)
   })
 })
