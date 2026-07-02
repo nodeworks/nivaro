@@ -78,6 +78,15 @@ export const queuesGuide: DocSection = {
         'Subscribe to a daily or weekly email digest instead of watching a queue live — the digest email includes a current snapshot (total, unowned, per-state counts) resolved fresh each time it sends, not a log of individual changes.',
         "A queue can back a public embeddable widget the same way a single collection can (Widgets page) — the embed shows the queue's current items to anyone with the link, resolved using the feed creator's read access, not the viewer's (matching how every other widget feed already works)."
       ]
+    },
+    { type: 'h3', text: 'Table column customization' },
+    {
+      type: 'ul',
+      items: [
+        'Each collection-type source can expose up to 5 extra fields from its collection as table columns (Queues builder → source row → "Extra columns"). Rows from a different source that didn\'t configure a given field simply show a blank cell for it — there\'s no special handling for mixed-collection queues beyond that.',
+        'Every viewer can independently choose which columns are visible (Table view → "Columns" control, top right) — the choice is saved per user per queue and persists across devices. Item and Claim/Release always stay visible regardless of customization.',
+        'A viewer who has never customized sees a computed default: all base columns plus the first 2 configured extra fields, so the table starts reasonably compact without any setup.'
+      ]
     }
   ]
 }
