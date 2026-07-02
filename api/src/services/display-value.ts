@@ -5,7 +5,10 @@
 
 export const LABEL_FALLBACK = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
 
-export function resolveDisplayValue(record: Record<string, unknown>, template?: string | null): string {
+export function resolveDisplayValue(
+  record: Record<string, unknown>,
+  template?: string | null
+): string {
   if (template) {
     return template
       .replace(/\{\{([\w.]+)\}\}/g, (_, key) => {
@@ -23,7 +26,10 @@ export function resolveDisplayValue(record: Record<string, unknown>, template?: 
       .trim()
   }
   if (record.first_name != null || record.last_name != null) {
-    return [record.first_name, record.last_name].filter(Boolean).join(' ').trim() || String(record.id ?? '')
+    return (
+      [record.first_name, record.last_name].filter(Boolean).join(' ').trim() ||
+      String(record.id ?? '')
+    )
   }
   for (const f of LABEL_FALLBACK) {
     if (record[f] != null && record[f] !== '') return String(record[f])

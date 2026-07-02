@@ -8,7 +8,10 @@ describe('resolveDisplayValue', () => {
 
   it('renders a template with multiple placeholders', () => {
     expect(
-      resolveDisplayValue({ first_name: 'Ada', last_name: 'Lovelace' }, '{{first_name}} {{last_name}}')
+      resolveDisplayValue(
+        { first_name: 'Ada', last_name: 'Lovelace' },
+        '{{first_name}} {{last_name}}'
+      )
     ).toBe('Ada Lovelace')
   })
 
@@ -17,7 +20,9 @@ describe('resolveDisplayValue', () => {
   })
 
   it('falls back to first_name/last_name when no template is given', () => {
-    expect(resolveDisplayValue({ first_name: 'Ada', last_name: 'Lovelace' }, null)).toBe('Ada Lovelace')
+    expect(resolveDisplayValue({ first_name: 'Ada', last_name: 'Lovelace' }, null)).toBe(
+      'Ada Lovelace'
+    )
   })
 
   it('falls back to the LABEL_FALLBACK field list when no template and no name fields', () => {
@@ -37,7 +42,9 @@ describe('extractTemplateFields', () => {
   })
 
   it('extracts only the top-level segment of a nested placeholder', () => {
-    expect(extractTemplateFields('{{author.name}}')).toEqual(expect.arrayContaining(['id', 'author']))
+    expect(extractTemplateFields('{{author.name}}')).toEqual(
+      expect.arrayContaining(['id', 'author'])
+    )
   })
 
   it('returns just id when there is no template', () => {
