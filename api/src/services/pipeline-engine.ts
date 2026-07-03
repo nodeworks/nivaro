@@ -243,39 +243,7 @@ export async function buildDelegationSubstitutions(
   return out
 }
 
-/**
- * Apply delegation substitution to a resolved owner list. For each owner that
- * is out of office with an active (non-expired) delegate, the delegate's full
- * record replaces the owner. Result is re-deduped.
- */
-export async function applyDelegations(
-  owners: ResolvedOwner[],
-  database: typeof db = db
-): Promise<ResolvedOwner[]> {
-  if (owners.length === 0) return owners
-  const substitutions = await buildDelegationSubstitutions(
-    owners.map((o) => o.id),
-    database
-  )
-  if (substitutions.size === 0) return owners
-  return dedupeOwners(owners.map((o) => substitutions.get(o.id) ?? o))
-}
-
 // ─── Owner resolution ─────────────────────────────────────────────────────────
-
-export async function resolveInstanceOwners(
-  stateId: string,
-  instanceId: string | null,
-  database: typeof db = db
-): Promise<ResolvedOwner[]> {
-  if (!instanceId) return []
-  const rows = await database('nivaro_pipeline_instance_owners as io')
-    .join('nivaro_users as u', 'io.user', 'u.id')
-    .where('io.instance', instanceId)
-    .andWhere((qb) => qb.where('io.state', stateId).orWhereNull('io.state'))
-    .select('u.id', 'u.email', 'u.first_name', 'u.last_name')
-  return rows as ResolvedOwner[]
-}
 
 export function pickWinningGroups(
   groups: OwnerGroup[],
@@ -402,12 +370,19 @@ export async function resolveStateOwnersBatch(
     )
     for (const row of rows as Array<ResolvedOwner & { group: string }>) {
       const list = groupUsersByGroup.get(row.group) ?? []
-      list.push({ id: row.id, email: row.email, first_name: row.first_name, last_name: row.last_name })
+      list.push({
+        id: row.id,
+        email: row.email,
+        first_name: row.first_name,
+        last_name: row.last_name
+      })
       groupUsersByGroup.set(row.group, list)
     }
   }
 
-  const instanceIds = [...new Set(requests.map((r) => r.instanceId).filter((id): id is string => !!id))]
+  const instanceIds = [
+    ...new Set(requests.map((r) => r.instanceId).filter((id): id is string => !!id))
+  ]
   const instanceOwnerRowsByInstance = new Map<
     string,
     Array<ResolvedOwner & { state: string | null }>
