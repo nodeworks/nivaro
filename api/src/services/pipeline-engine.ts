@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { selectInChunks } from './db-batch.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -318,6 +319,158 @@ export function pickWinningGroups(
   return defaults
 }
 
+export interface OwnerResolutionRequest {
+  key: string
+  stateId: string
+  instanceId: string | null
+  collection: string
+  itemId: string
+}
+
+export async function resolveStateOwnersBatch(
+  requests: OwnerResolutionRequest[],
+  database: typeof db = db
+): Promise<Map<string, ResolvedOwner[]>> {
+  const result = new Map<string, ResolvedOwner[]>()
+  if (requests.length === 0) return result
+
+  const stateIds = [...new Set(requests.map((r) => r.stateId))]
+  const groupRows = stateIds.length
+    ? ((await database<OwnerGroup>('nivaro_pipeline_owner_groups')
+        .whereIn('state', stateIds)
+        .orderBy('sort')
+        .orderBy('is_default')) as OwnerGroup[])
+    : []
+  const groupsByState = new Map<string, OwnerGroup[]>()
+  for (const g of groupRows) {
+    const list = groupsByState.get(g.state) ?? []
+    list.push(g)
+    groupsByState.set(g.state, list)
+  }
+
+  const withGroups = requests.filter((r) => (groupsByState.get(r.stateId) ?? []).length > 0)
+  const withoutGroups = requests.filter((r) => (groupsByState.get(r.stateId) ?? []).length === 0)
+
+  const recordsByCollectionAndId = new Map<string, Map<string, Record<string, unknown>>>()
+  const relationsByCollection = new Map<string, RelationInfo[]>()
+  const collections = [...new Set(withGroups.map((r) => r.collection))]
+  for (const collection of collections) {
+    const ids = [
+      ...new Set(withGroups.filter((r) => r.collection === collection).map((r) => r.itemId))
+    ]
+    let rows: Record<string, unknown>[] = []
+    try {
+      rows = await selectInChunks(ids, 2000, (chunk) =>
+        database(collection).whereIn('id', chunk).select('*')
+      )
+    } catch {
+      rows = []
+    }
+    const byId = new Map<string, Record<string, unknown>>()
+    for (const row of rows) byId.set(String(row.id), row)
+    recordsByCollectionAndId.set(collection, byId)
+
+    let relations: RelationInfo[] = []
+    try {
+      relations = (await database('nivaro_relations')
+        .where({ many_collection: collection })
+        .select('many_collection', 'many_field', 'one_collection')) as RelationInfo[]
+    } catch {
+      relations = []
+    }
+    relationsByCollection.set(collection, relations)
+  }
+
+  const winningGroupsByKey = new Map<string, OwnerGroup[]>()
+  const allGroupIds = new Set<string>()
+  for (const req of withGroups) {
+    const groups = groupsByState.get(req.stateId) ?? []
+    const record = recordsByCollectionAndId.get(req.collection)?.get(req.itemId) ?? {}
+    const relations = relationsByCollection.get(req.collection) ?? []
+    const winning = pickWinningGroups(groups, record, relations)
+    winningGroupsByKey.set(req.key, winning)
+    for (const g of winning) allGroupIds.add(g.id)
+  }
+
+  const groupUsersByGroup = new Map<string, ResolvedOwner[]>()
+  if (allGroupIds.size > 0) {
+    const rows = await selectInChunks([...allGroupIds], 2000, (chunk) =>
+      database('nivaro_pipeline_owner_group_users as ogu')
+        .join('nivaro_users as u', 'ogu.user', 'u.id')
+        .whereIn('ogu.group', chunk)
+        .select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+    )
+    for (const row of rows as Array<ResolvedOwner & { group: string }>) {
+      const list = groupUsersByGroup.get(row.group) ?? []
+      list.push({ id: row.id, email: row.email, first_name: row.first_name, last_name: row.last_name })
+      groupUsersByGroup.set(row.group, list)
+    }
+  }
+
+  const instanceIds = [...new Set(requests.map((r) => r.instanceId).filter((id): id is string => !!id))]
+  const instanceOwnerRowsByInstance = new Map<
+    string,
+    Array<ResolvedOwner & { state: string | null }>
+  >()
+  if (instanceIds.length > 0) {
+    const rows = await selectInChunks(instanceIds, 2000, (chunk) =>
+      database('nivaro_pipeline_instance_owners as io')
+        .join('nivaro_users as u', 'io.user', 'u.id')
+        .whereIn('io.instance', chunk)
+        .select('io.instance', 'io.state', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+    )
+    for (const row of rows as Array<ResolvedOwner & { instance: string; state: string | null }>) {
+      const list = instanceOwnerRowsByInstance.get(row.instance) ?? []
+      list.push({
+        id: row.id,
+        email: row.email,
+        first_name: row.first_name,
+        last_name: row.last_name,
+        state: row.state
+      })
+      instanceOwnerRowsByInstance.set(row.instance, list)
+    }
+  }
+
+  function instanceOwnersFor(req: OwnerResolutionRequest): ResolvedOwner[] {
+    if (!req.instanceId) return []
+    const rows = instanceOwnerRowsByInstance.get(req.instanceId) ?? []
+    return rows
+      .filter((r) => r.state === req.stateId || r.state === null)
+      .map((r) => ({ id: r.id, email: r.email, first_name: r.first_name, last_name: r.last_name }))
+  }
+
+  const combinedByKey = new Map<string, ResolvedOwner[]>()
+  for (const req of withoutGroups) {
+    combinedByKey.set(req.key, dedupeOwners(instanceOwnersFor(req)))
+  }
+  for (const req of withGroups) {
+    const winning = winningGroupsByKey.get(req.key) ?? []
+    const baseOwners = winning.flatMap((g) => groupUsersByGroup.get(g.id) ?? [])
+    combinedByKey.set(req.key, dedupeOwners([...baseOwners, ...instanceOwnersFor(req)]))
+  }
+
+  // Delegation substitution only ever applied to withGroups requests — see the
+  // pre-existing asymmetry documented on resolveStateOwners.
+  const withGroupsKeys = new Set(withGroups.map((r) => r.key))
+  const allOwnerIds = new Set<string>()
+  for (const req of withGroups) {
+    for (const o of combinedByKey.get(req.key) ?? []) allOwnerIds.add(o.id)
+  }
+  const substitutions = await buildDelegationSubstitutions([...allOwnerIds], database)
+
+  for (const req of requests) {
+    const owners = combinedByKey.get(req.key) ?? []
+    if (withGroupsKeys.has(req.key)) {
+      result.set(req.key, dedupeOwners(owners.map((o) => substitutions.get(o.id) ?? o)))
+    } else {
+      result.set(req.key, owners)
+    }
+  }
+
+  return result
+}
+
 export async function resolveStateOwners(
   stateId: string,
   instanceId: string | null,
@@ -325,47 +478,11 @@ export async function resolveStateOwners(
   itemId: string,
   database: typeof db = db
 ): Promise<ResolvedOwner[]> {
-  const groups = await database<OwnerGroup>('nivaro_pipeline_owner_groups')
-    .where({ state: stateId })
-    .orderBy('sort')
-    .orderBy('is_default')
-
-  if (!groups.length) {
-    return dedupeOwners(await resolveInstanceOwners(stateId, instanceId, database))
-  }
-
-  let record: Record<string, unknown> = {}
-  try {
-    const row = (await database(collection).where({ id: itemId }).select('*').first()) as
-      | Record<string, unknown>
-      | undefined
-    if (row) record = row
-  } catch {
-    // Safe fallback for dev tables that may not exist
-  }
-
-  let relations: RelationInfo[] = []
-  try {
-    relations = await database('nivaro_relations')
-      .where({ many_collection: collection })
-      .select('many_collection', 'many_field', 'one_collection')
-  } catch {
-    // Non-fatal
-  }
-
-  const winningGroups = pickWinningGroups(groups, record, relations)
-  const groupIds = winningGroups.map((g) => g.id)
-  let baseOwners: ResolvedOwner[] = []
-  if (groupIds.length > 0) {
-    baseOwners = (await database('nivaro_pipeline_owner_group_users as ogu')
-      .join('nivaro_users as u', 'ogu.user', 'u.id')
-      .whereIn('ogu.group', groupIds)
-      .select('u.id', 'u.email', 'u.first_name', 'u.last_name')) as ResolvedOwner[]
-  }
-
-  const instanceOwners = await resolveInstanceOwners(stateId, instanceId, database)
-  const resolved = dedupeOwners([...baseOwners, ...instanceOwners])
-  return applyDelegations(resolved, database)
+  const result = await resolveStateOwnersBatch(
+    [{ key: '_single', stateId, instanceId, collection, itemId }],
+    database
+  )
+  return result.get('_single') ?? []
 }
 
 // ─── Skip criteria / auto-advance ─────────────────────────────────────────────

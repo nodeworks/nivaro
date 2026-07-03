@@ -1,5 +1,10 @@
 import { vi, describe, expect, it } from 'vitest'
-import { pickWinningGroups, buildDelegationSubstitutions, type OwnerGroup } from '../../../services/pipeline-engine.js'
+import {
+  pickWinningGroups,
+  buildDelegationSubstitutions,
+  resolveStateOwnersBatch,
+  type OwnerGroup
+} from '../../../services/pipeline-engine.js'
 
 function group(overrides: Partial<OwnerGroup> = {}): OwnerGroup {
   return {
@@ -140,5 +145,128 @@ describe('buildDelegationSubstitutions', () => {
     })
     const result = await buildDelegationSubstitutions(['u1'], database)
     expect(result.has('u1')).toBe(false)
+  })
+})
+
+function makeOwnerBatchFakeDb(fixtures: {
+  groups: OwnerGroup[]
+  records: Record<string, Record<string, unknown>>
+  groupUsers: Array<{ group: string; id: string; email: string; first_name: string | null; last_name: string | null }>
+  instanceOwners: Array<{ instance: string; state: string | null; id: string; email: string; first_name: string | null; last_name: string | null }>
+  users: Array<{ id: string; delegate_id: string | null; delegate_expires_at: Date | null; is_out_of_office: boolean }>
+  delegateUsers: Array<{ id: string; email: string; first_name: string | null; last_name: string | null }>
+}) {
+  const tableCalls: string[] = []
+  const database = vi.fn((table: string) => {
+    tableCalls.push(table)
+    if (table === 'nivaro_pipeline_owner_groups') {
+      return {
+        whereIn: (_col: string, states: string[]) => ({
+          orderBy: () => ({
+            orderBy: async () => fixtures.groups.filter((g) => states.includes(g.state))
+          })
+        })
+      }
+    }
+    if (table === 'nivaro_relations') {
+      return { where: () => ({ select: async () => [] }) }
+    }
+    if (table === 'nivaro_pipeline_owner_group_users as ogu') {
+      return {
+        join: () => ({
+          whereIn: (_col: string, ids: string[]) => ({
+            select: async () => fixtures.groupUsers.filter((r) => ids.includes(r.group))
+          })
+        })
+      }
+    }
+    if (table === 'nivaro_pipeline_instance_owners as io') {
+      return {
+        join: () => ({
+          whereIn: (_col: string, ids: string[]) => ({
+            select: async () => fixtures.instanceOwners.filter((r) => ids.includes(r.instance))
+          })
+        })
+      }
+    }
+    if (table === 'nivaro_users') {
+      return {
+        whereIn: (_col: string, ids: string[]) => ({
+          select: async (...cols: string[]) =>
+            cols.includes('delegate_id')
+              ? fixtures.users.filter((u) => ids.includes(u.id))
+              : fixtures.delegateUsers.filter((u) => ids.includes(u.id))
+        })
+      }
+    }
+    // Item collection tables (e.g. 'articles')
+    return {
+      whereIn: (_col: string, ids: string[]) => ({
+        select: async () => ids.map((id) => fixtures.records[`${table}:${id}`]).filter(Boolean)
+      })
+    }
+  })
+  return { database: database as unknown as typeof import('../../../db/index.js').db, tableCalls }
+}
+
+describe('resolveStateOwnersBatch', () => {
+  it('returns an empty map for no requests', async () => {
+    const result = await resolveStateOwnersBatch([])
+    expect(result.size).toBe(0)
+  })
+
+  it('resolves owners for multiple items, applies delegation only to items whose state has groups', async () => {
+    const { database, tableCalls } = makeOwnerBatchFakeDb({
+      groups: [
+        {
+          id: 'g1',
+          template: 't',
+          state: 's1',
+          name: null,
+          filters: JSON.stringify([{ field: 'priority', op: 'eq', value: 'high' }]),
+          sort: 0,
+          is_default: false,
+          priority: 0,
+          max_wip: null
+        }
+      ],
+      records: { 'articles:1': { id: '1', priority: 'high' } },
+      groupUsers: [{ group: 'g1', id: 'u1', email: 'u1@x.com', first_name: 'U1', last_name: null }],
+      instanceOwners: [
+        { instance: 'inst-a', state: 's1', id: 'u2', email: 'u2@x.com', first_name: 'U2', last_name: null },
+        { instance: 'inst-b', state: null, id: 'u3', email: 'u3@x.com', first_name: 'U3', last_name: null }
+      ],
+      users: [
+        { id: 'u1', delegate_id: 'u1-delegate', delegate_expires_at: null, is_out_of_office: true },
+        { id: 'u2', delegate_id: null, delegate_expires_at: null, is_out_of_office: false },
+        { id: 'u3', delegate_id: 'u3-delegate', delegate_expires_at: null, is_out_of_office: true }
+      ],
+      delegateUsers: [
+        { id: 'u1-delegate', email: 'delegate1@x.com', first_name: 'Delegate1', last_name: null },
+        { id: 'u3-delegate', email: 'delegate3@x.com', first_name: 'Delegate3', last_name: null }
+      ]
+    })
+
+    const result = await resolveStateOwnersBatch(
+      [
+        { key: 'A', stateId: 's1', instanceId: 'inst-a', collection: 'articles', itemId: '1' },
+        { key: 'B', stateId: 's2', instanceId: 'inst-b', collection: 'articles', itemId: '2' }
+      ],
+      database
+    )
+
+    // req A: state s1 has groups → g1 matches (priority='high') → base owner u1,
+    // plus instance owner u2 (state matches 's1') → delegation applies → u1 substituted, u2 untouched.
+    expect(result.get('A')).toEqual([
+      { id: 'u1-delegate', email: 'delegate1@x.com', first_name: 'Delegate1', last_name: null },
+      { id: 'u2', email: 'u2@x.com', first_name: 'U2', last_name: null }
+    ])
+
+    // req B: state s2 has NO groups → instance owner u3 only (state null matches any) →
+    // NO delegation applied even though u3 has an active delegate — preserves existing asymmetry.
+    expect(result.get('B')).toEqual([{ id: 'u3', email: 'u3@x.com', first_name: 'U3', last_name: null }])
+
+    // Groups fetched once for the whole batch, not once per request.
+    expect(tableCalls.filter((t) => t === 'nivaro_pipeline_owner_groups')).toHaveLength(1)
   })
 })
