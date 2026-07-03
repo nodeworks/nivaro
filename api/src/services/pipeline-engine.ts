@@ -87,6 +87,12 @@ export interface RecordFilter {
   id_value?: number | null
 }
 
+export interface RelationInfo {
+  many_collection: string
+  many_field: string
+  one_collection: string | null
+}
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 export function parseJson(val: string | null | undefined): unknown {
@@ -268,6 +274,48 @@ export async function resolveInstanceOwners(
   return rows as ResolvedOwner[]
 }
 
+export function pickWinningGroups(
+  groups: OwnerGroup[],
+  record: Record<string, unknown>,
+  relations: RelationInfo[]
+): OwnerGroup[] {
+  const nonDefault = groups.filter((g) => !coerceBool(g.is_default))
+  const defaults = groups.filter((g) => coerceBool(g.is_default))
+
+  function evalFilter(f: RecordFilter): boolean {
+    if (f.id_value != null && f.field.includes('.')) {
+      const prefix = f.field.split('.')[0]
+      const m2oRel = relations.find((r) => r.many_field === prefix)
+      const fkValue = m2oRel ? record[m2oRel.many_field] : null
+      return evalFilterOp(f.op, fkValue, f.id_value)
+    }
+    if (f.id_value != null && !f.field.includes('.')) {
+      return evalFilterOp(f.op, record[f.field], f.id_value)
+    }
+    return evalFilterOp(f.op, record[f.field], f.value)
+  }
+
+  const matched: Array<{ group: OwnerGroup; filterCount: number }> = []
+  for (const group of nonDefault) {
+    const filters = parseJson(group.filters) as RecordFilter[] | null
+    if (!filters || filters.length === 0) continue
+    if (filters.every((f) => evalFilter(f))) {
+      matched.push({ group, filterCount: filters.length })
+    }
+  }
+
+  if (matched.length > 0) {
+    matched.sort((a, b) =>
+      b.filterCount !== a.filterCount
+        ? b.filterCount - a.filterCount
+        : (a.group.priority ?? 0) - (b.group.priority ?? 0)
+    )
+    return [matched[0].group]
+  }
+
+  return defaults
+}
+
 export async function resolveStateOwners(
   stateId: string,
   instanceId: string | null,
@@ -294,14 +342,7 @@ export async function resolveStateOwners(
     // Safe fallback for dev tables that may not exist
   }
 
-  const nonDefault = groups.filter((g) => !coerceBool(g.is_default))
-  const defaults = groups.filter((g) => coerceBool(g.is_default))
-
-  let relations: Array<{
-    many_collection: string
-    many_field: string
-    one_collection: string | null
-  }> = []
+  let relations: RelationInfo[] = []
   try {
     relations = await database('nivaro_relations')
       .where({ many_collection: collection })
@@ -310,42 +351,7 @@ export async function resolveStateOwners(
     // Non-fatal
   }
 
-  function evalFilter(f: RecordFilter): boolean {
-    if (f.id_value != null && f.field.includes('.')) {
-      const prefix = f.field.split('.')[0]
-      const m2oRel = relations.find((r) => r.many_field === prefix)
-      const fkValue = m2oRel ? record[m2oRel.many_field] : null
-      return evalFilterOp(f.op, fkValue, f.id_value)
-    }
-    if (f.id_value != null && !f.field.includes('.')) {
-      return evalFilterOp(f.op, record[f.field], f.id_value)
-    }
-    return evalFilterOp(f.op, record[f.field], f.value)
-  }
-
-  const matched: Array<{ group: OwnerGroup; filterCount: number }> = []
-  for (const group of nonDefault) {
-    const filters = parseJson(group.filters) as RecordFilter[] | null
-    if (!filters || filters.length === 0) continue
-    if (filters.every((f) => evalFilter(f))) {
-      matched.push({ group, filterCount: filters.length })
-    }
-  }
-
-  let winningGroups: OwnerGroup[] = []
-  if (matched.length > 0) {
-    matched.sort((a, b) =>
-      b.filterCount !== a.filterCount
-        ? b.filterCount - a.filterCount
-        : (a.group.priority ?? 0) - (b.group.priority ?? 0)
-    )
-    winningGroups = [matched[0].group]
-  }
-
-  if (winningGroups.length === 0) {
-    winningGroups = defaults
-  }
-
+  const winningGroups = pickWinningGroups(groups, record, relations)
   const groupIds = winningGroups.map((g) => g.id)
   let baseOwners: ResolvedOwner[] = []
   if (groupIds.length > 0) {
