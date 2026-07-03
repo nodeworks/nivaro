@@ -2,12 +2,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn().mockResolvedValue(true) }))
+vi.mock('../../../services/pipeline-engine.js', () => ({
+  parseJson: (v: unknown) => {
+    if (typeof v === 'string') return JSON.parse(v)
+    return v
+  },
+  resolveStateOwnersBatch: vi.fn()
+}))
 
 import { db } from '../../../db/index.js'
+import { resolveStateOwnersBatch } from '../../../services/pipeline-engine.js'
 import {
   applySanityCeiling,
   type QueueSourceRow,
   resolveCollectionSource,
+  resolveOwnedByMeSource,
   resolveTasksSource
 } from '../../../services/queues.js'
 import { makeAdminUser } from '../../helpers.js'
@@ -128,6 +137,8 @@ describe('resolveCollectionSource — state_values filters the full match set, n
       throw new Error(`Unexpected table in test fake: ${table}`)
     })
 
+    vi.mocked(resolveStateOwnersBatch).mockResolvedValue(new Map())
+
     const result = await resolveCollectionSource(source(), makeAdminUser())
 
     expect(result.items.map((i) => i.item_id).sort()).toEqual(['2', '4'])
@@ -160,6 +171,64 @@ describe('resolveTasksSource', () => {
     const result = await resolveTasksSource()
     expect(result.items).toHaveLength(1)
     expect(result.matchedCount).toBe(1)
+    expect(result.truncated).toBe(false)
+  })
+})
+
+describe('resolveOwnedByMeSource', () => {
+  it('returns only instances where the given user is an owner, with an accurate matchedCount', async () => {
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
+      if (table === 'nivaro_workflow_instances as wi') {
+        return makeDbChain([
+          {
+            instance_id: 'i1',
+            collection: 'articles',
+            item: '1',
+            current_state: 's1',
+            state_key: 'review',
+            state_color: null
+          },
+          {
+            instance_id: 'i2',
+            collection: 'articles',
+            item: '2',
+            current_state: 's1',
+            state_key: 'review',
+            state_color: null
+          }
+        ])
+      }
+      if (table === 'nivaro_fields') return makeDbChain([{ field: 'title' }])
+      if (table === 'articles') return makeDbChain([])
+      if (table === 'nivaro_pipeline_owner_groups') return makeDbChain([])
+      if (table === 'nivaro_pipeline_instance_owners as io') {
+        return makeDbChain([
+          {
+            instance: 'i1',
+            state: 's1',
+            id: 'me',
+            email: 'me@x.com',
+            first_name: 'Me',
+            last_name: null
+          }
+        ])
+      }
+      throw new Error(`Unexpected table: ${table}`)
+    })
+
+    vi.mocked(resolveStateOwnersBatch).mockResolvedValue(
+      new Map([
+        ['articles:1', [{ id: 'me', email: 'me@x.com', first_name: 'Me', last_name: null }]],
+        [
+          'articles:2',
+          [{ id: 'other', email: 'other@x.com', first_name: 'Other', last_name: null }]
+        ]
+      ])
+    )
+
+    const result = await resolveOwnedByMeSource('me')
+    expect(result.items.map((i) => i.item_id)).toEqual(['1'])
+    expect(result.matchedCount).toBe(2)
     expect(result.truncated).toBe(false)
   })
 })

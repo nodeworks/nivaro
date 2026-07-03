@@ -908,13 +908,12 @@ export async function resolveApprovalsSource(): Promise<SourceResult> {
   return { items, matchedCount, truncated }
 }
 
-export async function resolveOwnedByMeSource(userId: string): Promise<QueueItem[]> {
+export async function resolveOwnedByMeSource(userId: string): Promise<SourceResult> {
   const instances = (await db('nivaro_workflow_instances as wi')
     .join('nivaro_workflow_bindings as b', 'wi.collection', 'b.collection')
     .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
     .whereNotNull('wi.current_state')
     .whereNull('wi.completed_at')
-    .limit(SOURCE_ROW_CAP)
     .select(
       'wi.id as instance_id',
       'wi.collection',
@@ -930,25 +929,33 @@ export async function resolveOwnedByMeSource(userId: string): Promise<QueueItem[
     state_key: string | null
     state_color: string | null
   }>
-  if (instances.length === 0) return []
+  if (instances.length === 0) return { items: [], matchedCount: 0, truncated: false }
+
+  const matchedCount = instances.length
+  const truncated = matchedCount > QUEUE_SANITY_CEILING
+  const scoped = truncated ? instances.slice(0, QUEUE_SANITY_CEILING) : instances
 
   const byCollection = new Map<string, Set<string>>()
-  for (const inst of instances) {
+  for (const inst of scoped) {
     if (!byCollection.has(inst.collection)) byCollection.set(inst.collection, new Set())
     byCollection.get(inst.collection)!.add(inst.item)
   }
   const labels = await getLabels(byCollection)
 
-  const out: QueueItem[] = []
-  for (const inst of instances) {
-    const owners = await resolveStateOwners(
-      inst.current_state,
-      inst.instance_id,
-      inst.collection,
-      inst.item
-    )
+  const ownerRequests = scoped.map((inst) => ({
+    key: `${inst.collection}:${inst.item}`,
+    stateId: inst.current_state,
+    instanceId: inst.instance_id,
+    collection: inst.collection,
+    itemId: inst.item
+  }))
+  const ownersByKey = await resolveStateOwnersBatch(ownerRequests)
+
+  const items: QueueItem[] = []
+  for (const inst of scoped) {
+    const owners = ownersByKey.get(`${inst.collection}:${inst.item}`) ?? []
     if (!owners.some((o) => o.id === userId)) continue
-    out.push({
+    items.push({
       collection: inst.collection,
       item_id: inst.item,
       label: labels[`${inst.collection}:${inst.item}`] ?? inst.item,
@@ -962,7 +969,7 @@ export async function resolveOwnedByMeSource(userId: string): Promise<QueueItem[
       url: `/collections/${inst.collection}/${inst.item}`
     })
   }
-  return out
+  return { items, matchedCount, truncated }
 }
 
 // ─── Orchestrator ───────────────────────────────────────────────────────────────
