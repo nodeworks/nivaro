@@ -374,13 +374,16 @@ export async function widgetRoutes(app: FastifyInstance) {
         if (!creator) return reply.code(404).send({ error: 'Feed not found' })
 
         try {
-          const { items } = await fetchQueueItems(feed.queue_id, creator, 'all')
           const stored = Number(feed.limit_count) || 20
           const qLimit = req.query.limit ? Number(req.query.limit) : NaN
           const limit = Math.min(
             100,
             Math.max(1, Number.isFinite(qLimit) && qLimit > 0 ? Math.min(qLimit, stored) : stored)
           )
+          // Cap resolution at the small number of rows this public route will
+          // actually return, instead of resolving the full QUEUE_SANITY_CEILING
+          // (up to 20,000 rows/source) only to discard everything past `limit`.
+          const { items } = await fetchQueueItems(feed.queue_id, creator, 'all', { ceiling: limit })
           const fields = ['id', 'label', 'state', 'sla_status', 'aging_hours']
           const rows = items.slice(0, limit).map((it) => ({
             id: it.item_id,

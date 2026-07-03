@@ -206,14 +206,21 @@ export async function buildDelegationSubstitutions(
   const out = new Map<string, ResolvedOwner | null>()
   if (ownerIds.length === 0) return out
 
-  const rows = (await database('nivaro_users')
-    .whereIn('id', ownerIds)
-    .select('id', 'delegate_id', 'delegate_expires_at', 'is_out_of_office')) as Array<{
-    id: string
-    delegate_id: string | null
-    delegate_expires_at: Date | null
-    is_out_of_office: boolean
-  }>
+  const rows = await selectInChunks(
+    ownerIds,
+    2000,
+    (chunk) =>
+      database('nivaro_users')
+        .whereIn('id', chunk)
+        .select('id', 'delegate_id', 'delegate_expires_at', 'is_out_of_office') as Promise<
+        Array<{
+          id: string
+          delegate_id: string | null
+          delegate_expires_at: Date | null
+          is_out_of_office: boolean
+        }>
+      >
+  )
   const byId = new Map(rows.map((r) => [r.id, r]))
 
   const substitutionTargets = new Map<string, string>()
@@ -231,9 +238,14 @@ export async function buildDelegationSubstitutions(
   if (substitutionTargets.size === 0) return out
 
   const delegateIds = [...new Set(substitutionTargets.values())]
-  const delegateRows = (await database('nivaro_users')
-    .whereIn('id', delegateIds)
-    .select('id', 'email', 'first_name', 'last_name')) as ResolvedOwner[]
+  const delegateRows = await selectInChunks(
+    delegateIds,
+    2000,
+    (chunk) =>
+      database('nivaro_users')
+        .whereIn('id', chunk)
+        .select('id', 'email', 'first_name', 'last_name') as Promise<ResolvedOwner[]>
+  )
   const delegateById = new Map(delegateRows.map((d) => [d.id, d]))
 
   for (const [ownerId, delegateId] of substitutionTargets) {

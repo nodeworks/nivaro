@@ -623,7 +623,8 @@ async function resolvePathValues(
 
 export async function resolveCollectionSource(
   source: QueueSourceRow,
-  user: User
+  user: User,
+  ceiling: number = QUEUE_SANITY_CEILING
 ): Promise<SourceResult> {
   const empty: SourceResult = { items: [], matchedCount: 0, truncated: false }
   if (!source.collection) return empty
@@ -684,13 +685,13 @@ export async function resolveCollectionSource(
   const afterSla = new Set(ids)
   instances = instances.filter((i) => afterSla.has(i.item))
 
-  const ceiling = applySanityCeiling(ids, QUEUE_SANITY_CEILING)
-  ids = ceiling.ids
+  const sanity = applySanityCeiling(ids, ceiling)
+  ids = sanity.ids
   const finalIdSet = new Set(ids)
   instances = instances.filter((i) => finalIdSet.has(i.item))
 
   if (ids.length === 0) {
-    return { items: [], matchedCount: ceiling.matchedCount, truncated: ceiling.truncated }
+    return { items: [], matchedCount: sanity.matchedCount, truncated: sanity.truncated }
   }
 
   const labels = await getLabels(new Map([[source.collection, new Set(ids)]]))
@@ -770,10 +771,12 @@ export async function resolveCollectionSource(
     url: `/collections/${source.collection}/${id}`
   }))
 
-  return { items, matchedCount: ceiling.matchedCount, truncated: ceiling.truncated }
+  return { items, matchedCount: sanity.matchedCount, truncated: sanity.truncated }
 }
 
-export async function resolveTasksSource(): Promise<SourceResult> {
+export async function resolveTasksSource(
+  ceiling: number = QUEUE_SANITY_CEILING
+): Promise<SourceResult> {
   const rows = (await db('nivaro_tasks as t')
     .leftJoin('nivaro_users as u', 't.assignee', 'u.id')
     .where('t.status', 'open')
@@ -801,8 +804,8 @@ export async function resolveTasksSource(): Promise<SourceResult> {
   }>
 
   const matchedCount = rows.length
-  const truncated = matchedCount > QUEUE_SANITY_CEILING
-  const scoped = truncated ? rows.slice(0, QUEUE_SANITY_CEILING) : rows
+  const truncated = matchedCount > ceiling
+  const scoped = truncated ? rows.slice(0, ceiling) : rows
 
   const now = Date.now()
   const items = scoped.map((r) => ({
@@ -830,7 +833,9 @@ export async function resolveTasksSource(): Promise<SourceResult> {
   return { items, matchedCount, truncated }
 }
 
-export async function resolveApprovalsSource(): Promise<SourceResult> {
+export async function resolveApprovalsSource(
+  ceiling: number = QUEUE_SANITY_CEILING
+): Promise<SourceResult> {
   const rows = (await db('nivaro_approval_instances as i')
     .where('i.status', 'pending')
     .orderBy('i.created_at', 'asc')
@@ -852,8 +857,8 @@ export async function resolveApprovalsSource(): Promise<SourceResult> {
   if (rows.length === 0) return { items: [], matchedCount: 0, truncated: false }
 
   const matchedCount = rows.length
-  const truncated = matchedCount > QUEUE_SANITY_CEILING
-  const scoped = truncated ? rows.slice(0, QUEUE_SANITY_CEILING) : rows
+  const truncated = matchedCount > ceiling
+  const scoped = truncated ? rows.slice(0, ceiling) : rows
 
   const stepRows = (await db('nivaro_approval_chain_steps')
     .whereIn('chain', [...new Set(scoped.map((r) => r.chain))])
@@ -908,7 +913,10 @@ export async function resolveApprovalsSource(): Promise<SourceResult> {
   return { items, matchedCount, truncated }
 }
 
-export async function resolveOwnedByMeSource(userId: string): Promise<SourceResult> {
+export async function resolveOwnedByMeSource(
+  userId: string,
+  ceiling: number = QUEUE_SANITY_CEILING
+): Promise<SourceResult> {
   const instances = (await db('nivaro_workflow_instances as wi')
     .join('nivaro_workflow_bindings as b', 'wi.collection', 'b.collection')
     .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
@@ -931,9 +939,12 @@ export async function resolveOwnedByMeSource(userId: string): Promise<SourceResu
   }>
   if (instances.length === 0) return { items: [], matchedCount: 0, truncated: false }
 
+  // matchedCount here is the count of ALL active workflow instances scanned,
+  // BEFORE the "is this user an owner" filter below is applied — so `truncated`
+  // reflects global active-instance volume, not this user's own item count.
   const matchedCount = instances.length
-  const truncated = matchedCount > QUEUE_SANITY_CEILING
-  const scoped = truncated ? instances.slice(0, QUEUE_SANITY_CEILING) : instances
+  const truncated = matchedCount > ceiling
+  const scoped = truncated ? instances.slice(0, ceiling) : instances
 
   const byCollection = new Map<string, Set<string>>()
   for (const inst of scoped) {
@@ -978,7 +989,7 @@ export async function fetchQueueItems(
   queueId: string,
   user: User,
   scope: QueueScope,
-  options: { sort?: string; filters?: Record<string, unknown> } = {}
+  options: { sort?: string; filters?: Record<string, unknown>; ceiling?: number } = {}
 ): Promise<{
   items: QueueItem[]
   stats: QueueStats
@@ -989,12 +1000,13 @@ export async function fetchQueueItems(
     .where({ queue_id: queueId })
     .orderBy('sort')) as QueueSourceRow[]
 
+  const ceiling = options.ceiling ?? QUEUE_SANITY_CEILING
   const results = await Promise.all(
     sources.map((source) => {
-      if (source.type === 'collection') return resolveCollectionSource(source, user)
-      if (source.type === 'tasks') return resolveTasksSource()
-      if (source.type === 'approvals') return resolveApprovalsSource()
-      return resolveOwnedByMeSource(user.id)
+      if (source.type === 'collection') return resolveCollectionSource(source, user, ceiling)
+      if (source.type === 'tasks') return resolveTasksSource(ceiling)
+      if (source.type === 'approvals') return resolveApprovalsSource(ceiling)
+      return resolveOwnedByMeSource(user.id, ceiling)
     })
   )
 
@@ -1008,6 +1020,11 @@ export async function fetchQueueItems(
   const availableValues = computeAvailableValues(scoped)
   const filtered = options.filters ? applyColumnFilters(scoped, options.filters) : scoped
   const sorted = options.sort ? sortItems(filtered, options.sort) : filtered
+  // Each resolver's `matchedCount` feeds only the `truncated` flag above — it is
+  // intentionally NOT summed into stats.total, since that would double-count
+  // items that appear in more than one source and would ignore scope filtering.
+  // computeStats(scoped) counts the final deduped, scope-filtered set instead,
+  // which is more accurate than a raw per-source sum.
   return { items: sorted, stats: computeStats(scoped), availableValues, truncated }
 }
 
