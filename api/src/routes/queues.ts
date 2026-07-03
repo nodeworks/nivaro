@@ -414,7 +414,8 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({
       data: result.items,
       stats: result.stats,
-      available_values: result.availableValues
+      available_values: result.availableValues,
+      truncated: result.truncated
     })
   })
 
