@@ -7,7 +7,8 @@ import { db } from '../../../db/index.js'
 import {
   applySanityCeiling,
   type QueueSourceRow,
-  resolveCollectionSource
+  resolveCollectionSource,
+  resolveTasksSource
 } from '../../../services/queues.js'
 import { makeAdminUser } from '../../helpers.js'
 
@@ -131,6 +132,34 @@ describe('resolveCollectionSource — state_values filters the full match set, n
 
     expect(result.items.map((i) => i.item_id).sort()).toEqual(['2', '4'])
     expect(result.matchedCount).toBe(2)
+    expect(result.truncated).toBe(false)
+  })
+})
+
+describe('resolveTasksSource', () => {
+  it('returns matchedCount equal to items.length when under the sanity ceiling', async () => {
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
+      if (table === 'nivaro_tasks as t') {
+        return makeDbChain([
+          {
+            id: 1,
+            title: 'Task 1',
+            target_collection: 'articles',
+            target_item: '1',
+            created_at: new Date(),
+            assignee: 'u1',
+            assignee_first: 'A',
+            assignee_last: null,
+            assignee_email: 'a@x.com'
+          }
+        ])
+      }
+      throw new Error(`Unexpected table: ${table}`)
+    })
+
+    const result = await resolveTasksSource()
+    expect(result.items).toHaveLength(1)
+    expect(result.matchedCount).toBe(1)
     expect(result.truncated).toBe(false)
   })
 })

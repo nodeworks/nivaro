@@ -773,12 +773,11 @@ export async function resolveCollectionSource(
   return { items, matchedCount: ceiling.matchedCount, truncated: ceiling.truncated }
 }
 
-export async function resolveTasksSource(): Promise<QueueItem[]> {
+export async function resolveTasksSource(): Promise<SourceResult> {
   const rows = (await db('nivaro_tasks as t')
     .leftJoin('nivaro_users as u', 't.assignee', 'u.id')
     .where('t.status', 'open')
     .orderBy('t.created_at', 'asc')
-    .limit(SOURCE_ROW_CAP)
     .select(
       't.id',
       't.title',
@@ -801,8 +800,12 @@ export async function resolveTasksSource(): Promise<QueueItem[]> {
     assignee_email: string
   }>
 
+  const matchedCount = rows.length
+  const truncated = matchedCount > QUEUE_SANITY_CEILING
+  const scoped = truncated ? rows.slice(0, QUEUE_SANITY_CEILING) : rows
+
   const now = Date.now()
-  return rows.map((r) => ({
+  const items = scoped.map((r) => ({
     collection: 'tasks',
     item_id: String(r.id),
     label: r.title,
@@ -824,13 +827,13 @@ export async function resolveTasksSource(): Promise<QueueItem[]> {
     claimed_by: null,
     url: `/collections/${r.target_collection}/${r.target_item}`
   }))
+  return { items, matchedCount, truncated }
 }
 
-export async function resolveApprovalsSource(): Promise<QueueItem[]> {
+export async function resolveApprovalsSource(): Promise<SourceResult> {
   const rows = (await db('nivaro_approval_instances as i')
     .where('i.status', 'pending')
     .orderBy('i.created_at', 'asc')
-    .limit(SOURCE_ROW_CAP)
     .select(
       'i.id',
       'i.collection',
@@ -846,10 +849,14 @@ export async function resolveApprovalsSource(): Promise<QueueItem[]> {
     current_step: number
     chain: number
   }>
-  if (rows.length === 0) return []
+  if (rows.length === 0) return { items: [], matchedCount: 0, truncated: false }
+
+  const matchedCount = rows.length
+  const truncated = matchedCount > QUEUE_SANITY_CEILING
+  const scoped = truncated ? rows.slice(0, QUEUE_SANITY_CEILING) : rows
 
   const stepRows = (await db('nivaro_approval_chain_steps')
-    .whereIn('chain', [...new Set(rows.map((r) => r.chain))])
+    .whereIn('chain', [...new Set(scoped.map((r) => r.chain))])
     .select(
       'id',
       'chain',
@@ -860,15 +867,15 @@ export async function resolveApprovalsSource(): Promise<QueueItem[]> {
     )) as ApprovalChainStep[]
 
   const byCollection = new Map<string, Set<string>>()
-  for (const r of rows) {
+  for (const r of scoped) {
     if (!byCollection.has(r.collection)) byCollection.set(r.collection, new Set())
     byCollection.get(r.collection)!.add(r.item)
   }
   const labels = await getLabels(byCollection)
 
   const now = Date.now()
-  const out: QueueItem[] = []
-  for (const r of rows) {
+  const items: QueueItem[] = []
+  for (const r of scoped) {
     const step = stepRows.find((s) => s.chain === r.chain && s.step_order === r.current_step)
     const approverIds = step ? await resolveStepApprovers(step) : []
     let owners: QueueOwner[] = []
@@ -884,7 +891,7 @@ export async function resolveApprovalsSource(): Promise<QueueItem[]> {
       owners = users.map((u) => ({ id: u.id, name: userDisplayName(u) }))
     }
 
-    out.push({
+    items.push({
       collection: r.collection,
       item_id: String(r.item),
       label: labels[`${r.collection}:${r.item}`] ?? String(r.item),
@@ -898,7 +905,7 @@ export async function resolveApprovalsSource(): Promise<QueueItem[]> {
       url: `/collections/${r.collection}/${r.item}`
     })
   }
-  return out
+  return { items, matchedCount, truncated }
 }
 
 export async function resolveOwnedByMeSource(userId: string): Promise<QueueItem[]> {
