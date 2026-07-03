@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { selectInChunks } from '../services/db-batch.js'
 import { can } from '../services/permissions.js'
 
 interface SlaRule {
@@ -133,10 +134,12 @@ export async function computeStatusBatch(
   if (ids.length === 0) return out
 
   // Latest workflow instance per item
-  const instances = await db('nivaro_workflow_instances')
-    .where({ collection })
-    .whereIn('item', ids)
-    .orderBy('started_at', 'desc')
+  const instances = await selectInChunks(ids, 2000, (chunk) =>
+    db('nivaro_workflow_instances')
+      .where({ collection })
+      .whereIn('item', chunk)
+      .orderBy('started_at', 'desc')
+  )
 
   const latestByItem = new Map<string, (typeof instances)[number]>()
   for (const inst of instances) {
@@ -162,12 +165,12 @@ export async function computeStatusBatch(
   if (withRules.length === 0) return out
 
   // Most recent entry into the current state, per instance
-  const history = await db('nivaro_workflow_history')
-    .whereIn(
-      'instance',
-      withRules.map((i) => i.id)
-    )
-    .orderBy('created_at', 'desc')
+  const history = await selectInChunks(
+    withRules.map((i) => i.id),
+    2000,
+    (chunk) =>
+      db('nivaro_workflow_history').whereIn('instance', chunk).orderBy('created_at', 'desc')
+  )
 
   const enteredAt = new Map<string, Date>()
   for (const h of history) {
