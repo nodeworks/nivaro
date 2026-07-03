@@ -14,7 +14,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { GripVertical, SlidersHorizontal } from 'lucide-react'
+import { AlertTriangle, GripVertical, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
@@ -233,6 +233,7 @@ export function QueueDetailPage() {
     data: QueueItemRow[]
     stats: QueueStats
     available_values: { collection: string[]; state: string[] }
+    truncated: boolean
   }>({
     queryKey: ['queue-items', id, scope, sort, filterValues],
     queryFn: () =>
@@ -608,6 +609,15 @@ export function QueueDetailPage() {
       </div>
 
       <div className='flex-1 overflow-y-auto p-6'>
+        {data?.truncated && (
+          <div className='mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'>
+            <AlertTriangle className='h-4 w-4 shrink-0' />
+            <span>
+              One or more sources in this queue exceeded the row safety limit — some items may be
+              missing from totals and the table below. Narrow the source filters to see everything.
+            </span>
+          </div>
+        )}
         <div
           className='mb-4 grid gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'
           style={{
