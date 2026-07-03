@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { pickWinningGroups, type OwnerGroup } from '../../../services/pipeline-engine.js'
+import { vi, describe, expect, it } from 'vitest'
+import { pickWinningGroups, buildDelegationSubstitutions, type OwnerGroup } from '../../../services/pipeline-engine.js'
 
 function group(overrides: Partial<OwnerGroup> = {}): OwnerGroup {
   return {
@@ -87,5 +87,58 @@ describe('pickWinningGroups', () => {
     })
     const result = pickWinningGroups([nonMatching], { priority: 'low' }, [])
     expect(result).toEqual([])
+  })
+})
+
+function makeFakeDb(tables: Record<string, unknown[]>) {
+  return vi.fn((table: string) => ({
+    whereIn: (_col: string, ids: string[]) => ({
+      select: async () => (tables[table] ?? []).filter((r: any) => ids.includes(r.id))
+    })
+  })) as unknown as typeof import('../../../db/index.js').db
+}
+
+describe('buildDelegationSubstitutions', () => {
+  it('returns an empty map for no owner ids without querying', async () => {
+    const database = vi.fn()
+    const result = await buildDelegationSubstitutions([], database as any)
+    expect(result.size).toBe(0)
+    expect(database).not.toHaveBeenCalled()
+  })
+
+  it('maps an out-of-office owner with a non-expired delegate to the delegate record', async () => {
+    const database = makeFakeDb({
+      nivaro_users: [
+        { id: 'u1', delegate_id: 'u2', delegate_expires_at: null, is_out_of_office: true, email: 'u1@x.com', first_name: 'U1', last_name: null },
+        { id: 'u2', email: 'u2@x.com', first_name: 'U2', last_name: null }
+      ]
+    })
+    const result = await buildDelegationSubstitutions(['u1'], database)
+    expect(result.get('u1')).toEqual({ id: 'u2', email: 'u2@x.com', first_name: 'U2', last_name: null })
+  })
+
+  it('does not substitute an owner who is not out of office', async () => {
+    const database = makeFakeDb({
+      nivaro_users: [
+        { id: 'u1', delegate_id: 'u2', delegate_expires_at: null, is_out_of_office: false }
+      ]
+    })
+    const result = await buildDelegationSubstitutions(['u1'], database)
+    expect(result.has('u1')).toBe(false)
+  })
+
+  it('does not substitute when the delegation has expired', async () => {
+    const database = makeFakeDb({
+      nivaro_users: [
+        {
+          id: 'u1',
+          delegate_id: 'u2',
+          delegate_expires_at: new Date('2000-01-01'),
+          is_out_of_office: true
+        }
+      ]
+    })
+    const result = await buildDelegationSubstitutions(['u1'], database)
+    expect(result.has('u1')).toBe(false)
   })
 })

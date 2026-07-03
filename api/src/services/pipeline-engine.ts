@@ -198,18 +198,13 @@ export async function resolveActiveDelegate(
   return userId
 }
 
-/**
- * Apply delegation substitution to a resolved owner list. For each owner that
- * is out of office with an active (non-expired) delegate, the delegate's full
- * record replaces the owner. Result is re-deduped.
- */
-export async function applyDelegations(
-  owners: ResolvedOwner[],
+export async function buildDelegationSubstitutions(
+  ownerIds: string[],
   database: typeof db = db
-): Promise<ResolvedOwner[]> {
-  if (owners.length === 0) return owners
+): Promise<Map<string, ResolvedOwner | null>> {
+  const out = new Map<string, ResolvedOwner | null>()
+  if (ownerIds.length === 0) return out
 
-  const ownerIds = owners.map((o) => o.id)
   const rows = (await database('nivaro_users')
     .whereIn('id', ownerIds)
     .select('id', 'delegate_id', 'delegate_expires_at', 'is_out_of_office')) as Array<{
@@ -220,42 +215,49 @@ export async function applyDelegations(
   }>
   const byId = new Map(rows.map((r) => [r.id, r]))
 
-  // Collect delegate ids that will be substituted in.
-  const substitutions = new Map<string, string>()
-  for (const o of owners) {
-    const u = byId.get(o.id)
+  const substitutionTargets = new Map<string, string>()
+  for (const id of ownerIds) {
+    const u = byId.get(id)
     if (!u) continue
     if (
       coerceBool(u.is_out_of_office) &&
       u.delegate_id &&
       (!u.delegate_expires_at || new Date(u.delegate_expires_at) > new Date())
     ) {
-      substitutions.set(o.id, u.delegate_id)
+      substitutionTargets.set(id, u.delegate_id)
     }
   }
+  if (substitutionTargets.size === 0) return out
 
-  if (substitutions.size === 0) return owners
-
-  // Fetch full records for the substituted delegate ids.
-  const delegateIds = [...new Set(substitutions.values())]
+  const delegateIds = [...new Set(substitutionTargets.values())]
   const delegateRows = (await database('nivaro_users')
     .whereIn('id', delegateIds)
     .select('id', 'email', 'first_name', 'last_name')) as ResolvedOwner[]
   const delegateById = new Map(delegateRows.map((d) => [d.id, d]))
 
-  const out: ResolvedOwner[] = []
-  for (const o of owners) {
-    const sub = substitutions.get(o.id)
-    if (sub) {
-      const delegate = delegateById.get(sub)
-      if (delegate) {
-        out.push(delegate)
-        continue
-      }
-    }
-    out.push(o)
+  for (const [ownerId, delegateId] of substitutionTargets) {
+    const delegate = delegateById.get(delegateId)
+    if (delegate) out.set(ownerId, delegate)
   }
-  return dedupeOwners(out)
+  return out
+}
+
+/**
+ * Apply delegation substitution to a resolved owner list. For each owner that
+ * is out of office with an active (non-expired) delegate, the delegate's full
+ * record replaces the owner. Result is re-deduped.
+ */
+export async function applyDelegations(
+  owners: ResolvedOwner[],
+  database: typeof db = db
+): Promise<ResolvedOwner[]> {
+  if (owners.length === 0) return owners
+  const substitutions = await buildDelegationSubstitutions(
+    owners.map((o) => o.id),
+    database
+  )
+  if (substitutions.size === 0) return owners
+  return dedupeOwners(owners.map((o) => substitutions.get(o.id) ?? o))
 }
 
 // ─── Owner resolution ─────────────────────────────────────────────────────────
