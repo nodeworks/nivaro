@@ -22,6 +22,7 @@ function makeDbChain(result: unknown) {
     join: vi.fn().mockReturnThis(),
     select: vi.fn().mockResolvedValue(result),
     first: vi.fn().mockResolvedValue(result),
+    // biome-ignore lint/suspicious/noThenProperty: deliberate thenable mock simulating Knex's awaitable query builder for unit tests
     then: (resolve: (v: unknown) => void) => resolve(result)
   }
   return chain
