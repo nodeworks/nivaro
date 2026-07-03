@@ -983,12 +983,13 @@ export async function fetchQueueItems(
   items: QueueItem[]
   stats: QueueStats
   availableValues: { collection: string[]; state: string[] }
+  truncated: boolean
 }> {
   const sources = (await db<QueueSourceRow>('nivaro_queue_sources')
     .where({ queue_id: queueId })
     .orderBy('sort')) as QueueSourceRow[]
 
-  const batches = await Promise.all(
+  const results = await Promise.all(
     sources.map((source) => {
       if (source.type === 'collection') return resolveCollectionSource(source, user)
       if (source.type === 'tasks') return resolveTasksSource()
@@ -997,6 +998,9 @@ export async function fetchQueueItems(
     })
   )
 
+  const truncated = results.some((r) => r.truncated)
+  const batches = results.map((r) => r.items)
+
   const merged = mergeSourceResults(batches)
   const claims = await getClaims(queueId)
   const withClaims = attachClaims(merged, claims)
@@ -1004,7 +1008,7 @@ export async function fetchQueueItems(
   const availableValues = computeAvailableValues(scoped)
   const filtered = options.filters ? applyColumnFilters(scoped, options.filters) : scoped
   const sorted = options.sort ? sortItems(filtered, options.sort) : filtered
-  return { items: sorted, stats: computeStats(scoped), availableValues }
+  return { items: sorted, stats: computeStats(scoped), availableValues, truncated }
 }
 
 export async function getWipLimits(ownerIds: string[]): Promise<Map<string, number>> {
