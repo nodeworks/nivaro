@@ -9,9 +9,10 @@ import {
 import { computeStatusBatch } from '../routes/sla.js'
 import type { CMSRelation, User } from '../types.js'
 import { getCollection, getRelations } from './collections.js'
+import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { can } from './permissions.js'
-import { parseJson, resolveStateOwners } from './pipeline-engine.js'
+import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -95,7 +96,22 @@ export interface WorkloadRow {
 
 export type QueueScope = 'mine' | 'unowned' | 'all' | 'claimed'
 
-export const SOURCE_ROW_CAP = 1000
+export const QUEUE_SANITY_CEILING = 20000
+
+export interface SourceResult {
+  items: QueueItem[]
+  matchedCount: number
+  truncated: boolean
+}
+
+export function applySanityCeiling(
+  ids: string[],
+  ceiling: number
+): { ids: string[]; truncated: boolean; matchedCount: number } {
+  const matchedCount = ids.length
+  const truncated = matchedCount > ceiling
+  return { ids: truncated ? ids.slice(0, ceiling) : ids, truncated, matchedCount }
+}
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -411,9 +427,9 @@ export async function getLabels(
       const pk = fieldNames.includes('id') ? 'id' : null
       if (!labelField || !pk) continue
 
-      const rows = (await db(collection)
-        .whereIn(pk, [...ids])
-        .select(pk, labelField)) as Array<Record<string, unknown>>
+      const rows = (await selectInChunks([...ids], 2000, (chunk) =>
+        db(collection).whereIn(pk, chunk).select(pk, labelField)
+      )) as Array<Record<string, unknown>>
       for (const row of rows) {
         const value = row[labelField]
         if (value != null) labels[`${collection}:${row[pk]}`] = String(value)
@@ -484,11 +500,11 @@ async function resolvePathValues(
   const classified = classifyRelationSegment(collection, head, relations)
 
   if (!classified) {
-    const rows = (await db(collection).whereIn('id', ids).select(['id', head])) as Array<
-      Record<string, unknown>
-    >
+    const rows = await selectInChunks(ids, 2000, (chunk) =>
+      db(collection).whereIn('id', chunk).select(['id', head])
+    )
     const out = new Map<string, string>()
-    for (const row of rows) {
+    for (const row of rows as Array<Record<string, unknown>>) {
       const v = row[head]
       out.set(String(row.id), v == null ? '' : String(v))
     }
@@ -496,12 +512,12 @@ async function resolvePathValues(
   }
 
   if (classified.type === 'm2o') {
-    const rows = (await db(collection).whereIn('id', ids).select(['id', head])) as Array<
-      Record<string, unknown>
-    >
+    const rows = await selectInChunks(ids, 2000, (chunk) =>
+      db(collection).whereIn('id', chunk).select(['id', head])
+    )
     const fkByRowId = new Map<string, string>()
     const relatedIds = new Set<string>()
-    for (const row of rows) {
+    for (const row of rows as Array<Record<string, unknown>>) {
       if (row[head] == null) continue
       const fk = String(row[head])
       fkByRowId.set(String(row.id), fk)
@@ -527,11 +543,13 @@ async function resolvePathValues(
     const relatedCol = await getCollection(classified.relatedCollection)
     const template = relatedCol?.display_template ?? null
     const selectFields = template ? extractTemplateFields(template) : ['*']
-    const relatedRows = (await db(classified.relatedCollection)
-      .whereIn('id', [...relatedIds])
-      .select(selectFields)) as Array<Record<string, unknown>>
+    const relatedRows = await selectInChunks([...relatedIds], 2000, (chunk) =>
+      db(classified.relatedCollection).whereIn('id', chunk).select(selectFields)
+    )
     const displayById = new Map<string, string>()
-    for (const r of relatedRows) displayById.set(String(r.id), resolveDisplayValue(r, template))
+    for (const r of relatedRows as Array<Record<string, unknown>>) {
+      displayById.set(String(r.id), resolveDisplayValue(r, template))
+    }
     const out = new Map<string, string>()
     for (const [rowId, fk] of fkByRowId) {
       const v = displayById.get(fk)
@@ -550,11 +568,13 @@ async function resolvePathValues(
 
   if (classified.type === 'o2m') {
     const manyField = classified.manyField as string
-    const relatedRows = (await db(classified.relatedCollection)
-      .whereIn(manyField, ids)
-      .select([manyField, ...selectFields])) as Array<Record<string, unknown>>
+    const relatedRows = await selectInChunks(ids, 2000, (chunk) =>
+      db(classified.relatedCollection)
+        .whereIn(manyField, chunk)
+        .select([manyField, ...selectFields])
+    )
     const grouped = new Map<string, Record<string, unknown>[]>()
-    for (const row of relatedRows) {
+    for (const row of relatedRows as Array<Record<string, unknown>>) {
       const parentId = String(row[manyField])
       const list = grouped.get(parentId) ?? []
       list.push(row)
@@ -570,19 +590,21 @@ async function resolvePathValues(
   }
 
   // m2m
-  const junctionRows = (await db(`${classified.junction} as _j`)
-    .whereIn(`_j.${classified.junctionFkToParent}`, ids)
-    .join(
-      `${classified.relatedCollection} as _rel`,
-      '_rel.id',
-      `_j.${classified.junctionFkToOther}`
-    )
-    .select([
-      `_j.${classified.junctionFkToParent} as __parent_id`,
-      ...selectFields.map((f) => `_rel.${f}`)
-    ])) as Array<Record<string, unknown>>
+  const junctionRows = await selectInChunks(ids, 2000, (chunk) =>
+    db(`${classified.junction} as _j`)
+      .whereIn(`_j.${classified.junctionFkToParent}`, chunk)
+      .join(
+        `${classified.relatedCollection} as _rel`,
+        '_rel.id',
+        `_j.${classified.junctionFkToOther}`
+      )
+      .select([
+        `_j.${classified.junctionFkToParent} as __parent_id`,
+        ...selectFields.map((f) => `_rel.${f}`)
+      ])
+  )
   const grouped = new Map<string, Record<string, unknown>[]>()
-  for (const row of junctionRows) {
+  for (const row of junctionRows as Array<Record<string, unknown>>) {
     const parentId = String(row.__parent_id)
     const list = grouped.get(parentId) ?? []
     list.push(row)
@@ -602,78 +624,94 @@ async function resolvePathValues(
 export async function resolveCollectionSource(
   source: QueueSourceRow,
   user: User
-): Promise<QueueItem[]> {
-  if (!source.collection) return []
-  if (!(await can(user, 'read', source.collection))) return []
+): Promise<SourceResult> {
+  const empty: SourceResult = { items: [], matchedCount: 0, truncated: false }
+  if (!source.collection) return empty
+  if (!(await can(user, 'read', source.collection))) return empty
   const conditions = (parseJson(source.filters) as QueueCondition[] | null) ?? []
   const stateValues = parseJson(source.state_values) as string[] | null
 
-  let rows: Array<{ id: string | number }>
+  let ids: string[]
   try {
-    const q = db(source.collection).select('id').limit(SOURCE_ROW_CAP)
+    const q = db(source.collection).select('id')
     applyQueueConditions(q as unknown as ConditionBuilder, conditions)
-    rows = (await q) as Array<{ id: string | number }>
+    const rows = (await q) as Array<{ id: string | number }>
+    ids = rows.map((r) => String(r.id))
   } catch {
-    return []
+    return empty
   }
-  let ids = rows.map((r) => String(r.id))
-  if (ids.length === 0) return []
-
-  const labels = await getLabels(new Map([[source.collection, new Set(ids)]]))
+  if (ids.length === 0) return empty
 
   const binding = (await db('nivaro_workflow_bindings')
     .where({ collection: source.collection })
     .first()) as { id: number; template: string } | undefined
 
-  const stateById = new Map<string, { key: string; color: string | null }>()
-  const ownersById = new Map<string, QueueOwner[]>()
+  type InstanceRow = {
+    instance_id: string
+    item: string
+    current_state: string | null
+    state_key: string | null
+    state_color: string | null
+  }
+  let instances: InstanceRow[] = []
 
   if (binding) {
-    const instances = (await db('nivaro_workflow_instances as wi')
-      .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
-      .whereIn('wi.item', ids)
-      .where('wi.collection', source.collection)
-      .select(
-        'wi.id as instance_id',
-        'wi.item',
-        'wi.current_state',
-        's.key as state_key',
-        's.color as state_color'
-      )) as Array<{
-      instance_id: string
-      item: string
-      current_state: string | null
-      state_key: string | null
-      state_color: string | null
-    }>
+    instances = (await selectInChunks(ids, 2000, (chunk) =>
+      db('nivaro_workflow_instances as wi')
+        .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
+        .whereIn('wi.item', chunk)
+        .where('wi.collection', source.collection)
+        .select(
+          'wi.id as instance_id',
+          'wi.item',
+          'wi.current_state',
+          's.key as state_key',
+          's.color as state_color'
+        )
+    )) as InstanceRow[]
 
     if (stateValues?.length) {
       const keep = new Set(
         instances.filter((i) => i.state_key && stateValues.includes(i.state_key)).map((i) => i.item)
       )
       ids = ids.filter((id) => keep.has(id))
-    }
-
-    for (const inst of instances) {
-      if (!ids.includes(inst.item)) continue
-      if (inst.state_key) stateById.set(inst.item, { key: inst.state_key, color: inst.state_color })
-      if (inst.current_state) {
-        const owners = await resolveStateOwners(
-          inst.current_state,
-          inst.instance_id,
-          source.collection,
-          inst.item
-        )
-        ownersById.set(
-          inst.item,
-          owners.map((o) => ({ id: o.id, name: userDisplayName(o) }))
-        )
-      }
+      instances = instances.filter((i) => keep.has(i.item))
     }
   }
 
   const slaMap = ids.length ? await computeStatusBatch(source.collection, ids) : {}
   ids = filterBySlaStatus(ids, slaMap, source.sla_filter)
+  const afterSla = new Set(ids)
+  instances = instances.filter((i) => afterSla.has(i.item))
+
+  const ceiling = applySanityCeiling(ids, QUEUE_SANITY_CEILING)
+  ids = ceiling.ids
+  const finalIdSet = new Set(ids)
+  instances = instances.filter((i) => finalIdSet.has(i.item))
+
+  if (ids.length === 0) {
+    return { items: [], matchedCount: ceiling.matchedCount, truncated: ceiling.truncated }
+  }
+
+  const labels = await getLabels(new Map([[source.collection, new Set(ids)]]))
+
+  const stateById = new Map<string, { key: string; color: string | null }>()
+  for (const inst of instances) {
+    if (inst.state_key) stateById.set(inst.item, { key: inst.state_key, color: inst.state_color })
+  }
+
+  const ownerRequests = instances
+    .filter((inst) => inst.current_state)
+    .map((inst) => ({
+      key: inst.item,
+      stateId: inst.current_state as string,
+      instanceId: inst.instance_id,
+      collection: source.collection as string,
+      itemId: inst.item
+    }))
+  const ownersByItem = ownerRequests.length
+    ? await resolveStateOwnersBatch(ownerRequests)
+    : new Map<string, ResolvedOwner[]>()
 
   const extraFieldPaths = (parseJson(source.extra_fields) as string[] | null) ?? []
   const extraById = new Map<string, Record<string, unknown>>()
@@ -709,19 +747,21 @@ export async function resolveCollectionSource(
   if (rules.length && ids.length) {
     const fields = new Set<string>(['id'])
     for (const rule of rules) for (const f of referencedFields(rule.conditions)) fields.add(f)
-    const riskRows = (await db(source.collection)
-      .whereIn('id', ids)
-      .select([...fields])) as Record<string, unknown>[]
-    atRiskMap = evaluateRows(riskRows, rules)
+    const riskRows = await selectInChunks(ids, 2000, (chunk) =>
+      db(source.collection as string)
+        .whereIn('id', chunk)
+        .select([...fields])
+    )
+    atRiskMap = evaluateRows(riskRows as Record<string, unknown>[], rules)
   }
 
-  return ids.map((id) => ({
+  const items = ids.map((id) => ({
     collection: source.collection as string,
     item_id: id,
     label: labels[`${source.collection}:${id}`] ?? id,
     state: stateById.get(id)?.key ?? null,
     state_color: stateById.get(id)?.color ?? null,
-    owners: ownersById.get(id) ?? [],
+    owners: (ownersByItem.get(id) ?? []).map((o) => ({ id: o.id, name: userDisplayName(o) })),
     sla_status: slaMap[id]?.status ?? null,
     at_risk: !!atRiskMap[id]?.at_risk,
     aging_hours: slaMap[id]?.elapsed_hours ?? null,
@@ -729,6 +769,8 @@ export async function resolveCollectionSource(
     extra: extraById.get(id) ?? {},
     url: `/collections/${source.collection}/${id}`
   }))
+
+  return { items, matchedCount: ceiling.matchedCount, truncated: ceiling.truncated }
 }
 
 export async function resolveTasksSource(): Promise<QueueItem[]> {
