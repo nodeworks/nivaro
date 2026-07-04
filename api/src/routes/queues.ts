@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { enqueueQueueMaterializationBackfill } from '../functions/queue-materialization-jobs.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
@@ -304,6 +305,10 @@ export async function queuesRoutes(app: FastifyInstance) {
         }))
       )
     })
+
+    if ((queue as any)?.materialized) {
+      await enqueueQueueMaterializationBackfill(id)
+    }
 
     const sources = (await db<QueueSourceRow>('nivaro_queue_sources')
       .where({ queue_id: id })
