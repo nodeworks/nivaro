@@ -8,8 +8,7 @@ vi.mock('../../../plugins/inngest.js', () => ({
 import { db } from '../../../db/index.js'
 import {
   type MaterializedRowInput,
-  type StepRunner,
-  writeMaterializedRowsChunked
+  writeMaterializedRowChunk
 } from '../../../functions/queue-materialization-jobs.js'
 
 function makeRow(overrides: Partial<MaterializedRowInput> = {}): MaterializedRowInput {
@@ -32,10 +31,6 @@ function makeRow(overrides: Partial<MaterializedRowInput> = {}): MaterializedRow
     ...overrides
   }
 }
-
-// step.run just executes the callback inline — the tests care about the delete/insert
-// call sequence inside the callback, not Inngest's own step-memoization behavior.
-const step: StepRunner = { run: async (_id, fn) => fn() }
 
 // Builds a fresh `nivaro_queue_items`-shaped mock chain that records every whereIn(...)
 // call (in call order) plus delete/insert markers pushed into a shared `callOrder` array,
@@ -66,7 +61,7 @@ function makeQueueItemsChain(
 
 afterEach(() => vi.clearAllMocks())
 
-describe('writeMaterializedRowsChunked', () => {
+describe('writeMaterializedRowChunk', () => {
   it('deletes existing rows before inserting the new chunk (delete-then-insert, not a bare insert)', async () => {
     const callOrder: string[] = []
     const whereInCalls: Array<{ col: string; ids: unknown[] }> = []
@@ -81,7 +76,7 @@ describe('writeMaterializedRowsChunked', () => {
       throw new Error(`unexpected table: ${table}`)
     })
 
-    await writeMaterializedRowsChunked(step, 'q1', 1, [makeRow()])
+    await writeMaterializedRowChunk('q1', 1, [makeRow()])
 
     const deleteIdx = callOrder.indexOf('delete')
     const insertIdx = callOrder.indexOf('insert')
@@ -112,7 +107,7 @@ describe('writeMaterializedRowsChunked', () => {
       makeRow({ item_id: 'b' }),
       makeRow({ item_id: 'c' })
     ]
-    await writeMaterializedRowsChunked(step, 'q1', 1, chunkRows)
+    await writeMaterializedRowChunk('q1', 1, chunkRows)
 
     // The first whereIn('item_id', ...) call happens before delete() — that is the
     // delete step's scope. It must be exactly this chunk's ids, not some other/broader set.
@@ -123,7 +118,9 @@ describe('writeMaterializedRowsChunked', () => {
   })
 
   it('does not let a later, larger chunk widen an earlier chunk delete scope', async () => {
-    // Two chunks processed in the same call: chunk 0 = ['a','b'], chunk 1 = ['c'].
+    // Two chunks written via two separate calls: chunk 0 = 1000 ids, chunk 1 = 2 ids —
+    // mirrors how queueMaterializationBackfill's merged resolve-and-write step slices
+    // WRITE_CHUNK_SIZE-sized chunks and calls writeMaterializedRowChunk once per slice.
     // Regression guard for the delete accidentally being scoped to the full row set
     // (all chunks) instead of just the chunk currently being written.
     const deleteScopes: unknown[][] = []
@@ -157,13 +154,16 @@ describe('writeMaterializedRowsChunked', () => {
       throw new Error(`unexpected table: ${table}`)
     })
 
-    // WRITE_CHUNK_SIZE is 1000 in the source — build > 1000 rows so two chunks are written.
-    const rows: MaterializedRowInput[] = []
+    // 1002 rows split into a 1000-row chunk and a 2-row chunk, written via two calls —
+    // this is what the caller (the merged per-source step) does internally.
+    const allRows: MaterializedRowInput[] = []
     for (let i = 0; i < 1002; i++) {
-      rows.push(makeRow({ item_id: `item-${i}` }))
+      allRows.push(makeRow({ item_id: `item-${i}` }))
     }
-
-    await writeMaterializedRowsChunked(step, 'q1', 1, rows)
+    const WRITE_CHUNK_SIZE = 1000
+    for (let i = 0; i < allRows.length; i += WRITE_CHUNK_SIZE) {
+      await writeMaterializedRowChunk('q1', 1, allRows.slice(i, i + WRITE_CHUNK_SIZE))
+    }
 
     expect(deleteScopes).toHaveLength(2)
     expect(deleteScopes[0]).toHaveLength(1000)
@@ -197,7 +197,7 @@ describe('writeMaterializedRowsChunked', () => {
       makeRow({ item_id: 'item-a', ownerIds: ['user-1', 'user-2'] }),
       makeRow({ item_id: 'item-b', ownerIds: ['user-3'] })
     ]
-    await writeMaterializedRowsChunked(step, 'q1', 1, rows)
+    await writeMaterializedRowChunk('q1', 1, rows)
 
     expect(ownerInsertRows).toBeDefined()
     const forItemA = ownerInsertRows?.filter(
@@ -258,13 +258,13 @@ describe('writeMaterializedRowsChunked', () => {
 
     try {
       install()
-      await expect(writeMaterializedRowsChunked(step, 'q1', 1, rows)).resolves.not.toThrow()
+      await expect(writeMaterializedRowChunk('q1', 1, rows)).resolves.not.toThrow()
 
       // Simulate the retry: same chunk, same queueId/sourceId, no special "clean" mock
       // state required — the delete is a no-op on a table with nothing left to delete,
       // and the writer still runs the insert to completion.
       install()
-      await expect(writeMaterializedRowsChunked(step, 'q1', 1, rows)).resolves.not.toThrow()
+      await expect(writeMaterializedRowChunk('q1', 1, rows)).resolves.not.toThrow()
     } finally {
       vi.useRealTimers()
     }

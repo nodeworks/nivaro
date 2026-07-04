@@ -30,12 +30,6 @@ export async function enqueueQueueMaterializationBackfill(queueId: string): Prom
   }
 }
 
-// Minimal structural subset of Inngest's step tools — just enough to call step.run
-// from a shared helper without importing the full generic StepTools type.
-export interface StepRunner {
-  run(id: string, fn: () => Promise<void>): Promise<unknown>
-}
-
 const WRITE_CHUNK_SIZE = 1000
 
 // One row's worth of everything nivaro_queue_items + nivaro_queue_item_owners needs.
@@ -148,78 +142,75 @@ async function buildCollectionSourceRows(
   })
 }
 
-// Idempotent chunked writer, shared by all four source types. Each chunk is its own
-// Inngest step — retrying a failed chunk re-runs delete-then-insert for just that
-// chunk's ids, which is a safe no-op against already-written rows instead of hitting
-// the (queue_id, source_id, collection, item_id) unique constraint. Rows are grouped by
-// collection within the chunk (only `owned_by_me` mixes collections in one source) so
-// the delete/select can use plain whereIn instead of a large OR expansion.
-export async function writeMaterializedRowsChunked(
-  step: StepRunner,
+// Idempotent single-chunk writer, shared by all four source types — the delete-then-
+// insert-then-select-then-owner-insert body for exactly one chunk's worth of rows, no
+// `step` dependency. Rows are grouped by collection within the chunk (only
+// `owned_by_me` mixes collections in one source) so the delete/select can use plain
+// whereIn instead of a large OR expansion.
+//
+// Callers are responsible for chunking (WRITE_CHUNK_SIZE) and for the surrounding
+// Inngest step boundary — this function itself never calls step.run, so it can be
+// invoked in a tight loop from inside a single already-open step (see
+// queueMaterializationBackfill below) without violating Inngest's no-nested-steps rule.
+export async function writeMaterializedRowChunk(
   queueId: string,
   sourceId: number,
-  rows: MaterializedRowInput[]
+  chunk: MaterializedRowInput[]
 ): Promise<void> {
-  for (let i = 0; i < rows.length; i += WRITE_CHUNK_SIZE) {
-    const chunk = rows.slice(i, i + WRITE_CHUNK_SIZE)
-    const chunkIndex = Math.floor(i / WRITE_CHUNK_SIZE)
-    await step.run(`backfill-source-${sourceId}-chunk-${chunkIndex}`, async () => {
-      const byCollection = new Map<string, MaterializedRowInput[]>()
-      for (const row of chunk) {
-        const arr = byCollection.get(row.collection) ?? []
-        arr.push(row)
-        byCollection.set(row.collection, arr)
+  const byCollection = new Map<string, MaterializedRowInput[]>()
+  for (const row of chunk) {
+    const arr = byCollection.get(row.collection) ?? []
+    arr.push(row)
+    byCollection.set(row.collection, arr)
+  }
+
+  for (const [collection, collRows] of byCollection) {
+    const itemIds = collRows.map((r) => r.item_id)
+
+    await db('nivaro_queue_items')
+      .where({ queue_id: queueId, source_id: sourceId, collection })
+      .whereIn('item_id', itemIds)
+      .delete()
+
+    await db('nivaro_queue_items').insert(
+      collRows.map((r) => ({
+        queue_id: queueId,
+        source_id: sourceId,
+        collection: r.collection,
+        item_id: r.item_id,
+        label: r.label,
+        state: r.state,
+        state_color: r.state_color,
+        entered_state_at: r.entered_state_at,
+        sla_duration_hours: r.sla_duration_hours,
+        sla_warning_pct: r.sla_warning_pct,
+        sla_business_hours_only: r.sla_business_hours_only,
+        at_risk: r.at_risk,
+        at_risk_color: r.at_risk_color,
+        owner_names: r.owner_names,
+        extra: JSON.stringify(r.extra ?? {}),
+        url: r.url,
+        updated_at: new Date()
+      }))
+    )
+
+    const inserted = (await db('nivaro_queue_items')
+      .where({ queue_id: queueId, source_id: sourceId, collection })
+      .whereIn('item_id', itemIds)
+      .select('id', 'item_id')) as Array<{ id: number; item_id: string }>
+
+    const idByItemId = new Map(inserted.map((r) => [r.item_id, r.id]))
+    const ownerRows: Array<{ queue_item_id: number; user_id: string }> = []
+    for (const row of collRows) {
+      const queueItemId = idByItemId.get(row.item_id)
+      if (queueItemId === undefined) continue
+      for (const userId of row.ownerIds) {
+        ownerRows.push({ queue_item_id: queueItemId, user_id: userId })
       }
-
-      for (const [collection, collRows] of byCollection) {
-        const itemIds = collRows.map((r) => r.item_id)
-
-        await db('nivaro_queue_items')
-          .where({ queue_id: queueId, source_id: sourceId, collection })
-          .whereIn('item_id', itemIds)
-          .delete()
-
-        await db('nivaro_queue_items').insert(
-          collRows.map((r) => ({
-            queue_id: queueId,
-            source_id: sourceId,
-            collection: r.collection,
-            item_id: r.item_id,
-            label: r.label,
-            state: r.state,
-            state_color: r.state_color,
-            entered_state_at: r.entered_state_at,
-            sla_duration_hours: r.sla_duration_hours,
-            sla_warning_pct: r.sla_warning_pct,
-            sla_business_hours_only: r.sla_business_hours_only,
-            at_risk: r.at_risk,
-            at_risk_color: r.at_risk_color,
-            owner_names: r.owner_names,
-            extra: JSON.stringify(r.extra ?? {}),
-            url: r.url,
-            updated_at: new Date()
-          }))
-        )
-
-        const inserted = (await db('nivaro_queue_items')
-          .where({ queue_id: queueId, source_id: sourceId, collection })
-          .whereIn('item_id', itemIds)
-          .select('id', 'item_id')) as Array<{ id: number; item_id: string }>
-
-        const idByItemId = new Map(inserted.map((r) => [r.item_id, r.id]))
-        const ownerRows: Array<{ queue_item_id: number; user_id: string }> = []
-        for (const row of collRows) {
-          const queueItemId = idByItemId.get(row.item_id)
-          if (queueItemId === undefined) continue
-          for (const userId of row.ownerIds) {
-            ownerRows.push({ queue_item_id: queueItemId, user_id: userId })
-          }
-        }
-        if (ownerRows.length > 0) {
-          await db('nivaro_queue_item_owners').insert(ownerRows)
-        }
-      }
-    })
+    }
+    if (ownerRows.length > 0) {
+      await db('nivaro_queue_item_owners').insert(ownerRows)
+    }
   }
 }
 
@@ -263,38 +254,48 @@ export const queueMaterializationBackfill = inngest.createFunction(
       .orderBy('sort')) as QueueSourceRow[]
 
     for (const source of sources) {
-      // The row-resolution phase (~90-110 DB queries, tens of seconds against a WAN-latency
-      // MSSQL instance for a large queue) MUST be its own step. Inngest replays the entire
-      // function body from the top on every retry/step-resumption — only step.run results are
-      // memoized/skipped on replay. Running this bare meant the combined duration of the
-      // resolve PLUS the first write-chunk step regularly exceeded Inngest's per-step timeout,
-      // erroring out, and then re-running the whole unmemoized resolve again on every retry —
-      // an unrecoverable loop for large queues.
-      const resolved = await step.run(`resolve-source-${source.id}`, async () => {
+      // Resolution AND the chunked writes are merged into ONE step per source. They used
+      // to be separate steps (resolve-source-N returning the full rows array, then N
+      // further per-chunk write steps) — but Inngest serializes a step.run return value to
+      // JSON and ships it over HTTP, and for a large queue (~20k rows) that payload landed
+      // around 7.4MB, over Inngest's step-output size limit; the step failed instantly
+      // (0ms, before any work even started) on every attempt, an unrecoverable loop. Doing
+      // the writes inline here means the step returns only a row count — tiny regardless of
+      // queue size — while the actual DB writes still go through the exact same idempotent
+      // delete-then-insert-then-select-then-owner-insert logic as before, just invoked as
+      // plain in-step code instead of as separate step.run calls (Inngest doesn't support
+      // nested step.run inside an already-running step body).
+      //
+      // Retry-safety tradeoff: a mid-write failure now retries this ENTIRE source's
+      // resolve-and-write (Inngest replays the whole function body on retry, and only
+      // step.run results are memoized — so failing partway through this step re-does
+      // everything inside it), not just the one failed chunk as before. This is still safe,
+      // not a regression into the original bare-insert bug: writeMaterializedRowChunk is
+      // still delete-then-insert per chunk, so redoing the whole source on retry is
+      // idempotent, just potentially slower.
+      //
+      // Because resolution and writing now happen inside the same step, rows never cross
+      // the Inngest step-output JSON boundary — entered_state_at stays a real Date the
+      // whole way through, so the previous rehydration step (`new Date(r.entered_state_at)`)
+      // is no longer needed and has been removed.
+      await step.run(`resolve-and-write-source-${source.id}`, async () => {
+        let rows: MaterializedRowInput[]
         if (source.type === 'collection' && source.collection) {
-          return buildCollectionSourceRows(source, ownerUser)
+          rows = await buildCollectionSourceRows(source, ownerUser)
         } else if (source.type === 'tasks') {
-          return (await resolveTasksSource(QUEUE_SANITY_CEILING)).items.map(rowFromQueueItem)
+          rows = (await resolveTasksSource(QUEUE_SANITY_CEILING)).items.map(rowFromQueueItem)
         } else if (source.type === 'approvals') {
-          return (await resolveApprovalsSource(QUEUE_SANITY_CEILING)).items.map(rowFromQueueItem)
+          rows = (await resolveApprovalsSource(QUEUE_SANITY_CEILING)).items.map(rowFromQueueItem)
         } else {
-          return (await resolveOwnedByMeSource(ownerUser.id, QUEUE_SANITY_CEILING)).items.map(
+          rows = (await resolveOwnedByMeSource(ownerUser.id, QUEUE_SANITY_CEILING)).items.map(
             rowFromQueueItem
           )
         }
+        for (let i = 0; i < rows.length; i += WRITE_CHUNK_SIZE) {
+          await writeMaterializedRowChunk(queueId, source.id, rows.slice(i, i + WRITE_CHUNK_SIZE))
+        }
+        return rows.length
       })
-      // step.run's result is Jsonify<T>'d by Inngest whenever it's replayed from memoized
-      // step state (as opposed to executed fresh) — Date instances come back as ISO strings,
-      // which is why `resolved`'s inferred type has entered_state_at as `string | null` here,
-      // not `Date | null`. Rehydrate before handing rows to writeMaterializedRowsChunked's DB
-      // insert — the nivaro_queue_items.entered_state_at column is a real datetime2 column via
-      // knex/tedious, which expects an actual Date instance.
-      const rows: MaterializedRowInput[] = resolved.map((r) => ({
-        ...r,
-        extra: r.extra,
-        entered_state_at: r.entered_state_at ? new Date(r.entered_state_at) : null
-      }))
-      await writeMaterializedRowsChunked(step, queueId, source.id, rows)
     }
 
     // A write to an item that occurs after this job resolved its source but before this
