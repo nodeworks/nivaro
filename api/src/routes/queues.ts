@@ -7,7 +7,8 @@ import type { QueueRow, QueueScope, QueueSourceRow, QueueSourceType } from '../s
 import {
   computeAvailableExtraFields,
   fetchQueueItems,
-  fetchQueueWorkload
+  fetchQueueWorkload,
+  parsePaginationParams
 } from '../services/queues.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 
@@ -374,17 +375,21 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({ data: { visible_columns: body.visible_columns } })
   })
 
-  // GET /:id/items?scope=mine|unowned|all|claimed&sort=&filters= — fan-out worklist
+  // GET /:id/items?scope=mine|unowned|all|claimed&sort=&filters=&page=&limit= — fan-out worklist
   app.get('/:id/items', async (req, reply) => {
     const { id } = req.params as { id: string }
     const {
       scope = 'all',
       sort = '',
-      filters
+      filters,
+      page: pageRaw,
+      limit: limitRaw
     } = req.query as {
       scope?: string
       sort?: string
       filters?: string
+      page?: string
+      limit?: string
     }
     if (!['mine', 'unowned', 'all', 'claimed'].includes(scope)) {
       return reply.code(400).send({ error: 'scope must be mine, unowned, all, or claimed' })
@@ -407,15 +412,25 @@ export async function queuesRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
+    // Pagination is opt-in: only applied when the caller actually sent a page
+    // or limit param. The admin Kanban view shares this same endpoint but
+    // needs the full matching set (it renders every item as a card grouped
+    // by state), so it omits both params to get everything, same as before
+    // this feature existed.
+    const paginationRequested = pageRaw !== undefined || limitRaw !== undefined
+    const { page, limit } = parsePaginationParams(pageRaw, limitRaw)
+
     const result = await fetchQueueItems(id, req.user!, scope as QueueScope, {
       sort,
-      filters: parsedFilters
+      filters: parsedFilters,
+      ...(paginationRequested ? { page, limit } : {})
     })
     return reply.send({
       data: result.items,
       stats: result.stats,
       available_values: result.availableValues,
-      truncated: result.truncated
+      truncated: result.truncated,
+      total: result.total
     })
   })
 
