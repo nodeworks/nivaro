@@ -7,18 +7,19 @@ import { hooks } from './registry.js'
 // adds negligible cost for the common case.
 export function registerQueueMaterializationHooks() {
   hooks.after('*', 'create', async (ctx) => {
-    if (!ctx.result) return
-    const id = (ctx.result as { id?: string | number }).id
-    if (id == null) return
-    await syncMaterializedQueueItem(ctx.collection, String(id))
+    if (ctx.collection.startsWith('nivaro_')) return
+    if (ctx.keys?.[0] == null) return
+    await syncMaterializedQueueItem(ctx.collection, String(ctx.keys[0]))
   })
 
   hooks.after('*', 'update', async (ctx) => {
+    if (ctx.collection.startsWith('nivaro_')) return
     if (ctx.keys?.[0] == null) return
     await syncMaterializedQueueItem(ctx.collection, String(ctx.keys[0]))
   })
 
   hooks.after('*', 'delete', async (ctx) => {
+    if (ctx.collection.startsWith('nivaro_')) return
     if (ctx.keys?.[0] == null) return
     await syncMaterializedQueueItem(ctx.collection, String(ctx.keys[0]))
   })
