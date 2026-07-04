@@ -58,6 +58,7 @@ export interface QueueRow {
   role_id: string | null
   view_mode: 'table' | 'kanban' | 'both'
   is_active: boolean | number
+  materialized: boolean | number
   created_at: Date
   updated_at: Date | null
 }

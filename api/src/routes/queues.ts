@@ -306,7 +306,7 @@ export async function queuesRoutes(app: FastifyInstance) {
       )
     })
 
-    if ((queue as any)?.materialized) {
+    if (queue.materialized) {
       await enqueueQueueMaterializationBackfill(id)
     }
 
