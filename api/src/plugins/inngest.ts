@@ -19,13 +19,21 @@ export const inngest = new Inngest({
   isDev: config.NODE_ENV === 'development'
 })
 
-// Register Inngest functions here as you build them:
-// import { myFunction } from '../functions/my-function.js'
-// const functions = [myFunction]
-const functions: Parameters<typeof serve>[0]['functions'] = []
-
 export const inngestPlugin = fp(async (app: FastifyInstance) => {
   app.decorate('inngest', inngest)
+
+  // Function modules call `inngest.createFunction(...)` at their own module top
+  // level, so importing them here at THIS module's top level would create a
+  // circular import (this file would need to finish initializing `inngest` before
+  // the function module's top-level code could use it, but the function module is
+  // pulled in first as a dependency of this one) — same shape as the
+  // registry<->executor circular dep in flows/registry.ts, same fix: defer the
+  // import until this plugin actually registers, well after both modules have
+  // finished loading.
+  const { queueMaterializationBackfill } = await import(
+    '../functions/queue-materialization-jobs.js'
+  )
+  const functions: Parameters<typeof serve>[0]['functions'] = [queueMaterializationBackfill]
 
   const handler = serve({ client: inngest, functions })
 
