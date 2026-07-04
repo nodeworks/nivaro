@@ -237,6 +237,28 @@ export function computeAvailableValues(items: QueueItem[]): {
   return { collection: [...collections].sort(), state: [...states].sort() }
 }
 
+export function paginateItems<T>(
+  items: T[],
+  page?: number,
+  limit?: number
+): { items: T[]; total: number } {
+  const total = items.length
+  if (page == null || limit == null) return { items, total }
+  const start = (page - 1) * limit
+  return { items: items.slice(start, start + limit), total }
+}
+
+export function parsePaginationParams(
+  pageRaw: string | undefined,
+  limitRaw: string | undefined
+): { page: number; limit: number } {
+  const pageNum = Number(pageRaw)
+  const page = Number.isFinite(pageNum) && pageNum > 0 ? Math.floor(pageNum) : 1
+  const limitNum = Number(limitRaw)
+  const limit = Number.isFinite(limitNum) && limitNum > 0 ? Math.min(Math.floor(limitNum), 100) : 25
+  return { page, limit }
+}
+
 export function computeStats(items: QueueItem[]): QueueStats {
   const by_state: Record<string, number> = {}
   let unowned = 0

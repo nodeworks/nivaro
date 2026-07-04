@@ -13,6 +13,8 @@ import {
   formatMultiValueCell,
   groupByOwner,
   mergeSourceResults,
+  paginateItems,
+  parsePaginationParams,
   type QueueItem,
   type QueueScope,
   type QueueSourceRow,
@@ -640,5 +642,59 @@ describe('computeAvailableValues', () => {
       state: []
     })
     expect(computeAvailableValues([])).toEqual({ collection: [], state: [] })
+  })
+})
+
+describe('paginateItems', () => {
+  const five = [1, 2, 3, 4, 5]
+
+  it('returns all items unchanged and total = length when page/limit are omitted', () => {
+    expect(paginateItems(five)).toEqual({ items: five, total: 5 })
+  })
+
+  it('returns the first page', () => {
+    expect(paginateItems(five, 1, 2)).toEqual({ items: [1, 2], total: 5 })
+  })
+
+  it('returns the second page', () => {
+    expect(paginateItems(five, 2, 2)).toEqual({ items: [3, 4], total: 5 })
+  })
+
+  it('returns a partial last page', () => {
+    expect(paginateItems(five, 3, 2)).toEqual({ items: [5], total: 5 })
+  })
+
+  it('returns an empty array (not an error) for a page beyond the last one, total still accurate', () => {
+    expect(paginateItems(five, 10, 2)).toEqual({ items: [], total: 5 })
+  })
+
+  it('returns everything when only page is given but not limit', () => {
+    expect(paginateItems(five, 2)).toEqual({ items: five, total: 5 })
+  })
+})
+
+describe('parsePaginationParams', () => {
+  it('defaults to page 1, limit 25 when both are undefined', () => {
+    expect(parsePaginationParams(undefined, undefined)).toEqual({ page: 1, limit: 25 })
+  })
+
+  it('parses valid numeric strings', () => {
+    expect(parsePaginationParams('3', '50')).toEqual({ page: 3, limit: 50 })
+  })
+
+  it('floors fractional values', () => {
+    expect(parsePaginationParams('2.9', '10.9')).toEqual({ page: 2, limit: 10 })
+  })
+
+  it('falls back to defaults for non-numeric strings', () => {
+    expect(parsePaginationParams('abc', 'xyz')).toEqual({ page: 1, limit: 25 })
+  })
+
+  it('falls back to defaults for zero or negative values', () => {
+    expect(parsePaginationParams('0', '-5')).toEqual({ page: 1, limit: 25 })
+  })
+
+  it('clamps limit to a maximum of 100', () => {
+    expect(parsePaginationParams('1', '500')).toEqual({ page: 1, limit: 100 })
   })
 })
