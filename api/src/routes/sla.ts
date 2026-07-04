@@ -33,7 +33,7 @@ function formatRule(row: SlaRule): SlaRule {
   }
 }
 
-function businessHoursElapsed(from: Date, to: Date): number {
+export function businessHoursElapsed(from: Date, to: Date): number {
   let hours = 0
   const current = new Date(from)
   while (current < to) {
