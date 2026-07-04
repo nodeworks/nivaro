@@ -109,8 +109,10 @@ describe('queueItemMatchesSource', () => {
         elapsed_hours: 10,
         duration_hours: 8,
         warning_threshold_pct: 80,
+        business_hours_only: false,
         status: 'breached',
-        remaining_hours: -2
+        remaining_hours: -2,
+        entered_at: new Date('2024-01-01T00:00:00Z')
       }
     })
     const result = await queueItemMatchesSource('articles', '1', source({ sla_filter: 'breached' }))

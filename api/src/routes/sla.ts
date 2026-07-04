@@ -112,8 +112,10 @@ export interface SlaBatchEntry {
   elapsed_hours: number
   duration_hours: number
   warning_threshold_pct: number
+  business_hours_only: boolean
   status: 'ok' | 'warning' | 'breached'
   remaining_hours: number
+  entered_at: Date
 }
 
 function round1(n: number): number {
@@ -196,8 +198,10 @@ export async function computeStatusBatch(
       elapsed_hours: round1(elapsedHours),
       duration_hours: rule.duration_hours,
       warning_threshold_pct: rule.warning_threshold_pct,
+      business_hours_only: !!rule.business_hours_only,
       status,
-      remaining_hours: round1(rule.duration_hours - elapsedHours)
+      remaining_hours: round1(rule.duration_hours - elapsedHours),
+      entered_at: entered
     }
   }
 
