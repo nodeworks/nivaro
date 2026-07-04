@@ -263,18 +263,37 @@ export const queueMaterializationBackfill = inngest.createFunction(
       .orderBy('sort')) as QueueSourceRow[]
 
     for (const source of sources) {
-      let rows: MaterializedRowInput[]
-      if (source.type === 'collection' && source.collection) {
-        rows = await buildCollectionSourceRows(source, ownerUser)
-      } else if (source.type === 'tasks') {
-        rows = (await resolveTasksSource(QUEUE_SANITY_CEILING)).items.map(rowFromQueueItem)
-      } else if (source.type === 'approvals') {
-        rows = (await resolveApprovalsSource(QUEUE_SANITY_CEILING)).items.map(rowFromQueueItem)
-      } else {
-        rows = (await resolveOwnedByMeSource(ownerUser.id, QUEUE_SANITY_CEILING)).items.map(
-          rowFromQueueItem
-        )
-      }
+      // The row-resolution phase (~90-110 DB queries, tens of seconds against a WAN-latency
+      // MSSQL instance for a large queue) MUST be its own step. Inngest replays the entire
+      // function body from the top on every retry/step-resumption — only step.run results are
+      // memoized/skipped on replay. Running this bare meant the combined duration of the
+      // resolve PLUS the first write-chunk step regularly exceeded Inngest's per-step timeout,
+      // erroring out, and then re-running the whole unmemoized resolve again on every retry —
+      // an unrecoverable loop for large queues.
+      const resolved = await step.run(`resolve-source-${source.id}`, async () => {
+        if (source.type === 'collection' && source.collection) {
+          return buildCollectionSourceRows(source, ownerUser)
+        } else if (source.type === 'tasks') {
+          return (await resolveTasksSource(QUEUE_SANITY_CEILING)).items.map(rowFromQueueItem)
+        } else if (source.type === 'approvals') {
+          return (await resolveApprovalsSource(QUEUE_SANITY_CEILING)).items.map(rowFromQueueItem)
+        } else {
+          return (await resolveOwnedByMeSource(ownerUser.id, QUEUE_SANITY_CEILING)).items.map(
+            rowFromQueueItem
+          )
+        }
+      })
+      // step.run's result is Jsonify<T>'d by Inngest whenever it's replayed from memoized
+      // step state (as opposed to executed fresh) — Date instances come back as ISO strings,
+      // which is why `resolved`'s inferred type has entered_state_at as `string | null` here,
+      // not `Date | null`. Rehydrate before handing rows to writeMaterializedRowsChunked's DB
+      // insert — the nivaro_queue_items.entered_state_at column is a real datetime2 column via
+      // knex/tedious, which expects an actual Date instance.
+      const rows: MaterializedRowInput[] = resolved.map((r) => ({
+        ...r,
+        extra: r.extra,
+        entered_state_at: r.entered_state_at ? new Date(r.entered_state_at) : null
+      }))
       await writeMaterializedRowsChunked(step, queueId, source.id, rows)
     }
 
