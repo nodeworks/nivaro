@@ -4,10 +4,24 @@ import { businessHoursElapsed } from '../routes/sla.js'
 import type { User } from '../types.js'
 import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 
-export function touchesExtraField(sort: string, filters: Record<string, unknown>): boolean {
+// Returns true when the requested sort/filters touch a field this SQL-pushdown
+// path cannot (or intentionally does not) serve correctly: extra.* fields (never
+// materialized as real columns), sla_status/aging_hours filters (business-hours
+// SLA math is JS-only, not expressible as plain SQL), and an owners sort (would
+// need a SQL-level string aggregation across the M2M owners table). The caller
+// should route requests matching this to the existing live-resolve path instead
+// of calling fetchMaterializedQueueItems.
+export function requiresLiveResolveFallback(
+  sort: string,
+  filters: Record<string, unknown>
+): boolean {
   const sortKey = sort.startsWith('-') ? sort.slice(1) : sort
   if (sortKey.startsWith('extra.')) return true
-  return Object.keys(filters).some((k) => k.startsWith('extra.'))
+  if (sortKey === 'owners') return true
+  if (Object.keys(filters).some((k) => k.startsWith('extra.'))) return true
+  if (filters.sla_status != null && filters.sla_status !== '') return true
+  if (filters.aging_hours != null) return true
+  return false
 }
 
 function computeSla(row: {
@@ -78,6 +92,11 @@ export async function fetchMaterializedQueueItems(
   const scopeBase = applyScope(db('nivaro_queue_items as qi'), queueId, user, scope)
 
   // base = scopeBase + column filters — feeds total count and the paginated rows.
+  // sla_status/aging_hours filters and an owners sort are intentionally NOT
+  // handled here — requiresLiveResolveFallback() is responsible for routing
+  // those requests around this function entirely, so in practice this function
+  // should never receive them, but the code must not silently pretend to
+  // support them either.
   const base = scopeBase.clone()
   if (filters.collection) base.where('qi.collection', filters.collection as string)
   if (filters.state) base.where('qi.state', filters.state as string)
@@ -188,6 +207,28 @@ export async function fetchMaterializedQueueItems(
     ownersByQueueItemId.set(o.queue_item_id, list)
   }
 
+  // Resolve real claimant display names in one extra bounded query (≤ page size
+  // distinct ids) rather than a placeholder empty string — queue-kanban-board.tsx
+  // renders `Claimed: ${item.claimed_by.name}`, so an empty name silently shows
+  // blank for every claimed card in Kanban view.
+  const claimedByIds = Array.from(
+    new Set(rows.map((r) => r.claimed_by).filter((id): id is string => !!id))
+  )
+  const claimantNameById = new Map<string, string>()
+  if (claimedByIds.length > 0) {
+    const claimantRows = (await db('nivaro_users')
+      .whereIn('id', claimedByIds)
+      .select('id', 'first_name', 'last_name', 'email')) as Array<{
+      id: string
+      first_name: string | null
+      last_name: string | null
+      email: string
+    }>
+    for (const u of claimantRows) {
+      claimantNameById.set(u.id, [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email)
+    }
+  }
+
   const items: QueueItem[] = rows.map((r) => {
     const sla = computeSla(r)
     return {
@@ -200,10 +241,9 @@ export async function fetchMaterializedQueueItems(
       sla_status: sla.status,
       at_risk: !!r.at_risk,
       aging_hours: sla.aging_hours,
-      // claimed_by needs only `id` — the admin UI (QueueDetail.tsx) checks
-      // `row.claimed_by` for truthiness to show a Release button and never
-      // renders `.name`; a nivaro_users join for the claimant would be wasted work.
-      claimed_by: r.claimed_by ? { id: r.claimed_by, name: '' } : null,
+      claimed_by: r.claimed_by
+        ? { id: r.claimed_by, name: claimantNameById.get(r.claimed_by) ?? '' }
+        : null,
       extra: r.extra ? JSON.parse(r.extra) : {},
       url: r.url
     }
