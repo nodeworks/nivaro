@@ -8,6 +8,10 @@ export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('nivaro_queue_items', (t) => {
     t.increments('id').primary()
     t.uuid('queue_id').notNullable().references('id').inTable('nivaro_queues').onDelete('CASCADE')
+    // NO ACTION (not CASCADE): nivaro_queue_sources.queue_id already cascades from
+    // nivaro_queues, so a CASCADE here too would create a multi-cascade-path
+    // diamond back to nivaro_queues (MSSQL error 1785). queue_id's own CASCADE
+    // above already cleans up this table when the queue is deleted.
     t.integer('source_id')
       .notNullable()
       .references('id')
