@@ -6,7 +6,7 @@ import {
   parseActiveRules,
   referencedFields
 } from '../routes/at-risk.js'
-import { computeStatusBatch } from '../routes/sla.js'
+import { computeEnteredStateAtBatch, computeStatusBatch } from '../routes/sla.js'
 import { selectInChunks } from '../services/db-batch.js'
 import {
   QUEUE_SANITY_CEILING,
@@ -89,10 +89,13 @@ function rowFromQueueItem(item: QueueItem): MaterializedRowInput {
 
 // Batched row builder for `collection`-type sources. Calls resolveCollectionSource ONCE
 // (matched-id computation + label/state/owners/at-risk/extra/url, already batched
-// internally), then computeStatusBatch ONCE more to pull the raw SLA components
-// (entered_at/duration/warning-pct/business-hours) that resolveCollectionSource doesn't
-// expose on QueueItem, then ONE additional batched at-risk-color lookup — never a
-// per-item DB round trip regardless of how many items matched.
+// internally), then computeStatusBatch ONCE more to pull the SLA-rule-dependent
+// components (duration/warning-pct/business-hours), then computeEnteredStateAtBatch
+// ONCE more for entered_state_at (populated for any item with a current workflow state,
+// rule or not — computeStatusBatch alone would omit entered_state_at for items with no
+// active SLA rule, diverging from the single-item sync path's buildMaterializedRow),
+// then ONE additional batched at-risk-color lookup — never a per-item DB round trip
+// regardless of how many items matched.
 async function buildCollectionSourceRows(
   source: QueueSourceRow,
   ownerUser: User
@@ -104,6 +107,7 @@ async function buildCollectionSourceRows(
   const matchedIds = items.map((i) => i.item_id)
 
   const slaEntries = await computeStatusBatch(collection, matchedIds)
+  const enteredAtEntries = await computeEnteredStateAtBatch(collection, matchedIds)
 
   const ruleRows = (await db('nivaro_at_risk_rules')
     .where({ collection, is_active: true })
@@ -130,7 +134,7 @@ async function buildCollectionSourceRows(
       label: item.label,
       state: item.state,
       state_color: item.state_color,
-      entered_state_at: sla?.entered_at ?? null,
+      entered_state_at: enteredAtEntries[item.item_id] ?? null,
       sla_duration_hours: sla?.duration_hours ?? null,
       sla_warning_pct: sla?.warning_threshold_pct ?? null,
       sla_business_hours_only: sla?.business_hours_only ?? false,
@@ -220,7 +224,15 @@ export async function writeMaterializedRowsChunked(
 }
 
 export const queueMaterializationBackfill = inngest.createFunction(
-  { id: 'queue-materialization-backfill' },
+  {
+    id: 'queue-materialization-backfill',
+    // fetchQueueItems enqueues a new backfill event on every request while a queue is
+    // over-threshold and not yet materialized, with no de-dupe — without this,
+    // concurrent runs for the same queue can collide on the (queue_id, source_id,
+    // collection, item_id) unique constraint during chunk writes. Keyed per-queue so
+    // different queues still backfill in parallel.
+    concurrency: { key: 'event.data.queueId', limit: 1 }
+  },
   { event: 'queues/materialization.backfill' },
   async ({ event, step }) => {
     const queueId = (event.data as { queueId: string }).queueId
@@ -266,6 +278,9 @@ export const queueMaterializationBackfill = inngest.createFunction(
       await writeMaterializedRowsChunked(step, queueId, source.id, rows)
     }
 
+    // A write to an item that occurs after this job resolved its source but before this
+    // final step runs could be missed if that item is never written again — accepted
+    // limitation for now, the item will self-correct on its next write.
     await step.run('mark-materialized', async () => {
       await db('nivaro_queues').where({ id: queueId }).update({ materialized: true })
     })

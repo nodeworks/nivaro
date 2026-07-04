@@ -137,7 +137,7 @@ export async function fetchMaterializedQueueItems(
 
   const page = options.page ?? 1
   const limit = options.limit ?? total
-  const rows = (await base
+  const rowsQuery = base
     .clone()
     .select(
       'qi.id',
@@ -156,8 +156,12 @@ export async function fetchMaterializedQueueItems(
       'qi.extra',
       'qi.url'
     )
-    .offset((page - 1) * limit)
-    .limit(limit)) as Array<{
+  // limit=0 (e.g. an unpaginated Kanban request against a zero-row materialized queue,
+  // where total===0) would produce an invalid `OFFSET 0 FETCH NEXT 0 ROWS ONLY` against
+  // MSSQL — skip the pagination clauses entirely; the WHERE clause already matches
+  // nothing, so the result set is empty either way.
+  if (limit > 0) rowsQuery.offset((page - 1) * limit).limit(limit)
+  const rows = (await rowsQuery) as Array<{
     id: number
     collection: string
     item_id: string

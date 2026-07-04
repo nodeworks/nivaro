@@ -291,6 +291,12 @@ export async function queuesRoutes(app: FastifyInstance) {
     }
 
     await db.transaction(async (trx) => {
+      // nivaro_queue_items.source_id is a NO ACTION FK to nivaro_queue_sources.id
+      // (deliberately, to avoid a different MSSQL multi-cascade-path error) — cached
+      // rows must be cleared before their source rows or the DELETE throws an FK
+      // violation. This also cascades nivaro_queue_item_owners via its own CASCADE FK
+      // to nivaro_queue_items.
+      await trx('nivaro_queue_items').where({ queue_id: id }).delete()
       await trx('nivaro_queue_sources').where({ queue_id: id }).delete()
       await trx('nivaro_queue_sources').insert(
         body.sources!.map((s, i) => ({
@@ -304,6 +310,12 @@ export async function queuesRoutes(app: FastifyInstance) {
           sort: s.sort ?? i
         }))
       )
+      // Demote materialized to false so reads live-resolve (zero cache rows) until the
+      // backfill enqueued below completes and flips it back to true — avoids ever
+      // serving an empty/stale materialized cache mid-rebuild.
+      if (queue.materialized) {
+        await trx('nivaro_queues').where({ id }).update({ materialized: false })
+      }
     })
 
     if (queue.materialized) {

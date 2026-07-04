@@ -208,6 +208,60 @@ export async function computeStatusBatch(
   return out
 }
 
+/**
+ * Batch entered_state_at for many items in one collection, independent of whether an
+ * active SLA rule exists for the item's current state. computeStatusBatch() above only
+ * returns an entry for items with a matching active rule (its `withRules` filter) — the
+ * queue materialization backfill (queue-materialization-jobs.ts) needs entered_state_at
+ * populated whenever there's a current workflow state, rule or not, to match the
+ * single-item sync path (queue-materialization.ts's buildMaterializedRow). Without this,
+ * an item with a state but no SLA rule would get entered_state_at=null from backfill but
+ * a real timestamp from live sync, making aging_hours/sla_status sort order depend on
+ * which path last wrote the row.
+ */
+export async function computeEnteredStateAtBatch(
+  collection: string,
+  ids: string[]
+): Promise<Record<string, Date>> {
+  const out: Record<string, Date> = {}
+  if (ids.length === 0) return out
+
+  const instances = await selectInChunks(ids, 2000, (chunk) =>
+    db('nivaro_workflow_instances')
+      .where({ collection })
+      .whereIn('item', chunk)
+      .orderBy('started_at', 'desc')
+  )
+
+  const latestByItem = new Map<string, (typeof instances)[number]>()
+  for (const inst of instances) {
+    const key = String(inst.item)
+    if (!latestByItem.has(key)) latestByItem.set(key, inst)
+  }
+
+  const candidates = [...latestByItem.values()].filter((i) => i.current_state)
+  if (candidates.length === 0) return out
+
+  const history = await selectInChunks(
+    candidates.map((i) => i.id),
+    2000,
+    (chunk) => db('nivaro_workflow_history').whereIn('instance', chunk).orderBy('timestamp', 'desc')
+  )
+
+  const enteredAt = new Map<string, Date>()
+  for (const h of history) {
+    const key = `${h.instance}::${h.to_state}`
+    if (!enteredAt.has(key)) enteredAt.set(key, new Date(h.timestamp))
+  }
+
+  for (const inst of candidates) {
+    const entered = enteredAt.get(`${inst.id}::${inst.current_state}`)
+    if (entered) out[String(inst.item)] = entered
+  }
+
+  return out
+}
+
 export async function slaRoutes(app: FastifyInstance) {
   // ─── Admin CRUD ──────────────────────────────────────────────────────────────
 
