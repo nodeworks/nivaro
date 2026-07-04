@@ -151,9 +151,9 @@ async function buildMaterializedRow(
       if (instance.current_state) {
         const history = (await db('nivaro_workflow_history')
           .where({ instance: instance.instance_id, to_state: instance.current_state })
-          .orderBy('created_at', 'desc')
-          .first()) as { created_at: Date } | undefined
-        enteredStateAt = history ? new Date(history.created_at) : null
+          .orderBy('timestamp', 'desc')
+          .first()) as { timestamp: Date } | undefined
+        enteredStateAt = history ? new Date(history.timestamp) : null
 
         const rule = (await db('nivaro_sla_rules')
           .where({
