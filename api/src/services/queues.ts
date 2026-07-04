@@ -1011,12 +1011,19 @@ export async function fetchQueueItems(
   queueId: string,
   user: User,
   scope: QueueScope,
-  options: { sort?: string; filters?: Record<string, unknown>; ceiling?: number } = {}
+  options: {
+    sort?: string
+    filters?: Record<string, unknown>
+    ceiling?: number
+    page?: number
+    limit?: number
+  } = {}
 ): Promise<{
   items: QueueItem[]
   stats: QueueStats
   availableValues: { collection: string[]; state: string[] }
   truncated: boolean
+  total: number
 }> {
   const sources = (await db<QueueSourceRow>('nivaro_queue_sources')
     .where({ queue_id: queueId })
@@ -1047,7 +1054,8 @@ export async function fetchQueueItems(
   // items that appear in more than one source and would ignore scope filtering.
   // computeStats(scoped) counts the final deduped, scope-filtered set instead,
   // which is more accurate than a raw per-source sum.
-  return { items: sorted, stats: computeStats(scoped), availableValues, truncated }
+  const { items: paged, total } = paginateItems(sorted, options.page, options.limit)
+  return { items: paged, stats: computeStats(scoped), availableValues, truncated, total }
 }
 
 export async function getWipLimits(ownerIds: string[]): Promise<Map<string, number>> {
