@@ -74,14 +74,14 @@ async function computeStatus(collection: string, item: string) {
   // Find when instance entered current state (most recent history entry for that state)
   const historyEntry = await db('nivaro_workflow_history')
     .where({ instance: instance.id, to_state: instance.current_state })
-    .orderBy('created_at', 'desc')
+    .orderBy('timestamp', 'desc')
     .first()
 
   if (!historyEntry) {
     return { status: 'none' }
   }
 
-  const enteredAt = new Date(historyEntry.created_at)
+  const enteredAt = new Date(historyEntry.timestamp)
   const now = new Date()
 
   const elapsedHours = rule.business_hours_only
@@ -168,14 +168,13 @@ export async function computeStatusBatch(
   const history = await selectInChunks(
     withRules.map((i) => i.id),
     2000,
-    (chunk) =>
-      db('nivaro_workflow_history').whereIn('instance', chunk).orderBy('created_at', 'desc')
+    (chunk) => db('nivaro_workflow_history').whereIn('instance', chunk).orderBy('timestamp', 'desc')
   )
 
   const enteredAt = new Map<string, Date>()
   for (const h of history) {
     const key = `${h.instance}::${h.to_state}`
-    if (!enteredAt.has(key)) enteredAt.set(key, new Date(h.created_at))
+    if (!enteredAt.has(key)) enteredAt.set(key, new Date(h.timestamp))
   }
 
   const now = new Date()

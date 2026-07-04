@@ -68,11 +68,11 @@ export async function checkSlaForInstance(
 
     const historyEntry = await db('nivaro_workflow_history')
       .where({ instance: workflowInstanceId, to_state: instance.current_state })
-      .orderBy('created_at', 'desc')
+      .orderBy('timestamp', 'desc')
       .first()
     if (!historyEntry) return
 
-    const enteredAt = new Date(historyEntry.created_at)
+    const enteredAt = new Date(historyEntry.timestamp)
     const now = new Date()
 
     const elapsedHours = rule.business_hours_only
