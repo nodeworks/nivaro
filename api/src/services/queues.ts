@@ -97,6 +97,7 @@ export interface WorkloadRow {
 export type QueueScope = 'mine' | 'unowned' | 'all' | 'claimed'
 
 export const QUEUE_SANITY_CEILING = 20000
+export const PROMOTION_THRESHOLD = 5000
 
 export interface SourceResult {
   items: QueueItem[]
@@ -1040,6 +1041,20 @@ export async function fetchQueueItems(
   )
 
   const truncated = results.some((r) => r.truncated)
+
+  const summedMatchedCount = results.reduce((sum, r) => sum + r.matchedCount, 0)
+  if (summedMatchedCount > PROMOTION_THRESHOLD) {
+    const queue = (await db('nivaro_queues').where({ id: queueId }).first()) as
+      | { materialized: boolean }
+      | undefined
+    if (queue && !queue.materialized) {
+      const { enqueueQueueMaterializationBackfill } = await import(
+        '../functions/queue-materialization-jobs.js'
+      )
+      await enqueueQueueMaterializationBackfill(queueId)
+    }
+  }
+
   const batches = results.map((r) => r.items)
 
   const merged = mergeSourceResults(batches)
