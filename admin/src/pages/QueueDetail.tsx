@@ -234,12 +234,18 @@ export function QueueDetailPage() {
     stats: QueueStats
     available_values: { collection: string[]; state: string[] }
     truncated: boolean
+    total: number
   }>({
-    queryKey: ['queue-items', id, scope, sort, filterValues],
+    queryKey: ['queue-items', id, scope, sort, filterValues, view === 'table' ? page : 'all'],
     queryFn: () =>
       api
         .get(`/queues/${id}/items`, {
-          params: { scope, sort, filters: JSON.stringify(apiFilters) }
+          params: {
+            scope,
+            sort,
+            filters: JSON.stringify(apiFilters),
+            ...(view === 'table' ? { page, limit } : {})
+          }
         })
         .then((r) => r.data),
     enabled: !!id
@@ -377,8 +383,6 @@ export function QueueDetailPage() {
   const items = data?.data ?? []
   const stats = data?.stats
   const stateEntries = stats ? Object.entries(stats.by_state) : []
-  const start = (page - 1) * limit
-  const pageItems = items.slice(start, start + limit)
 
   const baseColumns: Column<QueueItemRow>[] = [
     {
@@ -774,9 +778,9 @@ export function QueueDetailPage() {
         {view === 'table' ? (
           <DataTable<QueueItemRow>
             columns={columns}
-            rows={pageItems}
+            rows={items}
             rowKey={(row) => `${row.collection}:${row.item_id}`}
-            total={items.length}
+            total={data?.total ?? 0}
             page={page}
             limit={limit}
             isLoading={isLoading}
