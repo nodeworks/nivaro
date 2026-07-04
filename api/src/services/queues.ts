@@ -504,7 +504,7 @@ function userDisplayName(row: {
 
 // ─── Relation path resolution ──────────────────────────────────────────────────
 
-async function resolvePathValues(
+export async function resolvePathValues(
   collection: string,
   ids: string[],
   segments: string[],

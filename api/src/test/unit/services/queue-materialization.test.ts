@@ -92,9 +92,62 @@ describe('queueItemMatchesSource', () => {
       makeDbChain({ id: '1' }) as unknown as ReturnType<typeof db>
     )
     vi.mocked(computeStatusBatch).mockResolvedValue({
-      '1': { state_key: 'review', elapsed_hours: 10, duration_hours: 8, warning_threshold_pct: 80, status: 'breached', remaining_hours: -2 }
+      '1': {
+        state_key: 'review',
+        elapsed_hours: 10,
+        duration_hours: 8,
+        warning_threshold_pct: 80,
+        status: 'breached',
+        remaining_hours: -2
+      }
     })
     const result = await queueItemMatchesSource('articles', '1', source({ sla_filter: 'breached' }))
     expect(result).toBe(true)
+  })
+})
+
+import { syncMaterializedQueueItem } from '../../../services/queue-materialization.js'
+
+describe('syncMaterializedQueueItem', () => {
+  it('deletes an existing row when the item no longer matches its source', async () => {
+    const deletedWhere: unknown[] = []
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
+      if (table === 'nivaro_queue_sources as qs') {
+        return {
+          join: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          select: vi.fn().mockResolvedValue([
+            {
+              id: 1,
+              queue_id: 'q1',
+              type: 'collection',
+              collection: 'articles',
+              filters: null,
+              state_values: JSON.stringify(['approved']),
+              sla_filter: null,
+              extra_fields: null,
+              sort: 0
+            }
+          ])
+        }
+      }
+      if (table === 'articles') return makeDbChain({ id: '1' })
+      if (table === 'nivaro_workflow_instances as wi') return makeDbChain({ state_key: 'draft' })
+      if (table === 'nivaro_queue_items') {
+        return {
+          where: vi.fn((cond: unknown) => {
+            deletedWhere.push(cond)
+            return {
+              first: vi.fn().mockResolvedValue({ id: 42 }),
+              delete: vi.fn().mockResolvedValue(1)
+            }
+          })
+        }
+      }
+      throw new Error(`unexpected table: ${table}`)
+    })
+
+    await syncMaterializedQueueItem('articles', '1')
+    expect(deletedWhere.length).toBeGreaterThan(0)
   })
 })
