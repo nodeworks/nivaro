@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1268,6 +1269,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         comment: body.comment ?? null,
         timestamp: new Date()
       })
+
+      // Keep materialized queue caches current — transitions never pass through
+      // the generic collection-write hook since they update workflow tables, not
+      // the bound business record itself.
+      await syncMaterializedQueueItem(collection, item)
 
       // Sync state_field on the record if configured
       const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
