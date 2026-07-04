@@ -104,7 +104,7 @@ async function syncOneMaterializedRow(
   }
 }
 
-export async function buildMaterializedRow(
+async function buildMaterializedRow(
   source: QueueSourceRow,
   collection: string,
   itemId: string

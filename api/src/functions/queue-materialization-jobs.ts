@@ -32,7 +32,7 @@ export async function enqueueQueueMaterializationBackfill(queueId: string): Prom
 
 // Minimal structural subset of Inngest's step tools — just enough to call step.run
 // from a shared helper without importing the full generic StepTools type.
-interface StepRunner {
+export interface StepRunner {
   run(id: string, fn: () => Promise<void>): Promise<unknown>
 }
 
@@ -43,7 +43,7 @@ const WRITE_CHUNK_SIZE = 1000
 // fields from a batched computeStatusBatch() call; the other three leave them at their
 // column defaults (they have no workflow SLA rule concept), same as the live-resolve
 // path always did.
-interface MaterializedRowInput {
+export interface MaterializedRowInput {
   collection: string
   item_id: string
   label: string
@@ -150,7 +150,7 @@ async function buildCollectionSourceRows(
 // the (queue_id, source_id, collection, item_id) unique constraint. Rows are grouped by
 // collection within the chunk (only `owned_by_me` mixes collections in one source) so
 // the delete/select can use plain whereIn instead of a large OR expansion.
-async function writeMaterializedRowsChunked(
+export async function writeMaterializedRowsChunked(
   step: StepRunner,
   queueId: string,
   sourceId: number,
