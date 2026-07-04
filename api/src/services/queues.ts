@@ -1027,6 +1027,18 @@ export async function fetchQueueItems(
   truncated: boolean
   total: number
 }> {
+  const queueRow = (await db('nivaro_queues').where({ id: queueId }).first()) as
+    | { materialized: boolean }
+    | undefined
+  if (queueRow?.materialized) {
+    const { requiresLiveResolveFallback, fetchMaterializedQueueItems } = await import(
+      './queue-materialization-read.js'
+    )
+    if (!requiresLiveResolveFallback(options.sort ?? '', options.filters ?? {})) {
+      return fetchMaterializedQueueItems(queueId, user, scope, options)
+    }
+  }
+
   const sources = (await db<QueueSourceRow>('nivaro_queue_sources')
     .where({ queue_id: queueId })
     .orderBy('sort')) as QueueSourceRow[]
