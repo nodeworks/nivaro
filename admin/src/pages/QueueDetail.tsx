@@ -14,8 +14,8 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, GripVertical, SlidersHorizontal } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { AlertTriangle, GripVertical, Rows3, SlidersHorizontal } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
@@ -24,11 +24,19 @@ import { QueueKanbanBoard } from '@/components/queue-kanban-board'
 import { QueueWorkloadView } from '@/components/queue-workload-view'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { buildGroups } from '@/lib/queue-grouping'
 import { cn, formatNumber } from '@/lib/utils'
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
@@ -208,6 +216,9 @@ export function QueueDetailPage() {
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
   const [sort, setSort] = useState('')
   const [filterValues, setFilterValues] = useState<Record<string, string>>({})
+  // Single serializable value so Phase 3 saved views can persist it without rework.
+  const [groupBy, setGroupBy] = useState<string | null>(null)
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const limit = 25
 
   const { data: queue } = useQuery<QueueMeta>({
@@ -298,7 +309,15 @@ export function QueueDetailPage() {
     truncated: boolean
     total: number
   }>({
-    queryKey: ['queue-items', id, scope, sort, filterValues, view === 'table' ? page : 'all'],
+    queryKey: [
+      'queue-items',
+      id,
+      scope,
+      sort,
+      filterValues,
+      view === 'table' && !groupBy ? page : 'all',
+      groupBy
+    ],
     queryFn: () =>
       api
         .get(`/queues/${id}/items`, {
@@ -306,7 +325,9 @@ export function QueueDetailPage() {
             scope,
             sort,
             filters: JSON.stringify(apiFilters),
-            ...(view === 'table' ? { page, limit } : {})
+            // Grouping renders the full matching set (kanban's existing path) —
+            // groups are derived client-side, so pagination pauses while grouped.
+            ...(view === 'table' && !groupBy ? { page, limit } : {})
           }
         })
         .then((r) => r.data),
@@ -445,6 +466,48 @@ export function QueueDetailPage() {
   const items = data?.data ?? []
   const stats = data?.stats
   const stateEntries = stats ? Object.entries(stats.by_state) : []
+
+  const groups = useMemo(() => (groupBy ? buildGroups(items, groupBy) : null), [items, groupBy])
+
+  // Spec: groups collapse by default when the grouped set exceeds 200 rows.
+  // Re-derived only when the grouping attribute changes — a socket-driven
+  // refetch must not blow away the user's manual expand state, so groups/items
+  // stay out of the deps on purpose.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on attribute change, not data refetch
+  useEffect(() => {
+    if (!groupBy || !groups) return
+    setCollapsedGroups(items.length > 200 ? new Set(groups.map((g) => g.key)) : new Set())
+  }, [groupBy])
+
+  function toggleGroup(key: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const rowGroups = groups?.map((g) => ({
+    key: g.key,
+    rows: g.rows,
+    header: (
+      <>
+        <span>{g.key}</span>
+        <span className='font-normal text-slate-400'>({formatNumber(g.rows.length)})</span>
+        {g.breached > 0 && (
+          <span className='rounded bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-600 dark:bg-red-500/10 dark:text-red-400'>
+            {g.breached} breached
+          </span>
+        )}
+        {g.atRisk > 0 && (
+          <span className='rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-600 dark:bg-amber-500/10 dark:text-amber-400'>
+            {g.atRisk} at risk
+          </span>
+        )}
+      </>
+    )
+  }))
 
   const baseColumns: Column<QueueItemRow>[] = [
     {
@@ -610,6 +673,18 @@ export function QueueDetailPage() {
       .map((k) => allToggleable.find((c) => c.key === k))
       .filter((c): c is Column<QueueItemRow> => c !== undefined),
     claimColumn
+  ]
+
+  const groupOptions: { value: string; label: string }[] = [
+    { value: 'state', label: 'State' },
+    { value: 'collection', label: 'Collection' },
+    { value: 'sla_status', label: 'SLA status' },
+    { value: 'at_risk', label: 'At risk' },
+    { value: 'owners', label: 'Owner' },
+    { value: 'aging', label: 'Aging' },
+    ...extraFieldKeys
+      .filter((f) => effectiveVisible.has(`extra.${f}`))
+      .map((f) => ({ value: `extra.${f}`, label: formatColumnHeader(f) }))
   ]
 
   const filterDefs: FilterDef[] = [
@@ -806,6 +881,59 @@ export function QueueDetailPage() {
               <PopoverTrigger asChild>
                 <button
                   type='button'
+                  className={cn(
+                    'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
+                    groupBy
+                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                  )}
+                >
+                  <Rows3 className='h-3.5 w-3.5' />
+                  {groupBy
+                    ? `Group: ${groupOptions.find((o) => o.value === groupBy)?.label ?? groupBy}`
+                    : 'Group'}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-[200px] p-0' align='start'>
+                <Command>
+                  <CommandInput placeholder='Group by…' className='h-8 text-[12px]' />
+                  <CommandList>
+                    <CommandEmpty>No attribute found.</CommandEmpty>
+                    <CommandItem value='__none__' onSelect={() => setGroupBy(null)}>
+                      None
+                    </CommandItem>
+                    {groupOptions.map((opt) => (
+                      <CommandItem
+                        key={opt.value}
+                        value={opt.label}
+                        onSelect={() => setGroupBy(opt.value)}
+                      >
+                        {opt.label}
+                      </CommandItem>
+                    ))}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          )}
+          {view === 'table' && groupBy && groups && (
+            <button
+              type='button'
+              onClick={() =>
+                setCollapsedGroups(
+                  collapsedGroups.size > 0 ? new Set() : new Set(groups.map((g) => g.key))
+                )
+              }
+              className='rounded-md px-2 py-1.5 text-[12px] text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+            >
+              {collapsedGroups.size > 0 ? 'Expand all' : 'Collapse all'}
+            </button>
+          )}
+          {view === 'table' && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
                   className='ml-auto flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
                 >
                   <SlidersHorizontal className='h-3.5 w-3.5' />
@@ -889,6 +1017,9 @@ export function QueueDetailPage() {
               setFilterValues((prev) => ({ ...prev, [key]: value }))
               setPage(1)
             }}
+            rowGroups={rowGroups ?? undefined}
+            collapsedGroups={collapsedGroups}
+            onToggleGroup={toggleGroup}
           />
         ) : view === 'kanban' ? (
           <QueueKanbanBoard
