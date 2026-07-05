@@ -14,7 +14,14 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Flame, GripVertical, Rows3, SlidersHorizontal } from 'lucide-react'
+import {
+  AlertTriangle,
+  Flame,
+  GripVertical,
+  RefreshCw,
+  Rows3,
+  SlidersHorizontal
+} from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
@@ -235,6 +242,10 @@ export function QueueDetailPage() {
   // Single serializable value so Phase 3 saved views can persist it without rework.
   const [groupBy, setGroupBy] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const [swimlaneBy, setSwimlaneBy] = useState<'collection' | 'owners' | null>(null)
+  // Socket-driven updates no longer refetch under the user — they accumulate here
+  // and surface as a "N updates · Refresh" pill the user triggers explicitly.
+  const [pendingUpdates, setPendingUpdates] = useState(0)
   const limit = 25
 
   const { data: queue } = useQuery<QueueMeta>({
@@ -291,8 +302,7 @@ export function QueueDetailPage() {
     })
 
     socket.on('collection:update', () => {
-      qc.invalidateQueries({ queryKey: ['queue-items', id] })
-      qc.invalidateQueries({ queryKey: ['queue-workload', id] })
+      setPendingUpdates((n) => n + 1)
     })
 
     return () => {
@@ -497,6 +507,19 @@ export function QueueDetailPage() {
   const items = data?.data ?? []
   const stats = data?.stats
   const stateEntries = stats ? Object.entries(stats.by_state) : []
+
+  // Any completed refetch clears the pending-updates pill — the data on screen
+  // is current again, however the refetch was triggered.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on data identity
+  useEffect(() => {
+    setPendingUpdates(0)
+  }, [data])
+
+  function refreshPendingUpdates() {
+    qc.invalidateQueries({ queryKey: ['queue-items', id] })
+    qc.invalidateQueries({ queryKey: ['queue-workload', id] })
+    setPendingUpdates(0)
+  }
 
   const groups = useMemo(() => (groupBy ? buildGroups(items, groupBy) : null), [items, groupBy])
 
@@ -1127,6 +1150,51 @@ export function QueueDetailPage() {
           >
             Workload
           </button>
+          {pendingUpdates > 0 && (
+            <button
+              type='button'
+              onClick={refreshPendingUpdates}
+              className='flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-3 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
+            >
+              <RefreshCw className='h-3 w-3' />
+              {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
+            </button>
+          )}
+          {view === 'kanban' && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  className={cn(
+                    'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
+                    swimlaneBy
+                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                  )}
+                >
+                  <Rows3 className='h-3.5 w-3.5' />
+                  {swimlaneBy
+                    ? `Lanes: ${swimlaneBy === 'collection' ? 'Collection' : 'Owner'}`
+                    : 'Lanes'}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-[180px] p-0' align='start'>
+                <Command>
+                  <CommandList>
+                    <CommandItem value='none' onSelect={() => setSwimlaneBy(null)}>
+                      None
+                    </CommandItem>
+                    <CommandItem value='collection' onSelect={() => setSwimlaneBy('collection')}>
+                      Collection
+                    </CommandItem>
+                    <CommandItem value='owner' onSelect={() => setSwimlaneBy('owners')}>
+                      Owner
+                    </CommandItem>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          )}
           {view === 'table' && (
             <Popover>
               <PopoverTrigger asChild>
@@ -1314,6 +1382,7 @@ export function QueueDetailPage() {
             onDrop={(item, targetState) => transitionMut.mutate({ item, targetState })}
             onClaim={(row) => claimMut.mutate(row)}
             onRelease={(row) => releaseMut.mutate(row)}
+            swimlaneBy={swimlaneBy}
           />
         ) : (
           <QueueWorkloadView queueId={id!} />

@@ -11,7 +11,9 @@ import {
   useSensor,
   useSensors
 } from '@dnd-kit/core'
-import { useState } from 'react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { buildGroups } from '@/lib/queue-grouping'
 import { cn, formatNumber } from '@/lib/utils'
 
 export interface QueueOwner {
@@ -161,21 +163,31 @@ export function QueueKanbanBoard({
   onDrop,
   onCardClick,
   onClaim,
-  onRelease
+  onRelease,
+  swimlaneBy = null
 }: {
   items: QueueItemRow[]
   onDrop: (item: QueueItemRow, targetState: string) => void
   onCardClick: (item: QueueItemRow) => void
   onClaim: (item: QueueItemRow) => void
   onRelease: (item: QueueItemRow) => void
+  /** Optional horizontal lanes crossed with the state columns. */
+  swimlaneBy?: 'collection' | 'owners' | null
 }) {
   const [activeItem, setActiveItem] = useState<QueueItemRow | null>(null)
+  const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    setCollapsedLanes(new Set())
+  }, [swimlaneBy])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor)
   )
 
+  // Global state-column union, computed once from ALL items so columns align
+  // vertically across every lane.
   const columns: Array<{ key: string; label: string; color: string | null }> = []
   const seen = new Set<string>()
   for (const item of items) {
@@ -184,6 +196,8 @@ export function QueueKanbanBoard({
     seen.add(key)
     columns.push({ key, label: item.state ?? 'No state', color: item.state_color })
   }
+
+  const lanes = swimlaneBy ? buildGroups(items, swimlaneBy) : null
 
   function handleDragStart(event: DragStartEvent) {
     setActiveItem((event.active.data.current as QueueItemRow) ?? null)
@@ -194,11 +208,42 @@ export function QueueKanbanBoard({
     const { active, over } = event
     if (!over) return
     const item = active.data.current as QueueItemRow
-    const targetState = String(over.id)
+    // Lane droppables are namespaced `${laneKey}::${stateKey}` — the lane part is
+    // derived display data, never writable; only the state segment drives the drop.
+    const targetState = String(over.id).split('::').pop() as string
     if (targetState === NO_STATE) return
     if ((item.state ?? NO_STATE) === targetState) return
     onDrop(item, targetState)
   }
+
+  function toggleLane(key: string) {
+    setCollapsedLanes((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const renderColumns = (laneItems: QueueItemRow[], lanePrefix?: string) => (
+    <div className='flex gap-3 overflow-x-auto pb-2'>
+      {columns.map((col) => (
+        <KanbanColumn
+          key={col.key}
+          stateKey={lanePrefix ? `${lanePrefix}::${col.key}` : col.key}
+          label={col.label}
+          color={col.color}
+          items={laneItems.filter((i) => (i.state ?? NO_STATE) === col.key)}
+          onCardClick={onCardClick}
+          onClaim={onClaim}
+          onRelease={onRelease}
+        />
+      ))}
+      {columns.length === 0 && (
+        <p className='py-12 text-center text-[13px] text-slate-400'>Nothing in this queue.</p>
+      )}
+    </div>
+  )
 
   return (
     <DndContext
@@ -207,23 +252,38 @@ export function QueueKanbanBoard({
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
-      <div className='flex gap-3 overflow-x-auto pb-2'>
-        {columns.map((col) => (
-          <KanbanColumn
-            key={col.key}
-            stateKey={col.key}
-            label={col.label}
-            color={col.color}
-            items={items.filter((i) => (i.state ?? NO_STATE) === col.key)}
-            onCardClick={onCardClick}
-            onClaim={onClaim}
-            onRelease={onRelease}
-          />
-        ))}
-        {columns.length === 0 && (
-          <p className='py-12 text-center text-[13px] text-slate-400'>Nothing in this queue.</p>
-        )}
-      </div>
+      {lanes ? (
+        <div className='space-y-4'>
+          {lanes.map((lane) => {
+            const collapsed = collapsedLanes.has(lane.key)
+            return (
+              <div key={lane.key}>
+                <button
+                  type='button'
+                  onClick={() => toggleLane(lane.key)}
+                  className='mb-2 flex items-center gap-1.5 text-[12px] font-semibold text-slate-700 dark:text-slate-200'
+                >
+                  {collapsed ? (
+                    <ChevronRight className='h-3.5 w-3.5 text-slate-400' />
+                  ) : (
+                    <ChevronDown className='h-3.5 w-3.5 text-slate-400' />
+                  )}
+                  {lane.key}
+                  <span className='font-normal text-slate-400'>
+                    ({formatNumber(lane.rows.length)})
+                  </span>
+                </button>
+                {!collapsed && renderColumns(lane.rows as QueueItemRow[], lane.key)}
+              </div>
+            )
+          })}
+          {lanes.length === 0 && (
+            <p className='py-12 text-center text-[13px] text-slate-400'>Nothing in this queue.</p>
+          )}
+        </div>
+      ) : (
+        renderColumns(items)
+      )}
       <DragOverlay dropAnimation={{ duration: 150, easing: 'ease' }}>
         {activeItem && (
           <div className='w-72 rounded-md border border-slate-300 bg-white p-2.5 shadow-lg'>
