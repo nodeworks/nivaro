@@ -274,6 +274,34 @@ export async function fetchMaterializedQueueItems(
     .count('* as n')
     .first()) as { n: number }
 
+  // sla_warning/sla_breached need business-hours math (computeSla is JS-only, not
+  // expressible as plain SQL), so count them via a narrow 5-column scan of the
+  // scope-filtered set — exact parity with the live path's computeStats(scoped).
+  const slaScanRows = (await scopeBase
+    .clone()
+    .select(
+      'qi.entered_state_at',
+      'qi.sla_duration_hours',
+      'qi.sla_warning_pct',
+      'qi.sla_business_hours_only',
+      'qi.at_risk'
+    )) as Array<{
+    entered_state_at: Date | null
+    sla_duration_hours: number | null
+    sla_warning_pct: number | null
+    sla_business_hours_only: boolean
+    at_risk: boolean
+  }>
+  let sla_warning = 0
+  let sla_breached = 0
+  let atRiskCount = 0
+  for (const r of slaScanRows) {
+    if (r.at_risk) atRiskCount++
+    const { status } = computeSla(r)
+    if (status === 'warning') sla_warning++
+    if (status === 'breached') sla_breached++
+  }
+
   const collectionsRow = (await scopeBase
     .clone()
     .distinct('qi.collection as collection')) as Array<{
@@ -288,7 +316,14 @@ export async function fetchMaterializedQueueItems(
 
   return {
     items,
-    stats: { total: statsTotal, by_state, unowned: Number(unownedRow.n) },
+    stats: {
+      total: statsTotal,
+      by_state,
+      unowned: Number(unownedRow.n),
+      sla_warning,
+      sla_breached,
+      at_risk: atRiskCount
+    },
     availableValues: {
       collection: collectionsRow.map((r) => r.collection).sort(),
       state: statesRow.map((r) => r.state).sort()

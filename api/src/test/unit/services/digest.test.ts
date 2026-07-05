@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { buildQueueSummaryHtml } from '../../../services/digest.js'
 
 describe('buildQueueSummaryHtml', () => {
-  const stats = { total: 12, by_state: { draft: 5, review: 7 }, unowned: 3 }
+  const stats = {
+    total: 12,
+    by_state: { draft: 5, review: 7 },
+    unowned: 3,
+    sla_warning: 0,
+    sla_breached: 0,
+    at_risk: 0
+  }
 
   it('includes the queue name', () => {
     expect(buildQueueSummaryHtml('My Queue', stats, 'https://example.test/queues/1')).toContain(

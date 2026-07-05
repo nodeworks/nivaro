@@ -98,7 +98,10 @@ describe('computeStats', () => {
     expect(computeStats(items)).toEqual({
       total: 3,
       by_state: { draft: 2, published: 1 },
-      unowned: 2
+      unowned: 2,
+      sla_warning: 0,
+      sla_breached: 0,
+      at_risk: 0
     })
   })
 
@@ -106,12 +109,36 @@ describe('computeStats', () => {
     expect(computeStats([item({ state: null })])).toEqual({
       total: 1,
       by_state: { none: 1 },
-      unowned: 1
+      unowned: 1,
+      sla_warning: 0,
+      sla_breached: 0,
+      at_risk: 0
     })
   })
 
   it('returns zeroed stats for an empty list', () => {
-    expect(computeStats([])).toEqual({ total: 0, by_state: {}, unowned: 0 })
+    expect(computeStats([])).toEqual({
+      total: 0,
+      by_state: {},
+      unowned: 0,
+      sla_warning: 0,
+      sla_breached: 0,
+      at_risk: 0
+    })
+  })
+
+  it('counts SLA warning, SLA breached, and at-risk items', () => {
+    const items = [
+      item({ item_id: '1', sla_status: 'warning' }),
+      item({ item_id: '2', sla_status: 'breached', at_risk: true }),
+      item({ item_id: '3', sla_status: 'breached' }),
+      item({ item_id: '4', sla_status: 'ok', at_risk: true }),
+      item({ item_id: '5' })
+    ]
+    const stats = computeStats(items)
+    expect(stats.sla_warning).toBe(1)
+    expect(stats.sla_breached).toBe(2)
+    expect(stats.at_risk).toBe(2)
   })
 })
 

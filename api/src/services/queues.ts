@@ -87,6 +87,9 @@ export interface QueueStats {
   total: number
   by_state: Record<string, number>
   unowned: number
+  sla_warning: number
+  sla_breached: number
+  at_risk: number
 }
 
 export interface WorkloadRow {
@@ -264,12 +267,18 @@ export function parsePaginationParams(
 export function computeStats(items: QueueItem[]): QueueStats {
   const by_state: Record<string, number> = {}
   let unowned = 0
+  let sla_warning = 0
+  let sla_breached = 0
+  let at_risk = 0
   for (const item of items) {
     const key = item.state ?? 'none'
     by_state[key] = (by_state[key] ?? 0) + 1
     if (item.owners.length === 0) unowned++
+    if (item.sla_status === 'warning') sla_warning++
+    if (item.sla_status === 'breached') sla_breached++
+    if (item.at_risk) at_risk++
   }
-  return { total: items.length, by_state, unowned }
+  return { total: items.length, by_state, unowned, sla_warning, sla_breached, at_risk }
 }
 
 const UNASSIGNED_KEY = '__unassigned__'
