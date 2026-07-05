@@ -6,7 +6,7 @@ import {
   parseActiveRules,
   referencedFields
 } from '../routes/at-risk.js'
-import { computeStatusBatch } from '../routes/sla.js'
+import { computeStatusBatch, type SlaInstanceRow } from '../routes/sla.js'
 import type { CMSRelation, User } from '../types.js'
 import { getCollection, getRelations } from './collections.js'
 import { selectInChunks } from './db-batch.js'
@@ -656,6 +656,17 @@ export async function resolveCollectionSource(
   const conditions = (parseJson(source.filters) as QueueCondition[] | null) ?? []
   const stateValues = parseJson(source.state_values) as string[] | null
 
+  // The ids query and the binding lookup only depend on source.collection, not on each
+  // other's results — fire them concurrently. The binding query is intentionally kept
+  // OUTSIDE the ids try/catch (its errors must still propagate/reject the call exactly
+  // as before, rather than being swallowed as an empty-result); a no-op .catch is
+  // attached purely to prevent an "unhandled rejection" warning in the case where the
+  // ids query fails first and we return before ever awaiting bindingPromise.
+  const bindingPromise = db('nivaro_workflow_bindings')
+    .where({ collection: source.collection })
+    .first() as Promise<{ id: number; template: string } | undefined>
+  bindingPromise.catch(() => {})
+
   let ids: string[]
   try {
     const q = db(source.collection).select('id')
@@ -667,9 +678,7 @@ export async function resolveCollectionSource(
   }
   if (ids.length === 0) return empty
 
-  const binding = (await db('nivaro_workflow_bindings')
-    .where({ collection: source.collection })
-    .first()) as { id: number; template: string } | undefined
+  const binding = await bindingPromise
 
   type InstanceRow = {
     instance_id: string
@@ -677,6 +686,8 @@ export async function resolveCollectionSource(
     current_state: string | null
     state_key: string | null
     state_color: string | null
+    template: string
+    started_at: Date
   }
   let instances: InstanceRow[] = []
 
@@ -686,12 +697,15 @@ export async function resolveCollectionSource(
         .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
         .whereIn('wi.item', chunk)
         .where('wi.collection', source.collection)
+        .orderBy('wi.started_at', 'desc')
         .select(
           'wi.id as instance_id',
           'wi.item',
           'wi.current_state',
           's.key as state_key',
-          's.color as state_color'
+          's.color as state_color',
+          'wi.template',
+          'wi.started_at'
         )
     )) as InstanceRow[]
 
@@ -704,7 +718,27 @@ export async function resolveCollectionSource(
     }
   }
 
-  const slaMap = ids.length ? await computeStatusBatch(source.collection, ids) : {}
+  // computeStatusBatch would otherwise re-run its own (near-identical) instances query —
+  // reuse the rows we already fetched above. Only valid when `binding` is truthy (the
+  // only case `instances` was ever populated); when there's no binding we pass undefined
+  // so computeStatusBatch falls back to its own query, matching prior behavior exactly.
+  const slaMap = ids.length
+    ? await computeStatusBatch(
+        source.collection,
+        ids,
+        binding
+          ? instances.map(
+              (i): SlaInstanceRow => ({
+                id: i.instance_id,
+                item: i.item,
+                current_state: i.current_state,
+                template: i.template,
+                started_at: i.started_at
+              })
+            )
+          : undefined
+      )
+    : {}
   ids = filterBySlaStatus(ids, slaMap, source.sla_filter)
   const afterSla = new Set(ids)
   instances = instances.filter((i) => afterSla.has(i.item))
@@ -717,8 +751,6 @@ export async function resolveCollectionSource(
   if (ids.length === 0) {
     return { items: [], matchedCount: sanity.matchedCount, truncated: sanity.truncated }
   }
-
-  const labels = await getLabels(new Map([[source.collection, new Set(ids)]]))
 
   const stateById = new Map<string, { key: string; color: string | null }>()
   for (const inst of instances) {
@@ -734,51 +766,66 @@ export async function resolveCollectionSource(
       collection: source.collection as string,
       itemId: inst.item
     }))
-  const ownersByItem = ownerRequests.length
-    ? await resolveStateOwnersBatch(ownerRequests)
-    : new Map<string, ResolvedOwner[]>()
 
-  const extraFieldPaths = (parseJson(source.extra_fields) as string[] | null) ?? []
-  const extraById = new Map<string, Record<string, unknown>>()
-  if (extraFieldPaths.length && ids.length) {
-    const relationsCache = new Map<string, CMSRelation[]>()
-    for (const path of extraFieldPaths) {
-      try {
-        const segments = path.split('.')
-        const valuesByRowId = await resolvePathValues(
-          source.collection,
-          ids,
-          segments,
-          relationsCache
-        )
-        for (const [rowId, value] of valuesByRowId) {
-          const extra = extraById.get(rowId) ?? {}
-          extra[path] = value
-          extraById.set(rowId, extra)
-        }
-      } catch {
-        // Degrade gracefully — a stale/deleted/relational field config must not
-        // break the whole queue's item list, and must not prevent OTHER extra
-        // field paths on the same source from resolving.
-      }
-    }
-  }
-
-  const ruleRows = (await db('nivaro_at_risk_rules')
-    .where({ collection: source.collection, is_active: true })
-    .orderBy('id')) as AtRiskRuleRow[]
-  const rules = parseActiveRules(ruleRows)
-  let atRiskMap: Record<string, { at_risk: true; rule: string; color: 'red' | 'amber' }> = {}
-  if (rules.length && ids.length) {
-    const fields = new Set<string>(['id'])
-    for (const rule of rules) for (const f of referencedFields(rule.conditions)) fields.add(f)
-    const riskRows = await selectInChunks(ids, 2000, (chunk) =>
-      db(source.collection as string)
-        .whereIn('id', chunk)
-        .select([...fields])
-    )
-    atRiskMap = evaluateRows(riskRows as Record<string, unknown>[], rules)
-  }
+  // Labels, owner resolution, the at-risk block, and extra-field resolution are all
+  // independent of each other's results — they only read `ids`/`instances`/
+  // `source.collection` and are combined together in the final items.map() below. Run
+  // them concurrently instead of sequentially awaiting each in turn.
+  const [labels, ownersByItem, atRiskMap, extraById] = await Promise.all([
+    getLabels(new Map([[source.collection, new Set(ids)]])),
+    ownerRequests.length
+      ? resolveStateOwnersBatch(ownerRequests)
+      : Promise.resolve(new Map<string, ResolvedOwner[]>()),
+    (async (): Promise<Record<string, { at_risk: true; rule: string; color: 'red' | 'amber' }>> => {
+      const ruleRows = (await db('nivaro_at_risk_rules')
+        .where({ collection: source.collection, is_active: true })
+        .orderBy('id')) as AtRiskRuleRow[]
+      const rules = parseActiveRules(ruleRows)
+      if (!rules.length || !ids.length) return {}
+      const fields = new Set<string>(['id'])
+      for (const rule of rules) for (const f of referencedFields(rule.conditions)) fields.add(f)
+      const riskRows = await selectInChunks(ids, 2000, (chunk) =>
+        db(source.collection as string)
+          .whereIn('id', chunk)
+          .select([...fields])
+      )
+      return evaluateRows(riskRows as Record<string, unknown>[], rules)
+    })(),
+    (async (): Promise<Map<string, Record<string, unknown>>> => {
+      const extraFieldPaths = (parseJson(source.extra_fields) as string[] | null) ?? []
+      const extraById = new Map<string, Record<string, unknown>>()
+      if (!extraFieldPaths.length || !ids.length) return extraById
+      const relationsCache = new Map<string, CMSRelation[]>()
+      // Parallelized across paths. relationsCache is a shared Map populated via a
+      // check-then-fetch-then-set pattern — concurrent calls for the same collection may
+      // each miss the cache and independently re-fetch getRelations() (redundant work,
+      // not a correctness bug: every caller writes the same relations for that
+      // collection, so a duplicate write is harmless).
+      await Promise.all(
+        extraFieldPaths.map(async (path) => {
+          try {
+            const segments = path.split('.')
+            const valuesByRowId = await resolvePathValues(
+              source.collection as string,
+              ids,
+              segments,
+              relationsCache
+            )
+            for (const [rowId, value] of valuesByRowId) {
+              const extra = extraById.get(rowId) ?? {}
+              extra[path] = value
+              extraById.set(rowId, extra)
+            }
+          } catch {
+            // Degrade gracefully — a stale/deleted/relational field config must not
+            // break the whole queue's item list, and must not prevent OTHER extra
+            // field paths on the same source from resolving.
+          }
+        })
+      )
+      return extraById
+    })()
+  ])
 
   const items = ids.map((id) => ({
     collection: source.collection as string,

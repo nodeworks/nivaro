@@ -122,26 +122,47 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10
 }
 
+/** Minimal instance row shape computeStatusBatch needs — either fetched internally
+ * or reused from a caller that already queried nivaro_workflow_instances for the
+ * same collection+ids (see `precomputedInstances` below). */
+export interface SlaInstanceRow {
+  id: string
+  item: string
+  current_state: string | null
+  template: string
+  started_at: Date | string
+}
+
 /**
  * Batch SLA status for many items in one collection. Same logic as
  * computeStatus() but resolved with three set-based queries instead of
  * three queries per item. Items without an instance, state, active rule,
  * or history entry are omitted from the result map.
+ *
+ * `precomputedInstances` lets a caller that already fetched
+ * nivaro_workflow_instances rows for this exact collection+ids set (ordered by
+ * started_at desc, same "latest instance per item" semantics as the internal
+ * query below) pass them in directly, skipping a redundant DB round trip.
+ * Only resolveCollectionSource does this today (see queues.ts) — every other
+ * caller omits the argument and gets the original always-query behavior.
  */
 export async function computeStatusBatch(
   collection: string,
-  ids: string[]
+  ids: string[],
+  precomputedInstances?: SlaInstanceRow[]
 ): Promise<Record<string, SlaBatchEntry>> {
   const out: Record<string, SlaBatchEntry> = {}
   if (ids.length === 0) return out
 
   // Latest workflow instance per item
-  const instances = await selectInChunks(ids, 2000, (chunk) =>
-    db('nivaro_workflow_instances')
-      .where({ collection })
-      .whereIn('item', chunk)
-      .orderBy('started_at', 'desc')
-  )
+  const instances: SlaInstanceRow[] =
+    precomputedInstances ??
+    ((await selectInChunks(ids, 2000, (chunk) =>
+      db('nivaro_workflow_instances')
+        .where({ collection })
+        .whereIn('item', chunk)
+        .orderBy('started_at', 'desc')
+    )) as SlaInstanceRow[])
 
   const latestByItem = new Map<string, (typeof instances)[number]>()
   for (const inst of instances) {

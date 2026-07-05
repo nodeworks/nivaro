@@ -80,7 +80,7 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
   : knex({
       client: config.DB_CLIENT,
       connection: buildConnection(config.DB_HOST, writePort),
-      pool: { min: 2, max: 10 },
+      pool: { min: 2, max: 25 },
       migrations: { migrationSource, tableName: 'nivaro_migrations' }
     })
 
@@ -142,7 +142,7 @@ export const dbRead: Database = config.DB_READ_HOST
         config.DB_READ_HOST,
         config.DB_READ_PORT ?? config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
       ),
-      pool: { min: 2, max: 10 },
+      pool: { min: 2, max: 25 },
       migrations: {
         migrationSource,
         tableName: 'nivaro_migrations'
