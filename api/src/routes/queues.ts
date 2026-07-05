@@ -339,6 +339,24 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({ data: sources.map(formatSource) })
   })
 
+  // POST /:id/rematerialize — force a full cache rebuild for an already-materialized
+  // queue (owner or admin). Needed to refresh caches built before a ceiling/logic
+  // change (e.g. the 20k backfill cap) — nothing else re-enqueues a backfill for a
+  // queue that is already materialized. Idempotent: chunks delete-then-insert, and
+  // the final step re-marks materialized.
+  app.post('/:id/rematerialize', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!req.isAdmin && queue.owner !== req.user!.id) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    await enqueueQueueMaterializationBackfill(id)
+    return reply.send({ data: { enqueued: true } })
+  })
+
   // GET /:id/column-prefs — current user's saved visible-columns for this queue
   app.get('/:id/column-prefs', async (req, reply) => {
     const { id } = req.params as { id: string }
