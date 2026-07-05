@@ -14,7 +14,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, GripVertical, Rows3, SlidersHorizontal } from 'lucide-react'
+import { AlertTriangle, Flame, GripVertical, Rows3, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
@@ -229,6 +229,17 @@ export function QueueDetailPage() {
 
   const { user } = useAuth()
   const socketRef = useRef<Socket | null>(null)
+
+  // Non-materialized queues default to priority order — the table's default
+  // order IS the triage order. Materialized queues keep server order: priority
+  // sorting routes them back to live resolution (sla math is JS-only), which
+  // would defeat the 5k+ row cache; the Priority chip remains an explicit opt-in.
+  const defaultSortApplied = useRef(false)
+  useEffect(() => {
+    if (!queue || defaultSortApplied.current) return
+    defaultSortApplied.current = true
+    if (!queue.materialized) setSort('-priority')
+  }, [queue])
 
   // Live-refresh: join a collection:* room per distinct collection-type source
   // and invalidate this queue's item/workload queries on collection:update, so
@@ -915,6 +926,24 @@ export function QueueDetailPage() {
                 </Command>
               </PopoverContent>
             </Popover>
+          )}
+          {view === 'table' && (
+            <button
+              type='button'
+              onClick={() => {
+                setSort(sort === '-priority' ? '' : '-priority')
+                setPage(1)
+              }}
+              className={cn(
+                'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
+                sort === '-priority'
+                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                  : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+              )}
+            >
+              <Flame className='h-3.5 w-3.5' />
+              Priority
+            </button>
           )}
           {view === 'table' && groupBy && groups && (
             <button
