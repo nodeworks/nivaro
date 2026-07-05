@@ -339,6 +339,104 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({ data: sources.map(formatSource) })
   })
 
+  // ── Saved queue views ──
+  // Visibility mirrors nivaro_saved_views: own views + shared views (role null or
+  // matching), all behind canReadQueue for the parent queue.
+
+  // GET /:id/views
+  app.get('/:id/views', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    const userId = req.user!.id
+    const userRole = req.user!.role ?? null
+    const rows = (await db('nivaro_queue_views')
+      .where({ queue_id: id })
+      .where((qb) => {
+        qb.where({ user: userId }).orWhere((shared) => {
+          shared.where('is_shared', true).andWhere((roleQb) => {
+            roleQb.whereNull('role')
+            if (userRole) roleQb.orWhere('role', userRole)
+          })
+        })
+      })
+      .orderBy('created_at', 'asc')) as Array<Record<string, unknown>>
+
+    return reply.send({
+      data: rows.map((r) => ({ ...r, is_shared: !!r.is_shared, state: parseJson(r.state as string) }))
+    })
+  })
+
+  // POST /:id/views
+  app.post('/:id/views', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    const body = (req.body ?? {}) as {
+      name?: string
+      state?: unknown
+      is_shared?: boolean
+      role?: string | null
+    }
+    if (!body.name?.trim()) return reply.code(400).send({ error: 'name is required' })
+
+    const [row] = (await db('nivaro_queue_views')
+      .insert({
+        queue_id: id,
+        name: body.name.trim(),
+        user: req.user!.id,
+        is_shared: !!body.is_shared,
+        role: body.role ?? null,
+        state: toJsonStr(body.state),
+        created_at: new Date()
+      })
+      .returning('*')) as unknown as [Record<string, unknown>]
+
+    await logActivity({
+      action: 'create',
+      user: req.user?.id,
+      collection: 'nivaro_queue_views',
+      item: String(row.id),
+      comment: queue.name,
+      req
+    })
+
+    return reply
+      .code(201)
+      .send({ data: { ...row, is_shared: !!row.is_shared, state: parseJson(row.state as string) } })
+  })
+
+  // DELETE /views/:viewId — owner or admin
+  app.delete('/views/:viewId', async (req, reply) => {
+    const { viewId } = req.params as { viewId: string }
+    const view = (await db('nivaro_queue_views')
+      .where({ id: Number(viewId) })
+      .first()) as { id: number; user: string } | undefined
+    if (!view) return reply.code(404).send({ error: 'Not found' })
+    if (!req.isAdmin && view.user !== req.user!.id) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    await db('nivaro_queue_views')
+      .where({ id: Number(viewId) })
+      .delete()
+    await logActivity({
+      action: 'delete',
+      user: req.user?.id,
+      collection: 'nivaro_queue_views',
+      item: String(viewId),
+      req
+    })
+    return reply.code(204).send()
+  })
+
   // POST /:id/rematerialize — force a full cache rebuild for an already-materialized
   // queue (owner or admin). Needed to refresh caches built before a ceiling/logic
   // change (e.g. the 20k backfill cap) — nothing else re-enqueues a backfill for a

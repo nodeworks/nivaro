@@ -20,6 +20,7 @@ import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
 import { type Column, DataTable, type FilterDef } from '@/components/data-table'
+import { QueueBulkBar } from '@/components/queue-bulk-bar'
 import { QueueItemSheet } from '@/components/queue-item-sheet'
 import { QueueKanbanBoard } from '@/components/queue-kanban-board'
 import { QueueWorkloadView } from '@/components/queue-workload-view'
@@ -89,6 +90,20 @@ interface QueueMeta {
 }
 
 type Scope = 'mine' | 'unowned' | 'all' | 'claimed'
+
+interface QueueView {
+  id: number
+  name: string
+  user: string
+  is_shared: boolean
+  state: {
+    scope?: Scope
+    filters?: Record<string, string>
+    sort?: string
+    group_by?: string | null
+    view?: 'table' | 'kanban' | 'workload'
+  } | null
+}
 
 const SCOPE_TABS: { value: Scope; label: string }[] = [
   { value: 'mine', label: 'My Items' },
@@ -346,28 +361,32 @@ export function QueueDetailPage() {
     enabled: !!id
   })
 
+  async function performTransition(item: QueueItemRow, targetState: string) {
+    const instanceRes = await api.get(`/pipelines/instance/${item.collection}/${item.item_id}`)
+    const instanceData = instanceRes.data.data as {
+      states: Array<{ id: string; key: string }>
+      available_transitions: Array<{ id: string; to_state: string }>
+    } | null
+    if (!instanceData || instanceData.states.length === 0) {
+      throw new Error('This item has no workflow instance')
+    }
+
+    const targetStateRow = instanceData.states.find((s) => s.key === targetState)
+    if (!targetStateRow) throw new Error('Target state not found')
+
+    const transition = instanceData.available_transitions.find(
+      (t) => t.to_state === targetStateRow.id
+    )
+    if (!transition) throw new Error('No transition available to move this item here')
+
+    await api.post(`/pipelines/instance/${item.collection}/${item.item_id}/transition`, {
+      transition_id: transition.id
+    })
+  }
+
   const transitionMut = useMutation({
     mutationFn: async ({ item, targetState }: { item: QueueItemRow; targetState: string }) => {
-      const instanceRes = await api.get(`/pipelines/instance/${item.collection}/${item.item_id}`)
-      const instanceData = instanceRes.data.data as {
-        states: Array<{ id: string; key: string }>
-        available_transitions: Array<{ id: string; to_state: string }>
-      } | null
-      if (!instanceData || instanceData.states.length === 0) {
-        throw new Error('This item has no workflow instance')
-      }
-
-      const targetStateRow = instanceData.states.find((s) => s.key === targetState)
-      if (!targetStateRow) throw new Error('Target state not found')
-
-      const transition = instanceData.available_transitions.find(
-        (t) => t.to_state === targetStateRow.id
-      )
-      if (!transition) throw new Error('No transition available to move this item here')
-
-      await api.post(`/pipelines/instance/${item.collection}/${item.item_id}/transition`, {
-        transition_id: transition.id
-      })
+      await performTransition(item, targetState)
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queue-items', id, scope] })
@@ -579,6 +598,72 @@ export function QueueDetailPage() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [view, visibleRows, highlightedId, sheetItem, user?.id, claimMut, releaseMut, navigate])
+
+  // ── Saved views ──
+  const { data: views } = useQuery<{ data: QueueView[] }>({
+    queryKey: ['queue-views', id],
+    queryFn: () => api.get(`/queues/${id}/views`).then((r) => r.data),
+    enabled: !!id
+  })
+  const [activeViewId, setActiveViewId] = useState<number | null>(null)
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [saveName, setSaveName] = useState('')
+  const [saveShared, setSaveShared] = useState(false)
+
+  function applyView(v: QueueView) {
+    const s = v.state ?? {}
+    setScope(s.scope ?? 'all')
+    setFilterValues(s.filters ?? {})
+    setSort(s.sort ?? '')
+    setGroupBy(s.group_by ?? null)
+    if (s.view) setView(s.view)
+    setPage(1)
+    setActiveViewId(v.id)
+  }
+
+  const saveViewMut = useMutation({
+    mutationFn: () =>
+      api.post(`/queues/${id}/views`, {
+        name: saveName.trim(),
+        is_shared: saveShared,
+        state: { scope, filters: filterValues, sort, group_by: groupBy, view }
+      }),
+    onSuccess: (res) => {
+      setSaveOpen(false)
+      setSaveName('')
+      setSaveShared(false)
+      setActiveViewId(res.data.data.id as number)
+      qc.invalidateQueries({ queryKey: ['queue-views', id] })
+      toast.success('View saved')
+    },
+    onError: () => toast.error('Failed to save view')
+  })
+
+  const deleteViewMut = useMutation({
+    mutationFn: (viewId: number) => api.delete(`/queues/views/${viewId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['queue-views', id] })
+      setActiveViewId(null)
+    },
+    onError: () => toast.error('Failed to delete view')
+  })
+
+  // ── Bulk actions ──
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [bulkBusy, setBulkBusy] = useState(false)
+
+  async function runBulk(label: string, fn: (row: QueueItemRow) => Promise<unknown>) {
+    const rows = items.filter((r) => selectedIds.includes(rowId(r)))
+    setBulkBusy(true)
+    const results = await Promise.allSettled(rows.map(fn))
+    const ok = results.filter((r) => r.status === 'fulfilled').length
+    const fail = results.length - ok
+    setBulkBusy(false)
+    setSelectedIds([])
+    qc.invalidateQueries({ queryKey: ['queue-items', id] })
+    if (fail) toast.warning(`${label}: ${ok} succeeded, ${fail} failed`)
+    else toast.success(`${label}: ${ok} succeeded`)
+  }
 
   const rowGroups = groups?.map((g) => ({
     key: g.key,
@@ -931,6 +1016,80 @@ export function QueueDetailPage() {
           ))}
         </div>
 
+        {(views?.data.length ?? 0) > 0 || saveOpen ? (
+          <div className='mb-3 flex flex-wrap items-center gap-1.5'>
+            {(views?.data ?? []).map((v) => (
+              <span
+                key={v.id}
+                className={cn(
+                  'group flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium',
+                  activeViewId === v.id
+                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
+                )}
+              >
+                <button type='button' onClick={() => applyView(v)}>
+                  {v.name}
+                  {v.is_shared && <span className='ml-1 text-slate-400'>· shared</span>}
+                </button>
+                {v.user === user?.id && (
+                  <button
+                    type='button'
+                    onClick={() => deleteViewMut.mutate(v.id)}
+                    className='hidden text-slate-400 hover:text-red-500 group-hover:inline'
+                    aria-label={`Delete view ${v.name}`}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+            <Popover open={saveOpen} onOpenChange={setSaveOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  className='rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-400 dark:hover:text-nvr-cyan'
+                >
+                  + Save view
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-[240px] p-3' align='start'>
+                <input
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  placeholder='View name'
+                  className='mb-2 w-full rounded-md border border-slate-200 px-2 py-1.5 text-[12px] focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
+                />
+                <label className='mb-2 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+                  <Checkbox
+                    checked={saveShared}
+                    onCheckedChange={(c) => setSaveShared(c === true)}
+                  />
+                  Share with everyone
+                </label>
+                <button
+                  type='button'
+                  disabled={!saveName.trim() || saveViewMut.isPending}
+                  onClick={() => saveViewMut.mutate()}
+                  className='w-full rounded-md bg-nvr-cyan px-2 py-1.5 text-[12px] font-semibold text-white hover:bg-nvr-cyan/90 disabled:opacity-50'
+                >
+                  Save current view
+                </button>
+              </PopoverContent>
+            </Popover>
+          </div>
+        ) : (
+          <div className='mb-3'>
+            <button
+              type='button'
+              onClick={() => setSaveOpen(true)}
+              className='rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-400 dark:hover:text-nvr-cyan'
+            >
+              + Save view
+            </button>
+          </div>
+        )}
+
         <div className='mb-4 flex items-center gap-1'>
           <button
             type='button'
@@ -1145,6 +1304,8 @@ export function QueueDetailPage() {
             rowGroups={rowGroups ?? undefined}
             collapsedGroups={collapsedGroups}
             onToggleGroup={toggleGroup}
+            selectedIds={selectedIds}
+            onSelectionChange={setSelectedIds}
           />
         ) : view === 'kanban' ? (
           <QueueKanbanBoard
@@ -1158,6 +1319,30 @@ export function QueueDetailPage() {
           <QueueWorkloadView queueId={id!} />
         )}
       </div>
+
+      <QueueBulkBar
+        count={selectedIds.length}
+        states={data?.available_values.state ?? []}
+        busy={bulkBusy}
+        onClaim={() =>
+          runBulk('Claim', (row) =>
+            api.post(`/queues/${id}/claim`, {
+              source_collection: row.collection,
+              item_id: row.item_id
+            })
+          )
+        }
+        onRelease={() =>
+          runBulk('Release', (row) =>
+            api.post(`/queues/${id}/release`, {
+              source_collection: row.collection,
+              item_id: row.item_id
+            })
+          )
+        }
+        onTransition={(state) => runBulk('Transition', (row) => performTransition(row, state))}
+        onClear={() => setSelectedIds([])}
+      />
 
       <QueueItemSheet
         item={sheetItem}
