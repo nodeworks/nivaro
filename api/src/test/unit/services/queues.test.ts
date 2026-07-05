@@ -8,6 +8,7 @@ import {
   classifyRelationSegment,
   computeAvailableExtraFields,
   computeAvailableValues,
+  computePriorityScore,
   computeStats,
   filterBySlaStatus,
   formatMultiValueCell,
@@ -723,5 +724,54 @@ describe('parsePaginationParams', () => {
 
   it('clamps limit to a maximum of 100', () => {
     expect(parsePaginationParams('1', '500')).toEqual({ page: 1, limit: 100 })
+  })
+})
+
+describe('computePriorityScore', () => {
+  it('gives strict band precedence: any breached item outranks any non-breached item', () => {
+    const breachedFresh = item({ sla_status: 'breached', aging_hours: 0 })
+    const warningOldRisky = item({ sla_status: 'warning', at_risk: true, aging_hours: 4000 })
+    expect(computePriorityScore(breachedFresh)).toBeGreaterThan(
+      computePriorityScore(warningOldRisky)
+    )
+  })
+
+  it('caps aging at 499 so age never crosses a band boundary', () => {
+    const okAncient = item({ sla_status: 'ok', aging_hours: 100000 })
+    const warningFresh = item({ sla_status: 'warning', aging_hours: 0 })
+    expect(computePriorityScore(okAncient)).toBe(499)
+    expect(computePriorityScore(warningFresh)).toBe(1000)
+  })
+
+  it('adds 500 for at-risk within the same SLA band', () => {
+    const risky = item({ sla_status: 'warning', at_risk: true, aging_hours: 10 })
+    const calm = item({ sla_status: 'warning', at_risk: false, aging_hours: 10 })
+    expect(computePriorityScore(risky) - computePriorityScore(calm)).toBe(500)
+  })
+
+  it('degrades to aging order when SLA and risk are absent', () => {
+    expect(computePriorityScore(item({ aging_hours: 30 }))).toBe(30)
+    expect(computePriorityScore(item({ aging_hours: null }))).toBe(0)
+  })
+})
+
+describe('sortItems — priority key', () => {
+  it('-priority puts the most urgent item first', () => {
+    const items = [
+      item({ item_id: 'calm', sla_status: 'ok', aging_hours: 5 }),
+      item({ item_id: 'breached', sla_status: 'breached', aging_hours: 1 }),
+      item({ item_id: 'risky', sla_status: null, at_risk: true, aging_hours: 200 }),
+      item({ item_id: 'warning', sla_status: 'warning', aging_hours: 50 })
+    ]
+    const sorted = sortItems(items, '-priority')
+    expect(sorted.map((i) => i.item_id)).toEqual(['breached', 'warning', 'risky', 'calm'])
+  })
+
+  it('older items rank higher within the same band', () => {
+    const items = [
+      item({ item_id: 'young', sla_status: 'breached', aging_hours: 2 }),
+      item({ item_id: 'old', sla_status: 'breached', aging_hours: 90 })
+    ]
+    expect(sortItems(items, '-priority').map((i) => i.item_id)).toEqual(['old', 'young'])
   })
 })

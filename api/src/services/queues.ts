@@ -193,6 +193,15 @@ export function applyColumnFilters(
 
 const SLA_SEVERITY: Record<string, number> = { ok: 0, warning: 1, breached: 2 }
 
+// Composite "do this first" score: SLA severity dominates (breached always
+// outranks warning outranks ok/none), at-risk breaks ties within a band, and
+// aging breaks ties within that — capped at 499 so age can never cross a band
+// boundary. Used by sort=-priority (most urgent first).
+export function computePriorityScore(item: QueueItem): number {
+  const slaRank = item.sla_status === 'breached' ? 2 : item.sla_status === 'warning' ? 1 : 0
+  return slaRank * 1000 + (item.at_risk ? 500 : 0) + Math.min(item.aging_hours ?? 0, 499)
+}
+
 function sortValue(item: QueueItem, key: string): string | number | null {
   if (key === 'collection') return item.collection
   if (key === 'label') return item.label
@@ -201,6 +210,7 @@ function sortValue(item: QueueItem, key: string): string | number | null {
   if (key === 'aging_hours') return item.aging_hours
   if (key === 'sla_status') return item.sla_status ? (SLA_SEVERITY[item.sla_status] ?? null) : null
   if (key === 'at_risk') return item.at_risk ? 1 : 0
+  if (key === 'priority') return computePriorityScore(item)
   if (key.startsWith('extra.')) {
     const v = item.extra?.[key.slice('extra.'.length)]
     return v == null ? null : String(v)
