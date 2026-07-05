@@ -10,7 +10,11 @@ describe('getInterfaces', () => {
 
   it('returns o2m interface list', () => {
     const result = getInterfaces('o2m')
-    expect(result).toEqual([{ value: 'relation-list', label: 'Related Items List (default)' }])
+    expect(result).toEqual([
+      { value: 'relation-list', label: 'Related Items List (default)' },
+      { value: 'inline-grid', label: 'Inline Grid' },
+      { value: 'inline-table', label: 'Inline Table' }
+    ])
   })
 
   it('returns m2m interfaces', () => {
