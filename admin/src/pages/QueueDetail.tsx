@@ -59,6 +59,9 @@ interface QueueStats {
   total: number
   by_state: Record<string, number>
   unowned: number
+  sla_warning: number
+  sla_breached: number
+  at_risk: number
 }
 
 interface QueueSource {
@@ -71,6 +74,7 @@ interface QueueMeta {
   id: string
   name: string
   description: string | null
+  materialized: boolean
   sources?: QueueSource[]
   available_extra_fields?: string[]
 }
@@ -100,6 +104,53 @@ function SlaPill({ status }: { status: QueueItemRow['sla_status'] }) {
         ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400'
         : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'
   return <span className={cn('rounded px-1.5 py-0.5 text-[11px] font-medium', cls)}>{status}</span>
+}
+
+function StatTile({
+  label,
+  count,
+  active,
+  isLoading,
+  tone,
+  onClick
+}: {
+  label: string
+  count: number
+  active: boolean
+  isLoading?: boolean
+  tone?: 'amber' | 'red'
+  onClick: () => void
+}) {
+  return (
+    <button
+      type='button'
+      onClick={onClick}
+      className={cn(
+        'bg-white px-4 py-3.5 text-left transition-colors hover:bg-slate-50 dark:bg-card dark:hover:bg-card/80',
+        active && 'ring-1 ring-inset ring-nvr-cyan bg-nvr-cyan/5 dark:bg-nvr-cyan/10'
+      )}
+    >
+      <p
+        className={cn(
+          'mb-1 text-[11px] font-medium',
+          tone === 'red'
+            ? 'text-red-500 dark:text-red-400'
+            : tone === 'amber'
+              ? 'text-amber-600 dark:text-amber-400'
+              : 'text-slate-400 dark:text-muted-foreground'
+        )}
+      >
+        {label}
+      </p>
+      {isLoading ? (
+        <Skeleton className='h-6 w-16 rounded' />
+      ) : (
+        <p className='text-[22px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
+          {formatNumber(count)}
+        </p>
+      )}
+    </button>
+  )
 }
 
 function formatColumnHeader(path: string): string {
@@ -228,6 +279,17 @@ export function QueueDetailPage() {
     }
     return out
   })()
+
+  function toggleTileFilter(key: string, value: string) {
+    setFilterValues((prev) => ({ ...prev, [key]: prev[key] === value ? '' : value }))
+    setPage(1)
+  }
+
+  function clearAllTileFilters() {
+    setFilterValues({})
+    setScope('all')
+    setPage(1)
+  }
 
   const { data, isLoading } = useQuery<{
     data: QueueItemRow[]
@@ -625,31 +687,60 @@ export function QueueDetailPage() {
         <div
           className='mb-4 grid gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'
           style={{
-            gridTemplateColumns: `repeat(${Math.min(stateEntries.length + 1, 6)}, minmax(0, 1fr))`
+            gridTemplateColumns: `repeat(${Math.min(stateEntries.length + 5, 6)}, minmax(0, 1fr))`
           }}
         >
-          <div className='bg-white px-4 py-3.5 dark:bg-card'>
-            <p className='mb-1 text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>
-              Total
-            </p>
-            {isLoading ? (
-              <Skeleton className='h-6 w-16 rounded' />
-            ) : (
-              <p className='text-[22px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
-                {formatNumber(stats?.total ?? 0)}
-              </p>
-            )}
-          </div>
+          <StatTile
+            label='Total'
+            count={stats?.total ?? 0}
+            active={Object.values(filterValues).every((v) => !v) && scope === 'all'}
+            isLoading={isLoading}
+            onClick={clearAllTileFilters}
+          />
           {stateEntries.map(([state, count]) => (
-            <div key={state} className='bg-white px-4 py-3.5 dark:bg-card'>
-              <p className='mb-1 text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>
-                {state}
-              </p>
-              <p className='text-[22px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
-                {formatNumber(count)}
-              </p>
-            </div>
+            <StatTile
+              key={state}
+              label={state}
+              count={count}
+              active={filterValues.state === state}
+              isLoading={isLoading}
+              onClick={() => toggleTileFilter('state', state)}
+            />
           ))}
+          <StatTile
+            label='Warning'
+            count={stats?.sla_warning ?? 0}
+            tone='amber'
+            active={filterValues.sla_status === 'warning'}
+            isLoading={isLoading}
+            onClick={() => toggleTileFilter('sla_status', 'warning')}
+          />
+          <StatTile
+            label='Breached'
+            count={stats?.sla_breached ?? 0}
+            tone='red'
+            active={filterValues.sla_status === 'breached'}
+            isLoading={isLoading}
+            onClick={() => toggleTileFilter('sla_status', 'breached')}
+          />
+          <StatTile
+            label='At Risk'
+            count={stats?.at_risk ?? 0}
+            tone='red'
+            active={filterValues.at_risk === 'yes'}
+            isLoading={isLoading}
+            onClick={() => toggleTileFilter('at_risk', 'yes')}
+          />
+          <StatTile
+            label='Unowned'
+            count={stats?.unowned ?? 0}
+            active={scope === 'unowned'}
+            isLoading={isLoading}
+            onClick={() => {
+              setScope(scope === 'unowned' ? 'all' : 'unowned')
+              setPage(1)
+            }}
+          />
         </div>
 
         <div className='mb-4 flex items-center gap-1 border-b border-slate-200 dark:border-border'>
