@@ -9,7 +9,7 @@ import {
 import { computeEnteredStateAtBatch, computeStatusBatch } from '../routes/sla.js'
 import { chunkArray, selectInChunks } from '../services/db-batch.js'
 import {
-  QUEUE_SANITY_CEILING,
+  BACKFILL_CEILING,
   type QueueItem,
   type QueueSourceRow,
   resolveApprovalsSource,
@@ -94,7 +94,7 @@ async function buildCollectionSourceRows(
   source: QueueSourceRow,
   ownerUser: User
 ): Promise<MaterializedRowInput[]> {
-  const { items } = await resolveCollectionSource(source, ownerUser, QUEUE_SANITY_CEILING)
+  const { items } = await resolveCollectionSource(source, ownerUser, BACKFILL_CEILING)
   if (items.length === 0) return []
 
   const collection = source.collection as string
@@ -291,11 +291,11 @@ export const queueMaterializationBackfill = inngest.createFunction(
         if (source.type === 'collection' && source.collection) {
           rows = await buildCollectionSourceRows(source, ownerUser)
         } else if (source.type === 'tasks') {
-          rows = (await resolveTasksSource(QUEUE_SANITY_CEILING)).items.map(rowFromQueueItem)
+          rows = (await resolveTasksSource(BACKFILL_CEILING)).items.map(rowFromQueueItem)
         } else if (source.type === 'approvals') {
-          rows = (await resolveApprovalsSource(QUEUE_SANITY_CEILING)).items.map(rowFromQueueItem)
+          rows = (await resolveApprovalsSource(BACKFILL_CEILING)).items.map(rowFromQueueItem)
         } else {
-          rows = (await resolveOwnedByMeSource(ownerUser.id, QUEUE_SANITY_CEILING)).items.map(
+          rows = (await resolveOwnedByMeSource(ownerUser.id, BACKFILL_CEILING)).items.map(
             rowFromQueueItem
           )
         }

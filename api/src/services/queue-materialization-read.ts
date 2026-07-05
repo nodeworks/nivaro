@@ -74,6 +74,97 @@ function applyScope(
   return qb
 }
 
+// Stats + availableValues from the materialized cache, scope-filtered but never
+// column-filtered (the computeStats(scoped) convention). Split out from
+// fetchMaterializedQueueItems so fetchQueueItems can serve EXACT stats for a
+// materialized queue even when the requested sort/filters force the ROWS through
+// the live-resolve fallback (priority sort, sla_status filter, extra.* …) — the
+// live path's QUEUE_SANITY_CEILING truncation must never cap the stat strip.
+export async function fetchMaterializedStats(
+  queueId: string,
+  user: User,
+  scope: QueueScope
+): Promise<{
+  stats: QueueStats
+  availableValues: { collection: string[]; state: string[] }
+}> {
+  const scopeBase = applyScope(db('nivaro_queue_items as qi'), queueId, user, scope)
+
+  const statsRows = (await scopeBase
+    .clone()
+    .select('qi.state')
+    .count('* as n')
+    .groupBy('qi.state')) as Array<{ state: string | null; n: number }>
+  const by_state: Record<string, number> = {}
+  let statsTotal = 0
+  for (const r of statsRows) {
+    by_state[r.state ?? 'none'] = Number(r.n)
+    statsTotal += Number(r.n)
+  }
+  const unownedRow = (await scopeBase
+    .clone()
+    .whereNotExists(function () {
+      this.select('*').from('nivaro_queue_item_owners as qio').whereRaw('qio.queue_item_id = qi.id')
+    })
+    .count('* as n')
+    .first()) as { n: number }
+
+  // sla_warning/sla_breached need business-hours math (computeSla is JS-only, not
+  // expressible as plain SQL), so count them via a narrow 5-column scan of the
+  // scope-filtered set — exact parity with the live path's computeStats(scoped).
+  const slaScanRows = (await scopeBase
+    .clone()
+    .select(
+      'qi.entered_state_at',
+      'qi.sla_duration_hours',
+      'qi.sla_warning_pct',
+      'qi.sla_business_hours_only',
+      'qi.at_risk'
+    )) as Array<{
+    entered_state_at: Date | null
+    sla_duration_hours: number | null
+    sla_warning_pct: number | null
+    sla_business_hours_only: boolean
+    at_risk: boolean
+  }>
+  let sla_warning = 0
+  let sla_breached = 0
+  let atRiskCount = 0
+  for (const r of slaScanRows) {
+    if (r.at_risk) atRiskCount++
+    const { status } = computeSla(r)
+    if (status === 'warning') sla_warning++
+    if (status === 'breached') sla_breached++
+  }
+
+  const collectionsRow = (await scopeBase
+    .clone()
+    .distinct('qi.collection as collection')) as Array<{
+    collection: string
+  }>
+  const statesRow = (await scopeBase
+    .clone()
+    .whereNotNull('qi.state')
+    .distinct('qi.state as state')) as Array<{
+    state: string
+  }>
+
+  return {
+    stats: {
+      total: statsTotal,
+      by_state,
+      unowned: Number(unownedRow.n),
+      sla_warning,
+      sla_breached,
+      at_risk: atRiskCount
+    },
+    availableValues: {
+      collection: collectionsRow.map((r) => r.collection).sort(),
+      state: statesRow.map((r) => r.state).sort()
+    }
+  }
+}
+
 export async function fetchMaterializedQueueItems(
   queueId: string,
   user: User,
@@ -257,81 +348,14 @@ export async function fetchMaterializedQueueItems(
     }
   })
 
-  // Stats and availableValues are computed on scopeBase (scope-filtered, no column
-  // filters) — see the comment on scopeBase above.
-  const statsRows = (await scopeBase
-    .clone()
-    .select('qi.state')
-    .count('* as n')
-    .groupBy('qi.state')) as Array<{ state: string | null; n: number }>
-  const by_state: Record<string, number> = {}
-  let statsTotal = 0
-  for (const r of statsRows) {
-    by_state[r.state ?? 'none'] = Number(r.n)
-    statsTotal += Number(r.n)
-  }
-  const unownedRow = (await scopeBase
-    .clone()
-    .whereNotExists(function () {
-      this.select('*').from('nivaro_queue_item_owners as qio').whereRaw('qio.queue_item_id = qi.id')
-    })
-    .count('* as n')
-    .first()) as { n: number }
-
-  // sla_warning/sla_breached need business-hours math (computeSla is JS-only, not
-  // expressible as plain SQL), so count them via a narrow 5-column scan of the
-  // scope-filtered set — exact parity with the live path's computeStats(scoped).
-  const slaScanRows = (await scopeBase
-    .clone()
-    .select(
-      'qi.entered_state_at',
-      'qi.sla_duration_hours',
-      'qi.sla_warning_pct',
-      'qi.sla_business_hours_only',
-      'qi.at_risk'
-    )) as Array<{
-    entered_state_at: Date | null
-    sla_duration_hours: number | null
-    sla_warning_pct: number | null
-    sla_business_hours_only: boolean
-    at_risk: boolean
-  }>
-  let sla_warning = 0
-  let sla_breached = 0
-  let atRiskCount = 0
-  for (const r of slaScanRows) {
-    if (r.at_risk) atRiskCount++
-    const { status } = computeSla(r)
-    if (status === 'warning') sla_warning++
-    if (status === 'breached') sla_breached++
-  }
-
-  const collectionsRow = (await scopeBase
-    .clone()
-    .distinct('qi.collection as collection')) as Array<{
-    collection: string
-  }>
-  const statesRow = (await scopeBase
-    .clone()
-    .whereNotNull('qi.state')
-    .distinct('qi.state as state')) as Array<{
-    state: string
-  }>
+  // Stats and availableValues come from the shared scope-filtered helper — see
+  // fetchMaterializedStats above.
+  const { stats, availableValues } = await fetchMaterializedStats(queueId, user, scope)
 
   return {
     items,
-    stats: {
-      total: statsTotal,
-      by_state,
-      unowned: Number(unownedRow.n),
-      sla_warning,
-      sla_breached,
-      at_risk: atRiskCount
-    },
-    availableValues: {
-      collection: collectionsRow.map((r) => r.collection).sort(),
-      state: statesRow.map((r) => r.state).sort()
-    },
+    stats,
+    availableValues,
     truncated: false,
     total
   }

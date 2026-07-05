@@ -102,6 +102,11 @@ export type QueueScope = 'mine' | 'unowned' | 'all' | 'claimed'
 
 export const QUEUE_SANITY_CEILING = 20000
 export const PROMOTION_THRESHOLD = 5000
+// Backfill resolves sources in a background Inngest job, so it gets a far higher
+// circuit breaker than interactive reads — the materialized cache must hold the
+// FULL matching set or its SQL-aggregate stats would inherit the interactive cap
+// (a 50k-row source materializing only 20k rows made the stat strip report 20,000).
+export const BACKFILL_CEILING = 200000
 
 export interface SourceResult {
   items: QueueItem[]
@@ -1096,13 +1101,23 @@ export async function fetchQueueItems(
   const queueRow = (await db('nivaro_queues').where({ id: queueId }).first()) as
     | { materialized: boolean }
     | undefined
+  // When a materialized queue's ROWS must live-resolve (priority sort, sla_status
+  // filter, extra.* sort/filter, owners sort), its STATS still come exact from the
+  // cache — stats depend only on scope, never on the requested sort/filters, and
+  // the live path's QUEUE_SANITY_CEILING would otherwise cap the stat strip at
+  // 20,000 for large queues.
+  let materializedStats: Promise<{
+    stats: QueueStats
+    availableValues: { collection: string[]; state: string[] }
+  }> | null = null
   if (queueRow?.materialized) {
-    const { requiresLiveResolveFallback, fetchMaterializedQueueItems } = await import(
-      './queue-materialization-read.js'
-    )
+    const { requiresLiveResolveFallback, fetchMaterializedQueueItems, fetchMaterializedStats } =
+      await import('./queue-materialization-read.js')
     if (!requiresLiveResolveFallback(options.sort ?? '', options.filters ?? {})) {
       return fetchMaterializedQueueItems(queueId, user, scope, options)
     }
+    materializedStats = fetchMaterializedStats(queueId, user, scope)
+    materializedStats.catch(() => {})
   }
 
   const sources = (await db<QueueSourceRow>('nivaro_queue_sources')
@@ -1149,7 +1164,16 @@ export async function fetchQueueItems(
   // computeStats(scoped) counts the final deduped, scope-filtered set instead,
   // which is more accurate than a raw per-source sum.
   const { items: paged, total } = paginateItems(sorted, options.page, options.limit)
-  return { items: paged, stats: computeStats(scoped), availableValues, truncated, total }
+  // Prefer exact cache stats for a materialized queue on the live-fallback path —
+  // fall back to live-computed stats if the cache read failed for any reason.
+  const exact = materializedStats ? await materializedStats.catch(() => null) : null
+  return {
+    items: paged,
+    stats: exact?.stats ?? computeStats(scoped),
+    availableValues: exact?.availableValues ?? availableValues,
+    truncated,
+    total
+  }
 }
 
 export async function getWipLimits(ownerIds: string[]): Promise<Map<string, number>> {
