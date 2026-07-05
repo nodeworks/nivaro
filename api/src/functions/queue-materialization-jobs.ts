@@ -7,7 +7,7 @@ import {
   referencedFields
 } from '../routes/at-risk.js'
 import { computeEnteredStateAtBatch, computeStatusBatch } from '../routes/sla.js'
-import { selectInChunks } from '../services/db-batch.js'
+import { chunkArray, selectInChunks } from '../services/db-batch.js'
 import {
   QUEUE_SANITY_CEILING,
   type QueueItem,
@@ -172,27 +172,32 @@ export async function writeMaterializedRowChunk(
       .whereIn('item_id', itemIds)
       .delete()
 
-    await db('nivaro_queue_items').insert(
-      collRows.map((r) => ({
-        queue_id: queueId,
-        source_id: sourceId,
-        collection: r.collection,
-        item_id: r.item_id,
-        label: r.label,
-        state: r.state,
-        state_color: r.state_color,
-        entered_state_at: r.entered_state_at,
-        sla_duration_hours: r.sla_duration_hours,
-        sla_warning_pct: r.sla_warning_pct,
-        sla_business_hours_only: r.sla_business_hours_only,
-        at_risk: r.at_risk,
-        at_risk_color: r.at_risk_color,
-        owner_names: r.owner_names,
-        extra: JSON.stringify(r.extra ?? {}),
-        url: r.url,
-        updated_at: new Date()
-      }))
-    )
+    const insertRows = collRows.map((r) => ({
+      queue_id: queueId,
+      source_id: sourceId,
+      collection: r.collection,
+      item_id: r.item_id,
+      label: r.label,
+      state: r.state,
+      state_color: r.state_color,
+      entered_state_at: r.entered_state_at,
+      sla_duration_hours: r.sla_duration_hours,
+      sla_warning_pct: r.sla_warning_pct,
+      sla_business_hours_only: r.sla_business_hours_only,
+      at_risk: r.at_risk,
+      at_risk_color: r.at_risk_color,
+      owner_names: r.owner_names,
+      extra: JSON.stringify(r.extra ?? {}),
+      url: r.url,
+      updated_at: new Date()
+    }))
+    // MSSQL caps bound parameters at ~2100 per statement (see docs/claude/gotchas.md /
+    // db-tables.md) — this row has 17 columns, so 100 rows/batch = 1700 params, comfortably
+    // under the cap. A single bulk insert of up to WRITE_CHUNK_SIZE (1000) rows would blow
+    // past it (17,000 params) and throw immediately.
+    for (const batch of chunkArray(insertRows, 100)) {
+      await db('nivaro_queue_items').insert(batch)
+    }
 
     const inserted = (await db('nivaro_queue_items')
       .where({ queue_id: queueId, source_id: sourceId, collection })
@@ -208,8 +213,11 @@ export async function writeMaterializedRowChunk(
         ownerRows.push({ queue_item_id: queueItemId, user_id: userId })
       }
     }
-    if (ownerRows.length > 0) {
-      await db('nivaro_queue_item_owners').insert(ownerRows)
+    // Same MSSQL bound-parameter cap as above — this row has only 2 columns (500 rows/batch
+    // = 1000 params), so 1000 rows was already right at the ~2100-param edge; chunk it too
+    // for defensive correctness/consistency rather than relying on staying just under the line.
+    for (const batch of chunkArray(ownerRows, 500)) {
+      await db('nivaro_queue_item_owners').insert(batch)
     }
   }
 }
