@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
-vi.mock('../../../routes/sla.js', () => ({ computeStatusBatch: vi.fn() }))
+vi.mock('../../../routes/sla.js', () => ({
+  computeStatusBatch: vi.fn(),
+  businessHoursElapsed: vi.fn()
+}))
 vi.mock('../../../services/pipeline-engine.js', () => ({
   parseJson: (val: string | null | undefined) => {
     if (!val) return null
@@ -17,6 +20,7 @@ vi.mock('../../../services/pipeline-engine.js', () => ({
 import { db } from '../../../db/index.js'
 import { computeStatusBatch } from '../../../routes/sla.js'
 import { resolveStateOwnersBatch } from '../../../services/pipeline-engine.js'
+import { requiresLiveResolveFallback } from '../../../services/queue-materialization-read.js'
 import { queueItemMatchesSource } from '../../../services/queue-materialization.js'
 import type { QueueSourceRow } from '../../../services/queues.js'
 
@@ -322,5 +326,25 @@ describe('syncMaterializedQueueItem', () => {
     expect(insertArgs).toBeDefined()
     expect(insertArgs?.entered_state_at).toEqual(FIXED_DATE)
     expect(insertArgs?.state).toBe('in_review')
+  })
+})
+
+describe('requiresLiveResolveFallback', () => {
+  it('routes priority sorts to the live path (sla_status is JS-only math)', () => {
+    expect(requiresLiveResolveFallback('priority', {})).toBe(true)
+    expect(requiresLiveResolveFallback('-priority', {})).toBe(true)
+  })
+
+  it('keeps SQL-servable sorts on the materialized path', () => {
+    expect(requiresLiveResolveFallback('label', {})).toBe(false)
+    expect(requiresLiveResolveFallback('-state', {})).toBe(false)
+    expect(requiresLiveResolveFallback('', {})).toBe(false)
+  })
+
+  it('still falls back for extra.* and owners sorts and sla/aging filters', () => {
+    expect(requiresLiveResolveFallback('extra.customer.name', {})).toBe(true)
+    expect(requiresLiveResolveFallback('owners', {})).toBe(true)
+    expect(requiresLiveResolveFallback('', { sla_status: 'breached' })).toBe(true)
+    expect(requiresLiveResolveFallback('', { aging_hours: { min: 1 } })).toBe(true)
   })
 })

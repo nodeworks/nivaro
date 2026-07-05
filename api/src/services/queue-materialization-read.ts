@@ -7,10 +7,11 @@ import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 // Returns true when the requested sort/filters touch a field this SQL-pushdown
 // path cannot (or intentionally does not) serve correctly: extra.* fields (never
 // materialized as real columns), sla_status/aging_hours filters (business-hours
-// SLA math is JS-only, not expressible as plain SQL), and an owners sort (would
-// need a SQL-level string aggregation across the M2M owners table). The caller
-// should route requests matching this to the existing live-resolve path instead
-// of calling fetchMaterializedQueueItems.
+// SLA math is JS-only, not expressible as plain SQL), an owners sort (would
+// need a SQL-level string aggregation across the M2M owners table), and a
+// priority sort (composite of sla_status/at_risk/aging — same JS-only SLA math).
+// The caller should route requests matching this to the existing live-resolve
+// path instead of calling fetchMaterializedQueueItems.
 export function requiresLiveResolveFallback(
   sort: string,
   filters: Record<string, unknown>
@@ -18,6 +19,9 @@ export function requiresLiveResolveFallback(
   const sortKey = sort.startsWith('-') ? sort.slice(1) : sort
   if (sortKey.startsWith('extra.')) return true
   if (sortKey === 'owners') return true
+  // priority = f(sla_status, at_risk, aging_hours); sla math is business-hours
+  // JS — not expressible in SQL, so priority sorts live-resolve.
+  if (sortKey === 'priority') return true
   if (Object.keys(filters).some((k) => k.startsWith('extra.'))) return true
   if (filters.sla_status != null && filters.sla_status !== '') return true
   if (filters.aging_hours != null) return true

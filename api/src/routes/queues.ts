@@ -24,7 +24,8 @@ function formatQueue(row: QueueRow) {
   return {
     ...row,
     is_shared: !!row.is_shared,
-    is_active: !!row.is_active
+    is_active: !!row.is_active,
+    materialized: !!row.materialized
   }
 }
 
