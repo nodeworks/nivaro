@@ -89,6 +89,21 @@ export const queuesGuide: DocSection = {
         "An extra column can be a relation, not just a plain field — the builder's field picker lets you drill through up to 3 hops (e.g. an M2O chain like Project → Owner → Name). M2O columns show the related record's configured display template; O2M/M2M columns show up to 3 related records' display values with a \"+N more\" suffix when there are more. Relation display values are always resolved fresh from the live schema, never cached.",
         'Every visible column can be filtered and sorted, and dragged to reorder (via the "Columns" popover\'s grip handle). Filtering and sorting happen after scope-filtering but never affect the stat strip, Kanban, or Workload views — those always reflect the full scope-filtered set. Filter and sort choices reset when you leave the queue; only which columns are visible and their order persist.'
       ]
+    },
+    { type: 'h3', text: 'Stat strip filtering' },
+    {
+      type: 'p',
+      text: 'Every tile in the stat strip is clickable. State tiles toggle a state filter, the Warning and Breached tiles toggle the SLA filter, At Risk toggles the risk filter, Unowned switches to the No Owners scope tab, and Total resets everything. The active tile is highlighted, and a second click clears its filter.'
+    },
+    { type: 'h3', text: 'Grouping' },
+    {
+      type: 'p',
+      text: 'The Group control above the table groups rows by state, collection, SLA status, at-risk, owner, aging bucket (<1d / 1–3d / 3–7d / >7d), or any visible extra-field column. Group headers show a row count plus breached and at-risk chips, and each group collapses independently (an Expand all / Collapse all button sits beside the picker). Groups collapse by default when the set exceeds 200 rows. Grouping loads the full matching set — pagination pauses while grouped and resumes when grouping is turned off.'
+    },
+    { type: 'h3', text: 'Priority sort' },
+    {
+      type: 'p',
+      text: 'The Priority chip orders items by urgency: SLA breached first, then SLA warning, then at-risk, then oldest within each band. Regular (non-materialized) queues default to this order — the table order is the triage order. Large materialized queues keep their normal order by default and opt into priority via the chip, which routes through the slower live-resolution path. Clicking any column header overrides priority order; clicking the chip restores it.'
     }
   ]
 }
