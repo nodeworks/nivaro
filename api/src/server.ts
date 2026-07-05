@@ -25,6 +25,7 @@ import { formRendererRoutes } from './routes/form-renderer.js'
 import { registerRoutes } from './routes/index.js'
 import { presencePublicRoutes } from './routes/presence.js'
 import { registerDigestCrons } from './services/digest.js'
+import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { callExternalApi } from './services/external-apis.js'
 
 export async function buildServer() {
@@ -98,6 +99,7 @@ export async function buildServer() {
   if (!process.env.CLOUD_META_DB_URL) {
     registerFileCleanup(app.cron)
     registerDigestCrons(app.cron)
+    registerQueueSnapshotCron(app.cron)
   }
 
   // ─── Workspace context ────────────────────────────────────────────────────

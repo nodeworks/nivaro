@@ -339,6 +339,38 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({ data: sources.map(formatSource) })
   })
 
+  // GET /:id/trends?days=14 — daily stat snapshots for sparklines/deltas (1–90 days)
+  app.get('/:id/trends', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    const daysRaw = Number((req.query as { days?: string }).days)
+    const days = Number.isFinite(daysRaw) ? Math.min(Math.max(Math.floor(daysRaw), 1), 90) : 14
+    const since = new Date(Date.now() - days * 86_400_000)
+
+    const rows = (await db('nivaro_queue_stat_snapshots')
+      .where({ queue_id: id })
+      .where('snapshot_date', '>=', since)
+      .orderBy('snapshot_date', 'asc')
+      .select(
+        'snapshot_date',
+        'total',
+        'unowned',
+        'sla_warning',
+        'sla_breached',
+        'at_risk',
+        'by_state'
+      )) as Array<Record<string, unknown>>
+
+    return reply.send({
+      data: rows.map((r) => ({ ...r, by_state: parseJson(r.by_state as string) ?? {} }))
+    })
+  })
+
   // ── Saved queue views ──
   // Visibility mirrors nivaro_saved_views: own views + shared views (role null or
   // matching), all behind canReadQueue for the parent queue.

@@ -137,12 +137,33 @@ function SlaPill({ status }: { status: QueueItemRow['sla_status'] }) {
   return <span className={cn('rounded px-1.5 py-0.5 text-[11px] font-medium', cls)}>{status}</span>
 }
 
+function Sparkline({ points }: { points: number[] }) {
+  if (points.length < 2) return null
+  const w = 64
+  const h = 18
+  const max = Math.max(...points)
+  const min = Math.min(...points)
+  const range = max - min || 1
+  const step = w / (points.length - 1)
+  const path = points
+    .map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${(h - 2 - ((v - min) / range) * (h - 4)).toFixed(1)}`)
+    .join(' ')
+  return (
+    <svg width={w} height={h} className='mt-1.5 opacity-40' aria-hidden='true'>
+      <path d={path} fill='none' stroke='currentColor' strokeWidth='1.5' />
+    </svg>
+  )
+}
+
 function StatTile({
   label,
   count,
   active,
   isLoading,
   tone,
+  trend,
+  delta,
+  deltaBadIsUp,
   onClick
 }: {
   label: string
@@ -150,6 +171,10 @@ function StatTile({
   active: boolean
   isLoading?: boolean
   tone?: 'amber' | 'red'
+  trend?: number[]
+  delta?: number | null
+  /** When true a rising delta renders red and a falling one green (breached/at-risk style). */
+  deltaBadIsUp?: boolean
   onClick: () => void
 }) {
   return (
@@ -176,10 +201,26 @@ function StatTile({
       {isLoading ? (
         <Skeleton className='h-6 w-16 rounded' />
       ) : (
-        <p className='text-[22px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
+        <p className='flex items-baseline gap-1.5 text-[22px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
           {formatNumber(count)}
+          {delta != null && delta !== 0 && (
+            <span
+              className={cn(
+                'text-[11px] font-medium',
+                deltaBadIsUp
+                  ? delta > 0
+                    ? 'text-red-500'
+                    : 'text-emerald-600'
+                  : 'text-slate-400'
+              )}
+            >
+              {delta > 0 ? '↑' : '↓'}
+              {formatNumber(Math.abs(delta))}
+            </span>
+          )}
         </p>
       )}
+      {trend && <Sparkline points={trend} />}
     </button>
   )
 }
@@ -519,6 +560,34 @@ export function QueueDetailPage() {
     qc.invalidateQueries({ queryKey: ['queue-items', id] })
     qc.invalidateQueries({ queryKey: ['queue-workload', id] })
     setPendingUpdates(0)
+  }
+
+  // ── Trends (daily snapshots → sparklines + deltas on the global tiles) ──
+  const { data: trends } = useQuery<{
+    data: Array<{
+      snapshot_date: string
+      total: number
+      unowned: number
+      sla_warning: number
+      sla_breached: number
+      at_risk: number
+    }>
+  }>({
+    queryKey: ['queue-trends', id],
+    queryFn: () => api.get(`/queues/${id}/trends`, { params: { days: 14 } }).then((r) => r.data),
+    enabled: !!id,
+    staleTime: 5 * 60 * 1000
+  })
+
+  function trendFor(metric: 'total' | 'unowned' | 'sla_warning' | 'sla_breached' | 'at_risk'): {
+    trend?: number[]
+    delta?: number | null
+  } {
+    const rows = trends?.data ?? []
+    if (rows.length === 0) return {}
+    const series = rows.map((r) => r[metric])
+    const last = rows[rows.length - 1]
+    return { trend: series, delta: (stats?.[metric] ?? 0) - last[metric] }
   }
 
   const groups = useMemo(() => (groupBy ? buildGroups(items, groupBy) : null), [items, groupBy])
@@ -970,6 +1039,7 @@ export function QueueDetailPage() {
             count={stats?.total ?? 0}
             active={Object.values(filterValues).every((v) => !v) && scope === 'all'}
             isLoading={isLoading}
+            {...trendFor('total')}
             onClick={clearAllTileFilters}
           />
           {stateEntries.map(([state, count]) => (
@@ -988,6 +1058,8 @@ export function QueueDetailPage() {
             tone='amber'
             active={filterValues.sla_status === 'warning'}
             isLoading={isLoading}
+            deltaBadIsUp
+            {...trendFor('sla_warning')}
             onClick={() => toggleTileFilter('sla_status', 'warning')}
           />
           <StatTile
@@ -996,6 +1068,8 @@ export function QueueDetailPage() {
             tone='red'
             active={filterValues.sla_status === 'breached'}
             isLoading={isLoading}
+            deltaBadIsUp
+            {...trendFor('sla_breached')}
             onClick={() => toggleTileFilter('sla_status', 'breached')}
           />
           <StatTile
@@ -1004,6 +1078,8 @@ export function QueueDetailPage() {
             tone='red'
             active={filterValues.at_risk === 'yes'}
             isLoading={isLoading}
+            deltaBadIsUp
+            {...trendFor('at_risk')}
             onClick={() => toggleTileFilter('at_risk', 'yes')}
           />
           <StatTile
@@ -1011,6 +1087,8 @@ export function QueueDetailPage() {
             count={stats?.unowned ?? 0}
             active={scope === 'unowned'}
             isLoading={isLoading}
+            deltaBadIsUp
+            {...trendFor('unowned')}
             onClick={() => {
               setScope(scope === 'unowned' ? 'all' : 'unowned')
               setPage(1)
