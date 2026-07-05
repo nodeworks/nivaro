@@ -104,6 +104,36 @@ export const queuesGuide: DocSection = {
     {
       type: 'p',
       text: 'The Priority chip orders items by urgency: SLA breached first, then SLA warning, then at-risk, then oldest within each band. Regular (non-materialized) queues default to this order — the table order is the triage order. Large materialized queues keep their normal order by default and opt into priority via the chip, which routes through the slower live-resolution path. Clicking any column header overrides priority order; clicking the chip restores it.'
+    },
+    { type: 'h3', text: 'Triage: side sheet, keyboard, Work Next' },
+    {
+      type: 'ul',
+      items: [
+        "Clicking a row (or kanban card) opens a side sheet with the item's meta, extra fields, available workflow transitions, claim/release, and comments — handle items without leaving the queue. The Open link (or the o key) jumps to the full record.",
+        'Keyboard triage in Table view: j/k (or arrows) move the highlight, Enter opens the sheet, c claims/releases, o opens the full record, Esc closes the sheet.',
+        'Work Next claims the most urgent unclaimed item (following the current table order) and opens it; the sheet\'s Next button advances to the following item. It never auto-releases — releasing or transitioning stays an explicit action.'
+      ]
+    },
+    { type: 'h3', text: 'Saved views and bulk actions' },
+    {
+      type: 'ul',
+      items: [
+        'Save the current scope + filters + sort + grouping + view mode as a named view (+ Save view); views appear as pills and can be shared with everyone. Views are per-queue.',
+        'Selecting rows (checkboxes) opens a floating bar: bulk Claim, Release, or Transition to a target state. Transitions apply per item under the same permission and condition rules as dragging a card — a summary toast reports successes and skips.'
+      ]
+    },
+    { type: 'h3', text: 'Kanban swimlanes and live updates' },
+    {
+      type: 'ul',
+      items: [
+        'The Lanes control on the Kanban view adds horizontal lanes by collection or owner, crossed with the state columns. Lanes collapse individually.',
+        'When other users change items in this queue, an N updates · Refresh pill appears instead of the board reloading under you — click it to refresh.'
+      ]
+    },
+    { type: 'h3', text: 'Trends' },
+    {
+      type: 'p',
+      text: 'A nightly snapshot records each queue\'s totals (total, unowned, SLA warning/breached, at risk, per-state counts). Stat tiles show a 14-day sparkline and a delta versus the last snapshot — rising breached/at-risk counts render red, falling ones green. Trends appear after the first nightly snapshot.'
     }
   ]
 }
