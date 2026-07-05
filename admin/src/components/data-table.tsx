@@ -1,5 +1,5 @@
-import { ChevronDown, ChevronsUpDown, ChevronUp, Search } from 'lucide-react'
-import type React from 'react'
+import { ChevronDown, ChevronRight, ChevronsUpDown, ChevronUp, Search } from 'lucide-react'
+import React from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -71,6 +71,11 @@ export interface DataTableProps<T = Record<string, unknown>> {
   onSelectionChange?: (ids: string[]) => void
   /** Optional per-row class — e.g. at-risk background tinting. */
   rowClassName?: (row: T) => string | undefined
+  /** Grouped rendering: when set, `rows` is ignored for the body; each group renders
+   *  a full-width header row followed by its rows (unless collapsed). Pagination hides. */
+  rowGroups?: Array<{ key: string; header: React.ReactNode; rows: T[] }>
+  collapsedGroups?: Set<string>
+  onToggleGroup?: (key: string) => void
 }
 
 // ─── Sort helpers ─────────────────────────────────────────────────────────────
@@ -132,7 +137,10 @@ export function DataTable<T = Record<string, unknown>>({
   emptyMessage = 'No records found.',
   selectedIds,
   onSelectionChange,
-  rowClassName
+  rowClassName,
+  rowGroups,
+  collapsedGroups,
+  onToggleGroup
 }: DataTableProps<T>) {
   const totalPages = Math.ceil(total / limit)
   const start = (page - 1) * limit + 1
@@ -144,6 +152,44 @@ export function DataTable<T = Record<string, unknown>>({
   const handleHeaderClick = (col: Column<T>) => {
     if (!col.sortable || !onSortChange) return
     onSortChange(nextSort(sort, col.key))
+  }
+
+  const renderRow = (row: T, i: number) => {
+    const rowId = rowKey ? rowKey(row, i) : String(i)
+    const isSelected = selectedIds?.includes(rowId) ?? false
+    return (
+      <TableRow
+        key={rowId}
+        className={cn(
+          'border-slate-100',
+          onRowClick && 'cursor-pointer hover:bg-slate-50/80',
+          rowClassName?.(row),
+          isSelected && 'bg-nvr-cyan/5'
+        )}
+        onClick={() => onRowClick?.(row)}
+      >
+        {onSelectionChange && (
+          <TableCell
+            className='w-9 px-3 py-2'
+            onClick={(e) => {
+              e.stopPropagation()
+              if (isSelected) {
+                onSelectionChange(selectedIds?.filter((id) => id !== rowId) ?? [])
+              } else {
+                onSelectionChange([...(selectedIds ?? []), rowId])
+              }
+            }}
+          >
+            <Checkbox checked={isSelected} aria-label='Select row' />
+          </TableCell>
+        )}
+        {columns.map((col) => (
+          <TableCell key={col.key} className={cn('px-3 py-2', col.className)}>
+            {col.render ? col.render(row, i) : String((row as Record<string, unknown>)[col.key] ?? '—')}
+          </TableCell>
+        ))}
+      </TableRow>
+    )
   }
 
   return (
@@ -307,50 +353,39 @@ export function DataTable<T = Record<string, unknown>>({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((row, i) => {
-                  const rowId = rowKey ? rowKey(row, i) : String(i)
-                  const isSelected = selectedIds?.includes(rowId) ?? false
-                  return (
-                    <TableRow
-                      key={rowId}
-                      className={cn(
-                        'border-slate-100',
-                        onRowClick && 'cursor-pointer hover:bg-slate-50/80',
-                        rowClassName?.(row),
-                        isSelected && 'bg-nvr-cyan/5'
-                      )}
-                      onClick={() => onRowClick?.(row)}
-                    >
-                      {onSelectionChange && (
-                        <TableCell
-                          className='w-9 px-3 py-2'
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (isSelected) {
-                              onSelectionChange(selectedIds?.filter((id) => id !== rowId) ?? [])
-                            } else {
-                              onSelectionChange([...(selectedIds ?? []), rowId])
-                            }
-                          }}
-                        >
-                          <Checkbox checked={isSelected} aria-label='Select row' />
-                        </TableCell>
-                      )}
-                      {columns.map((col) => (
-                        <TableCell key={col.key} className={cn('px-3 py-2', col.className)}>
-                          {col.render
-                            ? col.render(row, i)
-                            : String((row as Record<string, unknown>)[col.key] ?? '—')}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  )
-                })}
+                {rowGroups
+                  ? rowGroups.map((group) => {
+                      const collapsed = collapsedGroups?.has(group.key) ?? false
+                      return (
+                        <React.Fragment key={group.key}>
+                          <TableRow
+                            className='cursor-pointer border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 dark:bg-muted/40'
+                            onClick={() => onToggleGroup?.(group.key)}
+                          >
+                            <TableCell
+                              colSpan={columns.length + (onSelectionChange ? 1 : 0)}
+                              className='px-3 py-1.5'
+                            >
+                              <span className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 dark:text-foreground'>
+                                {collapsed ? (
+                                  <ChevronRight className='h-3.5 w-3.5 text-slate-400' />
+                                ) : (
+                                  <ChevronDown className='h-3.5 w-3.5 text-slate-400' />
+                                )}
+                                {group.header}
+                              </span>
+                            </TableCell>
+                          </TableRow>
+                          {!collapsed && group.rows.map((row, i) => renderRow(row, i))}
+                        </React.Fragment>
+                      )
+                    })
+                  : rows.map((row, i) => renderRow(row, i))}
 
-                {rows.length === 0 && (
+                {(rowGroups ? rowGroups.length === 0 : rows.length === 0) && (
                   <TableRow>
                     <TableCell
-                      colSpan={columns.length}
+                      colSpan={columns.length + (onSelectionChange ? 1 : 0)}
                       className='py-12 text-center text-[13px] text-slate-400'
                     >
                       {emptyMessage}
@@ -361,7 +396,7 @@ export function DataTable<T = Record<string, unknown>>({
             </Table>
 
             {/* Pagination */}
-            {total > limit && (
+            {!rowGroups && total > limit && (
               <div className='flex items-center justify-between border-t border-slate-100 px-4 py-2.5'>
                 <p className='text-[12px] text-slate-400'>
                   {formatNumber(start)}–{formatNumber(end)} of {formatNumber(total)} records
