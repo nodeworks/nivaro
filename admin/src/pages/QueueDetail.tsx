@@ -20,6 +20,7 @@ import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
 import { type Column, DataTable, type FilterDef } from '@/components/data-table'
+import { QueueItemSheet } from '@/components/queue-item-sheet'
 import { QueueKanbanBoard } from '@/components/queue-kanban-board'
 import { QueueWorkloadView } from '@/components/queue-workload-view'
 import { Badge } from '@/components/ui/badge'
@@ -499,6 +500,86 @@ export function QueueDetailPage() {
     })
   }
 
+  // Rows visible in the table, flattened in render order — grouped mode walks
+  // expanded groups only. Drives keyboard navigation and Work Next.
+  const visibleRows = useMemo(() => {
+    if (!groups) return items
+    return groups.filter((g) => !collapsedGroups.has(g.key)).flatMap((g) => g.rows)
+  }, [groups, items, collapsedGroups])
+
+  const rowId = (row: QueueItemRow) => `${row.collection}:${row.item_id}`
+
+  // ── Triage: side sheet, keyboard nav, Work Next ──
+  const [sheetItem, setSheetItem] = useState<QueueItemRow | null>(null)
+  const [workNext, setWorkNext] = useState(false)
+  const [highlightedId, setHighlightedId] = useState<string | null>(null)
+
+  // Keep the open sheet's item fresh across refetches (claim/transition update it).
+  useEffect(() => {
+    if (!sheetItem) return
+    const fresh = items.find((r) => rowId(r) === rowId(sheetItem))
+    if (fresh && fresh !== sheetItem) setSheetItem(fresh)
+    // biome-ignore lint/correctness/useExhaustiveDependencies: sync only when data changes
+  }, [items])
+
+  const workNextEligible = (row: QueueItemRow) =>
+    !row.claimed_by || row.claimed_by.id === user?.id
+
+  function startWorkNext(after?: QueueItemRow) {
+    const startIdx = after ? visibleRows.findIndex((r) => rowId(r) === rowId(after)) + 1 : 0
+    const next = visibleRows.slice(startIdx).find(workNextEligible)
+    if (!next) {
+      setWorkNext(false)
+      setSheetItem(null)
+      toast.info('Nothing left to work on — queue clear!')
+      return
+    }
+    setWorkNext(true)
+    setHighlightedId(rowId(next))
+    if (!next.claimed_by) claimMut.mutate(next)
+    setSheetItem(next)
+  }
+
+  useEffect(() => {
+    if (view !== 'table') return
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return
+      }
+      const idx = highlightedId
+        ? visibleRows.findIndex((r) => rowId(r) === highlightedId)
+        : -1
+      if (e.key === 'j' || e.key === 'ArrowDown') {
+        e.preventDefault()
+        const next = visibleRows[Math.min(idx + 1, visibleRows.length - 1)]
+        if (next) setHighlightedId(rowId(next))
+      } else if (e.key === 'k' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const prev = visibleRows[Math.max(idx - 1, 0)]
+        if (prev) setHighlightedId(rowId(prev))
+      } else if (e.key === 'Enter' && idx >= 0 && !sheetItem) {
+        e.preventDefault()
+        setSheetItem(visibleRows[idx])
+      } else if (e.key === 'c' && idx >= 0) {
+        e.preventDefault()
+        const row = visibleRows[idx]
+        row.claimed_by?.id === user?.id ? releaseMut.mutate(row) : claimMut.mutate(row)
+      } else if (e.key === 'o' && idx >= 0) {
+        e.preventDefault()
+        navigate(visibleRows[idx].url)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [view, visibleRows, highlightedId, sheetItem, user?.id, claimMut, releaseMut, navigate])
+
   const rowGroups = groups?.map((g) => ({
     key: g.key,
     rows: g.rows,
@@ -927,6 +1008,15 @@ export function QueueDetailPage() {
               </PopoverContent>
             </Popover>
           )}
+          {view === 'table' && visibleRows.length > 0 && (
+            <button
+              type='button'
+              onClick={() => startWorkNext()}
+              className='flex items-center gap-1 rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-nvr-cyan/90'
+            >
+              Work Next ▶
+            </button>
+          )}
           {view === 'table' && (
             <button
               type='button'
@@ -1033,7 +1123,13 @@ export function QueueDetailPage() {
             limit={limit}
             isLoading={isLoading}
             onPageChange={setPage}
-            onRowClick={(row) => navigate(row.url)}
+            onRowClick={(row) => {
+              setHighlightedId(rowId(row))
+              setSheetItem(row)
+            }}
+            rowClassName={(row) =>
+              highlightedId === rowId(row) ? 'bg-nvr-cyan/5 dark:bg-nvr-cyan/10' : undefined
+            }
             emptyMessage='Nothing in this queue.'
             sort={sort}
             onSortChange={(next) => {
@@ -1053,7 +1149,7 @@ export function QueueDetailPage() {
         ) : view === 'kanban' ? (
           <QueueKanbanBoard
             items={items}
-            onCardClick={(row) => navigate(row.url)}
+            onCardClick={(row) => setSheetItem(row)}
             onDrop={(item, targetState) => transitionMut.mutate({ item, targetState })}
             onClaim={(row) => claimMut.mutate(row)}
             onRelease={(row) => releaseMut.mutate(row)}
@@ -1062,6 +1158,21 @@ export function QueueDetailPage() {
           <QueueWorkloadView queueId={id!} />
         )}
       </div>
+
+      <QueueItemSheet
+        item={sheetItem}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSheetItem(null)
+            setWorkNext(false)
+          }
+        }}
+        onClaim={(row) => claimMut.mutate(row as QueueItemRow)}
+        onRelease={(row) => releaseMut.mutate(row as QueueItemRow)}
+        workNextActive={workNext}
+        onNext={() => sheetItem && startWorkNext(sheetItem)}
+        refetchItems={() => qc.invalidateQueries({ queryKey: ['queue-items', id] })}
+      />
     </div>
   )
 }
