@@ -193,8 +193,12 @@ export async function fetchMaterializedQueueItems(
   // should never receive them, but the code must not silently pretend to
   // support them either.
   const base = scopeBase.clone()
-  if (filters.collection) base.where('qi.collection', filters.collection as string)
-  if (filters.state) base.where('qi.state', filters.state as string)
+  const asList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map(String) : v == null || v === '' ? [] : [String(v)]
+  const collectionList = asList(filters.collection)
+  if (collectionList.length > 0) base.whereIn('qi.collection', collectionList)
+  const stateList = asList(filters.state)
+  if (stateList.length > 0) base.whereIn('qi.state', stateList)
   if (filters.label)
     base.whereRaw('LOWER(qi.label) LIKE ?', [`%${String(filters.label).toLowerCase()}%`])
   if (filters.owners) {

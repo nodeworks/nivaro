@@ -224,6 +224,13 @@ export function attachClaims(items: QueueItem[], claims: Map<string, QueueOwner>
   }))
 }
 
+// Multiselect filters arrive as arrays and match ANY value (OR semantics);
+// single strings keep the original behavior.
+function matchesAny(value: unknown, test: (v: string) => boolean): boolean {
+  if (Array.isArray(value)) return value.some((v) => test(String(v)))
+  return test(String(value))
+}
+
 export function applyColumnFilters(
   items: QueueItem[],
   filters: Record<string, unknown>
@@ -231,6 +238,7 @@ export function applyColumnFilters(
   return items.filter((item) => {
     for (const [key, value] of Object.entries(filters)) {
       if (value == null || value === '') continue
+      if (Array.isArray(value) && value.length === 0) continue
 
       if (key === 'aging_hours') {
         const range = value as { min?: number; max?: number }
@@ -243,10 +251,13 @@ export function applyColumnFilters(
         if (item.at_risk !== (value === 'yes')) return false
         continue
       }
-      if (key === 'collection' && item.collection !== value) return false
-      else if (key === 'state' && item.state !== value) return false
+      if (key === 'collection' && !matchesAny(value, (v) => item.collection === v)) return false
+      else if (key === 'state' && !matchesAny(value, (v) => item.state === v)) return false
       else if (key === 'sla_status' && item.sla_status !== value) return false
-      else if (key === 'label' && !item.label.toLowerCase().includes(String(value).toLowerCase()))
+      else if (
+        key === 'label' &&
+        !item.label.toLowerCase().includes(String(value).toLowerCase())
+      )
         return false
       else if (key === 'owners') {
         const names = item.owners.map((o) => o.name.toLowerCase()).join(' ')
@@ -254,7 +265,9 @@ export function applyColumnFilters(
       } else if (key.startsWith('extra.')) {
         const path = key.slice('extra.'.length)
         const v = item.extra?.[path]
-        if (v == null || !String(v).toLowerCase().includes(String(value).toLowerCase())) {
+        if (v == null) return false
+        const haystack = String(v).toLowerCase()
+        if (!matchesAny(value, (needle) => haystack.includes(needle.toLowerCase()))) {
           return false
         }
       }

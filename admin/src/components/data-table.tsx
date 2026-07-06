@@ -54,6 +54,8 @@ export interface FilterDef {
   /** 'combobox' only: server-backed autocomplete. Called (debounced) with the search
    *  text; overrides `options` when provided. */
   loadOptions?: (search: string) => Promise<{ label: string; value: string }[]>
+  /** 'combobox' only: allow selecting multiple values (filter matches ANY of them). */
+  multi?: boolean
 }
 
 export interface DataTableProps<T = Record<string, unknown>> {
@@ -74,8 +76,8 @@ export interface DataTableProps<T = Record<string, unknown>> {
   onSearchChange?: (val: string) => void
   searchPlaceholder?: string
   filterDefs?: FilterDef[]
-  filterValues?: Record<string, string>
-  onFilterChange?: (key: string, value: string) => void
+  filterValues?: Record<string, string | string[]>
+  onFilterChange?: (key: string, value: string | string[]) => void
   toolbarRight?: React.ReactNode
   emptyMessage?: string
   selectedIds?: string[]
@@ -134,17 +136,18 @@ function FilterCombobox({
   onChange
 }: {
   def: FilterDef
-  value: string
-  onChange: (value: string) => void
+  value: string | string[]
+  onChange: (value: string | string[]) => void
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [asyncOptions, setAsyncOptions] = useState<{ label: string; value: string }[]>([])
   const [loading, setLoading] = useState(false)
-  const [selectedLabel, setSelectedLabel] = useState<string | null>(null)
+  const [labelCache, setLabelCache] = useState<Record<string, string>>({})
   const requestSeq = useRef(0)
 
   const isAsync = !!def.loadOptions
+  const selected = Array.isArray(value) ? value : value === '' ? [] : [value]
 
   useEffect(() => {
     if (!isAsync || !open) return
@@ -168,13 +171,17 @@ function FilterCombobox({
   }, [search, open, isAsync])
 
   const options = isAsync ? asyncOptions : (def.options ?? [])
+  const labelFor = (v: string) =>
+    options.find((o) => o.value === v)?.label ??
+    (def.options ?? []).find((o) => o.value === v)?.label ??
+    labelCache[v] ??
+    v
   const currentLabel =
-    value === ''
+    selected.length === 0
       ? null
-      : (options.find((o) => o.value === value)?.label ??
-        (def.options ?? []).find((o) => o.value === value)?.label ??
-        selectedLabel ??
-        value)
+      : selected.length === 1
+        ? labelFor(selected[0])
+        : `${labelFor(selected[0])} +${selected.length - 1}`
 
   return (
     <Popover
@@ -194,7 +201,7 @@ function FilterCombobox({
         >
           <span className='truncate'>{currentLabel ?? def.placeholder}</span>
           <span className='ml-1 flex shrink-0 items-center gap-0.5'>
-            {value !== '' && (
+            {selected.length > 0 && (
               // biome-ignore lint/a11y/useKeyWithClickEvents: auxiliary clear affordance; Esc + reselect cover keyboard
               <span
                 role='button'
@@ -202,8 +209,7 @@ function FilterCombobox({
                 aria-label='Clear filter'
                 onClick={(e) => {
                   e.stopPropagation()
-                  setSelectedLabel(null)
-                  onChange('')
+                  onChange(def.multi ? [] : '')
                 }}
                 className='rounded p-0.5 text-slate-400 hover:text-slate-600'
               >
@@ -226,23 +232,35 @@ function FilterCombobox({
             <CommandEmpty className='py-3 text-center text-[12px] text-slate-400'>
               {loading ? 'Searching…' : 'No results'}
             </CommandEmpty>
-            {options.map((opt) => (
-              <CommandItem
-                key={opt.value}
-                value={isAsync ? opt.value : opt.label}
-                onSelect={() => {
-                  setSelectedLabel(opt.label)
-                  onChange(opt.value === value ? '' : opt.value)
-                  setOpen(false)
-                }}
-                className='text-[12px]'
-              >
-                <Check
-                  className={cn('mr-2 h-3 w-3', value === opt.value ? 'opacity-100' : 'opacity-0')}
-                />
-                {opt.label}
-              </CommandItem>
-            ))}
+            {options.map((opt) => {
+              const isSelected = selected.includes(opt.value)
+              return (
+                <CommandItem
+                  key={opt.value}
+                  value={isAsync ? opt.value : opt.label}
+                  onSelect={() => {
+                    setLabelCache((prev) => ({ ...prev, [opt.value]: opt.label }))
+                    if (def.multi) {
+                      onChange(
+                        isSelected
+                          ? selected.filter((v) => v !== opt.value)
+                          : [...selected, opt.value]
+                      )
+                      // stays open — multiselect flows pick several values in a row
+                    } else {
+                      onChange(isSelected ? '' : opt.value)
+                      setOpen(false)
+                    }
+                  }}
+                  className='text-[12px]'
+                >
+                  <Check
+                    className={cn('mr-2 h-3 w-3', isSelected ? 'opacity-100' : 'opacity-0')}
+                  />
+                  {opt.label}
+                </CommandItem>
+              )
+            })}
           </CommandList>
         </Command>
       </PopoverContent>
@@ -358,7 +376,8 @@ export function DataTable<T = Record<string, unknown>>({
             )}
 
             {filterDefs?.map((def) => {
-              const currentVal = filterValues[def.key] ?? ''
+              const rawVal = filterValues[def.key] ?? ''
+              const currentVal = typeof rawVal === 'string' ? rawVal : ''
 
               if (def.type === 'text') {
                 return (
@@ -377,7 +396,7 @@ export function DataTable<T = Record<string, unknown>>({
                   <FilterCombobox
                     key={def.key}
                     def={def}
-                    value={currentVal}
+                    value={rawVal}
                     onChange={(v) => onFilterChange?.(def.key, v)}
                   />
                 )

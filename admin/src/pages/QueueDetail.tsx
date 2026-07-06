@@ -326,7 +326,7 @@ export function QueueDetailPage() {
   const [page, setPage] = useState(1)
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
   const [sort, setSort] = useState('')
-  const [filterValues, setFilterValues] = useState<Record<string, string>>({})
+  const [filterValues, setFilterValues] = useState<Record<string, string | string[]>>({})
   // Single serializable value so Phase 3 saved views can persist it without rework.
   const [groupBy, setGroupBy] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
@@ -405,6 +405,10 @@ export function QueueDetailPage() {
     const out: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(filterValues)) {
       if (!value) continue
+      if (Array.isArray(value)) {
+        if (value.length > 0) out[key] = value
+        continue
+      }
       if (key === 'aging_hours') {
         const [min, max] = value.split(':')
         const range: { min?: number; max?: number } = {}
@@ -422,6 +426,26 @@ export function QueueDetailPage() {
     setFilterValues((prev) => ({ ...prev, [key]: prev[key] === value ? '' : value }))
     setPage(1)
   }
+
+  // Multiselect-aware toggle for the state chips — membership in the array.
+  function toggleStateChip(state: string) {
+    setFilterValues((prev) => {
+      const current = prev.state
+      const list = Array.isArray(current) ? current : current ? [current] : []
+      const next = list.includes(state) ? list.filter((v) => v !== state) : [...list, state]
+      return { ...prev, state: next }
+    })
+    setPage(1)
+  }
+
+  const stateFilterList = Array.isArray(filterValues.state)
+    ? filterValues.state
+    : filterValues.state
+      ? [filterValues.state]
+      : []
+
+  const isFilterEmpty = (v: string | string[] | undefined) =>
+    !v || (Array.isArray(v) && v.length === 0)
 
   function clearAllTileFilters() {
     setFilterValues({})
@@ -1111,6 +1135,7 @@ export function QueueDetailPage() {
       key: 'collection',
       placeholder: 'Collection',
       type: 'combobox' as const,
+      multi: true,
       options: (data?.available_values.collection ?? []).map((c) => ({
         label: collectionLabel(c),
         value: c
@@ -1120,6 +1145,7 @@ export function QueueDetailPage() {
       key: 'state',
       placeholder: 'State',
       type: 'combobox' as const,
+      multi: true,
       options: (data?.available_values.state ?? []).map((s) => ({
         label: stateLabel(s),
         value: s
@@ -1154,6 +1180,7 @@ export function QueueDetailPage() {
           key: `extra.${f}`,
           placeholder: formatColumnHeader(f),
           type: 'combobox' as const,
+          multi: true,
           loadOptions: makeRelationLoader(meta)
         }
       }
@@ -1219,7 +1246,7 @@ export function QueueDetailPage() {
           <StatTile
             label='Total'
             count={stats?.total ?? 0}
-            active={Object.values(filterValues).every((v) => !v) && scope === 'all'}
+            active={Object.values(filterValues).every(isFilterEmpty) && scope === 'all'}
             isLoading={isLoading}
             {...trendFor('total')}
             onClick={clearAllTileFilters}
@@ -1276,8 +1303,8 @@ export function QueueDetailPage() {
                 label={stateLabel(state)}
                 count={count}
                 color={stateMetaByKey[state]?.color ?? null}
-                active={filterValues.state === state}
-                onClick={() => toggleTileFilter('state', state)}
+                active={stateFilterList.includes(state)}
+                onClick={() => toggleStateChip(state)}
               />
             ))}
           </div>

@@ -272,7 +272,7 @@ export function UsersPage() {
           filterValues={{ status: statusFilter }}
           onFilterChange={(key, val) => {
             if (key === 'status') {
-              setStatusFilter(val)
+              setStatusFilter(typeof val === 'string' ? val : (val[0] ?? ''))
               setPage(1)
             }
           }}

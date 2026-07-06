@@ -839,3 +839,38 @@ describe('computeStatsFromIdMeta', () => {
     expect(stats.at_risk).toBe(1)
   })
 })
+
+describe('applyColumnFilters — multiselect arrays', () => {
+  const rows = [
+    item({ item_id: '1', collection: 'a', state: 'draft', extra: { 'divisions.name': 'Zone 1' } }),
+    item({ item_id: '2', collection: 'b', state: 'review', extra: { 'divisions.name': 'Zone 2' } }),
+    item({ item_id: '3', collection: 'c', state: 'done', extra: { 'divisions.name': 'Zone 3' } })
+  ]
+
+  it('matches ANY of the values for collection/state arrays', () => {
+    expect(applyColumnFilters(rows, { collection: ['a', 'c'] }).map((r) => r.item_id)).toEqual([
+      '1',
+      '3'
+    ])
+    expect(applyColumnFilters(rows, { state: ['draft', 'review'] }).map((r) => r.item_id)).toEqual([
+      '1',
+      '2'
+    ])
+  })
+
+  it('matches ANY of the values for extra.* arrays (contains semantics)', () => {
+    expect(
+      applyColumnFilters(rows, { 'extra.divisions.name': ['Zone 1', 'Zone 3'] }).map(
+        (r) => r.item_id
+      )
+    ).toEqual(['1', '3'])
+  })
+
+  it('empty arrays are ignored like empty strings', () => {
+    expect(applyColumnFilters(rows, { collection: [] })).toHaveLength(3)
+  })
+
+  it('single string values keep working unchanged', () => {
+    expect(applyColumnFilters(rows, { collection: 'b' }).map((r) => r.item_id)).toEqual(['2'])
+  })
+})
