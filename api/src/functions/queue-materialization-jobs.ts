@@ -51,6 +51,7 @@ export interface MaterializedRowInput {
   at_risk_color: string | null
   owner_names: string | null
   extra: Record<string, unknown> | undefined
+  extra_ids?: Record<string, string[]>
   url: string
   ownerIds: string[]
 }
@@ -76,6 +77,7 @@ function rowFromQueueItem(item: QueueItem): MaterializedRowInput {
     at_risk_color: null,
     owner_names: item.owners.map((o) => o.name).join(' ') || null,
     extra: item.extra,
+    extra_ids: item.extra_ids,
     url: item.url,
     ownerIds: item.owners.map((o) => o.id)
   }
@@ -136,6 +138,7 @@ async function buildCollectionSourceRows(
       at_risk_color: item.at_risk ? (colorByItemId.get(item.item_id) ?? null) : null,
       owner_names: item.owners.map((o) => o.name).join(' ') || null,
       extra: item.extra,
+      extra_ids: item.extra_ids,
       url: item.url,
       ownerIds: item.owners.map((o) => o.id)
     }
@@ -187,7 +190,13 @@ export async function writeMaterializedRowChunk(
       at_risk: r.at_risk,
       at_risk_color: r.at_risk_color,
       owner_names: r.owner_names,
-      extra: JSON.stringify(r.extra ?? {}),
+      // Reserved __ids key mirrors buildMaterializedRow — the read path splits it
+      // back out into extra_ids for drill-down.
+      extra: JSON.stringify(
+        r.extra_ids && Object.keys(r.extra_ids).length > 0
+          ? { ...(r.extra ?? {}), __ids: r.extra_ids }
+          : (r.extra ?? {})
+      ),
       url: r.url,
       updated_at: new Date()
     }))
