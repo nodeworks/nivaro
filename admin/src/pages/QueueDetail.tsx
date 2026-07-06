@@ -89,7 +89,7 @@ interface QueueSource {
   id: number
   type: 'collection' | 'tasks' | 'approvals' | 'owned_by_me'
   collection: string | null
-  drilldown?: Record<string, { enabled?: boolean; layout_id?: number | null }>
+  drilldown?: Record<string, { enabled?: boolean; layout_id?: number | null; width?: number | null }>
 }
 
 interface ExtraFieldMeta {
@@ -1043,15 +1043,23 @@ export function QueueDetailPage() {
     collection: string
     itemId: string
     layoutId?: number | null
+    width?: number | null
     title?: string
   } | null>(null)
 
-  const drilldownConfigFor = (path: string): { enabled: boolean; layout_id: number | null } => {
+  const drilldownConfigFor = (
+    path: string
+  ): { enabled: boolean; layout_id: number | null; width: number | null } => {
     for (const src of queue?.sources ?? []) {
       const cfg = src.drilldown?.[path]
-      if (cfg) return { enabled: cfg.enabled !== false, layout_id: cfg.layout_id ?? null }
+      if (cfg)
+        return {
+          enabled: cfg.enabled !== false,
+          layout_id: cfg.layout_id ?? null,
+          width: cfg.width ?? null
+        }
     }
-    return { enabled: true, layout_id: null }
+    return { enabled: true, layout_id: null, width: null }
   }
 
   const extraColumns: Column<QueueItemRow>[] = extraFieldKeys.map((field) => ({
@@ -1074,6 +1082,7 @@ export function QueueDetailPage() {
                 collection: meta.target_collection as string,
                 itemId: targetIds[0],
                 layoutId: cfg.layout_id,
+                width: cfg.width,
                 title: String(value)
               })
             }}
@@ -1751,6 +1760,7 @@ export function QueueDetailPage() {
           collection={drilldown.collection}
           itemId={drilldown.itemId}
           layoutId={drilldown.layoutId}
+          width={drilldown.width}
           title={drilldown.title}
           onClose={() => setDrilldown(null)}
         />

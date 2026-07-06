@@ -42,7 +42,10 @@ interface QueueSource {
   state_values: string[] | null
   state_mode?: 'include' | 'exclude' | null
   label_template?: string | null
-  drilldown?: Record<string, { enabled?: boolean; layout_id?: number | null }> | null
+  drilldown?: Record<
+    string,
+    { enabled?: boolean; layout_id?: number | null; width?: number | null }
+  > | null
   sla_filter: string | null
   extra_fields: string[] | null
   sort: number
@@ -203,6 +206,13 @@ function QueueListItem({
 
 // Per-column drill-down config: enabled toggle + pinned detail layout of the
 // target collection. Only offered for relation extra-field paths.
+const DRILLDOWN_WIDTHS = [
+  { value: 480, label: 'Narrow (480px)' },
+  { value: 640, label: 'Default (640px)' },
+  { value: 900, label: 'Wide (900px)' },
+  { value: 1100, label: 'Extra wide (1100px)' }
+]
+
 function DrilldownChipConfig({
   path,
   targetCollection,
@@ -211,8 +221,8 @@ function DrilldownChipConfig({
 }: {
   path: string
   targetCollection: string
-  cfg: { enabled?: boolean; layout_id?: number | null } | undefined
-  onChange: (next: { enabled: boolean; layout_id: number | null }) => void
+  cfg: { enabled?: boolean; layout_id?: number | null; width?: number | null } | undefined
+  onChange: (next: { enabled: boolean; layout_id: number | null; width: number | null }) => void
 }) {
   const [open, setOpen] = useState(false)
   const { data: detailLayouts = [] } = useQuery<
@@ -255,7 +265,13 @@ function DrilldownChipConfig({
           <input
             type='checkbox'
             checked={enabled}
-            onChange={(e) => onChange({ enabled: e.target.checked, layout_id: cfg?.layout_id ?? null })}
+            onChange={(e) =>
+              onChange({
+                enabled: e.target.checked,
+                layout_id: cfg?.layout_id ?? null,
+                width: cfg?.width ?? null
+              })
+            }
             className='h-3.5 w-3.5 rounded accent-nvr-cyan'
           />
         </label>
@@ -265,7 +281,11 @@ function DrilldownChipConfig({
             <select
               value={cfg?.layout_id ?? ''}
               onChange={(e) =>
-                onChange({ enabled: true, layout_id: e.target.value ? Number(e.target.value) : null })
+                onChange({
+                  enabled: true,
+                  layout_id: e.target.value ? Number(e.target.value) : null,
+                  width: cfg?.width ?? null
+                })
               }
               className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
             >
@@ -282,6 +302,24 @@ function DrilldownChipConfig({
                 view. Create one in Data Model → Layout.
               </p>
             )}
+            <span className='text-[10px] text-slate-400'>Panel width</span>
+            <select
+              value={cfg?.width ?? 640}
+              onChange={(e) =>
+                onChange({
+                  enabled: true,
+                  layout_id: cfg?.layout_id ?? null,
+                  width: Number(e.target.value) === 640 ? null : Number(e.target.value)
+                })
+              }
+              className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+            >
+              {DRILLDOWN_WIDTHS.map((w) => (
+                <option key={w.value} value={w.value}>
+                  {w.label}
+                </option>
+              ))}
+            </select>
           </div>
         )}
       </PopoverContent>
