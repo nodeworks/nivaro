@@ -23,6 +23,8 @@ interface FieldConfigRow {
   hidden: boolean
   readonly: boolean
   interface: string | null
+  display: string | null
+  display_options: Record<string, unknown> | null
   computed_type: string | null
   group_key: string | null
   sort: number
@@ -49,12 +51,78 @@ const EDITABLE_TYPES = new Set([
   'datetime'
 ])
 
-function displayValue(type: string, v: unknown): string {
+// Minimal dayjs-style token formatter for the datetime display's format string.
+function formatDateToken(v: string, fmt: string): string {
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return v
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return fmt
+    .replace(/YYYY/g, String(d.getFullYear()))
+    .replace(/MMM/g, MONTHS[d.getMonth()])
+    .replace(/MM/g, pad(d.getMonth() + 1))
+    .replace(/DD/g, pad(d.getDate()))
+    .replace(/\bD\b/g, String(d.getDate()))
+    .replace(/HH/g, pad(d.getHours()))
+    .replace(/mm/g, pad(d.getMinutes()))
+    .replace(/ss/g, pad(d.getSeconds()))
+}
+
+// Field display settings (Data Model field chip -> Display) applied at render:
+// formatted-value (prefix/suffix + locale number), label (choice text + colors),
+// datetime (format string), boolean (custom labels).
+function displayValue(f: Pick<FieldConfigRow, 'type' | 'display' | 'display_options'>, v: unknown): string {
+  const type = f.type
+  const opts = f.display_options ?? {}
   if (v == null || v === '') return '—'
-  if (type === 'boolean') return v ? 'Yes' : 'No'
-  if (type === 'date' || type === 'dateTime' || type === 'datetime') return formatDate(String(v))
+  if (f.display === 'boolean' || type === 'boolean') {
+    if (f.display === 'boolean') {
+      return v ? String(opts.true_label ?? 'Yes') : String(opts.false_label ?? 'No')
+    }
+    return v ? 'Yes' : 'No'
+  }
+  if (f.display === 'label') {
+    return String(v)
+  }
+  if (f.display === 'formatted-value') {
+    const num = typeof v === 'number' ? v : Number(v)
+    const body =
+      !Number.isNaN(num) && ['integer', 'bigInteger', 'decimal', 'float'].includes(type)
+        ? num.toLocaleString()
+        : String(v)
+    return `${opts.prefix ?? ''}${body}${opts.suffix ?? ''}`
+  }
+  if (type === 'date' || type === 'dateTime' || type === 'datetime') {
+    if (f.display === 'datetime' && typeof opts.format === 'string' && opts.format) {
+      return formatDateToken(String(v), opts.format)
+    }
+    return formatDate(String(v))
+  }
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
+}
+
+// Label display: matched choice renders as a colored pill.
+function LabelPill({
+  choices,
+  value
+}: {
+  choices: Array<{ value: string; text: string; background?: string; foreground?: string }>
+  value: unknown
+}) {
+  const match = choices.find((c) => String(c.value) === String(value))
+  if (!match) return <>{String(value)}</>
+  return (
+    <span
+      className='inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium'
+      style={{
+        backgroundColor: match.background || 'rgba(0,206,255,0.12)',
+        color: match.foreground || 'inherit'
+      }}
+    >
+      {match.text || String(value)}
+    </span>
+  )
 }
 
 function InlineEditor({
@@ -319,7 +387,16 @@ export function RecordDrilldownSheet({
                             ) : (
                               <span className='flex items-start justify-between gap-2'>
                                 <span className={cn('break-words', item?.[f.field] == null && 'text-slate-300 dark:text-muted-foreground')}>
-                                  {displayValue(f.type, item?.[f.field])}
+                                  {f.display === 'label' &&
+                                  Array.isArray(f.display_options) &&
+                                  item?.[f.field] != null ? (
+                                    <LabelPill
+                                      choices={f.display_options as Array<{ value: string; text: string; background?: string; foreground?: string }>}
+                                      value={item[f.field]}
+                                    />
+                                  ) : (
+                                    displayValue(f, item?.[f.field])
+                                  )}
                                 </span>
                                 {editable && (
                                   <button

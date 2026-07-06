@@ -13,6 +13,8 @@ function parseJsonSafe(val: unknown): unknown {
 }
 
 interface FieldRow {
+  display?: string | null
+  display_options?: string | null
   field: string
   type: string | null
   label: string | null
@@ -49,6 +51,8 @@ function formatFieldConfig(row: FieldRow) {
     readonly: !!row.readonly,
     required: !!row.required,
     interface: row.interface ?? null,
+    display: row.display ?? null,
+    display_options: parseJsonSafe(row.display_options),
     options: parseJsonSafe(row.options),
     group_key: row.group_key ?? null,
     visibility_rules: parseJsonSafe(row.visibility_rules),
@@ -143,6 +147,8 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         'type',
         'label',
         'note',
+        'display',
+        'display_options',
         'hidden',
         'readonly',
         'required',
