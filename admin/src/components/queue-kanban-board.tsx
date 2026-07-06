@@ -48,12 +48,14 @@ function KanbanCard({
   item,
   onCardClick,
   onClaim,
-  onRelease
+  onRelease,
+  claimsEnabled = true
 }: {
   item: QueueItemRow
   onCardClick: (item: QueueItemRow) => void
   onClaim: (item: QueueItemRow) => void
   onRelease: (item: QueueItemRow) => void
+  claimsEnabled?: boolean
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `${item.collection}:${item.item_id}`,
@@ -86,17 +88,19 @@ function KanbanCard({
         </div>
         {item.at_risk && <span className='mt-1 block text-[10px] text-red-500'>⚑ At risk</span>}
       </button>
-      <button
-        type='button'
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation()
-          item.claimed_by ? onRelease(item) : onClaim(item)
-        }}
-        className='mt-1.5 text-[11px] font-medium text-nvr-navy underline dark:text-nvr-cyan'
-      >
-        {item.claimed_by ? 'Release' : 'Claim'}
-      </button>
+      {claimsEnabled && (
+        <button
+          type='button'
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            item.claimed_by ? onRelease(item) : onClaim(item)
+          }}
+          className='mt-1.5 text-[11px] font-medium text-nvr-navy underline dark:text-nvr-cyan'
+        >
+          {item.claimed_by ? 'Release' : 'Claim'}
+        </button>
+      )}
     </div>
   )
 }
@@ -108,7 +112,8 @@ function KanbanColumn({
   items,
   onCardClick,
   onClaim,
-  onRelease
+  onRelease,
+  claimsEnabled = true
 }: {
   stateKey: string
   label: string
@@ -117,6 +122,7 @@ function KanbanColumn({
   onCardClick: (item: QueueItemRow) => void
   onClaim: (item: QueueItemRow) => void
   onRelease: (item: QueueItemRow) => void
+  claimsEnabled?: boolean
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stateKey })
 
@@ -148,6 +154,7 @@ function KanbanColumn({
             onCardClick={onCardClick}
             onClaim={onClaim}
             onRelease={onRelease}
+            claimsEnabled={claimsEnabled}
           />
         ))}
         {items.length === 0 && (
@@ -166,7 +173,8 @@ export function QueueKanbanBoard({
   onRelease,
   swimlaneBy = null,
   stateLabels,
-  laneLabel
+  laneLabel,
+  claimsEnabled = true
 }: {
   items: QueueItemRow[]
   onDrop: (item: QueueItemRow, targetState: string) => void
@@ -179,6 +187,8 @@ export function QueueKanbanBoard({
   stateLabels?: Record<string, string>
   /** Formats lane keys (e.g. collection names → display names). */
   laneLabel?: (key: string) => string
+  /** When false the per-card Claim/Release button is hidden. */
+  claimsEnabled?: boolean
 }) {
   const [activeItem, setActiveItem] = useState<QueueItemRow | null>(null)
   const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(new Set())
@@ -247,6 +257,7 @@ export function QueueKanbanBoard({
           onCardClick={onCardClick}
           onClaim={onClaim}
           onRelease={onRelease}
+          claimsEnabled={claimsEnabled}
         />
       ))}
       {columns.length === 0 && (

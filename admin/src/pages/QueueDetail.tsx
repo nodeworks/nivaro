@@ -92,6 +92,7 @@ interface QueueMeta {
   name: string
   description: string | null
   materialized: boolean
+  claims_enabled: boolean
   sources?: QueueSource[]
   available_extra_fields?: string[]
 }
@@ -302,6 +303,8 @@ export function QueueDetailPage() {
   // order IS the triage order. Materialized queues keep server order: priority
   // sorting routes them back to live resolution (sla math is JS-only), which
   // would defeat the 5k+ row cache; the Priority chip remains an explicit opt-in.
+  const claimsEnabled = queue?.claims_enabled !== false
+
   const defaultSortApplied = useRef(false)
   useEffect(() => {
     if (!queue || defaultSortApplied.current) return
@@ -701,7 +704,7 @@ export function QueueDetailPage() {
     }
     setWorkNext(true)
     setHighlightedId(rowId(next))
-    if (!next.claimed_by) claimMut.mutate(next)
+    if (claimsEnabled && !next.claimed_by) claimMut.mutate(next)
     setSheetItem(next)
   }
 
@@ -732,7 +735,7 @@ export function QueueDetailPage() {
       } else if (e.key === 'Enter' && idx >= 0 && !sheetItem) {
         e.preventDefault()
         setSheetItem(visibleRows[idx])
-      } else if (e.key === 'c' && idx >= 0) {
+      } else if (e.key === 'c' && idx >= 0 && claimsEnabled) {
         e.preventDefault()
         const row = visibleRows[idx]
         row.claimed_by?.id === user?.id ? releaseMut.mutate(row) : claimMut.mutate(row)
@@ -743,7 +746,7 @@ export function QueueDetailPage() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [view, visibleRows, highlightedId, sheetItem, user?.id, claimMut, releaseMut, navigate])
+  }, [view, visibleRows, highlightedId, sheetItem, user?.id, claimMut, releaseMut, navigate, claimsEnabled])
 
   // ── Saved views ──
   const { data: views } = useQuery<{ data: QueueView[] }>({
@@ -1001,7 +1004,7 @@ export function QueueDetailPage() {
       .filter((k) => effectiveVisible.has(k))
       .map((k) => allToggleable.find((c) => c.key === k))
       .filter((c): c is Column<QueueItemRow> => c !== undefined),
-    claimColumn
+    ...(claimsEnabled ? [claimColumn] : [])
   ]
 
   const groupOptions: { value: string; label: string }[] = [
@@ -1164,7 +1167,7 @@ export function QueueDetailPage() {
         </div>
 
         <div className='mb-4 flex items-center gap-1 border-b border-slate-200 dark:border-border'>
-          {SCOPE_TABS.map((tab) => (
+          {SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map((tab) => (
             <button
               key={tab.value}
               type='button'
@@ -1530,6 +1533,7 @@ export function QueueDetailPage() {
             swimlaneBy={swimlaneBy}
             stateLabels={stateLabelByKey}
             laneLabel={swimlaneBy === 'collection' ? collectionLabel : undefined}
+            claimsEnabled={claimsEnabled}
           />
         ) : (
           <QueueWorkloadView queueId={id!} />
@@ -1538,6 +1542,7 @@ export function QueueDetailPage() {
 
       <QueueBulkBar
         count={selectedIds.length}
+        claimsEnabled={claimsEnabled}
         states={(data?.available_values.state ?? []).map((s) => ({
           value: s,
           label: stateLabel(s)
@@ -1567,6 +1572,7 @@ export function QueueDetailPage() {
         item={sheetItem}
         stateLabels={stateLabelByKey}
         collectionLabel={collectionLabel}
+        claimsEnabled={claimsEnabled}
         onOpenChange={(open) => {
           if (!open) {
             setSheetItem(null)

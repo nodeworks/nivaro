@@ -13,6 +13,7 @@ export function QueueBulkBar({
   count,
   states,
   busy,
+  claimsEnabled = true,
   onClaim,
   onRelease,
   onTransition,
@@ -21,6 +22,7 @@ export function QueueBulkBar({
   count: number
   states: Array<{ value: string; label: string }>
   busy: boolean
+  claimsEnabled?: boolean
   onClaim: () => void
   onRelease: () => void
   onTransition: (state: string) => void
@@ -35,22 +37,26 @@ export function QueueBulkBar({
       <span className='mr-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
         {count} selected
       </span>
-      <button
-        type='button'
-        disabled={busy}
-        onClick={onClaim}
-        className='rounded-md px-2.5 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 disabled:opacity-50 dark:text-nvr-cyan'
-      >
-        Claim
-      </button>
-      <button
-        type='button'
-        disabled={busy}
-        onClick={onRelease}
-        className='rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
-      >
-        Release
-      </button>
+      {claimsEnabled && (
+        <>
+          <button
+            type='button'
+            disabled={busy}
+            onClick={onClaim}
+            className='rounded-md px-2.5 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 disabled:opacity-50 dark:text-nvr-cyan'
+          >
+            Claim
+          </button>
+          <button
+            type='button'
+            disabled={busy}
+            onClick={onRelease}
+            className='rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
+          >
+            Release
+          </button>
+        </>
+      )}
       <Popover open={transitionOpen} onOpenChange={setTransitionOpen}>
         <PopoverTrigger asChild>
           <button

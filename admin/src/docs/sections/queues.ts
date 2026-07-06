@@ -53,6 +53,7 @@ export const queuesGuide: DocSection = {
       type: 'ul',
       items: [
         "Toggle Table/Kanban at the top of a queue worklist. Kanban columns are the union of workflow state keys present among the queue's current items — dragging a card to another column resolves and executes the matching transition via the same endpoint PipelinePanel uses, so RBAC (required_roles) and condition_rules revalidate exactly as they do anywhere else. A drop with no valid transition toasts an error and the card stays put.",
+        'Claiming can be turned off per queue ("Allow claiming items" in the queue builder) — the claim column, buttons, bulk actions, and the Claimed by me tab disappear, and Work Next opens items without claiming them.',
         'Any viewer of a queue can Claim an unclaimed item (self-assign, support-ticket style) or Release their own claim — claiming is gated by the same visibility rule as reading the queue, not by queue ownership. For any source pointing at a real collection record with a live workflow instance — collection sources and Approvals sources alike — claiming also adds the user as a pipeline instance owner (removed again on release); only Tasks sources track claims queue-locally only, since a task has no corresponding business record to grant ownership on.',
         'A 4th scope tab, "Claimed by me", filters to items the current user has claimed in this queue.'
       ]

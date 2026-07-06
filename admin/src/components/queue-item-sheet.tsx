@@ -90,7 +90,8 @@ export function QueueItemSheet({
   onNext,
   refetchItems,
   stateLabels,
-  collectionLabel
+  collectionLabel,
+  claimsEnabled = true
 }: {
   item: SheetItem | null
   onOpenChange: (open: boolean) => void
@@ -103,6 +104,8 @@ export function QueueItemSheet({
   stateLabels?: Record<string, string>
   /** Collection name → display name. */
   collectionLabel?: (name: string) => string
+  /** When false the claim/release button is hidden. */
+  claimsEnabled?: boolean
 }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -256,15 +259,17 @@ export function QueueItemSheet({
                 </div>
               )}
 
-              <div className='mb-4'>
-                <button
-                  type='button'
-                  onClick={() => (item.claimed_by ? onRelease(item) : onClaim(item))}
-                  className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-medium text-white hover:bg-nvr-cyan/90'
-                >
-                  {item.claimed_by ? 'Release claim' : 'Claim this item'}
-                </button>
-              </div>
+              {claimsEnabled && (
+                <div className='mb-4'>
+                  <button
+                    type='button'
+                    onClick={() => (item.claimed_by ? onRelease(item) : onClaim(item))}
+                    className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-medium text-white hover:bg-nvr-cyan/90'
+                  >
+                    {item.claimed_by ? 'Release claim' : 'Claim this item'}
+                  </button>
+                </div>
+              )}
 
               <div>
                 <p className='mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400 dark:text-muted-foreground'>

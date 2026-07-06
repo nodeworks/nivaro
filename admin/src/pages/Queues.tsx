@@ -66,6 +66,7 @@ interface Queue {
   role_id: string | null
   view_mode: 'table' | 'kanban' | 'both'
   is_active: boolean
+  claims_enabled: boolean
 }
 
 interface QueueDetailData extends Queue {
@@ -491,6 +492,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [isShared, setIsShared] = useState(false)
+  const [claimsEnabled, setClaimsEnabled] = useState(true)
   const [sources, setSources] = useState<QueueSource[]>([])
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
 
@@ -498,6 +500,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     setName(queue.name)
     setDescription(queue.description ?? '')
     setIsShared(queue.is_shared)
+    setClaimsEnabled(queue.claims_enabled)
     setSources(queue.sources)
     setLoadedFor(queue.id)
   }
@@ -511,7 +514,13 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
   }))
 
   const saveMetaMut = useMutation({
-    mutationFn: () => api.patch(`/queues/${queueId}`, { name, description, is_shared: isShared }),
+    mutationFn: () =>
+      api.patch(`/queues/${queueId}`, {
+        name,
+        description,
+        is_shared: isShared,
+        claims_enabled: claimsEnabled
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queues'] })
       qc.invalidateQueries({ queryKey: ['queue', queueId] })
@@ -598,6 +607,18 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
         />
         <Label htmlFor='is-shared' className='text-[12px] text-slate-600'>
           Shared with everyone
+        </Label>
+      </div>
+
+      <div className='flex items-center gap-2'>
+        <Checkbox
+          checked={claimsEnabled}
+          onCheckedChange={(v) => setClaimsEnabled(!!v)}
+          id='claims-enabled'
+          disabled={!canEdit}
+        />
+        <Label htmlFor='claims-enabled' className='text-[12px] text-slate-600'>
+          Allow claiming items
         </Label>
       </div>
 

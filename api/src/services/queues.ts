@@ -74,6 +74,7 @@ export interface QueueRow {
   view_mode: 'table' | 'kanban' | 'both'
   is_active: boolean | number
   materialized: boolean | number
+  claims_enabled: boolean | number
   created_at: Date
   updated_at: Date | null
 }

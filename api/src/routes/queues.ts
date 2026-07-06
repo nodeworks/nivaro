@@ -25,7 +25,8 @@ function formatQueue(row: QueueRow) {
     ...row,
     is_shared: !!row.is_shared,
     is_active: !!row.is_active,
-    materialized: !!row.materialized
+    materialized: !!row.materialized,
+    claims_enabled: !!row.claims_enabled
   }
 }
 
@@ -174,6 +175,7 @@ export async function queuesRoutes(app: FastifyInstance) {
       role_id?: string | null
       view_mode?: 'table' | 'kanban' | 'both'
       is_active?: boolean
+      claims_enabled?: boolean
     }
 
     const update: Record<string, unknown> = { updated_at: new Date() }
@@ -188,6 +190,7 @@ export async function queuesRoutes(app: FastifyInstance) {
     if (body.role_id !== undefined) update.role_id = body.role_id
     if (body.view_mode !== undefined) update.view_mode = body.view_mode
     if (body.is_active !== undefined) update.is_active = !!body.is_active
+    if (body.claims_enabled !== undefined) update.claims_enabled = !!body.claims_enabled
 
     await db('nivaro_queues').where({ id }).update(update)
     const updated = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow
@@ -648,6 +651,9 @@ export async function queuesRoutes(app: FastifyInstance) {
       | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+    if (!queue.claims_enabled) {
+      return reply.code(403).send({ error: 'Claiming is disabled for this queue' })
+    }
 
     const { items } = await fetchQueueItems(id, req.user!, 'all')
     const targetKey = `${body.source_collection}:${body.item_id}`
@@ -725,6 +731,9 @@ export async function queuesRoutes(app: FastifyInstance) {
       | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+    if (!queue.claims_enabled) {
+      return reply.code(403).send({ error: 'Claiming is disabled for this queue' })
+    }
 
     const { items } = await fetchQueueItems(id, req.user!, 'all')
     const targetKey = `${body.source_collection}:${body.item_id}`
