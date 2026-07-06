@@ -543,10 +543,12 @@ export async function renderTemplateLabels(
     }>
     const columns = new Set(fieldRows.map((f) => f.field))
     const wanted = extractTemplateFields(template).filter((f) => columns.has(f))
+    // extractTemplateFields always seeds 'id' — dedupe or MSSQL/tedious returns the
+    // duplicated column as a comma-joined value ("283639,283639"), corrupting every
+    // label key and silently falling the Item column back to raw ids.
+    const selectCols = [...new Set(['id', ...wanted])]
     const rows = (await selectInChunks(ids, 2000, (chunk) =>
-      db(collection)
-        .whereIn('id', chunk)
-        .select(['id', ...wanted])
+      db(collection).whereIn('id', chunk).select(selectCols)
     )) as Array<Record<string, unknown>>
     for (const row of rows) {
       labels[`${collection}:${row.id}`] = resolveDisplayValue(row, template)
