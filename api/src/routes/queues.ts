@@ -286,10 +286,13 @@ export async function queuesRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: `invalid state_mode: ${s.state_mode}` })
       }
       if (s.extra_fields !== undefined) {
-        if (!Array.isArray(s.extra_fields) || s.extra_fields.length > 5) {
+        // Cap raised 5 → 10: extra-field values are cached by materialization and
+        // filtered via JSON_VALUE pushdown, so the old per-read resolution cost no
+        // longer justifies the tighter limit.
+        if (!Array.isArray(s.extra_fields) || s.extra_fields.length > 10) {
           return reply
             .code(400)
-            .send({ error: 'extra_fields must be an array of at most 5 field names' })
+            .send({ error: 'extra_fields must be an array of at most 10 field names' })
         }
         for (const f of s.extra_fields) {
           if (typeof f !== 'string') {

@@ -325,7 +325,7 @@ function SourceRow({
                 </button>
               </Badge>
             ))}
-            {canEdit && currentExtraFields.length < 5 && source.collection && (
+            {canEdit && currentExtraFields.length < 10 && source.collection && (
               <div className='w-[220px]'>
                 <CollectionFieldPicker
                   collection={source.collection}
@@ -339,6 +339,11 @@ function SourceRow({
                   placeholder='Add column…'
                 />
               </div>
+            )}
+            {canEdit && currentExtraFields.length >= 10 && (
+              <span className='text-[11px] text-slate-400'>
+                10/10 columns — remove one to add another
+              </span>
             )}
           </div>
         </div>
