@@ -324,3 +324,67 @@ describe('resolveStateOwnersBatch', () => {
     expect(tableCalls.filter((t) => t === 'nivaro_pipeline_owner_groups')).toHaveLength(1)
   })
 })
+
+describe('pickWinningGroups — resolved filter values (m2m + multi-hop)', () => {
+  it('matches an m2m dimension via a resolved id set', () => {
+    const g = group({
+      id: 'm2m',
+      filters: JSON.stringify([
+        { field: 'regions.short_name', op: 'eq', value: 'KEY', id_value: 4 }
+      ])
+    })
+    const resolved = new Map([
+      ['regions.short_name', { ids: new Set(['4']), display: new Set(['KEY']) }]
+    ])
+    expect(pickWinningGroups([g], {}, [], resolved)).toEqual([g])
+    const miss = new Map([
+      ['regions.short_name', { ids: new Set(['7']), display: new Set(['NED']) }]
+    ])
+    expect(pickWinningGroups([g], {}, [], miss)).toEqual([])
+  })
+
+  it('matches a multi-hop m2o dimension via a resolved chain fk', () => {
+    const g = group({
+      id: 'hop2',
+      filters: JSON.stringify([
+        { field: 'project.project_type.name', op: 'eq', value: 'Materials', id_value: 20 }
+      ])
+    })
+    const resolved = new Map([
+      ['project.project_type.name', { ids: 20 as unknown, display: 'Materials' as unknown }]
+    ])
+    expect(pickWinningGroups([g], { project: 7618 }, [], resolved)).toEqual([g])
+    const miss = new Map([
+      ['project.project_type.name', { ids: 3 as unknown, display: 'Power' as unknown }]
+    ])
+    expect(pickWinningGroups([g], { project: 7618 }, [], miss)).toEqual([])
+  })
+
+  it('falls back to display-value comparison when the filter has no id_value', () => {
+    const g = group({
+      id: 'display',
+      filters: JSON.stringify([{ field: 'regions.short_name', op: 'eq', value: 'KEY' }])
+    })
+    const resolved = new Map([
+      ['regions.short_name', { ids: new Set(['4']), display: new Set(['KEY']) }]
+    ])
+    expect(pickWinningGroups([g], {}, [], resolved)).toEqual([g])
+  })
+
+  it('neq excludes when the m2m set contains the value', () => {
+    const g = group({
+      id: 'neq',
+      filters: JSON.stringify([
+        { field: 'regions.short_name', op: 'neq', value: 'KEY', id_value: 4 }
+      ])
+    })
+    const has = new Map([
+      ['regions.short_name', { ids: new Set(['4']), display: new Set(['KEY']) }]
+    ])
+    expect(pickWinningGroups([g], {}, [], has)).toEqual([])
+    const hasNot = new Map([
+      ['regions.short_name', { ids: new Set(['9']), display: new Set(['BLT']) }]
+    ])
+    expect(pickWinningGroups([g], {}, [], hasNot)).toEqual([g])
+  })
+})

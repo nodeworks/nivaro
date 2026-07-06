@@ -257,15 +257,42 @@ export async function buildDelegationSubstitutions(
 
 // ─── Owner resolution ─────────────────────────────────────────────────────────
 
+// Pre-resolved value for one filter field on one record. `ids` carries the
+// id-side comparison target: an id Set for M2M paths, or the final-hop FK for
+// (multi-hop) M2O paths. `display` carries the display-column value(s) for
+// filters saved without an id_value.
+export interface ResolvedFilterValue {
+  ids: Set<string> | unknown
+  display: Set<string> | unknown
+}
+
+function evalAgainstResolved(op: RecordFilter['op'], resolved: unknown, target: unknown): boolean {
+  if (resolved instanceof Set) {
+    const has = resolved.has(String(target))
+    if (op === 'neq') return !has
+    if (op === 'eq') return has
+    // Other ops don't have meaningful multi-value semantics — no match.
+    return false
+  }
+  return evalFilterOp(op, resolved, target)
+}
+
 export function pickWinningGroups(
   groups: OwnerGroup[],
   record: Record<string, unknown>,
-  relations: RelationInfo[]
+  relations: RelationInfo[],
+  resolvedValues?: Map<string, ResolvedFilterValue>
 ): OwnerGroup[] {
   const nonDefault = groups.filter((g) => !coerceBool(g.is_default))
   const defaults = groups.filter((g) => coerceBool(g.is_default))
 
   function evalFilter(f: RecordFilter): boolean {
+    const resolved = resolvedValues?.get(f.field)
+    if (resolved) {
+      return f.id_value != null
+        ? evalAgainstResolved(f.op, resolved.ids, f.id_value)
+        : evalAgainstResolved(f.op, resolved.display, f.value)
+    }
     if (f.id_value != null && f.field.includes('.')) {
       const prefix = f.field.split('.')[0]
       const m2oRel = relations.find((r) => r.many_field === prefix)
@@ -307,6 +334,157 @@ export interface OwnerResolutionRequest {
   itemId: string
 }
 
+// Batched, path-aware resolution of dotted owner-group filter fields for a set
+// of records. Handles what pickWinningGroups' synchronous prefix lookup cannot:
+//   - M2M alias dimensions (e.g. workflows.regions via workflows_regions):
+//     resolves to a Set of related ids (+ Set of display values).
+//   - Multi-hop M2O chains (e.g. project.project_type.name): resolves the FK at
+//     the final hop (project_type id) and the display column value.
+// Fields that fail to resolve are simply omitted — pickWinningGroups falls back
+// to its legacy prefix behavior for them.
+async function resolveFilterValues(
+  collection: string,
+  records: Map<string, Record<string, unknown>>,
+  fields: string[],
+  database: typeof db
+): Promise<Map<string, Map<string, ResolvedFilterValue>>> {
+  const out = new Map<string, Map<string, ResolvedFilterValue>>()
+  const itemIds = [...records.keys()]
+  if (itemIds.length === 0 || fields.length === 0) return out
+
+  const setFor = (itemId: string) => {
+    let m = out.get(itemId)
+    if (!m) {
+      m = new Map()
+      out.set(itemId, m)
+    }
+    return m
+  }
+
+  interface RelRow {
+    many_collection: string
+    many_field: string
+    one_collection: string | null
+    one_field: string | null
+    junction_field: string | null
+  }
+  const relCache = new Map<string, RelRow[]>()
+  async function relsFor(table: string): Promise<RelRow[]> {
+    if (!relCache.has(table)) {
+      const rows = (await database('nivaro_relations')
+        .where({ many_collection: table })
+        .orWhere({ one_collection: table })
+        .select(
+          'many_collection',
+          'many_field',
+          'one_collection',
+          'one_field',
+          'junction_field'
+        )) as RelRow[]
+      relCache.set(table, rows)
+    }
+    return relCache.get(table) ?? []
+  }
+
+  const baseRels = await relsFor(collection)
+
+  for (const field of fields) {
+    const segments = field.split('.')
+    if (segments.length < 2 || segments.length > 4) continue
+    const prefix = segments[0]
+    try {
+      const m2o = baseRels.find(
+        (r) => r.many_collection === collection && r.many_field === prefix && r.one_collection
+      )
+      if (m2o) {
+        // Walk the M2O chain: fk per item hops through intermediate tables; the
+        // id-side value is the FK into the FINAL table, display is its column.
+        let fkByItem = new Map<string, unknown>()
+        for (const [itemId, rec] of records) fkByItem.set(itemId, rec[prefix])
+        let table = m2o.one_collection as string
+        for (let i = 1; i < segments.length - 1; i++) {
+          const hopField = segments[i]
+          const hopRels = await relsFor(table)
+          const hopRel = hopRels.find(
+            (r) => r.many_collection === table && r.many_field === hopField && r.one_collection
+          )
+          if (!hopRel) throw new Error(`no m2o hop ${table}.${hopField}`)
+          const ids = [...new Set([...fkByItem.values()].filter((v) => v != null))]
+          const rows = (await selectInChunks(ids as string[], 2000, (chunk) =>
+            database(table).whereIn('id', chunk).select('id', hopField)
+          )) as Array<Record<string, unknown>>
+          const hopByRowId = new Map(rows.map((r) => [String(r.id), r[hopField]]))
+          const next = new Map<string, unknown>()
+          for (const [itemId, fk] of fkByItem) {
+            next.set(itemId, fk == null ? null : (hopByRowId.get(String(fk)) ?? null))
+          }
+          fkByItem = next
+          table = hopRel.one_collection as string
+        }
+        const displayCol = segments[segments.length - 1]
+        const finalIds = [...new Set([...fkByItem.values()].filter((v) => v != null))]
+        const displayRows = (await selectInChunks(finalIds as string[], 2000, (chunk) =>
+          database(table).whereIn('id', chunk).select('id', displayCol)
+        )) as Array<Record<string, unknown>>
+        const displayByRowId = new Map(displayRows.map((r) => [String(r.id), r[displayCol]]))
+        for (const [itemId, fk] of fkByItem) {
+          setFor(itemId).set(field, {
+            ids: fk ?? null,
+            display: fk == null ? null : (displayByRowId.get(String(fk)) ?? null)
+          })
+        }
+        continue
+      }
+
+      const alias = baseRels.find((r) => r.one_collection === collection && r.one_field === prefix)
+      if (alias?.junction_field) {
+        const junction = alias.many_collection
+        const ourCol = alias.many_field
+        const relCol = alias.junction_field
+        const junctionRels = await relsFor(junction)
+        const relatedRel = junctionRels.find(
+          (r) => r.many_collection === junction && r.many_field === relCol && r.one_collection
+        )
+        const junctionRows = (await selectInChunks(itemIds, 2000, (chunk) =>
+          database(junction).whereIn(ourCol, chunk).select(`${ourCol} as our_id`, `${relCol} as rel_id`)
+        )) as Array<{ our_id: unknown; rel_id: unknown }>
+        const idsByItem = new Map<string, Set<string>>()
+        const allRelated = new Set<string>()
+        for (const row of junctionRows) {
+          if (row.rel_id == null) continue
+          const key = String(row.our_id)
+          if (!idsByItem.has(key)) idsByItem.set(key, new Set())
+          idsByItem.get(key)!.add(String(row.rel_id))
+          allRelated.add(String(row.rel_id))
+        }
+        const displayCol = segments[1]
+        const displayByRelId = new Map<string, string>()
+        if (relatedRel?.one_collection && allRelated.size > 0 && segments.length >= 2) {
+          const rows = (await selectInChunks([...allRelated], 2000, (chunk) =>
+            database(relatedRel.one_collection as string)
+              .whereIn('id', chunk)
+              .select('id', displayCol)
+          )) as Array<Record<string, unknown>>
+          for (const r of rows) displayByRelId.set(String(r.id), String(r[displayCol]))
+        }
+        for (const itemId of itemIds) {
+          const ids = idsByItem.get(itemId) ?? new Set<string>()
+          const display = new Set<string>()
+          for (const rid of ids) {
+            const d = displayByRelId.get(rid)
+            if (d != null) display.add(d)
+          }
+          setFor(itemId).set(field, { ids, display })
+        }
+      }
+    } catch {
+      // Unresolvable field — leave it out; legacy prefix fallback applies.
+    }
+  }
+
+  return out
+}
+
 export async function resolveStateOwnersBatch(
   requests: OwnerResolutionRequest[],
   database: typeof db = db
@@ -331,8 +509,26 @@ export async function resolveStateOwnersBatch(
   const withGroups = requests.filter((r) => (groupsByState.get(r.stateId) ?? []).length > 0)
   const withoutGroups = requests.filter((r) => (groupsByState.get(r.stateId) ?? []).length === 0)
 
+  // Dotted filter fields used by the groups each collection's requests can hit —
+  // pre-resolved in batch so M2M and multi-hop M2O dimensions actually match.
+  const dottedFieldsByCollection = new Map<string, Set<string>>()
+  for (const req of withGroups) {
+    let set = dottedFieldsByCollection.get(req.collection)
+    if (!set) {
+      set = new Set()
+      dottedFieldsByCollection.set(req.collection, set)
+    }
+    for (const g of groupsByState.get(req.stateId) ?? []) {
+      const filters = parseJson(g.filters) as RecordFilter[] | null
+      for (const f of filters ?? []) {
+        if (f.field.includes('.')) set.add(f.field)
+      }
+    }
+  }
+
   const recordsByCollectionAndId = new Map<string, Map<string, Record<string, unknown>>>()
   const relationsByCollection = new Map<string, RelationInfo[]>()
+  const resolvedByCollection = new Map<string, Map<string, Map<string, ResolvedFilterValue>>>()
   const collections = [...new Set(withGroups.map((r) => r.collection))]
   for (const collection of collections) {
     const ids = [
@@ -359,6 +555,14 @@ export async function resolveStateOwnersBatch(
       relations = []
     }
     relationsByCollection.set(collection, relations)
+
+    const dotted = [...(dottedFieldsByCollection.get(collection) ?? [])]
+    if (dotted.length > 0) {
+      resolvedByCollection.set(
+        collection,
+        await resolveFilterValues(collection, byId, dotted, database)
+      )
+    }
   }
 
   const winningGroupsByKey = new Map<string, OwnerGroup[]>()
@@ -367,7 +571,8 @@ export async function resolveStateOwnersBatch(
     const groups = groupsByState.get(req.stateId) ?? []
     const record = recordsByCollectionAndId.get(req.collection)?.get(req.itemId) ?? {}
     const relations = relationsByCollection.get(req.collection) ?? []
-    const winning = pickWinningGroups(groups, record, relations)
+    const resolved = resolvedByCollection.get(req.collection)?.get(req.itemId)
+    const winning = pickWinningGroups(groups, record, relations, resolved)
     winningGroupsByKey.set(req.key, winning)
     for (const g of winning) allGroupIds.add(g.id)
   }
