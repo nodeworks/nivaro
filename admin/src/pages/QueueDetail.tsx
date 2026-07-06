@@ -13,7 +13,7 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   Flame,
@@ -590,6 +590,60 @@ export function QueueDetailPage() {
     return { trend: series, delta: (stats?.[metric] ?? 0) - last[metric] }
   }
 
+  // ── Friendly labels: workflow state keys → state labels, collection names →
+  // registry display names. Fallback: title-cased key.
+  const sourceCollections = useMemo(
+    () => [
+      ...new Set(
+        (queue?.sources ?? [])
+          .filter((s) => s.type === 'collection' && s.collection)
+          .map((s) => s.collection as string)
+      )
+    ],
+    [queue?.sources]
+  )
+
+  const { data: collectionsReg } = useQuery<{
+    data: Array<{ collection: string; display_name: string | null; plural: string | null }>
+  }>({
+    queryKey: ['collections'],
+    queryFn: () => api.get('/collections').then((r) => r.data),
+    staleTime: 5 * 60 * 1000
+  })
+
+  const stateQueries = useQueries({
+    queries: sourceCollections.map((col) => ({
+      queryKey: ['queue-collection-states', col],
+      queryFn: () =>
+        api
+          .get(`/queues/collection-states/${col}`)
+          .then((r) => r.data.data as Array<{ key: string; label: string }>),
+      staleTime: 5 * 60 * 1000
+    }))
+  })
+
+  const friendly = (v: string) => v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
+  const stateLabelByKey = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const q of stateQueries) {
+      for (const st of q.data ?? []) map[st.key] = st.label
+    }
+    return map
+    // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on fetched data identity
+  }, [stateQueries.map((q) => q.data)])
+
+  const stateLabel = (key: string | null | undefined): string => {
+    if (!key) return '—'
+    if (key === 'none') return 'No State'
+    return stateLabelByKey[key] ?? friendly(key)
+  }
+
+  const collectionLabel = (name: string): string => {
+    const row = (collectionsReg?.data ?? []).find((c) => c.collection === name)
+    return row?.display_name || row?.plural || friendly(name)
+  }
+
   const groups = useMemo(() => (groupBy ? buildGroups(items, groupBy) : null), [items, groupBy])
 
   // Spec: groups collapse by default when the grouped set exceeds 200 rows.
@@ -757,12 +811,18 @@ export function QueueDetailPage() {
     else toast.success(`${label}: ${ok} succeeded`)
   }
 
+  const groupKeyLabel = (key: string): string => {
+    if (groupBy === 'state') return key === 'No state' ? key : stateLabel(key)
+    if (groupBy === 'collection') return collectionLabel(key)
+    return key
+  }
+
   const rowGroups = groups?.map((g) => ({
     key: g.key,
     rows: g.rows,
     header: (
       <>
-        <span>{g.key}</span>
+        <span>{groupKeyLabel(g.key)}</span>
         <span className='font-normal text-slate-400'>({formatNumber(g.rows.length)})</span>
         {g.breached > 0 && (
           <span className='rounded bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-600 dark:bg-red-500/10 dark:text-red-400'>
@@ -783,7 +843,7 @@ export function QueueDetailPage() {
       key: 'collection',
       header: 'Collection',
       sortable: true,
-      render: (row) => <Badge variant='outline'>{row.collection}</Badge>
+      render: (row) => <Badge variant='outline'>{collectionLabel(row.collection)}</Badge>
     },
     {
       key: 'label',
@@ -803,7 +863,7 @@ export function QueueDetailPage() {
               color: row.state_color ?? undefined
             }}
           >
-            {row.state}
+            {stateLabel(row.state)}
           </span>
         ) : (
           <span className='text-slate-300'>—</span>
@@ -961,13 +1021,19 @@ export function QueueDetailPage() {
       key: 'collection',
       placeholder: 'Collection',
       type: 'select' as const,
-      options: (data?.available_values.collection ?? []).map((c) => ({ label: c, value: c }))
+      options: (data?.available_values.collection ?? []).map((c) => ({
+        label: collectionLabel(c),
+        value: c
+      }))
     },
     {
       key: 'state',
       placeholder: 'State',
       type: 'select' as const,
-      options: (data?.available_values.state ?? []).map((s) => ({ label: s, value: s }))
+      options: (data?.available_values.state ?? []).map((s) => ({
+        label: stateLabel(s),
+        value: s
+      }))
     },
     {
       key: 'sla_status',
@@ -1046,7 +1112,7 @@ export function QueueDetailPage() {
           {stateEntries.map(([state, count]) => (
             <StatTile
               key={state}
-              label={state}
+              label={stateLabel(state)}
               count={count}
               active={filterValues.state === state}
               isLoading={isLoading}
@@ -1462,6 +1528,8 @@ export function QueueDetailPage() {
             onClaim={(row) => claimMut.mutate(row)}
             onRelease={(row) => releaseMut.mutate(row)}
             swimlaneBy={swimlaneBy}
+            stateLabels={stateLabelByKey}
+            laneLabel={swimlaneBy === 'collection' ? collectionLabel : undefined}
           />
         ) : (
           <QueueWorkloadView queueId={id!} />
@@ -1470,7 +1538,10 @@ export function QueueDetailPage() {
 
       <QueueBulkBar
         count={selectedIds.length}
-        states={data?.available_values.state ?? []}
+        states={(data?.available_values.state ?? []).map((s) => ({
+          value: s,
+          label: stateLabel(s)
+        }))}
         busy={bulkBusy}
         onClaim={() =>
           runBulk('Claim', (row) =>
@@ -1494,6 +1565,8 @@ export function QueueDetailPage() {
 
       <QueueItemSheet
         item={sheetItem}
+        stateLabels={stateLabelByKey}
+        collectionLabel={collectionLabel}
         onOpenChange={(open) => {
           if (!open) {
             setSheetItem(null)

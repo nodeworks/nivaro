@@ -481,7 +481,9 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     queryKey: ['queue', queueId],
     queryFn: () => api.get(`/queues/${queueId}`).then((r) => r.data.data)
   })
-  const { data: collections = [] } = useQuery<Array<{ collection: string }>>({
+  const { data: collections = [] } = useQuery<
+    Array<{ collection: string; display_name: string | null; plural: string | null }>
+  >({
     queryKey: ['collections'],
     queryFn: () => api.get('/collections').then((r) => r.data.data)
   })
@@ -500,7 +502,13 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     setLoadedFor(queue.id)
   }
 
-  const collectionOptions = collections.map((c) => ({ value: c.collection, label: c.collection }))
+  const collectionOptions = collections.map((c) => ({
+    value: c.collection,
+    label:
+      c.display_name ||
+      c.plural ||
+      c.collection.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase())
+  }))
 
   const saveMetaMut = useMutation({
     mutationFn: () => api.patch(`/queues/${queueId}`, { name, description, is_shared: isShared }),

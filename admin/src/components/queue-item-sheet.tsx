@@ -88,7 +88,9 @@ export function QueueItemSheet({
   onRelease,
   workNextActive,
   onNext,
-  refetchItems
+  refetchItems,
+  stateLabels,
+  collectionLabel
 }: {
   item: SheetItem | null
   onOpenChange: (open: boolean) => void
@@ -97,6 +99,10 @@ export function QueueItemSheet({
   workNextActive?: boolean
   onNext?: () => void
   refetchItems: () => void
+  /** State key → display label (falls back to the raw key). */
+  stateLabels?: Record<string, string>
+  /** Collection name → display name. */
+  collectionLabel?: (name: string) => string
 }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -162,7 +168,9 @@ export function QueueItemSheet({
                     {item.label}
                   </SheetTitle>
                   <div className='mt-1.5 flex items-center gap-2'>
-                    <Badge variant='outline'>{item.collection}</Badge>
+                    <Badge variant='outline'>
+                      {collectionLabel ? collectionLabel(item.collection) : item.collection}
+                    </Badge>
                     {item.state && (
                       <span
                         className='rounded px-1.5 py-0.5 text-[11px] font-medium'
@@ -171,7 +179,7 @@ export function QueueItemSheet({
                           color: item.state_color ?? undefined
                         }}
                       >
-                        {item.state}
+                        {stateLabels?.[item.state] ?? item.state}
                       </span>
                     )}
                   </div>

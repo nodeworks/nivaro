@@ -19,7 +19,7 @@ export function QueueBulkBar({
   onClear
 }: {
   count: number
-  states: string[]
+  states: Array<{ value: string; label: string }>
   busy: boolean
   onClaim: () => void
   onRelease: () => void
@@ -68,14 +68,14 @@ export function QueueBulkBar({
               <CommandEmpty>No state found.</CommandEmpty>
               {states.map((s) => (
                 <CommandItem
-                  key={s}
-                  value={s}
+                  key={s.value}
+                  value={s.label}
                   onSelect={() => {
                     setTransitionOpen(false)
-                    onTransition(s)
+                    onTransition(s.value)
                   }}
                 >
-                  {s}
+                  {s.label}
                 </CommandItem>
               ))}
             </CommandList>

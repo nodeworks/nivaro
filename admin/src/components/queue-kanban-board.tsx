@@ -164,7 +164,9 @@ export function QueueKanbanBoard({
   onCardClick,
   onClaim,
   onRelease,
-  swimlaneBy = null
+  swimlaneBy = null,
+  stateLabels,
+  laneLabel
 }: {
   items: QueueItemRow[]
   onDrop: (item: QueueItemRow, targetState: string) => void
@@ -173,6 +175,10 @@ export function QueueKanbanBoard({
   onRelease: (item: QueueItemRow) => void
   /** Optional horizontal lanes crossed with the state columns. */
   swimlaneBy?: 'collection' | 'owners' | null
+  /** State key → display label (falls back to the raw key). */
+  stateLabels?: Record<string, string>
+  /** Formats lane keys (e.g. collection names → display names). */
+  laneLabel?: (key: string) => string
 }) {
   const [activeItem, setActiveItem] = useState<QueueItemRow | null>(null)
   const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(new Set())
@@ -194,7 +200,11 @@ export function QueueKanbanBoard({
     const key = item.state ?? NO_STATE
     if (seen.has(key)) continue
     seen.add(key)
-    columns.push({ key, label: item.state ?? 'No state', color: item.state_color })
+    columns.push({
+      key,
+      label: item.state ? (stateLabels?.[item.state] ?? item.state) : 'No state',
+      color: item.state_color
+    })
   }
 
   const lanes = swimlaneBy ? buildGroups(items, swimlaneBy) : null
@@ -268,7 +278,7 @@ export function QueueKanbanBoard({
                   ) : (
                     <ChevronDown className='h-3.5 w-3.5 text-slate-400' />
                   )}
-                  {lane.key}
+                  {laneLabel ? laneLabel(lane.key) : lane.key}
                   <span className='font-normal text-slate-400'>
                     ({formatNumber(lane.rows.length)})
                   </span>
