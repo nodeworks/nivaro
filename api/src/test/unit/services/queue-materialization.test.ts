@@ -348,3 +348,47 @@ describe('requiresLiveResolveFallback', () => {
     expect(requiresLiveResolveFallback('', { aging_hours: { min: 1 } })).toBe(true)
   })
 })
+
+describe('queueItemMatchesSource — state_mode exclude', () => {
+  it('returns false when the item is in an excluded state', async () => {
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
+      if (table === 'articles') return makeDbChain({ id: '1' })
+      if (table === 'nivaro_workflow_instances as wi') return makeDbChain({ state_key: 'completed' })
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const result = await queueItemMatchesSource(
+      'articles',
+      '1',
+      source({ state_values: JSON.stringify(['completed']), state_mode: 'exclude' })
+    )
+    expect(result).toBe(false)
+  })
+
+  it('returns true when the item is in a non-excluded state', async () => {
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
+      if (table === 'articles') return makeDbChain({ id: '1' })
+      if (table === 'nivaro_workflow_instances as wi') return makeDbChain({ state_key: 'draft' })
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const result = await queueItemMatchesSource(
+      'articles',
+      '1',
+      source({ state_values: JSON.stringify(['completed']), state_mode: 'exclude' })
+    )
+    expect(result).toBe(true)
+  })
+
+  it('keeps items with no workflow instance when excluding states', async () => {
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
+      if (table === 'articles') return makeDbChain({ id: '1' })
+      if (table === 'nivaro_workflow_instances as wi') return makeDbChain(undefined)
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const result = await queueItemMatchesSource(
+      'articles',
+      '1',
+      source({ state_values: JSON.stringify(['completed']), state_mode: 'exclude' })
+    )
+    expect(result).toBe(true)
+  })
+})

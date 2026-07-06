@@ -42,9 +42,24 @@ export interface QueueSourceRow {
   collection: string | null
   filters: string | null
   state_values: string | null
+  /** 'include' (default) keeps only the listed states; 'exclude' drops them (stateless items kept). */
+  state_mode?: 'include' | 'exclude' | null
   sla_filter: string | null
   extra_fields: string | null
   sort: number
+}
+
+// State filtering semantics shared by the live resolver and the materialization
+// write-path matcher. Include: only listed states pass (stateless items drop).
+// Exclude: listed states drop, everything else — INCLUDING items with no
+// workflow instance/state — passes.
+export function stateFilterKeep(
+  stateKey: string | null,
+  stateValues: string[],
+  mode: 'include' | 'exclude'
+): boolean {
+  if (mode === 'exclude') return stateKey == null || !stateValues.includes(stateKey)
+  return stateKey != null && stateValues.includes(stateKey)
 }
 
 export interface QueueRow {
@@ -734,11 +749,12 @@ export async function resolveCollectionSource(
     )) as InstanceRow[]
 
     if (stateValues?.length) {
-      const keep = new Set(
-        instances.filter((i) => i.state_key && stateValues.includes(i.state_key)).map((i) => i.item)
-      )
-      ids = ids.filter((id) => keep.has(id))
-      instances = instances.filter((i) => keep.has(i.item))
+      const mode = source.state_mode === 'exclude' ? 'exclude' : 'include'
+      const stateByItem = new Map<string, string | null>()
+      for (const i of instances) stateByItem.set(i.item, i.state_key)
+      ids = ids.filter((id) => stateFilterKeep(stateByItem.get(id) ?? null, stateValues, mode))
+      const kept = new Set(ids)
+      instances = instances.filter((i) => kept.has(i.item))
     }
   }
 

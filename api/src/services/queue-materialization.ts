@@ -15,7 +15,8 @@ import {
   getLabels,
   type QueueCondition,
   type QueueSourceRow,
-  resolvePathValues
+  resolvePathValues,
+  stateFilterKeep
 } from './queues.js'
 
 export async function queueItemMatchesSource(
@@ -37,7 +38,8 @@ export async function queueItemMatchesSource(
       .where('wi.item', itemId)
       .select('s.key as state_key')
       .first()) as { state_key: string | null } | undefined
-    if (!instance?.state_key || !stateValues.includes(instance.state_key)) return false
+    const mode = source.state_mode === 'exclude' ? 'exclude' : 'include'
+    if (!stateFilterKeep(instance?.state_key ?? null, stateValues, mode)) return false
   }
 
   if (source.sla_filter) {

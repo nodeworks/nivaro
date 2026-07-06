@@ -242,6 +242,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         collection?: string | null
         filters?: unknown
         state_values?: unknown
+        state_mode?: string | null
         sla_filter?: string | null
         extra_fields?: unknown
         sort?: number
@@ -264,6 +265,9 @@ export async function queuesRoutes(app: FastifyInstance) {
       }
       if (s.sla_filter && s.sla_filter !== 'warning' && s.sla_filter !== 'breached') {
         return reply.code(400).send({ error: `invalid sla_filter: ${s.sla_filter}` })
+      }
+      if (s.state_mode && s.state_mode !== 'include' && s.state_mode !== 'exclude') {
+        return reply.code(400).send({ error: `invalid state_mode: ${s.state_mode}` })
       }
       if (s.extra_fields !== undefined) {
         if (!Array.isArray(s.extra_fields) || s.extra_fields.length > 5) {
@@ -306,6 +310,7 @@ export async function queuesRoutes(app: FastifyInstance) {
           collection: s.collection ?? null,
           filters: toJsonStr(s.filters),
           state_values: toJsonStr(s.state_values),
+          state_mode: s.state_mode === 'exclude' ? 'exclude' : 'include',
           sla_filter: s.sla_filter ?? null,
           extra_fields: toJsonStr(s.extra_fields ?? []),
           sort: s.sort ?? i
@@ -337,6 +342,21 @@ export async function queuesRoutes(app: FastifyInstance) {
     })
 
     return reply.send({ data: sources.map(formatSource) })
+  })
+
+  // GET /collection-states/:collection — workflow states for a collection's binding
+  // (builder state include/exclude picker; authenticated, non-admin — personal queues).
+  app.get('/collection-states/:collection', async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    const binding = (await db('nivaro_workflow_bindings').where({ collection }).first()) as
+      | { template: string }
+      | undefined
+    if (!binding) return reply.send({ data: [] })
+    const states = await db('nivaro_workflow_states')
+      .where({ template: binding.template })
+      .orderBy('sort')
+      .select('key', 'label', 'color')
+    return reply.send({ data: states })
   })
 
   // GET /:id/trends?days=14 — daily stat snapshots for sparklines/deltas (1–90 days)

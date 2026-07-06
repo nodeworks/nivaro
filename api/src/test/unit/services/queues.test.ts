@@ -19,7 +19,8 @@ import {
   type QueueItem,
   type QueueScope,
   type QueueSourceRow,
-  sortItems
+  sortItems,
+  stateFilterKeep
 } from '../../../services/queues.js'
 import type { CMSRelation } from '../../../types.js'
 
@@ -773,5 +774,19 @@ describe('sortItems — priority key', () => {
       item({ item_id: 'old', sla_status: 'breached', aging_hours: 90 })
     ]
     expect(sortItems(items, '-priority').map((i) => i.item_id)).toEqual(['old', 'young'])
+  })
+})
+
+describe('stateFilterKeep', () => {
+  it('include mode keeps only listed states and drops stateless items', () => {
+    expect(stateFilterKeep('draft', ['draft'], 'include')).toBe(true)
+    expect(stateFilterKeep('completed', ['draft'], 'include')).toBe(false)
+    expect(stateFilterKeep(null, ['draft'], 'include')).toBe(false)
+  })
+
+  it('exclude mode drops listed states and keeps stateless items', () => {
+    expect(stateFilterKeep('completed', ['completed'], 'exclude')).toBe(false)
+    expect(stateFilterKeep('draft', ['completed'], 'exclude')).toBe(true)
+    expect(stateFilterKeep(null, ['completed'], 'exclude')).toBe(true)
   })
 })
