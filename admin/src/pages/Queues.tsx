@@ -27,16 +27,35 @@ import { cn } from '@/lib/utils'
 
 type SourceType = 'collection' | 'tasks' | 'approvals' | 'owned_by_me'
 
+interface QueueCondition {
+  field: string
+  op: string
+  value?: unknown
+}
+
 interface QueueSource {
   id?: number
   type: SourceType
   collection: string | null
-  filters: unknown
+  filters: QueueCondition[] | null
   state_values: string[] | null
+  state_mode?: 'include' | 'exclude' | null
   sla_filter: string | null
   extra_fields: string[] | null
   sort: number
 }
+
+const FILTER_OPS: { value: string; label: string }[] = [
+  { value: 'eq', label: 'equals' },
+  { value: 'neq', label: 'not equals' },
+  { value: 'contains', label: 'contains' },
+  { value: 'gt', label: '>' },
+  { value: 'gte', label: '≥' },
+  { value: 'lt', label: '<' },
+  { value: 'lte', label: '≤' },
+  { value: 'null', label: 'is empty' },
+  { value: 'nnull', label: 'is not empty' }
+]
 
 interface Queue {
   id: string
@@ -188,6 +207,44 @@ function SourceRow({
   canEdit: boolean
 }) {
   const currentExtraFields = source.extra_fields ?? []
+  const isCollection = source.type === 'collection' && !!source.collection
+
+  const { data: states = [] } = useQuery<Array<{ key: string; label: string }>>({
+    queryKey: ['queue-collection-states', source.collection],
+    queryFn: () =>
+      api.get(`/queues/collection-states/${source.collection}`).then((r) => r.data.data),
+    enabled: isCollection
+  })
+
+  const { data: fieldConfig } = useQuery<{
+    data: Array<{ field: string; type: string; label: string | null; computed_type: string | null }>
+  }>({
+    queryKey: ['field-config', source.collection],
+    queryFn: () => api.get(`/field-config/${source.collection}`).then((r) => r.data),
+    enabled: isCollection
+  })
+  // Real DB columns only — alias (o2m/m2m presentation) and computed fields
+  // aren't SQL-filterable by applyQueueConditions.
+  const filterFieldOptions = (fieldConfig?.data ?? [])
+    .filter((f) => f.type !== 'alias' && !f.computed_type)
+    .map((f) => ({ value: f.field, label: f.label || f.field }))
+
+  const conditions = Array.isArray(source.filters) ? source.filters : []
+  const stateValues = source.state_values ?? []
+  const stateMode = source.state_mode === 'exclude' ? 'exclude' : 'include'
+
+  // cmdk lowercases CommandItem values in onSelect — resolve back to the real key.
+  const resolveStateKey = (v: string) =>
+    states.find((s) => s.key.toLowerCase() === v.toLowerCase())?.key ?? v
+  const resolveField = (v: string) =>
+    filterFieldOptions.find((f) => f.value.toLowerCase() === v.toLowerCase())?.value ?? v
+
+  function updateCondition(idx: number, patch: Partial<QueueCondition>) {
+    onChange({
+      ...source,
+      filters: conditions.map((c, i) => (i === idx ? { ...c, ...patch } : c))
+    })
+  }
 
   return (
     <div className='flex flex-col gap-2 rounded-md border border-slate-200 p-2 dark:border-border'>
@@ -282,6 +339,133 @@ function SourceRow({
           </div>
         </div>
       )}
+      {isCollection && states.length > 0 && (
+        <div className='space-y-1 pl-1'>
+          <div className='flex items-center gap-2'>
+            <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>States</Label>
+            <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+              {(['include', 'exclude'] as const).map((m) => (
+                <button
+                  key={m}
+                  type='button'
+                  disabled={!canEdit}
+                  onClick={() => onChange({ ...source, state_mode: m })}
+                  className={cn(
+                    'px-2 py-0.5 text-[11px] font-medium capitalize',
+                    stateMode === m
+                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                  )}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            {stateValues.length === 0 && (
+              <span className='text-[11px] text-slate-400'>No state filter — all states</span>
+            )}
+          </div>
+          <div className='flex flex-wrap items-center gap-1.5'>
+            {stateValues.map((k) => (
+              <Badge key={k} className='gap-1 text-[11px]'>
+                {states.find((s) => s.key === k)?.label ?? k}
+                <button
+                  type='button'
+                  aria-label={`Remove ${k}`}
+                  disabled={!canEdit}
+                  onClick={() =>
+                    onChange({ ...source, state_values: stateValues.filter((x) => x !== k) })
+                  }
+                  className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
+                >
+                  <X className='h-3 w-3' />
+                </button>
+              </Badge>
+            ))}
+            {canEdit && (
+              <div className='w-[200px]'>
+                <FieldCombobox
+                  value=''
+                  onChange={(v) => {
+                    const key = resolveStateKey(v)
+                    if (key && !stateValues.includes(key)) {
+                      onChange({ ...source, state_values: [...stateValues, key] })
+                    }
+                  }}
+                  options={states
+                    .filter((s) => !stateValues.includes(s.key))
+                    .map((s) => ({ value: s.key, label: s.label }))}
+                  placeholder={stateMode === 'exclude' ? 'Exclude state…' : 'Include state…'}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {isCollection && (
+        <div className='space-y-1 pl-1'>
+          <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>Filters</Label>
+          {conditions.map((c, idx) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: rows have no stable identity
+            <div key={idx} className='flex items-center gap-1.5'>
+              <div className='w-44 shrink-0'>
+                <FieldCombobox
+                  value={c.field}
+                  onChange={(v) => updateCondition(idx, { field: resolveField(v) })}
+                  options={filterFieldOptions}
+                  placeholder='Field…'
+                  disabled={!canEdit}
+                />
+              </div>
+              <div className='w-32 shrink-0'>
+                <FieldCombobox
+                  value={c.op}
+                  onChange={(v) => updateCondition(idx, { op: v || 'eq' })}
+                  options={FILTER_OPS}
+                  placeholder='Op…'
+                  disabled={!canEdit}
+                />
+              </div>
+              {c.op !== 'null' && c.op !== 'nnull' && (
+                <Input
+                  value={String(c.value ?? '')}
+                  onChange={(e) => updateCondition(idx, { value: e.target.value })}
+                  placeholder='Value'
+                  disabled={!canEdit}
+                  className='h-8 w-40 text-[12px]'
+                />
+              )}
+              {canEdit && (
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='h-8 w-8 shrink-0 p-0 text-slate-400 hover:text-red-500'
+                  onClick={() =>
+                    onChange({ ...source, filters: conditions.filter((_, i) => i !== idx) })
+                  }
+                >
+                  <X className='h-3.5 w-3.5' />
+                </Button>
+              )}
+            </div>
+          ))}
+          {canEdit && (
+            <Button
+              variant='ghost'
+              size='sm'
+              className='h-7 gap-1 px-2 text-[11px] text-slate-500 hover:text-slate-700'
+              onClick={() =>
+                onChange({
+                  ...source,
+                  filters: [...conditions, { field: '', op: 'eq', value: '' }]
+                })
+              }
+            >
+              <Plus className='h-3 w-3' /> Add filter
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -331,7 +515,13 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
   const saveSourcesMut = useMutation({
     mutationFn: () =>
       api.patch(`/queues/${queueId}/sources`, {
-        sources: sources.map((s, i) => ({ ...s, sort: i }))
+        sources: sources.map((s, i) => ({
+          ...s,
+          // Drop half-built condition rows — an empty field name would make the
+          // source's SQL query throw and the source silently resolve empty.
+          filters: (s.filters ?? []).filter((c) => c.field && c.op),
+          sort: i
+        }))
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queue', queueId] })

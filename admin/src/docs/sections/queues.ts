@@ -105,6 +105,15 @@ export const queuesGuide: DocSection = {
       type: 'p',
       text: 'The Priority chip orders items by urgency: SLA breached first, then SLA warning, then at-risk, then oldest within each band. Regular (non-materialized) queues default to this order — the table order is the triage order. Large materialized queues keep their normal order by default and opt into priority via the chip, which routes through the slower live-resolution path. Clicking any column header overrides priority order; clicking the chip restores it.'
     },
+    { type: 'h3', text: 'Source filters' },
+    {
+      type: 'ul',
+      items: [
+        'Each collection source can carry static field filters (field + operator + value, ANDed together) — e.g. amount > 1000, category not equals archived. Only real table columns are filterable; relation and computed fields are excluded.',
+        'The States row restricts a source by workflow state with an Include/Exclude toggle. "Exclude: completed" keeps working when the workflow later gains new states; items with no workflow state are kept in exclude mode.',
+        'Saving sources on a large (materialized) queue automatically rebuilds its cache with the new filters applied.'
+      ]
+    },
     { type: 'h3', text: 'Triage: side sheet, keyboard, Work Next' },
     {
       type: 'ul',
