@@ -15,7 +15,8 @@
     "fix:collections": "tsx src/db/fix-collections.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "sync:legacy-owners": "tsx src/scripts/sync-legacy-owners.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.101.0",
