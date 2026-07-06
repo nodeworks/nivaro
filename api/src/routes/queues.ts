@@ -366,6 +366,45 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({ data: states })
   })
 
+  // GET /:id/label-suggest?q= — Item-column autocomplete. Materialized queues
+  // suggest via SQL DISTINCT/LIKE on the cached label column; small live queues
+  // resolve and filter in memory (their reads do that anyway).
+  app.get('/:id/label-suggest', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { q } = req.query as { q?: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    const needle = (q ?? '').trim().toLowerCase()
+    if (queue.materialized) {
+      const query = db('nivaro_queue_items')
+        .where({ queue_id: id })
+        .whereNotNull('label')
+        .distinct('label')
+        .orderBy('label')
+        .limit(20)
+      if (needle) query.whereRaw('LOWER(label) LIKE ?', [`%${needle}%`])
+      const rows = (await query) as Array<{ label: string }>
+      return reply.send({ data: rows.map((r) => r.label) })
+    }
+
+    const { items } = await fetchQueueItems(id, req.user!, 'all')
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const item of items) {
+      if (!item.label) continue
+      if (needle && !item.label.toLowerCase().includes(needle)) continue
+      if (seen.has(item.label)) continue
+      seen.add(item.label)
+      out.push(item.label)
+      if (out.length >= 20) break
+    }
+    return reply.send({ data: out.sort() })
+  })
+
   // GET /:id/trends?days=14 — daily stat snapshots for sparklines/deltas (1–90 days)
   app.get('/:id/trends', async (req, reply) => {
     const { id } = req.params as { id: string }

@@ -1172,7 +1172,18 @@ export function QueueDetailPage() {
       ]
     },
     { key: 'aging_hours', placeholder: 'Aging (hours)', type: 'range' as const },
-    { key: 'label', placeholder: 'Search item…', type: 'text' as const },
+    {
+      key: 'label',
+      placeholder: 'Item',
+      type: 'combobox' as const,
+      multi: true,
+      loadOptions: async (search: string) => {
+        const res = await api.get(`/queues/${id}/label-suggest`, {
+          params: search.trim() ? { q: search.trim() } : {}
+        })
+        return ((res.data.data ?? []) as string[]).map((l) => ({ label: l, value: l }))
+      }
+    },
     { key: 'owners', placeholder: 'Search owners…', type: 'text' as const },
     ...extraFieldKeys.map((f) => {
       const meta = extraFieldMetaByPath.get(f)

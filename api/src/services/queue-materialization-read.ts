@@ -223,8 +223,14 @@ export async function fetchMaterializedQueueItems(
       }
     })
   }
-  if (filters.label)
-    base.whereRaw('LOWER(qi.label) LIKE ?', [`%${String(filters.label).toLowerCase()}%`])
+  const labelList = asList(filters.label)
+  if (labelList.length > 0) {
+    base.where(function () {
+      for (const v of labelList) {
+        this.orWhereRaw('LOWER(qi.label) LIKE ?', [`%${v.toLowerCase()}%`])
+      }
+    })
+  }
   if (filters.owners) {
     base.whereRaw('LOWER(qi.owner_names) LIKE ?', [`%${String(filters.owners).toLowerCase()}%`])
   }

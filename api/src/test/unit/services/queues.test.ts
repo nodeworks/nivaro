@@ -874,3 +874,21 @@ describe('applyColumnFilters — multiselect arrays', () => {
     expect(applyColumnFilters(rows, { collection: 'b' }).map((r) => r.item_id)).toEqual(['2'])
   })
 })
+
+describe('applyColumnFilters — label arrays', () => {
+  const rows = [
+    item({ item_id: '1', label: 'MMCAR-8479' }),
+    item({ item_id: '2', label: 'GECAR-14433' }),
+    item({ item_id: '3', label: 'GECAR-11546' })
+  ]
+
+  it('label matches ANY of the selected labels', () => {
+    expect(
+      applyColumnFilters(rows, { label: ['MMCAR-8479', 'GECAR-11546'] }).map((r) => r.item_id)
+    ).toEqual(['1', '3'])
+  })
+
+  it('single string label keeps contains semantics', () => {
+    expect(applyColumnFilters(rows, { label: 'gecar' }).map((r) => r.item_id)).toEqual(['2', '3'])
+  })
+})

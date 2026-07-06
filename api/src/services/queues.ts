@@ -254,11 +254,10 @@ export function applyColumnFilters(
       if (key === 'collection' && !matchesAny(value, (v) => item.collection === v)) return false
       else if (key === 'state' && !matchesAny(value, (v) => item.state === v)) return false
       else if (key === 'sla_status' && item.sla_status !== value) return false
-      else if (
-        key === 'label' &&
-        !item.label.toLowerCase().includes(String(value).toLowerCase())
-      )
-        return false
+      else if (key === 'label') {
+        const haystack = item.label.toLowerCase()
+        if (!matchesAny(value, (needle) => haystack.includes(needle.toLowerCase()))) return false
+      }
       else if (key === 'owners') {
         const names = item.owners.map((o) => o.name.toLowerCase()).join(' ')
         if (!names.includes(String(value).toLowerCase())) return false
