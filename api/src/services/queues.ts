@@ -789,7 +789,10 @@ export async function resolvePathValues(
       const out = new Map<string, PathValue>()
       for (const [rowId, fk] of fkByRowId) {
         const v = nested.get(fk)
-        if (v !== undefined) out.set(rowId, v)
+        // A plain leaf reports no ids — the final ENTITY on the path is then the
+        // record this hop resolved to (e.g. project_type.name -> the project_types
+        // row), so substitute this hop's fk. Deeper m2o/m2m hops report their own.
+        if (v !== undefined) out.set(rowId, v.ids.length > 0 ? v : { value: v.value, ids: [fk] })
       }
       return out
     }
