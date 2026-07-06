@@ -9,6 +9,7 @@ import {
   computeAvailableExtraFields,
   computeAvailableValues,
   computePriorityScore,
+  computeStatsFromIdMeta,
   computeStats,
   filterBySlaStatus,
   formatMultiValueCell,
@@ -788,5 +789,41 @@ describe('stateFilterKeep', () => {
     expect(stateFilterKeep('completed', ['completed'], 'exclude')).toBe(false)
     expect(stateFilterKeep('draft', ['completed'], 'exclude')).toBe(true)
     expect(stateFilterKeep(null, ['completed'], 'exclude')).toBe(true)
+  })
+})
+
+describe('computeStatsFromIdMeta', () => {
+  const meta = (collection: string, item_id: string, state: string | null = null, sla: 'ok' | 'warning' | 'breached' | null = null) => ({
+    collection,
+    item_id,
+    state,
+    sla_status: sla
+  })
+
+  it('counts total/by_state/sla across the full meta set, deduped across sources', () => {
+    const stats = computeStatsFromIdMeta(
+      [
+        [meta('a', '1', 'draft', 'breached'), meta('a', '2', 'draft', 'warning')],
+        [meta('a', '1', 'draft', 'breached'), meta('b', '1', null, 'ok')]
+      ],
+      []
+    )
+    expect(stats.total).toBe(3)
+    expect(stats.by_state).toEqual({ draft: 2, none: 1 })
+    expect(stats.sla_breached).toBe(1)
+    expect(stats.sla_warning).toBe(1)
+  })
+
+  it('takes unowned and at_risk from the hydrated subset', () => {
+    const stats = computeStatsFromIdMeta(
+      [[meta('a', '1'), meta('a', '2')]],
+      [
+        item({ item_id: '1', owners: [], at_risk: true }),
+        item({ item_id: '2', owners: [{ id: 'u1', name: 'Alice' }] })
+      ]
+    )
+    expect(stats.total).toBe(2)
+    expect(stats.unowned).toBe(1)
+    expect(stats.at_risk).toBe(1)
   })
 })

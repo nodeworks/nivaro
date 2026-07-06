@@ -123,10 +123,56 @@ export const PROMOTION_THRESHOLD = 5000
 // (a 50k-row source materializing only 20k rows made the stat strip report 20,000).
 export const BACKFILL_CEILING = 200000
 
+export interface SourceIdMeta {
+  collection: string
+  item_id: string
+  state: string | null
+  sla_status: 'ok' | 'warning' | 'breached' | null
+}
+
 export interface SourceResult {
   items: QueueItem[]
   matchedCount: number
   truncated: boolean
+  /** Light per-item metadata for the FULL matched set (pre-sanity-ceiling), so
+   *  stats can stay exact even when the hydrated rows were truncated. Capped at
+   *  BACKFILL_CEILING — absent when even that was exceeded. */
+  idMeta?: SourceIdMeta[]
+}
+
+// Exact live-path stats from the resolvers' full id metadata: total/by_state/
+// sla counts dedupe across sources by collection:item_id (first occurrence,
+// matching mergeSourceResults). unowned/at_risk need owner and at-risk
+// resolution, which only ran for the hydrated (possibly capped) subset — they
+// come from it as the best available approximation when truncated.
+export function computeStatsFromIdMeta(
+  metaBatches: SourceIdMeta[][],
+  hydratedScoped: QueueItem[]
+): QueueStats {
+  const seen = new Set<string>()
+  const by_state: Record<string, number> = {}
+  let total = 0
+  let sla_warning = 0
+  let sla_breached = 0
+  for (const batch of metaBatches) {
+    for (const m of batch) {
+      const key = `${m.collection}:${m.item_id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      total++
+      const stateKey = m.state ?? 'none'
+      by_state[stateKey] = (by_state[stateKey] ?? 0) + 1
+      if (m.sla_status === 'warning') sla_warning++
+      if (m.sla_status === 'breached') sla_breached++
+    }
+  }
+  let unowned = 0
+  let at_risk = 0
+  for (const item of hydratedScoped) {
+    if (item.owners.length === 0) unowned++
+    if (item.at_risk) at_risk++
+  }
+  return { total, by_state, unowned, sla_warning, sla_breached, at_risk }
 }
 
 export function applySanityCeiling(
@@ -783,13 +829,29 @@ export async function resolveCollectionSource(
   const afterSla = new Set(ids)
   instances = instances.filter((i) => afterSla.has(i.item))
 
+  // Full-set light metadata BEFORE the ceiling — keeps stats exact when the
+  // hydrated rows below get truncated. Skipped past BACKFILL_CEILING (memory
+  // backstop); stats then fall back to the capped set.
+  let idMeta: SourceIdMeta[] | undefined
+  if (ids.length <= BACKFILL_CEILING) {
+    const stateKeyByItem = new Map<string, string | null>()
+    for (const i of instances) stateKeyByItem.set(i.item, i.state_key)
+    idMeta = ids.map((id) => ({
+      collection: source.collection as string,
+      item_id: id,
+      state: stateKeyByItem.get(id) ?? null,
+      sla_status:
+        (slaMap[id]?.status as 'ok' | 'warning' | 'breached' | undefined) ?? null
+    }))
+  }
+
   const sanity = applySanityCeiling(ids, ceiling)
   ids = sanity.ids
   const finalIdSet = new Set(ids)
   instances = instances.filter((i) => finalIdSet.has(i.item))
 
   if (ids.length === 0) {
-    return { items: [], matchedCount: sanity.matchedCount, truncated: sanity.truncated }
+    return { items: [], matchedCount: sanity.matchedCount, truncated: sanity.truncated, idMeta }
   }
 
   const stateById = new Map<string, { key: string; color: string | null }>()
@@ -882,7 +944,7 @@ export async function resolveCollectionSource(
     url: `/collections/${source.collection}/${id}`
   }))
 
-  return { items, matchedCount: sanity.matchedCount, truncated: sanity.truncated }
+  return { items, matchedCount: sanity.matchedCount, truncated: sanity.truncated, idMeta }
 }
 
 export async function resolveTasksSource(
@@ -916,6 +978,12 @@ export async function resolveTasksSource(
 
   const matchedCount = rows.length
   const truncated = matchedCount > ceiling
+  const idMeta: SourceIdMeta[] = rows.map((r) => ({
+    collection: 'tasks',
+    item_id: String(r.id),
+    state: null,
+    sla_status: null
+  }))
   const scoped = truncated ? rows.slice(0, ceiling) : rows
 
   const now = Date.now()
@@ -941,7 +1009,7 @@ export async function resolveTasksSource(
     claimed_by: null,
     url: `/collections/${r.target_collection}/${r.target_item}`
   }))
-  return { items, matchedCount, truncated }
+  return { items, matchedCount, truncated, idMeta }
 }
 
 export async function resolveApprovalsSource(
@@ -969,6 +1037,12 @@ export async function resolveApprovalsSource(
 
   const matchedCount = rows.length
   const truncated = matchedCount > ceiling
+  const idMeta: SourceIdMeta[] = rows.map((r) => ({
+    collection: r.collection,
+    item_id: String(r.item),
+    state: 'pending_approval',
+    sla_status: null
+  }))
   const scoped = truncated ? rows.slice(0, ceiling) : rows
 
   const stepRows = (await db('nivaro_approval_chain_steps')
@@ -1021,7 +1095,7 @@ export async function resolveApprovalsSource(
       url: `/collections/${r.collection}/${r.item}`
     })
   }
-  return { items, matchedCount, truncated }
+  return { items, matchedCount, truncated, idMeta }
 }
 
 export async function resolveOwnedByMeSource(
@@ -1091,7 +1165,19 @@ export async function resolveOwnedByMeSource(
       url: `/collections/${inst.collection}/${inst.item}`
     })
   }
-  return { items, matchedCount, truncated }
+  return {
+    items,
+    matchedCount,
+    truncated,
+    // owned_by_me's matched set is defined by owner resolution, which only ran
+    // for the capped scan — best-effort meta from the resolved items.
+    idMeta: items.map((i) => ({
+      collection: i.collection,
+      item_id: i.item_id,
+      state: i.state,
+      sla_status: i.sla_status
+    }))
+  }
 }
 
 // ─── Orchestrator ───────────────────────────────────────────────────────────────
@@ -1183,9 +1269,30 @@ export async function fetchQueueItems(
   // Prefer exact cache stats for a materialized queue on the live-fallback path —
   // fall back to live-computed stats if the cache read failed for any reason.
   const exact = materializedStats ? await materializedStats.catch(() => null) : null
+  // Live-path exact stats: when hydrated rows were truncated by the sanity
+  // ceiling, recompute total/by_state/sla from the resolvers' full id metadata.
+  // Scope 'all' only — other scopes filter by owners, which are resolved only
+  // for the hydrated subset. Sources missing idMeta contribute their hydrated
+  // items so totals never undercount what is actually shown.
+  const liveExact =
+    !exact && truncated && scope === 'all'
+      ? computeStatsFromIdMeta(
+          results.map(
+            (r) =>
+              r.idMeta ??
+              r.items.map((i) => ({
+                collection: i.collection,
+                item_id: i.item_id,
+                state: i.state,
+                sla_status: i.sla_status
+              }))
+          ),
+          scoped
+        )
+      : null
   return {
     items: paged,
-    stats: exact?.stats ?? computeStats(scoped),
+    stats: exact?.stats ?? liveExact ?? computeStats(scoped),
     availableValues: exact?.availableValues ?? availableValues,
     truncated,
     total

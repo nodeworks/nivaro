@@ -1023,9 +1023,9 @@ export function QueueDetailPage() {
           <div className='mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'>
             <AlertTriangle className='h-4 w-4 shrink-0' />
             <span>
-              {queue?.materialized
-                ? 'This request used the live path and hit the row safety limit — the table below may not include every matching item, but the totals above are exact (served from the cache). Clear the priority sort or SLA filter to browse everything.'
-                : 'One or more sources in this queue exceeded the row safety limit — some items may be missing from totals and the table below. Totals become exact automatically once the queue finishes promoting to the materialized cache.'}
+              This view hit the row safety limit — the table below may not include every matching
+              item, but the totals above are exact. Narrow the filters (or clear the priority sort
+              on a large queue) to browse everything.
             </span>
           </div>
         )}
