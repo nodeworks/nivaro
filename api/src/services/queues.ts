@@ -409,6 +409,71 @@ export function computeAvailableExtraFields(sources: QueueSourceRow[]): string[]
   return out
 }
 
+export interface ExtraFieldMeta {
+  path: string
+  /** 'relation' → the final value comes from a related collection (combobox-filterable);
+   *  'plain' → a direct/terminal column (text filter). */
+  kind: 'relation' | 'plain'
+  relation_type?: 'm2o' | 'm2m' | 'o2m'
+  target_collection?: string
+  display_field?: string
+}
+
+/** Classify each configured extra-field path so the admin can render the right
+ *  filter control: relation paths (regions.short_name, project.project_type.name)
+ *  become server-searchable comboboxes against the FINAL hop's target collection. */
+export async function computeExtraFieldMeta(
+  sources: QueueSourceRow[],
+  database: typeof db = db
+): Promise<ExtraFieldMeta[]> {
+  const out: ExtraFieldMeta[] = []
+  const relCache = new Map<string, CMSRelation[]>()
+  async function relsFor(collection: string): Promise<CMSRelation[]> {
+    if (!relCache.has(collection)) {
+      const rows = (await database('nivaro_relations')
+        .where({ many_collection: collection })
+        .orWhere({ one_collection: collection })) as CMSRelation[]
+      relCache.set(collection, rows)
+    }
+    return relCache.get(collection) ?? []
+  }
+
+  const paths = new Map<string, string>() // path -> base collection
+  for (const source of sources) {
+    if (source.type !== 'collection' || !source.collection) continue
+    const fields = (parseJson(source.extra_fields) as string[] | null) ?? []
+    for (const f of fields) if (!paths.has(f)) paths.set(f, source.collection)
+  }
+
+  for (const [path, baseCollection] of paths) {
+    const segments = path.split('.')
+    let current = baseCollection
+    let lastRelation: RelationSegmentInfo | null = null
+    let plain = segments.length === 1
+    for (let i = 0; i < segments.length - 1; i++) {
+      const info = classifyRelationSegment(current, segments[i], await relsFor(current))
+      if (!info) {
+        plain = true
+        break
+      }
+      lastRelation = info
+      current = info.relatedCollection
+    }
+    if (plain || !lastRelation) {
+      out.push({ path, kind: 'plain' })
+    } else {
+      out.push({
+        path,
+        kind: 'relation',
+        relation_type: lastRelation.type,
+        target_collection: lastRelation.relatedCollection,
+        display_field: segments[segments.length - 1]
+      })
+    }
+  }
+  return out
+}
+
 export interface RelationSegmentInfo {
   type: 'm2o' | 'm2m' | 'o2m'
   relatedCollection: string

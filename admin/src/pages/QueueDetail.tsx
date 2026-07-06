@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   Flame,
   GripVertical,
+  Play,
   RefreshCw,
   Rows3,
   SlidersHorizontal
@@ -87,6 +88,14 @@ interface QueueSource {
   collection: string | null
 }
 
+interface ExtraFieldMeta {
+  path: string
+  kind: 'relation' | 'plain'
+  relation_type?: 'm2o' | 'm2m' | 'o2m'
+  target_collection?: string
+  display_field?: string
+}
+
 interface QueueMeta {
   id: string
   name: string
@@ -95,6 +104,7 @@ interface QueueMeta {
   claims_enabled: boolean
   sources?: QueueSource[]
   available_extra_fields?: string[]
+  extra_field_meta?: ExtraFieldMeta[]
 }
 
 type Scope = 'mine' | 'unowned' | 'all' | 'claimed'
@@ -222,6 +232,42 @@ function StatTile({
         </p>
       )}
       {trend && <Sparkline points={trend} />}
+    </button>
+  )
+}
+
+function StateChip({
+  label,
+  count,
+  color,
+  active,
+  onClick
+}: {
+  label: string
+  count: number
+  color: string | null
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type='button'
+      onClick={onClick}
+      className={cn(
+        'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] font-medium transition-colors',
+        active
+          ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300'
+      )}
+    >
+      <span
+        className='h-2 w-2 shrink-0 rounded-full'
+        style={{ backgroundColor: color ?? '#94a3b8' }}
+      />
+      {label}
+      <span className='font-semibold tabular-nums text-slate-900 dark:text-foreground'>
+        {formatNumber(count)}
+      </span>
     </button>
   )
 }
@@ -622,21 +668,27 @@ export function QueueDetailPage() {
       queryFn: () =>
         api
           .get(`/queues/collection-states/${col}`)
-          .then((r) => r.data.data as Array<{ key: string; label: string }>),
+          .then((r) => r.data.data as Array<{ key: string; label: string; color: string | null }>),
       staleTime: 5 * 60 * 1000
     }))
   })
 
   const friendly = (v: string) => v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 
-  const stateLabelByKey = useMemo(() => {
-    const map: Record<string, string> = {}
+  const stateMetaByKey = useMemo(() => {
+    const map: Record<string, { label: string; color: string | null }> = {}
     for (const q of stateQueries) {
-      for (const st of q.data ?? []) map[st.key] = st.label
+      for (const st of q.data ?? []) map[st.key] = { label: st.label, color: st.color }
     }
     return map
     // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on fetched data identity
   }, [stateQueries.map((q) => q.data)])
+
+  const stateLabelByKey = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const [k, v] of Object.entries(stateMetaByKey)) map[k] = v.label
+    return map
+  }, [stateMetaByKey])
 
   const stateLabel = (key: string | null | undefined): string => {
     if (!key) return '—'
@@ -1021,11 +1073,44 @@ export function QueueDetailPage() {
       .map((f) => ({ value: `extra.${f}`, label: formatColumnHeader(f) }))
   ]
 
+  // Server-backed autocomplete for relation extra-fields: searches the FINAL
+  // hop's target collection (e.g. project_types.name) so huge datasets stay
+  // usable. The selected display value feeds the existing contains-match filter.
+  const makeRelationLoader =
+    (meta: ExtraFieldMeta) =>
+    async (search: string): Promise<{ label: string; value: string }[]> => {
+      if (!meta.target_collection || !meta.display_field) return []
+      const params: Record<string, string | number> = {
+        limit: 25,
+        sort: meta.display_field
+      }
+      if (search.trim()) {
+        params.filter = JSON.stringify({ [meta.display_field]: { _contains: search.trim() } })
+      }
+      const res = await api.get(`/items/${meta.target_collection}`, { params })
+      const rows = (res.data.data ?? []) as Record<string, unknown>[]
+      const seen = new Set<string>()
+      const out: { label: string; value: string }[] = []
+      for (const row of rows) {
+        const v = row[meta.display_field]
+        if (v == null || v === '') continue
+        const str = String(v)
+        if (seen.has(str)) continue
+        seen.add(str)
+        out.push({ label: str, value: str })
+      }
+      return out
+    }
+
+  const extraFieldMetaByPath = new Map(
+    (queue?.extra_field_meta ?? []).map((m) => [m.path, m])
+  )
+
   const filterDefs: FilterDef[] = [
     {
       key: 'collection',
       placeholder: 'Collection',
-      type: 'select' as const,
+      type: 'combobox' as const,
       options: (data?.available_values.collection ?? []).map((c) => ({
         label: collectionLabel(c),
         value: c
@@ -1034,7 +1119,7 @@ export function QueueDetailPage() {
     {
       key: 'state',
       placeholder: 'State',
-      type: 'select' as const,
+      type: 'combobox' as const,
       options: (data?.available_values.state ?? []).map((s) => ({
         label: stateLabel(s),
         value: s
@@ -1062,11 +1147,22 @@ export function QueueDetailPage() {
     { key: 'aging_hours', placeholder: 'Aging (hours)', type: 'range' as const },
     { key: 'label', placeholder: 'Search item…', type: 'text' as const },
     { key: 'owners', placeholder: 'Search owners…', type: 'text' as const },
-    ...extraFieldKeys.map((f) => ({
-      key: `extra.${f}`,
-      placeholder: `Search ${formatColumnHeader(f)}…`,
-      type: 'text' as const
-    }))
+    ...extraFieldKeys.map((f) => {
+      const meta = extraFieldMetaByPath.get(f)
+      if (meta?.kind === 'relation') {
+        return {
+          key: `extra.${f}`,
+          placeholder: formatColumnHeader(f),
+          type: 'combobox' as const,
+          loadOptions: makeRelationLoader(meta)
+        }
+      }
+      return {
+        key: `extra.${f}`,
+        placeholder: `Search ${formatColumnHeader(f)}…`,
+        type: 'text' as const
+      }
+    })
   ].filter((def) => effectiveVisible.has(def.key) || def.key === 'label' || def.key === 'owners')
 
   function handleToggleColumn(key: string) {
@@ -1078,14 +1174,33 @@ export function QueueDetailPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <div className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-          {queue?.name ?? 'Queue'}
-        </h1>
-        {queue?.description && (
-          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
-            {queue.description}
-          </p>
+      <div className='sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
+        <div className='min-w-0'>
+          <h1 className='truncate text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+            {queue?.name ?? 'Queue'}
+          </h1>
+          {queue?.description && (
+            <p className='mt-0.5 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
+              {queue.description}
+            </p>
+          )}
+        </div>
+        {mySub ? (
+          <button
+            type='button'
+            onClick={() => unsubscribeMut.mutate(mySub.id)}
+            className='shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+          >
+            Subscribed ({mySub.digest_frequency}) · Unsubscribe
+          </button>
+        ) : (
+          <button
+            type='button'
+            onClick={() => subscribeMut.mutate('daily')}
+            className='shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
+          >
+            Get daily digest
+          </button>
         )}
       </div>
 
@@ -1100,12 +1215,7 @@ export function QueueDetailPage() {
             </span>
           </div>
         )}
-        <div
-          className='mb-4 grid gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'
-          style={{
-            gridTemplateColumns: `repeat(${Math.min(stateEntries.length + 5, 6)}, minmax(0, 1fr))`
-          }}
-        >
+        <div className='mb-3 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-5 dark:border-border dark:bg-border'>
           <StatTile
             label='Total'
             count={stats?.total ?? 0}
@@ -1114,16 +1224,6 @@ export function QueueDetailPage() {
             {...trendFor('total')}
             onClick={clearAllTileFilters}
           />
-          {stateEntries.map(([state, count]) => (
-            <StatTile
-              key={state}
-              label={stateLabel(state)}
-              count={count}
-              active={filterValues.state === state}
-              isLoading={isLoading}
-              onClick={() => toggleTileFilter('state', state)}
-            />
-          ))}
           <StatTile
             label='Warning'
             count={stats?.sla_warning ?? 0}
@@ -1168,7 +1268,22 @@ export function QueueDetailPage() {
           />
         </div>
 
-        <div className='mb-4 flex items-center gap-1 border-b border-slate-200 dark:border-border'>
+        {stateEntries.length > 0 && (
+          <div className='mb-4 flex flex-wrap items-center gap-1.5'>
+            {stateEntries.map(([state, count]) => (
+              <StateChip
+                key={state}
+                label={stateLabel(state)}
+                count={count}
+                color={stateMetaByKey[state]?.color ?? null}
+                active={filterValues.state === state}
+                onClick={() => toggleTileFilter('state', state)}
+              />
+            ))}
+          </div>
+        )}
+
+        <div className='mb-3 flex flex-wrap items-center gap-1 border-b border-slate-200 dark:border-border'>
           {SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map((tab) => (
             <button
               key={tab.value}
@@ -1187,10 +1302,7 @@ export function QueueDetailPage() {
               {tab.label}
             </button>
           ))}
-        </div>
-
-        {(views?.data.length ?? 0) > 0 || saveOpen ? (
-          <div className='mb-3 flex flex-wrap items-center gap-1.5'>
+          <div className='ml-auto flex flex-wrap items-center gap-1.5 pb-1.5'>
             {(views?.data ?? []).map((v) => (
               <span
                 key={v.id}
@@ -1226,7 +1338,7 @@ export function QueueDetailPage() {
                   + Save view
                 </button>
               </PopoverTrigger>
-              <PopoverContent className='w-[240px] p-3' align='start'>
+              <PopoverContent className='w-[240px] p-3' align='end'>
                 <input
                   value={saveName}
                   onChange={(e) => setSaveName(e.target.value)}
@@ -1251,100 +1363,33 @@ export function QueueDetailPage() {
               </PopoverContent>
             </Popover>
           </div>
-        ) : (
-          <div className='mb-3'>
-            <button
-              type='button'
-              onClick={() => setSaveOpen(true)}
-              className='rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-400 dark:hover:text-nvr-cyan'
-            >
-              + Save view
-            </button>
-          </div>
-        )}
+        </div>
 
-        <div className='mb-4 flex items-center gap-1'>
-          <button
-            type='button'
-            onClick={() => setView('table')}
-            className={cn(
-              'rounded-md px-3 py-1.5 text-[12px] font-medium',
-              view === 'table'
-                ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                : 'text-slate-500'
-            )}
-          >
-            Table
-          </button>
-          <button
-            type='button'
-            onClick={() => setView('kanban')}
-            className={cn(
-              'rounded-md px-3 py-1.5 text-[12px] font-medium',
-              view === 'kanban'
-                ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                : 'text-slate-500'
-            )}
-          >
-            Kanban
-          </button>
-          <button
-            type='button'
-            onClick={() => setView('workload')}
-            className={cn(
-              'rounded-md px-3 py-1.5 text-[12px] font-medium',
-              view === 'workload'
-                ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                : 'text-slate-500'
-            )}
-          >
-            Workload
-          </button>
-          {pendingUpdates > 0 && (
-            <button
-              type='button'
-              onClick={refreshPendingUpdates}
-              className='flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-3 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
-            >
-              <RefreshCw className='h-3 w-3' />
-              {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
-            </button>
-          )}
-          {view === 'kanban' && (
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type='button'
-                  className={cn(
-                    'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
-                    swimlaneBy
-                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
-                  )}
-                >
-                  <Rows3 className='h-3.5 w-3.5' />
-                  {swimlaneBy
-                    ? `Lanes: ${swimlaneBy === 'collection' ? 'Collection' : 'Owner'}`
-                    : 'Lanes'}
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className='w-[180px] p-0' align='start'>
-                <Command>
-                  <CommandList>
-                    <CommandItem value='none' onSelect={() => setSwimlaneBy(null)}>
-                      None
-                    </CommandItem>
-                    <CommandItem value='collection' onSelect={() => setSwimlaneBy('collection')}>
-                      Collection
-                    </CommandItem>
-                    <CommandItem value='owner' onSelect={() => setSwimlaneBy('owners')}>
-                      Owner
-                    </CommandItem>
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-          )}
+        <div className='mb-4 flex flex-wrap items-center gap-2'>
+          <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+            {(
+              [
+                { value: 'table', label: 'Table' },
+                { value: 'kanban', label: 'Kanban' },
+                { value: 'workload', label: 'Workload' }
+              ] as const
+            ).map((v, i) => (
+              <button
+                key={v.value}
+                type='button'
+                onClick={() => setView(v.value)}
+                className={cn(
+                  'px-3 py-1.5 text-[12px] font-medium transition-colors',
+                  i > 0 && 'border-l border-slate-200 dark:border-border',
+                  view === v.value
+                    ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                    : 'bg-white text-slate-500 hover:text-slate-700 dark:bg-card dark:hover:text-foreground'
+                )}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
           {view === 'table' && (
             <Popover>
               <PopoverTrigger asChild>
@@ -1385,15 +1430,6 @@ export function QueueDetailPage() {
               </PopoverContent>
             </Popover>
           )}
-          {view === 'table' && visibleRows.length > 0 && (
-            <button
-              type='button'
-              onClick={() => startWorkNext()}
-              className='flex items-center gap-1 rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-nvr-cyan/90'
-            >
-              Work Next ▶
-            </button>
-          )}
           {view === 'table' && (
             <button
               type='button'
@@ -1425,12 +1461,58 @@ export function QueueDetailPage() {
               {collapsedGroups.size > 0 ? 'Expand all' : 'Collapse all'}
             </button>
           )}
+          {view === 'kanban' && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  className={cn(
+                    'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
+                    swimlaneBy
+                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                  )}
+                >
+                  <Rows3 className='h-3.5 w-3.5' />
+                  {swimlaneBy
+                    ? `Lanes: ${swimlaneBy === 'collection' ? 'Collection' : 'Owner'}`
+                    : 'Lanes'}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-[180px] p-0' align='start'>
+                <Command>
+                  <CommandList>
+                    <CommandItem value='none' onSelect={() => setSwimlaneBy(null)}>
+                      None
+                    </CommandItem>
+                    <CommandItem value='collection' onSelect={() => setSwimlaneBy('collection')}>
+                      Collection
+                    </CommandItem>
+                    <CommandItem value='owner' onSelect={() => setSwimlaneBy('owners')}>
+                      Owner
+                    </CommandItem>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          )}
+          {pendingUpdates > 0 && (
+            <button
+              type='button'
+              onClick={refreshPendingUpdates}
+              className='flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-3 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
+            >
+              <RefreshCw className='h-3 w-3' />
+              {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
+            </button>
+          )}
+          <div className='flex-1' />
           {view === 'table' && (
             <Popover>
               <PopoverTrigger asChild>
                 <button
                   type='button'
-                  className='ml-auto flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                  className='flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
                 >
                   <SlidersHorizontal className='h-3.5 w-3.5' />
                   Columns
@@ -1465,27 +1547,14 @@ export function QueueDetailPage() {
               </PopoverContent>
             </Popover>
           )}
-          {mySub ? (
+          {view === 'table' && visibleRows.length > 0 && (
             <button
               type='button'
-              onClick={() => unsubscribeMut.mutate(mySub.id)}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground',
-                view !== 'table' && 'ml-auto'
-              )}
+              onClick={() => startWorkNext()}
+              className='flex items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm hover:bg-nvr-cyan/90'
             >
-              Subscribed ({mySub.digest_frequency}) · Unsubscribe
-            </button>
-          ) : (
-            <button
-              type='button'
-              onClick={() => subscribeMut.mutate('daily')}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan',
-                view !== 'table' && 'ml-auto'
-              )}
-            >
-              Get daily digest
+              <Play className='h-3 w-3 fill-current' />
+              Work Next
             </button>
           )}
         </div>

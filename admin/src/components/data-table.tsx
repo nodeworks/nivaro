@@ -1,5 +1,13 @@
-import { ChevronDown, ChevronRight, ChevronsUpDown, ChevronUp, Search } from 'lucide-react'
-import React from 'react'
+import { Check, ChevronDown, ChevronRight, ChevronsUpDown, ChevronUp, Search, X } from 'lucide-react'
+import React, { useEffect, useRef, useState } from 'react'
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -40,9 +48,12 @@ export interface FilterDef {
   key: string
   placeholder: string
   /** Defaults to 'select' — every existing FilterDef without this field keeps its current dropdown behavior unchanged. */
-  type?: 'select' | 'text' | 'range'
-  /** Required when type is 'select' or omitted; ignored for 'text'/'range'. */
+  type?: 'select' | 'text' | 'range' | 'combobox'
+  /** Required when type is 'select' or omitted; static options for 'combobox'; ignored for 'text'/'range'. */
   options?: { label: string; value: string }[]
+  /** 'combobox' only: server-backed autocomplete. Called (debounced) with the search
+   *  text; overrides `options` when provided. */
+  loadOptions?: (search: string) => Promise<{ label: string; value: string }[]>
 }
 
 export interface DataTableProps<T = Record<string, unknown>> {
@@ -109,6 +120,134 @@ function SortIcon({ field, sort }: { field: string; sort: string }) {
     return <ChevronUp className='ml-1 inline h-3 w-3 shrink-0 text-nvr-cyan' />
   }
   return <ChevronDown className='ml-1 inline h-3 w-3 shrink-0 text-nvr-cyan' />
+}
+
+// ─── Filter combobox ──────────────────────────────────────────────────────────
+// Searchable single-select filter. Static `options` filter client-side via cmdk;
+// `loadOptions` swaps to server-backed autocomplete (250ms debounce) for large
+// datasets (relation targets). Value is the option value; label is remembered so
+// an async-selected option still displays after its options page is gone.
+
+function FilterCombobox({
+  def,
+  value,
+  onChange
+}: {
+  def: FilterDef
+  value: string
+  onChange: (value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [asyncOptions, setAsyncOptions] = useState<{ label: string; value: string }[]>([])
+  const [loading, setLoading] = useState(false)
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null)
+  const requestSeq = useRef(0)
+
+  const isAsync = !!def.loadOptions
+
+  useEffect(() => {
+    if (!isAsync || !open) return
+    const seq = ++requestSeq.current
+    setLoading(true)
+    const timer = setTimeout(() => {
+      def
+        .loadOptions?.(search)
+        .then((opts) => {
+          if (requestSeq.current === seq) setAsyncOptions(opts)
+        })
+        .catch(() => {
+          if (requestSeq.current === seq) setAsyncOptions([])
+        })
+        .finally(() => {
+          if (requestSeq.current === seq) setLoading(false)
+        })
+    }, search ? 250 : 0)
+    return () => clearTimeout(timer)
+    // biome-ignore lint/correctness/useExhaustiveDependencies: def identity is unstable per render; keyed on search/open
+  }, [search, open, isAsync])
+
+  const options = isAsync ? asyncOptions : (def.options ?? [])
+  const currentLabel =
+    value === ''
+      ? null
+      : (options.find((o) => o.value === value)?.label ??
+        (def.options ?? []).find((o) => o.value === value)?.label ??
+        selectedLabel ??
+        value)
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o)
+        if (!o) setSearch('')
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className={cn(
+            'flex h-8 w-40 items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-2.5 text-[13px] dark:border-border dark:bg-muted/40',
+            currentLabel ? 'text-slate-800 dark:text-foreground' : 'text-slate-500'
+          )}
+        >
+          <span className='truncate'>{currentLabel ?? def.placeholder}</span>
+          <span className='ml-1 flex shrink-0 items-center gap-0.5'>
+            {value !== '' && (
+              // biome-ignore lint/a11y/useKeyWithClickEvents: auxiliary clear affordance; Esc + reselect cover keyboard
+              <span
+                role='button'
+                tabIndex={-1}
+                aria-label='Clear filter'
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setSelectedLabel(null)
+                  onChange('')
+                }}
+                className='rounded p-0.5 text-slate-400 hover:text-slate-600'
+              >
+                <X className='h-3 w-3' />
+              </span>
+            )}
+            <ChevronsUpDown className='h-3 w-3 text-slate-400' />
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[240px] p-0' align='start'>
+        <Command shouldFilter={!isAsync}>
+          <CommandInput
+            placeholder='Search…'
+            className='h-8 text-[12px]'
+            value={search}
+            onValueChange={setSearch}
+          />
+          <CommandList>
+            <CommandEmpty className='py-3 text-center text-[12px] text-slate-400'>
+              {loading ? 'Searching…' : 'No results'}
+            </CommandEmpty>
+            {options.map((opt) => (
+              <CommandItem
+                key={opt.value}
+                value={isAsync ? opt.value : opt.label}
+                onSelect={() => {
+                  setSelectedLabel(opt.label)
+                  onChange(opt.value === value ? '' : opt.value)
+                  setOpen(false)
+                }}
+                className='text-[12px]'
+              >
+                <Check
+                  className={cn('mr-2 h-3 w-3', value === opt.value ? 'opacity-100' : 'opacity-0')}
+                />
+                {opt.label}
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 // ─── DataTable ────────────────────────────────────────────────────────────────
@@ -229,6 +368,17 @@ export function DataTable<T = Record<string, unknown>>({
                     placeholder={def.placeholder}
                     value={currentVal}
                     onChange={(e) => onFilterChange?.(def.key, e.target.value)}
+                  />
+                )
+              }
+
+              if (def.type === 'combobox') {
+                return (
+                  <FilterCombobox
+                    key={def.key}
+                    def={def}
+                    value={currentVal}
+                    onChange={(v) => onFilterChange?.(def.key, v)}
                   />
                 )
               }

@@ -7,6 +7,7 @@ import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
 import type { QueueRow, QueueScope, QueueSourceRow, QueueSourceType } from '../services/queues.js'
 import {
   computeAvailableExtraFields,
+  computeExtraFieldMeta,
   fetchQueueItems,
   fetchQueueWorkload,
   parsePaginationParams
@@ -100,7 +101,8 @@ export async function queuesRoutes(app: FastifyInstance) {
       data: {
         ...formatQueue(queue),
         sources: sources.map(formatSource),
-        available_extra_fields: computeAvailableExtraFields(sources)
+        available_extra_fields: computeAvailableExtraFields(sources),
+        extra_field_meta: await computeExtraFieldMeta(sources)
       }
     })
   })
