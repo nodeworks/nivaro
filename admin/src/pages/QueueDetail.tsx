@@ -929,6 +929,7 @@ export function QueueDetailPage() {
     {
       key: 'label',
       header: 'Item',
+      sortable: true,
       render: (row) => <span className='font-medium'>{row.label}</span>
     },
     {
