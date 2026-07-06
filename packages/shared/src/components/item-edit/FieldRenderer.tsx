@@ -1,4 +1,5 @@
 import { Badge } from '../ui/badge'
+import { formatDisplayValue } from './GroupSection'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Switch } from '../ui/switch'
@@ -136,7 +137,9 @@ export function FieldRenderer({
     )
   }
 
-  // Read-only display
+  // Read-only display — formatDisplayValue applies the field's display settings
+  // (options.format currency/decimal/int, choice labels, datetime locale) so a
+  // read-only field renders exactly like its formatted editable counterpart.
   if (field.readonly) {
     const display =
       value === null || value === undefined ? (
@@ -144,7 +147,7 @@ export function FieldRenderer({
       ) : typeof value === 'boolean' ? (
         <Badge variant={value ? 'default' : 'secondary'}>{value ? 'Yes' : 'No'}</Badge>
       ) : (
-        <span className='text-sm'>{String(value)}</span>
+        <span className='text-sm tabular-nums'>{formatDisplayValue(value, field)}</span>
       )
     return <div className='min-h-[36px] flex items-center'>{display}</div>
   }
