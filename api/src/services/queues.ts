@@ -44,6 +44,8 @@ export interface QueueSourceRow {
   state_values: string | null
   /** 'include' (default) keeps only the listed states; 'exclude' drops them (stateless items kept). */
   state_mode?: 'include' | 'exclude' | null
+  /** Item-column display template ({{field}} tokens). Null = collection display_template, then fallback. */
+  label_template?: string | null
   sla_filter: string | null
   extra_fields: string | null
   sort: number
@@ -525,13 +527,56 @@ export function applyQueueConditions(q: ConditionBuilder, conditions: QueueCondi
 
 const LABEL_CANDIDATES = ['title', 'name', 'label', 'subject']
 
-/** Best-effort display labels for a set of {collection,item_id} pairs. Mirrors tasks.ts getItemLabels(). */
+/** Render {{field}}-template labels for a set of ids of one collection. Template
+ *  fields are limited to REAL columns of the collection (dotted tokens render
+ *  empty — same contract as ItemEdit display templates). */
+export async function renderTemplateLabels(
+  collection: string,
+  ids: string[],
+  template: string
+): Promise<Record<string, string>> {
+  const labels: Record<string, string> = {}
+  if (ids.length === 0) return labels
+  try {
+    const fieldRows = (await db('nivaro_fields').where({ collection }).select('field')) as Array<{
+      field: string
+    }>
+    const columns = new Set(fieldRows.map((f) => f.field))
+    const wanted = extractTemplateFields(template).filter((f) => columns.has(f))
+    const rows = (await selectInChunks(ids, 2000, (chunk) =>
+      db(collection)
+        .whereIn('id', chunk)
+        .select(['id', ...wanted])
+    )) as Array<Record<string, unknown>>
+    for (const row of rows) {
+      labels[`${collection}:${row.id}`] = resolveDisplayValue(row, template)
+    }
+  } catch {
+    // Collection table may not exist or be queryable — labels stay empty
+  }
+  return labels
+}
+
+/** Best-effort display labels for a set of {collection,item_id} pairs. Honors the
+ *  collection's display_template when configured, else falls back to the first of
+ *  title/name/label/subject. Mirrors tasks.ts getItemLabels(). */
 export async function getLabels(
   itemsByCollection: Map<string, Set<string>>
 ): Promise<Record<string, string>> {
   const labels: Record<string, string> = {}
   for (const [collection, ids] of itemsByCollection) {
     try {
+      const colMeta = (await db('nivaro_collections')
+        .where({ collection })
+        .first('display_template')) as { display_template: string | null } | undefined
+      if (colMeta?.display_template) {
+        Object.assign(
+          labels,
+          await renderTemplateLabels(collection, [...ids], colMeta.display_template)
+        )
+        continue
+      }
+
       const fields = (await db('nivaro_fields').where({ collection }).select('field')) as Array<{
         field: string
       }>
@@ -878,7 +923,9 @@ export async function resolveCollectionSource(
   // `source.collection` and are combined together in the final items.map() below. Run
   // them concurrently instead of sequentially awaiting each in turn.
   const [labels, ownersByItem, atRiskMap, extraById] = await Promise.all([
-    getLabels(new Map([[source.collection, new Set(ids)]])),
+    source.label_template
+      ? renderTemplateLabels(source.collection, ids, source.label_template)
+      : getLabels(new Map([[source.collection, new Set(ids)]])),
     ownerRequests.length
       ? resolveStateOwnersBatch(ownerRequests)
       : Promise.resolve(new Map<string, ResolvedOwner[]>()),

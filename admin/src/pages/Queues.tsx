@@ -40,6 +40,7 @@ interface QueueSource {
   filters: QueueCondition[] | null
   state_values: string[] | null
   state_mode?: 'include' | 'exclude' | null
+  label_template?: string | null
   sla_filter: string | null
   extra_fields: string[] | null
   sort: number
@@ -470,6 +471,24 @@ function SourceRow({
               <Plus className='h-3 w-3' /> Add filter
             </Button>
           )}
+        </div>
+      )}
+      {isCollection && (
+        <div className='space-y-1 pl-1'>
+          <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+            Item label
+          </Label>
+          <Input
+            value={source.label_template ?? ''}
+            onChange={(e) => onChange({ ...source, label_template: e.target.value || null })}
+            placeholder='e.g. {{project_id}} — {{title}}'
+            disabled={!canEdit}
+            className='h-8 w-full max-w-[420px] font-mono text-[12px]'
+          />
+          <p className='text-[11px] text-slate-400'>
+            Controls the Item column. Use {'{{field}}'} tokens (direct fields of this collection).
+            Empty = the collection's display template, then title/name/label/subject.
+          </p>
         </div>
       )}
     </div>

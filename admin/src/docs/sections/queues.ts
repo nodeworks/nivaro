@@ -106,6 +106,11 @@ export const queuesGuide: DocSection = {
       type: 'p',
       text: 'The Priority chip orders items by urgency: SLA breached first, then SLA warning, then at-risk, then oldest within each band. Regular (non-materialized) queues default to this order — the table order is the triage order. Large materialized queues keep their normal order by default and opt into priority via the chip, which routes through the slower live-resolution path. Clicking any column header overrides priority order; clicking the chip restores it.'
     },
+    { type: 'h3', text: 'Item column label' },
+    {
+      type: 'p',
+      text: 'Each collection source can set an Item label template — e.g. {{project_id}} — {{title}} — controlling what the Item column (and kanban card title) shows. Tokens are direct fields of the source collection. Left empty, the collection\'s display template applies, falling back to the first of title/name/label/subject.'
+    },
     { type: 'h3', text: 'Source filters' },
     {
       type: 'ul',

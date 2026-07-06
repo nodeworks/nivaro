@@ -13,6 +13,7 @@ import {
   type ConditionBuilder,
   filterBySlaStatus,
   getLabels,
+  renderTemplateLabels,
   type QueueCondition,
   type QueueSourceRow,
   resolvePathValues,
@@ -111,7 +112,9 @@ async function buildMaterializedRow(
   collection: string,
   itemId: string
 ): Promise<{ row: Record<string, unknown>; ownerIds: string[] }> {
-  const labels = await getLabels(new Map([[collection, new Set([itemId])]]))
+  const labels = source.label_template
+    ? await renderTemplateLabels(collection, [itemId], source.label_template)
+    : await getLabels(new Map([[collection, new Set([itemId])]]))
   const label = labels[`${collection}:${itemId}`] ?? itemId
 
   const binding = (await db('nivaro_workflow_bindings').where({ collection }).first()) as

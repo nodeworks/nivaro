@@ -246,6 +246,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         filters?: unknown
         state_values?: unknown
         state_mode?: string | null
+        label_template?: string | null
         sla_filter?: string | null
         extra_fields?: unknown
         sort?: number
@@ -314,6 +315,7 @@ export async function queuesRoutes(app: FastifyInstance) {
           filters: toJsonStr(s.filters),
           state_values: toJsonStr(s.state_values),
           state_mode: s.state_mode === 'exclude' ? 'exclude' : 'include',
+          label_template: s.label_template?.trim().slice(0, 500) || null,
           sla_filter: s.sla_filter ?? null,
           extra_fields: toJsonStr(s.extra_fields ?? []),
           sort: s.sort ?? i
