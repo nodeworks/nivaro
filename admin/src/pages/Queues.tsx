@@ -369,7 +369,7 @@ function SourceRow({
           <div className='flex flex-wrap items-center gap-1.5'>
             {stateValues.map((k) => (
               <Badge key={k} className='gap-1 text-[11px]'>
-                {states.find((s) => s.key === k)?.label ?? k}
+                {k === '__none__' ? '(No state)' : (states.find((s) => s.key === k)?.label ?? k)}
                 <button
                   type='button'
                   aria-label={`Remove ${k}`}
@@ -393,9 +393,14 @@ function SourceRow({
                       onChange({ ...source, state_values: [...stateValues, key] })
                     }
                   }}
-                  options={states
-                    .filter((s) => !stateValues.includes(s.key))
-                    .map((s) => ({ value: s.key, label: s.label }))}
+                  options={[
+                    ...(stateValues.includes('__none__')
+                      ? []
+                      : [{ value: '__none__', label: '(No state)' }]),
+                    ...states
+                      .filter((s) => !stateValues.includes(s.key))
+                      .map((s) => ({ value: s.key, label: s.label }))
+                  ]}
                   placeholder={stateMode === 'exclude' ? 'Exclude state…' : 'Include state…'}
                 />
               </div>

@@ -111,7 +111,7 @@ export const queuesGuide: DocSection = {
       type: 'ul',
       items: [
         'Each collection source can carry static field filters (field + operator + value, ANDed together) — e.g. amount > 1000, category not equals archived. Only real table columns are filterable; relation and computed fields are excluded.',
-        'The States row restricts a source by workflow state with an Include/Exclude toggle. "Exclude: completed" keeps working when the workflow later gains new states; items with no workflow state are kept in exclude mode.',
+        'The States row restricts a source by workflow state with an Include/Exclude toggle. "Exclude: completed" keeps working when the workflow later gains new states. A "(No state)" option targets items without a workflow state: include it to pull stateless items in, exclude it to drop them (without it, stateless items drop in include mode and stay in exclude mode).',
         'Saving sources on a large (materialized) queue automatically rebuilds its cache with the new filters applied.'
       ]
     },

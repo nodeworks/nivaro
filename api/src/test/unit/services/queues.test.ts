@@ -790,6 +790,18 @@ describe('stateFilterKeep', () => {
     expect(stateFilterKeep('draft', ['completed'], 'exclude')).toBe(true)
     expect(stateFilterKeep(null, ['completed'], 'exclude')).toBe(true)
   })
+
+  it('the __none__ sentinel matches stateless items', () => {
+    // include: sentinel keeps stateless items (alone or alongside real states)
+    expect(stateFilterKeep(null, ['__none__'], 'include')).toBe(true)
+    expect(stateFilterKeep(null, ['draft', '__none__'], 'include')).toBe(true)
+    expect(stateFilterKeep('draft', ['draft', '__none__'], 'include')).toBe(true)
+    expect(stateFilterKeep('completed', ['__none__'], 'include')).toBe(false)
+    // exclude: sentinel drops stateless items
+    expect(stateFilterKeep(null, ['__none__'], 'exclude')).toBe(false)
+    expect(stateFilterKeep(null, ['completed', '__none__'], 'exclude')).toBe(false)
+    expect(stateFilterKeep('draft', ['__none__'], 'exclude')).toBe(true)
+  })
 })
 
 describe('computeStatsFromIdMeta', () => {

@@ -50,16 +50,19 @@ export interface QueueSourceRow {
 }
 
 // State filtering semantics shared by the live resolver and the materialization
-// write-path matcher. Include: only listed states pass (stateless items drop).
-// Exclude: listed states drop, everything else — INCLUDING items with no
-// workflow instance/state — passes.
+// write-path matcher. Include: only listed states pass (stateless items drop
+// unless the '__none__' sentinel is listed). Exclude: listed states drop,
+// everything else passes (stateless items drop only when '__none__' is listed).
+export const NO_STATE_SENTINEL = '__none__'
+
 export function stateFilterKeep(
   stateKey: string | null,
   stateValues: string[],
   mode: 'include' | 'exclude'
 ): boolean {
-  if (mode === 'exclude') return stateKey == null || !stateValues.includes(stateKey)
-  return stateKey != null && stateValues.includes(stateKey)
+  const matches =
+    stateKey == null ? stateValues.includes(NO_STATE_SENTINEL) : stateValues.includes(stateKey)
+  return mode === 'exclude' ? !matches : matches
 }
 
 export interface QueueRow {
