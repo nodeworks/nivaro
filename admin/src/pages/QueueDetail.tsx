@@ -606,11 +606,13 @@ export function QueueDetailPage() {
     [queue?.sources]
   )
 
-  const { data: collectionsReg } = useQuery<{
-    data: Array<{ collection: string; display_name: string | null; plural: string | null }>
-  }>({
+  // NOTE: shares the ['collections'] cache key with Queues.tsx and other pages —
+  // the cached shape must stay the raw array (r.data.data), never the envelope.
+  const { data: collectionsReg } = useQuery<
+    Array<{ collection: string; display_name: string | null; plural: string | null }>
+  >({
     queryKey: ['collections'],
-    queryFn: () => api.get('/collections').then((r) => r.data),
+    queryFn: () => api.get('/collections').then((r) => r.data.data),
     staleTime: 5 * 60 * 1000
   })
 
@@ -643,7 +645,7 @@ export function QueueDetailPage() {
   }
 
   const collectionLabel = (name: string): string => {
-    const row = (collectionsReg?.data ?? []).find((c) => c.collection === name)
+    const row = (collectionsReg ?? []).find((c) => c.collection === name)
     return row?.display_name || row?.plural || friendly(name)
   }
 
