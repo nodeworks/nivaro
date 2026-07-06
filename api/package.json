@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "sync:legacy-owners": "tsx src/scripts/sync-legacy-owners.ts",
-    "sync:legacy-states": "tsx src/scripts/sync-legacy-states.ts"
+    "sync:legacy-states": "tsx src/scripts/sync-legacy-states.ts",
+    "fix:junction-fields": "tsx src/scripts/fix-junction-fields.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.101.0",
