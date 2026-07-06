@@ -87,6 +87,59 @@ function applyScope(
 // materialized queue even when the requested sort/filters force the ROWS through
 // the live-resolve fallback (priority sort, sla_status filter, extra.* …) — the
 // live path's QUEUE_SANITY_CEILING truncation must never cap the stat strip.
+// Aggregate QueueStats over any nivaro_queue_items builder (scope-only for the
+// headline stats; scope+column-filters for filtered_stats).
+async function computeStatsForBuilder(baseFactory: () => Knex.QueryBuilder): Promise<QueueStats> {
+  const statsRows = (await baseFactory()
+    .select('qi.state')
+    .count('* as n')
+    .groupBy('qi.state')) as Array<{ state: string | null; n: number }>
+  const by_state: Record<string, number> = {}
+  let total = 0
+  for (const r of statsRows) {
+    by_state[r.state ?? 'none'] = Number(r.n)
+    total += Number(r.n)
+  }
+  const unownedRow = (await baseFactory()
+    .whereNotExists(function () {
+      this.select('*').from('nivaro_queue_item_owners as qio').whereRaw('qio.queue_item_id = qi.id')
+    })
+    .count('* as n')
+    .first()) as { n: number }
+  const atRiskRow = (await baseFactory()
+    .where('qi.at_risk', true)
+    .count('* as n')
+    .first()) as { n: number }
+  const slaScanRows = (await baseFactory()
+    .whereNotNull('qi.sla_duration_hours')
+    .select(
+      'qi.entered_state_at',
+      'qi.sla_duration_hours',
+      'qi.sla_warning_pct',
+      'qi.sla_business_hours_only'
+    )) as Array<{
+    entered_state_at: Date | null
+    sla_duration_hours: number | null
+    sla_warning_pct: number | null
+    sla_business_hours_only: boolean
+  }>
+  let sla_warning = 0
+  let sla_breached = 0
+  for (const r of slaScanRows) {
+    const { status } = computeSla(r)
+    if (status === 'warning') sla_warning++
+    if (status === 'breached') sla_breached++
+  }
+  return {
+    total,
+    by_state,
+    unowned: Number(unownedRow.n),
+    sla_warning,
+    sla_breached,
+    at_risk: Number(atRiskRow.n)
+  }
+}
+
 export async function fetchMaterializedStats(
   queueId: string,
   user: User,
@@ -186,6 +239,7 @@ export async function fetchMaterializedQueueItems(
 ): Promise<{
   items: QueueItem[]
   stats: QueueStats
+  filteredStats: QueueStats | null
   availableValues: { collection: string[]; state: string[] }
   truncated: boolean
   total: number
@@ -393,9 +447,15 @@ export async function fetchMaterializedQueueItems(
   // fetchMaterializedStats above.
   const { stats, availableValues } = await fetchMaterializedStats(queueId, user, scope)
 
+  const { hasActiveColumnFilters } = await import('./queues.js')
+  const filteredStats = hasActiveColumnFilters(filters)
+    ? await computeStatsForBuilder(() => base.clone().clearSelect().clearOrder())
+    : null
+
   return {
     items,
     stats,
+    filteredStats,
     availableValues,
     truncated: false,
     total

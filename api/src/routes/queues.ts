@@ -673,6 +673,7 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({
       data: result.items,
       stats: result.stats,
+      filtered_stats: result.filteredStats,
       available_values: result.availableValues,
       truncated: result.truncated,
       total: result.total

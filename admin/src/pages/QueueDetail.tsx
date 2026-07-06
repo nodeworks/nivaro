@@ -171,6 +171,7 @@ function Sparkline({ points }: { points: number[] }) {
 function StatTile({
   label,
   count,
+  filteredCount,
   active,
   isLoading,
   tone,
@@ -181,6 +182,8 @@ function StatTile({
 }: {
   label: string
   count: number
+  /** Count over the active column filters — renders as "277 / 504" when set. */
+  filteredCount?: number | null
   active: boolean
   isLoading?: boolean
   tone?: 'amber' | 'red'
@@ -215,7 +218,14 @@ function StatTile({
         <Skeleton className='h-6 w-16 rounded' />
       ) : (
         <p className='flex items-baseline gap-1.5 text-[22px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
-          {formatNumber(count)}
+          {filteredCount != null ? (
+            <>
+              <span className='text-nvr-navy dark:text-nvr-cyan'>{formatNumber(filteredCount)}</span>
+              <span className='text-[13px] font-medium text-slate-400'>/ {formatNumber(count)}</span>
+            </>
+          ) : (
+            formatNumber(count)
+          )}
           {delta != null && delta !== 0 && (
             <span
               className={cn(
@@ -241,12 +251,14 @@ function StatTile({
 function StateChip({
   label,
   count,
+  filteredCount,
   color,
   active,
   onClick
 }: {
   label: string
   count: number
+  filteredCount?: number | null
   color: string | null
   active: boolean
   onClick: () => void
@@ -268,7 +280,14 @@ function StateChip({
       />
       {label}
       <span className='font-semibold tabular-nums text-slate-900 dark:text-foreground'>
-        {formatNumber(count)}
+        {filteredCount != null ? (
+          <>
+            <span className='text-nvr-navy dark:text-nvr-cyan'>{formatNumber(filteredCount)}</span>
+            <span className='font-normal text-slate-400'> / {formatNumber(count)}</span>
+          </>
+        ) : (
+          formatNumber(count)
+        )}
       </span>
     </button>
   )
@@ -460,6 +479,7 @@ export function QueueDetailPage() {
   const { data, isLoading } = useQuery<{
     data: QueueItemRow[]
     stats: QueueStats
+    filtered_stats: QueueStats | null
     available_values: { collection: string[]; state: string[] }
     truncated: boolean
     total: number
@@ -624,6 +644,7 @@ export function QueueDetailPage() {
 
   const items = data?.data ?? []
   const stats = data?.stats
+  const filteredStats = data?.filtered_stats ?? null
   const stateEntries = stats ? Object.entries(stats.by_state) : []
 
   // Any completed refetch clears the pending-updates pill — the data on screen
@@ -1259,6 +1280,7 @@ export function QueueDetailPage() {
           <StatTile
             label='Total'
             count={stats?.total ?? 0}
+            filteredCount={filteredStats ? filteredStats.total : null}
             active={Object.values(filterValues).every(isFilterEmpty) && scope === 'all'}
             isLoading={isLoading}
             {...trendFor('total')}
@@ -1267,6 +1289,7 @@ export function QueueDetailPage() {
           <StatTile
             label='Warning'
             count={stats?.sla_warning ?? 0}
+            filteredCount={filteredStats ? filteredStats.sla_warning : null}
             tone='amber'
             active={filterValues.sla_status === 'warning'}
             isLoading={isLoading}
@@ -1277,6 +1300,7 @@ export function QueueDetailPage() {
           <StatTile
             label='Breached'
             count={stats?.sla_breached ?? 0}
+            filteredCount={filteredStats ? filteredStats.sla_breached : null}
             tone='red'
             active={filterValues.sla_status === 'breached'}
             isLoading={isLoading}
@@ -1287,6 +1311,7 @@ export function QueueDetailPage() {
           <StatTile
             label='At Risk'
             count={stats?.at_risk ?? 0}
+            filteredCount={filteredStats ? filteredStats.at_risk : null}
             tone='red'
             active={filterValues.at_risk === 'yes'}
             isLoading={isLoading}
@@ -1297,6 +1322,7 @@ export function QueueDetailPage() {
           <StatTile
             label='Unowned'
             count={stats?.unowned ?? 0}
+            filteredCount={filteredStats ? filteredStats.unowned : null}
             active={scope === 'unowned'}
             isLoading={isLoading}
             deltaBadIsUp
@@ -1315,6 +1341,7 @@ export function QueueDetailPage() {
                 key={state}
                 label={stateLabel(state)}
                 count={count}
+                filteredCount={filteredStats ? (filteredStats.by_state[state] ?? 0) : null}
                 color={stateMetaByKey[state]?.color ?? null}
                 active={stateFilterList.includes(state)}
                 onClick={() => toggleStateChip(state)}

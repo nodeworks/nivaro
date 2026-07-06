@@ -225,6 +225,17 @@ export function attachClaims(items: QueueItem[], claims: Map<string, QueueOwner>
   }))
 }
 
+// True when the request carries at least one active column filter — drives the
+// optional filtered_stats block (stat strip "277 / 504" display).
+export function hasActiveColumnFilters(filters: Record<string, unknown> | undefined): boolean {
+  if (!filters) return false
+  return Object.values(filters).some((v) => {
+    if (v == null || v === '') return false
+    if (Array.isArray(v)) return v.length > 0
+    return true
+  })
+}
+
 // Multiselect filters arrive as arrays and match ANY value (OR semantics);
 // single strings keep the original behavior.
 function matchesAny(value: unknown, test: (v: string) => boolean): boolean {
@@ -1321,6 +1332,8 @@ export async function fetchQueueItems(
 ): Promise<{
   items: QueueItem[]
   stats: QueueStats
+  /** Stats over the column-filtered set; null when no column filters are active. */
+  filteredStats: QueueStats | null
   availableValues: { collection: string[]; state: string[] }
   truncated: boolean
   total: number
@@ -1418,6 +1431,7 @@ export async function fetchQueueItems(
   return {
     items: paged,
     stats: exact?.stats ?? liveExact ?? computeStats(scoped),
+    filteredStats: hasActiveColumnFilters(options.filters) ? computeStats(filtered) : null,
     availableValues: exact?.availableValues ?? availableValues,
     truncated,
     total
