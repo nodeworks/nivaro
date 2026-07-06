@@ -5,27 +5,34 @@ import type { User } from '../types.js'
 import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 
 // Returns true when the requested sort/filters touch a field this SQL-pushdown
-// path cannot (or intentionally does not) serve correctly: extra.* fields (never
-// materialized as real columns), sla_status/aging_hours filters (business-hours
-// SLA math is JS-only, not expressible as plain SQL), an owners sort (would
-// need a SQL-level string aggregation across the M2M owners table), and a
-// priority sort (composite of sla_status/at_risk/aging — same JS-only SLA math).
-// The caller should route requests matching this to the existing live-resolve
-// path instead of calling fetchMaterializedQueueItems.
+// path cannot (or intentionally does not) serve correctly: sla_status/
+// aging_hours filters (business-hours SLA math is JS-only, not expressible as
+// plain SQL), an owners sort (would need a SQL-level string aggregation across
+// the M2M owners table), and a priority sort (composite of sla_status/at_risk/
+// aging — same JS-only SLA math). extra.* filters and sorts ARE served here via
+// JSON_VALUE over the cached `extra` JSON (a 6s live resolve otherwise — see
+// jsonValueExpr below). The caller should route requests matching this to the
+// existing live-resolve path instead of calling fetchMaterializedQueueItems.
 export function requiresLiveResolveFallback(
   sort: string,
   filters: Record<string, unknown>
 ): boolean {
   const sortKey = sort.startsWith('-') ? sort.slice(1) : sort
-  if (sortKey.startsWith('extra.')) return true
   if (sortKey === 'owners') return true
   // priority = f(sla_status, at_risk, aging_hours); sla math is business-hours
   // JS — not expressible in SQL, so priority sorts live-resolve.
   if (sortKey === 'priority') return true
-  if (Object.keys(filters).some((k) => k.startsWith('extra.'))) return true
   if (filters.sla_status != null && filters.sla_status !== '') return true
   if (filters.aging_hours != null) return true
   return false
+}
+
+// JSON path for an extra-field key: the cached `extra` object is FLAT — dotted
+// display paths are literal keys ('divisions.name'), so the whole key is one
+// quoted JSON property, never a nested path. Quotes stripped defensively (keys
+// come from stored source config, not raw user input).
+function extraJsonPath(field: string): string {
+  return `$."${field.replace(/"/g, '')}"`
 }
 
 function computeSla(row: {
@@ -110,28 +117,34 @@ export async function fetchMaterializedStats(
     .first()) as { n: number }
 
   // sla_warning/sla_breached need business-hours math (computeSla is JS-only, not
-  // expressible as plain SQL), so count them via a narrow 5-column scan of the
-  // scope-filtered set — exact parity with the live path's computeStats(scoped).
+  // expressible as plain SQL) — but only rows that CARRY an SLA rule can be
+  // warning/breached, so the JS scan is restricted to sla_duration_hours IS NOT
+  // NULL (usually a small fraction; zero when no SLA rules are configured).
+  // at_risk is a plain bit — SQL count, no scan.
+  const atRiskRow = (await scopeBase
+    .clone()
+    .where('qi.at_risk', true)
+    .count('* as n')
+    .first()) as { n: number }
+  const atRiskCount = Number(atRiskRow.n)
+
   const slaScanRows = (await scopeBase
     .clone()
+    .whereNotNull('qi.sla_duration_hours')
     .select(
       'qi.entered_state_at',
       'qi.sla_duration_hours',
       'qi.sla_warning_pct',
-      'qi.sla_business_hours_only',
-      'qi.at_risk'
+      'qi.sla_business_hours_only'
     )) as Array<{
     entered_state_at: Date | null
     sla_duration_hours: number | null
     sla_warning_pct: number | null
     sla_business_hours_only: boolean
-    at_risk: boolean
   }>
   let sla_warning = 0
   let sla_breached = 0
-  let atRiskCount = 0
   for (const r of slaScanRows) {
-    if (r.at_risk) atRiskCount++
     const { status } = computeSla(r)
     if (status === 'warning') sla_warning++
     if (status === 'breached') sla_breached++
@@ -199,6 +212,17 @@ export async function fetchMaterializedQueueItems(
   if (collectionList.length > 0) base.whereIn('qi.collection', collectionList)
   const stateList = asList(filters.state)
   if (stateList.length > 0) base.whereIn('qi.state', stateList)
+  for (const [key, raw] of Object.entries(filters)) {
+    if (!key.startsWith('extra.')) continue
+    const values = asList(raw)
+    if (values.length === 0) continue
+    const path = extraJsonPath(key.slice('extra.'.length))
+    base.where(function () {
+      for (const v of values) {
+        this.orWhereRaw('JSON_VALUE(qi.extra, ?) LIKE ?', [path, `%${v}%`])
+      }
+    })
+  }
   if (filters.label)
     base.whereRaw('LOWER(qi.label) LIKE ?', [`%${String(filters.label).toLowerCase()}%`])
   if (filters.owners) {
@@ -228,6 +252,13 @@ export async function fetchMaterializedQueueItems(
     )
   } else if (sortKey === 'at_risk') {
     base.orderBy('qi.at_risk', desc ? 'desc' : 'asc')
+  } else if (sortKey.startsWith('extra.')) {
+    const path = extraJsonPath(sortKey.slice('extra.'.length))
+    // Nulls last regardless of direction — matches sortItems' convention.
+    base.orderByRaw(
+      `CASE WHEN JSON_VALUE(qi.extra, ?) IS NULL THEN 1 ELSE 0 END ASC, JSON_VALUE(qi.extra, ?) ${desc ? 'DESC' : 'ASC'}`,
+      [path, path]
+    )
   } else {
     // MSSQL requires ORDER BY when OFFSET/FETCH is present but no real sort was
     // requested — same fallback used in services/items.ts.

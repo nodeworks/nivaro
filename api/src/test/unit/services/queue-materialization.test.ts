@@ -341,11 +341,19 @@ describe('requiresLiveResolveFallback', () => {
     expect(requiresLiveResolveFallback('', {})).toBe(false)
   })
 
-  it('still falls back for extra.* and owners sorts and sla/aging filters', () => {
-    expect(requiresLiveResolveFallback('extra.customer.name', {})).toBe(true)
+  it('still falls back for owners sorts and sla/aging filters', () => {
     expect(requiresLiveResolveFallback('owners', {})).toBe(true)
     expect(requiresLiveResolveFallback('', { sla_status: 'breached' })).toBe(true)
     expect(requiresLiveResolveFallback('', { aging_hours: { min: 1 } })).toBe(true)
+  })
+
+  it('serves extra.* filters and sorts from the cache (JSON_VALUE pushdown)', () => {
+    expect(requiresLiveResolveFallback('extra.customer.name', {})).toBe(false)
+    expect(requiresLiveResolveFallback('-extra.customer.name', {})).toBe(false)
+    expect(requiresLiveResolveFallback('', { 'extra.divisions.name': 'Zone 1' })).toBe(false)
+    expect(requiresLiveResolveFallback('', { 'extra.divisions.name': ['Zone 1', 'Zone 2'] })).toBe(
+      false
+    )
   })
 })
 

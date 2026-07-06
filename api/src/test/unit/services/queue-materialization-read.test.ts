@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { requiresLiveResolveFallback } from '../../../services/queue-materialization-read.js'
 
 describe('requiresLiveResolveFallback', () => {
-  it('returns true when sort references an extra field', () => {
-    expect(requiresLiveResolveFallback('extra.owner.name', {})).toBe(true)
+  it('serves extra-field sorts from the cache (JSON_VALUE pushdown)', () => {
+    expect(requiresLiveResolveFallback('extra.owner.name', {})).toBe(false)
   })
 
-  it('returns true when a column filter key references an extra field', () => {
-    expect(requiresLiveResolveFallback('', { 'extra.priority': 'High' })).toBe(true)
+  it('serves extra-field column filters from the cache (JSON_VALUE pushdown)', () => {
+    expect(requiresLiveResolveFallback('', { 'extra.priority': 'High' })).toBe(false)
   })
 
   it('returns true when filters include sla_status', () => {
