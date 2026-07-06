@@ -3,6 +3,7 @@ import { ArrowRight, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { OwnerAvatars } from '@/components/owner-avatars'
 import { Badge } from '@/components/ui/badge'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { api } from '@/lib/api'
@@ -200,7 +201,7 @@ export function QueueItemSheet({
             <div className='flex-1 overflow-y-auto px-5 py-4'>
               <div className='mb-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
                 <MetaCell label='Owners'>
-                  {item.owners.length ? item.owners.map((o) => o.name).join(', ') : 'No owners'}
+                  <OwnerAvatars owners={item.owners} max={6} />
                 </MetaCell>
                 <MetaCell label='Claimed by'>{item.claimed_by?.name ?? '—'}</MetaCell>
                 <MetaCell label='SLA'>

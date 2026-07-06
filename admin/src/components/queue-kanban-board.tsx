@@ -13,6 +13,7 @@ import {
 } from '@dnd-kit/core'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { OwnerAvatars } from '@/components/owner-avatars'
 import { buildGroups } from '@/lib/queue-grouping'
 import { cn, formatNumber } from '@/lib/utils'
 
@@ -76,14 +77,12 @@ function KanbanCard({
         <p className='mb-1.5 truncate text-[12px] font-medium text-slate-800 dark:text-slate-100'>
           {item.label}
         </p>
-        <div className='flex items-center justify-between text-[11px] text-slate-400'>
-          <span className='truncate'>
-            {item.claimed_by
-              ? `Claimed: ${item.claimed_by.name}`
-              : item.owners.length
-                ? item.owners.map((o) => o.name).join(', ')
-                : 'No owners'}
-          </span>
+        <div className='flex items-center justify-between gap-2 text-[11px] text-slate-400'>
+          {item.claimed_by ? (
+            <span className='truncate'>Claimed: {item.claimed_by.name}</span>
+          ) : (
+            <OwnerAvatars owners={item.owners} max={3} />
+          )}
           <span className='shrink-0'>{formatAging(item.aging_hours)}</span>
         </div>
         {item.at_risk && <span className='mt-1 block text-[10px] text-red-500'>⚑ At risk</span>}

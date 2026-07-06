@@ -28,6 +28,7 @@ import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
 import { type Column, DataTable, type FilterDef } from '@/components/data-table'
+import { OwnerAvatars } from '@/components/owner-avatars'
 import { QueueBulkBar } from '@/components/queue-bulk-bar'
 import { QueueItemSheet } from '@/components/queue-item-sheet'
 import { QueueKanbanBoard } from '@/components/queue-kanban-board'
@@ -955,14 +956,7 @@ export function QueueDetailPage() {
       key: 'owners',
       header: 'Owners',
       sortable: true,
-      render: (row) =>
-        row.owners.length ? (
-          <span className='text-[12px] text-slate-600 dark:text-slate-300'>
-            {row.owners.map((o) => o.name).join(', ')}
-          </span>
-        ) : (
-          <span className='text-slate-300'>No owners</span>
-        )
+      render: (row) => <OwnerAvatars owners={row.owners} />
     },
     {
       key: 'aging_hours',
