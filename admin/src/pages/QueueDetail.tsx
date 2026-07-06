@@ -89,7 +89,7 @@ interface QueueSource {
   id: number
   type: 'collection' | 'tasks' | 'approvals' | 'owned_by_me'
   collection: string | null
-  drilldown?: Record<string, { enabled?: boolean; layout_id?: number | null; width?: number | null }>
+  drilldown?: Record<string, { enabled?: boolean; layout_id?: number | null; width?: number | string | null }>
 }
 
 interface ExtraFieldMeta {
@@ -1043,13 +1043,13 @@ export function QueueDetailPage() {
     collection: string
     itemId: string
     layoutId?: number | null
-    width?: number | null
+    width?: number | string | null
     title?: string
   } | null>(null)
 
   const drilldownConfigFor = (
     path: string
-  ): { enabled: boolean; layout_id: number | null; width: number | null } => {
+  ): { enabled: boolean; layout_id: number | null; width: number | string | null } => {
     for (const src of queue?.sources ?? []) {
       const cfg = src.drilldown?.[path]
       if (cfg)

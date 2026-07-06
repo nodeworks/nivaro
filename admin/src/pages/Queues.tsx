@@ -44,7 +44,7 @@ interface QueueSource {
   label_template?: string | null
   drilldown?: Record<
     string,
-    { enabled?: boolean; layout_id?: number | null; width?: number | null }
+    { enabled?: boolean; layout_id?: number | null; width?: number | string | null }
   > | null
   sla_filter: string | null
   extra_fields: string[] | null
@@ -213,6 +213,23 @@ const DRILLDOWN_WIDTHS = [
   { value: 1100, label: 'Extra wide (1100px)' }
 ]
 
+// Freeform width: '800', '800px' -> 800 (px, clamped 320..2000); '75%' -> '75%'
+// (of the viewport, clamped 10..96). Null = invalid / empty.
+function normalizeDrilldownWidth(raw: string): number | string | null {
+  const t = raw.trim().toLowerCase()
+  if (!t) return null
+  const pct = t.match(/^(\d{1,3})\s*%$/)
+  if (pct) {
+    const n = Math.min(96, Math.max(10, Number(pct[1])))
+    return `${n}%`
+  }
+  const px = t.match(/^(\d{2,4})\s*(px)?$/)
+  if (px) {
+    return Math.min(2000, Math.max(320, Number(px[1])))
+  }
+  return null
+}
+
 function DrilldownChipConfig({
   path,
   targetCollection,
@@ -221,9 +238,19 @@ function DrilldownChipConfig({
 }: {
   path: string
   targetCollection: string
-  cfg: { enabled?: boolean; layout_id?: number | null; width?: number | null } | undefined
-  onChange: (next: { enabled: boolean; layout_id: number | null; width: number | null }) => void
+  cfg:
+    | { enabled?: boolean; layout_id?: number | null; width?: number | string | null }
+    | undefined
+  onChange: (next: {
+    enabled: boolean
+    layout_id: number | null
+    width: number | string | null
+  }) => void
 }) {
+  const presetValues = new Set(DRILLDOWN_WIDTHS.map((w) => w.value))
+  const isCustom = cfg?.width != null && !presetValues.has(cfg.width as number)
+  const [customMode, setCustomMode] = useState(isCustom)
+  const [customDraft, setCustomDraft] = useState(isCustom ? String(cfg?.width ?? '') : '')
   const [open, setOpen] = useState(false)
   const { data: detailLayouts = [] } = useQuery<
     Array<{ id: number; name: string; layout_type?: string }>
@@ -304,22 +331,49 @@ function DrilldownChipConfig({
             )}
             <span className='text-[10px] text-slate-400'>Panel width</span>
             <select
-              value={cfg?.width ?? 640}
-              onChange={(e) =>
+              value={customMode ? '__custom__' : String(cfg?.width ?? 640)}
+              onChange={(e) => {
+                if (e.target.value === '__custom__') {
+                  setCustomMode(true)
+                  setCustomDraft(cfg?.width != null ? String(cfg.width) : '')
+                  return
+                }
+                setCustomMode(false)
+                const n = Number(e.target.value)
                 onChange({
                   enabled: true,
                   layout_id: cfg?.layout_id ?? null,
-                  width: Number(e.target.value) === 640 ? null : Number(e.target.value)
+                  width: n === 640 ? null : n
                 })
-              }
+              }}
               className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
             >
               {DRILLDOWN_WIDTHS.map((w) => (
-                <option key={w.value} value={w.value}>
+                <option key={w.value} value={String(w.value)}>
                   {w.label}
                 </option>
               ))}
+              <option value='__custom__'>Custom…</option>
             </select>
+            {customMode && (
+              <div className='space-y-0.5'>
+                <Input
+                  value={customDraft}
+                  onChange={(e) => {
+                    setCustomDraft(e.target.value)
+                    const w = normalizeDrilldownWidth(e.target.value)
+                    if (w != null) {
+                      onChange({ enabled: true, layout_id: cfg?.layout_id ?? null, width: w })
+                    }
+                  }}
+                  placeholder='e.g. 800px or 75%'
+                  className='h-7 text-[11px]'
+                />
+                <p className='text-[10px] text-slate-400'>
+                  Pixels (320–2000) or viewport percentage (10–96%).
+                </p>
+              </div>
+            )}
           </div>
         )}
       </PopoverContent>

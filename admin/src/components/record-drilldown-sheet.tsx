@@ -36,8 +36,8 @@ export function RecordDrilldownSheet({
   collection: string
   itemId: string
   layoutId?: number | null
-  /** Panel width in px (per queue-column config); default 640. */
-  width?: number | null
+  /** Panel width per queue-column config: px number or 'NN%' of the viewport; default 640. */
+  width?: number | string | null
   title?: string
   onClose: () => void
 }) {
@@ -60,7 +60,7 @@ export function RecordDrilldownSheet({
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent
         className='flex flex-col gap-0 overflow-hidden p-0'
-        style={{ width: width ?? 640, maxWidth: '92vw' }}
+        style={{ width: width ?? 640, maxWidth: '96vw' }}
       >
         <SheetHeader className='shrink-0 border-b border-slate-200 px-4 py-3 dark:border-border'>
           <SheetTitle className='flex items-center justify-between gap-2 pr-6 text-[14px]'>
