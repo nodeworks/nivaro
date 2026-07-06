@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "sync:legacy-owners": "tsx src/scripts/sync-legacy-owners.ts"
+    "sync:legacy-owners": "tsx src/scripts/sync-legacy-owners.ts",
+    "sync:legacy-states": "tsx src/scripts/sync-legacy-states.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.101.0",
