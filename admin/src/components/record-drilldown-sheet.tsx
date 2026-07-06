@@ -27,6 +27,7 @@ interface FieldConfigRow {
   group_key: string | null
   sort: number
   layout_assigned: boolean
+  is_visible?: boolean | number | null
 }
 
 interface DetailLayoutResponse {
@@ -221,8 +222,11 @@ export function RecordDrilldownSheet({
     setEditingField(null)
   }, [])
 
+  // With a detail layout, the layout IS the field selection: only assigned,
+  // visible fields render. Without one (fallback), show everything not hidden.
   const visibleFields = fields
     .filter((f) => !f.hidden && f.field !== 'id' && !f.field.startsWith('__'))
+    .filter((f) => (hasDetailLayout ? f.layout_assigned && f.is_visible !== false && f.is_visible !== 0 : true))
     .sort((a, b) => a.sort - b.sort)
 
   const groups = detailLayout?.groups ?? []
