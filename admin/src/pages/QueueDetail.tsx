@@ -29,6 +29,7 @@ import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
 import { type Column, DataTable, type FilterDef } from '@/components/data-table'
 import { OwnerAvatars } from '@/components/owner-avatars'
+import { RecordDrilldownSheet } from '@/components/record-drilldown-sheet'
 import { QueueBulkBar } from '@/components/queue-bulk-bar'
 import { QueueItemSheet } from '@/components/queue-item-sheet'
 import { QueueKanbanBoard } from '@/components/queue-kanban-board'
@@ -71,6 +72,7 @@ export interface QueueItemRow {
   aging_hours: number | null
   claimed_by: QueueOwner | null
   extra?: Record<string, unknown>
+  extra_ids?: Record<string, string[]>
   url: string
 }
 
@@ -87,6 +89,7 @@ interface QueueSource {
   id: number
   type: 'collection' | 'tasks' | 'approvals' | 'owned_by_me'
   collection: string | null
+  drilldown?: Record<string, { enabled?: boolean; layout_id?: number | null }>
 }
 
 interface ExtraFieldMeta {
@@ -1033,17 +1036,54 @@ export function QueueDetailPage() {
 
   const extraFieldKeys = queue?.available_extra_fields ?? []
 
+  // Drill-down target: clicking a relation extra-field value opens a detail
+  // sheet for the related record. Config is per source column (enabled +
+  // pinned detail layout); relation paths default to enabled.
+  const [drilldown, setDrilldown] = useState<{
+    collection: string
+    itemId: string
+    layoutId?: number | null
+    title?: string
+  } | null>(null)
+
+  const drilldownConfigFor = (path: string): { enabled: boolean; layout_id: number | null } => {
+    for (const src of queue?.sources ?? []) {
+      const cfg = src.drilldown?.[path]
+      if (cfg) return { enabled: cfg.enabled !== false, layout_id: cfg.layout_id ?? null }
+    }
+    return { enabled: true, layout_id: null }
+  }
+
   const extraColumns: Column<QueueItemRow>[] = extraFieldKeys.map((field) => ({
     key: `extra.${field}`,
     header: aliasFor(`extra.${field}`, formatColumnHeader(field)),
     sortable: true,
     render: (row) => {
       const value = row.extra?.[field]
-      return value == null || value === '' ? (
-        <span className='text-slate-300'>—</span>
-      ) : (
-        <span className='text-[12px]'>{String(value)}</span>
-      )
+      if (value == null || value === '') return <span className='text-slate-300'>—</span>
+      const meta = (queue?.extra_field_meta ?? []).find((m) => m.path === field)
+      const targetIds = row.extra_ids?.[field] ?? []
+      const cfg = drilldownConfigFor(field)
+      if (meta?.kind === 'relation' && meta.target_collection && targetIds.length > 0 && cfg.enabled) {
+        return (
+          <button
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              setDrilldown({
+                collection: meta.target_collection as string,
+                itemId: targetIds[0],
+                layoutId: cfg.layout_id,
+                title: String(value)
+              })
+            }}
+            className='text-left text-[12px] text-slate-700 underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-nvr-navy hover:decoration-nvr-cyan dark:text-slate-200 dark:hover:text-nvr-cyan'
+          >
+            {String(value)}
+          </button>
+        )
+      }
+      return <span className='text-[12px]'>{String(value)}</span>
     }
   }))
 
@@ -1705,6 +1745,16 @@ export function QueueDetailPage() {
         onTransition={(state) => runBulk('Transition', (row) => performTransition(row, state))}
         onClear={() => setSelectedIds([])}
       />
+
+      {drilldown && (
+        <RecordDrilldownSheet
+          collection={drilldown.collection}
+          itemId={drilldown.itemId}
+          layoutId={drilldown.layoutId}
+          title={drilldown.title}
+          onClose={() => setDrilldown(null)}
+        />
+      )}
 
       <QueueItemSheet
         item={sheetItem}

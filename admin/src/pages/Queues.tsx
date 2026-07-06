@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronsUpDown, Inbox, Plus, Trash2, X } from 'lucide-react'
+import { Check, ChevronsUpDown, Inbox, Plus, Trash2, X, Settings2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
@@ -42,6 +42,7 @@ interface QueueSource {
   state_values: string[] | null
   state_mode?: 'include' | 'exclude' | null
   label_template?: string | null
+  drilldown?: Record<string, { enabled?: boolean; layout_id?: number | null }> | null
   sla_filter: string | null
   extra_fields: string[] | null
   sort: number
@@ -74,6 +75,11 @@ interface Queue {
 
 interface QueueDetailData extends Queue {
   sources: QueueSource[]
+  extra_field_meta?: Array<{
+    path: string
+    kind: 'relation' | 'plain'
+    target_collection?: string
+  }>
 }
 
 const SOURCE_TYPE_OPTIONS: { value: SourceType; label: string }[] = [
@@ -195,17 +201,107 @@ function QueueListItem({
   )
 }
 
+// Per-column drill-down config: enabled toggle + pinned detail layout of the
+// target collection. Only offered for relation extra-field paths.
+function DrilldownChipConfig({
+  path,
+  targetCollection,
+  cfg,
+  onChange
+}: {
+  path: string
+  targetCollection: string
+  cfg: { enabled?: boolean; layout_id?: number | null } | undefined
+  onChange: (next: { enabled: boolean; layout_id: number | null }) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const { data: detailLayouts = [] } = useQuery<
+    Array<{ id: number; name: string; layout_type?: string }>
+  >({
+    queryKey: ['detail-layouts', targetCollection],
+    enabled: open,
+    queryFn: () =>
+      api
+        .get(`/collection-layouts?collection=${targetCollection}`)
+        .then((r) =>
+          ((r.data.data ?? []) as Array<{ id: number; name: string; layout_type?: string }>).filter(
+            (l) => l.layout_type === 'detail'
+          )
+        )
+  })
+  const enabled = cfg?.enabled !== false
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          aria-label={`Drill-down settings for ${path}`}
+          className={cn(
+            'ml-0.5 rounded-sm hover:opacity-100',
+            enabled ? 'opacity-80 text-nvr-cyan' : 'opacity-40'
+          )}
+        >
+          <Settings2 className='h-3 w-3' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[240px] space-y-2 p-3' align='start'>
+        <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+          Drill-down · {path}
+        </p>
+        <label className='flex cursor-pointer items-center justify-between'>
+          <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+            Click value opens detail panel
+          </span>
+          <input
+            type='checkbox'
+            checked={enabled}
+            onChange={(e) => onChange({ enabled: e.target.checked, layout_id: cfg?.layout_id ?? null })}
+            className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+          />
+        </label>
+        {enabled && (
+          <div className='space-y-1'>
+            <span className='text-[10px] text-slate-400'>Detail layout</span>
+            <select
+              value={cfg?.layout_id ?? ''}
+              onChange={(e) =>
+                onChange({ enabled: true, layout_id: e.target.value ? Number(e.target.value) : null })
+              }
+              className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+            >
+              <option value=''>Default (active detail layout)</option>
+              {detailLayouts.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+            {detailLayouts.length === 0 && (
+              <p className='text-[10px] text-slate-400'>
+                No detail layouts on {targetCollection} yet — the panel falls back to a read-only
+                view. Create one in Data Model → Layout.
+              </p>
+            )}
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 // ─── Source row editor ──────────────────────────────────────────────────────
 
 function SourceRow({
   source,
   collectionOptions,
+  extraFieldMeta,
   onChange,
   onRemove,
   canEdit
 }: {
   source: QueueSource
   collectionOptions: { value: string; label: string }[]
+  extraFieldMeta: Array<{ path: string; kind: 'relation' | 'plain'; target_collection?: string }>
   onChange: (next: QueueSource) => void
   onRemove: () => void
   canEdit: boolean
@@ -309,22 +405,35 @@ function SourceRow({
             Extra columns
           </Label>
           <div className='flex flex-wrap items-center gap-1.5'>
-            {currentExtraFields.map((f) => (
-              <Badge key={f} className='gap-1 font-mono text-[11px]'>
-                {f}
-                <button
-                  type='button'
-                  aria-label={`Remove ${f}`}
-                  onClick={() =>
-                    onChange({ ...source, extra_fields: currentExtraFields.filter((x) => x !== f) })
-                  }
-                  className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
-                  disabled={!canEdit}
-                >
-                  <X className='h-3 w-3' />
-                </button>
-              </Badge>
-            ))}
+            {currentExtraFields.map((f) => {
+              const meta = extraFieldMeta.find((m) => m.path === f)
+              return (
+                <Badge key={f} className='gap-1 font-mono text-[11px]'>
+                  {f}
+                  {canEdit && meta?.kind === 'relation' && meta.target_collection && (
+                    <DrilldownChipConfig
+                      path={f}
+                      targetCollection={meta.target_collection}
+                      cfg={source.drilldown?.[f]}
+                      onChange={(next) =>
+                        onChange({ ...source, drilldown: { ...(source.drilldown ?? {}), [f]: next } })
+                      }
+                    />
+                  )}
+                  <button
+                    type='button'
+                    aria-label={`Remove ${f}`}
+                    onClick={() =>
+                      onChange({ ...source, extra_fields: currentExtraFields.filter((x) => x !== f) })
+                    }
+                    className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
+                    disabled={!canEdit}
+                  >
+                    <X className='h-3 w-3' />
+                  </button>
+                </Badge>
+              )
+            })}
             {canEdit && currentExtraFields.length < 10 && source.collection && (
               <div className='w-[220px]'>
                 <CollectionFieldPicker
@@ -737,6 +846,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
         <div className='space-y-2'>
           {sources.map((s, i) => (
             <SourceRow
+              extraFieldMeta={queue?.extra_field_meta ?? []}
               key={s.id ?? `new-${i}`}
               source={s}
               collectionOptions={collectionOptions}

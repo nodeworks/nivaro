@@ -8288,7 +8288,7 @@ interface CollectionLayout {
   allow_schedule?: boolean | number
   allow_disable_pickers?: boolean | number
   conditions?: { role_ids?: string[] } | null
-  layout_type?: 'grouped' | 'table' | 'file' | 'addendum'
+  layout_type?: 'grouped' | 'table' | 'file' | 'addendum' | 'detail'
   addendum_layout_id?: number | null
   workflow_template_id?: string | null
   single_active_addendum?: boolean
@@ -8577,7 +8577,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
               >
                 <button type='button' onClick={() => setSelectedId(l.id)} className='flex min-w-0 flex-1 items-center gap-1.5'>
                   {l.is_active ? (
-                    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', l.layout_type === 'file' ? 'bg-amber-400' : l.layout_type === 'addendum' ? 'bg-violet-400' : 'bg-nvr-cyan')} />
+                    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', l.layout_type === 'file' ? 'bg-amber-400' : l.layout_type === 'addendum' ? 'bg-violet-400' : l.layout_type === 'detail' ? 'bg-emerald-400' : 'bg-nvr-cyan')} />
                   ) : (
                     <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-transparent' />
                   )}
@@ -8588,6 +8588,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                       l.layout_type === 'addendum' ? 'bg-violet-100 text-violet-600 dark:bg-violet-900/40 dark:text-violet-400'
                       : l.layout_type === 'file' ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400'
                       : l.layout_type === 'table' ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400'
+                      : l.layout_type === 'detail' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
                       : ''
                     )}>
                       {l.layout_type === 'addendum' ? 'addn' : l.layout_type}
@@ -8773,7 +8774,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                 <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
                   <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Layout type</span>
                   <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
-                    {(['grouped', 'table', 'file', 'addendum'] as const).map((lt) => (
+                    {(['grouped', 'table', 'file', 'addendum', 'detail'] as const).map((lt) => (
                       <button
                         key={lt}
                         type='button'
@@ -8785,7 +8786,7 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                             : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
                         )}
                       >
-                        {lt === 'addendum' ? 'Addendum Form' : lt}
+                        {lt === 'addendum' ? 'Addendum Form' : lt === 'detail' ? 'Detail (drill-down)' : lt}
                       </button>
                     ))}
                   </div>
