@@ -25,6 +25,7 @@ interface FieldConfigRow {
   interface: string | null
   display: string | null
   display_options: Record<string, unknown> | null
+  options: Record<string, unknown> | null
   computed_type: string | null
   group_key: string | null
   sort: number
@@ -68,10 +69,42 @@ function formatDateToken(v: string, fmt: string): string {
     .replace(/ss/g, pad(d.getSeconds()))
 }
 
-// Field display settings (Data Model field chip -> Display) applied at render:
-// formatted-value (prefix/suffix + locale number), label (choice text + colors),
-// datetime (format string), boolean (custom labels).
-function displayValue(f: Pick<FieldConfigRow, 'type' | 'display' | 'display_options'>, v: unknown): string {
+// Number formatting from the layout field chip settings (options.format:
+// int | decimal | currency, with options.currency / options.precision).
+function formatNumberBody(f: Pick<FieldConfigRow, 'type' | 'options'>, v: unknown): string | null {
+  if (!['integer', 'bigInteger', 'decimal', 'float'].includes(f.type)) return null
+  const num = typeof v === 'number' ? v : Number(v)
+  if (Number.isNaN(num)) return null
+  const opts = f.options ?? {}
+  if (opts.format === 'currency') {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency: String(opts.currency || 'USD')
+      }).format(num)
+    } catch {
+      return num.toLocaleString()
+    }
+  }
+  if (opts.format === 'decimal') {
+    const precision = Number(opts.precision ?? 2)
+    return num.toLocaleString(undefined, {
+      minimumFractionDigits: precision,
+      maximumFractionDigits: precision
+    })
+  }
+  if (opts.format === 'int') return Math.round(num).toLocaleString()
+  return null
+}
+
+// Field display settings (Data Model field chip -> Display + number format)
+// applied at render: currency/decimal/int number formats, formatted-value
+// (prefix/suffix), label (choice text + colors), datetime (format string),
+// boolean (custom labels).
+function displayValue(
+  f: Pick<FieldConfigRow, 'type' | 'display' | 'display_options' | 'options'>,
+  v: unknown
+): string {
   const type = f.type
   const opts = f.display_options ?? {}
   if (v == null || v === '') return '—'
@@ -84,14 +117,17 @@ function displayValue(f: Pick<FieldConfigRow, 'type' | 'display' | 'display_opti
   if (f.display === 'label') {
     return String(v)
   }
+  const numberBody = formatNumberBody(f, v)
   if (f.display === 'formatted-value') {
     const num = typeof v === 'number' ? v : Number(v)
     const body =
-      !Number.isNaN(num) && ['integer', 'bigInteger', 'decimal', 'float'].includes(type)
+      numberBody ??
+      (!Number.isNaN(num) && ['integer', 'bigInteger', 'decimal', 'float'].includes(type)
         ? num.toLocaleString()
-        : String(v)
+        : String(v))
     return `${opts.prefix ?? ''}${body}${opts.suffix ?? ''}`
   }
+  if (numberBody != null) return numberBody
   if (type === 'date' || type === 'dateTime' || type === 'datetime') {
     if (f.display === 'datetime' && typeof opts.format === 'string' && opts.format) {
       return formatDateToken(String(v), opts.format)
