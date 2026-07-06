@@ -140,7 +140,9 @@ export function FieldRenderer({
   // Read-only display — formatDisplayValue applies the field's display settings
   // (options.format currency/decimal/int, choice labels, datetime locale) so a
   // read-only field renders exactly like its formatted editable counterpart.
-  if (field.readonly) {
+  // Inline tables are exempt: they render the full table in read-only mode
+  // (same display, no edit affordances) further down.
+  if (field.readonly && iface !== 'inline-table') {
     const display =
       value === null || value === undefined ? (
         <span className='text-muted-foreground italic text-sm'>—</span>
@@ -312,7 +314,7 @@ export function FieldRenderer({
         const sortField = typeof opts.sort_field === 'string' && opts.sort_field ? opts.sort_field : undefined
         const sortDir = opts.sort_dir === 'desc' ? 'desc' as const : 'asc' as const
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} prefillParentId={prefillParentId} parentFieldKey={field.field} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} prefillParentId={prefillParentId} parentFieldKey={field.field} readOnly={field.readonly} />
         )
       }
     }

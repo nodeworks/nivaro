@@ -140,11 +140,15 @@ export function InlineTableField({
   sortField,
   sortDir = 'asc',
   prefillParentId,
-  parentFieldKey
+  parentFieldKey,
+  readOnly = false
 }: {
   relatedCollection: string
   manyField: string
   parentId: string
+  /** Same table display, but no editing: hides the Add toolbar, + Add row,
+   *  row delete/undo, and blocks cell edit entry. */
+  readOnly?: boolean
   parentCollection?: string
   layoutId?: number | null
   showRowRevisions?: boolean
@@ -272,6 +276,9 @@ export function InlineTableField({
   }
 
   // { rowId, draft } — null = no row editing, 'new' = adding new row
+  // Read-only mode also disables row reordering.
+  if (readOnly) enableReorder = false
+  // biome-ignore lint/style/noParameterAssign: intentional prop override
   const [editState, setEditState] = useState<{ rowId: string; draft: Record<string, unknown> } | null>(null)
   const editStateRef = useRef<{ rowId: string; draft: Record<string, unknown> } | null>(null)
   useEffect(() => { editStateRef.current = editState }, [editState])
@@ -589,18 +596,21 @@ export function InlineTableField({
   })
 
   function startEdit(row: Record<string, unknown>) {
+    if (readOnly) return
     const id = String(row.id)
     if (editState?.rowId === id) return
     setEditState({ rowId: id, draft: applyComputedFields({ ...row }) })
   }
 
   function startPendingEdit(row: Record<string, unknown>, ri: number) {
+    if (readOnly) return
     const rowId = `pending:${ri}`
     if (editState?.rowId === rowId) return
     setEditState({ rowId, draft: applyComputedFields({ ...row }) })
   }
 
   function startNew() {
+    if (readOnly) return
     setEditState({ rowId: 'new', draft: {} })
   }
 
@@ -901,7 +911,7 @@ export function InlineTableField({
 
   return (
     <div className='space-y-1.5'>
-      <div className='flex items-center gap-2 text-[11px]'>
+      {!readOnly && <div className='flex items-center gap-2 text-[11px]'>
         <span className='text-slate-400'>Add</span>
         <input
           type='number'
@@ -958,7 +968,7 @@ export function InlineTableField({
             <History className='h-3.5 w-3.5' />
           </button>
         )}
-      </div>
+      </div>}
 
       {applyOpen && applyValuesCols.length > 0 && (
         <div className='rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2'>
@@ -1294,10 +1304,12 @@ export function InlineTableField({
                               <History className='h-3 w-3' />
                             </button>
                           )}
-                          <button type='button' onClick={(e) => deleteRow(row, e)}
-                            className='rounded p-0.5 text-slate-300 hover:text-red-500'>
-                            <X className='h-3 w-3' />
-                          </button>
+                          {!readOnly && (
+                            <button type='button' onClick={(e) => deleteRow(row, e)}
+                              className='rounded p-0.5 text-slate-300 hover:text-red-500'>
+                              <X className='h-3 w-3' />
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
@@ -1476,7 +1488,7 @@ export function InlineTableField({
           {uniqueError}
         </div>
       )}
-      {activeView === 'original' && !isEditingNew && (
+      {activeView === 'original' && !isEditingNew && !readOnly && (
         <div className='border-t border-slate-100 px-3 py-1.5'>
           <button type='button' onClick={startNew}
             className='text-[11px] font-medium text-[#00ceff] hover:underline'>
