@@ -3,6 +3,7 @@ import { Check, ChevronsUpDown, Inbox, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import { CollectionFieldPicker, type PickedField } from '@/components/field-picker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -478,16 +479,18 @@ function SourceRow({
           <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
             Item label
           </Label>
-          <Input
-            value={source.label_template ?? ''}
-            onChange={(e) => onChange({ ...source, label_template: e.target.value || null })}
-            placeholder='e.g. {{project_id}} — {{title}}'
-            disabled={!canEdit}
-            className='h-8 w-full max-w-[420px] font-mono text-[12px]'
-          />
+          <div className='max-w-[520px]'>
+            <DisplayTemplateEditor
+              value={source.label_template ?? ''}
+              onChange={(v) => onChange({ ...source, label_template: v || null })}
+              collection={source.collection as string}
+              placeholder='Add fields and text — controls the Item column'
+              disabled={!canEdit}
+            />
+          </div>
           <p className='text-[11px] text-slate-400'>
-            Controls the Item column. Use {'{{field}}'} tokens (direct fields of this collection).
-            Empty = the collection's display template, then title/name/label/subject.
+            Empty = the collection's display template, then title/name/label/subject. Direct fields
+            of this collection only.
           </p>
         </div>
       )}
