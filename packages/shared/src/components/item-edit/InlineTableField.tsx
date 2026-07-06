@@ -1445,7 +1445,9 @@ export function InlineTableField({
           return (
             <tfoot>
               <tr className='border-t border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600'>
-                {(rowOrderField || isNew || isPendingMode) && <td />}
+                {/* Leading cells must mirror the header exactly: reorder, line #, status */}
+                {enableReorder && (rowOrderField || isNew || isPendingMode) && <td />}
+                {showLineNumbers && <td />}
                 {(isNew || isPendingMode) && <td />}
                 {displayCols.map(c => {
                   const opts = c.options ? (typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown> : {}
