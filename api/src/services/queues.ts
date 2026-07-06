@@ -427,16 +427,10 @@ export async function computeExtraFieldMeta(
   database: typeof db = db
 ): Promise<ExtraFieldMeta[]> {
   const out: ExtraFieldMeta[] = []
-  const relCache = new Map<string, CMSRelation[]>()
-  async function relsFor(collection: string): Promise<CMSRelation[]> {
-    if (!relCache.has(collection)) {
-      const rows = (await database('nivaro_relations')
-        .where({ many_collection: collection })
-        .orWhere({ one_collection: collection })) as CMSRelation[]
-      relCache.set(collection, rows)
-    }
-    return relCache.get(collection) ?? []
-  }
+  // Full relations table (small): m2m classification needs the SIBLING junction
+  // row (junction → related collection), which a per-collection fetch misses —
+  // neither of that row's sides names the base collection.
+  const allRelations = (await database('nivaro_relations')) as CMSRelation[]
 
   const paths = new Map<string, string>() // path -> base collection
   for (const source of sources) {
@@ -451,7 +445,7 @@ export async function computeExtraFieldMeta(
     let lastRelation: RelationSegmentInfo | null = null
     let plain = segments.length === 1
     for (let i = 0; i < segments.length - 1; i++) {
-      const info = classifyRelationSegment(current, segments[i], await relsFor(current))
+      const info = classifyRelationSegment(current, segments[i], allRelations)
       if (!info) {
         plain = true
         break
