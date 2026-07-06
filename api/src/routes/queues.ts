@@ -731,9 +731,9 @@ export async function queuesRoutes(app: FastifyInstance) {
       | undefined
     if (!queue) return reply.code(404).send({ error: 'Not found' })
     if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
-    if (!queue.claims_enabled) {
-      return reply.code(403).send({ error: 'Claiming is disabled for this queue' })
-    }
+    // Deliberately NOT gated on claims_enabled: releasing must stay possible
+    // after claiming is turned off, or existing claims (and their
+    // pipeline-instance-owner write-through grants) would be stuck forever.
 
     const { items } = await fetchQueueItems(id, req.user!, 'all')
     const targetKey = `${body.source_collection}:${body.item_id}`
