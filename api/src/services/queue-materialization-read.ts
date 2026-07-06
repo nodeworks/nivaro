@@ -13,6 +13,23 @@ import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 // JSON_VALUE over the cached `extra` JSON (a 6s live resolve otherwise — see
 // jsonValueExpr below). The caller should route requests matching this to the
 // existing live-resolve path instead of calling fetchMaterializedQueueItems.
+// The cached extra JSON may carry a reserved __ids key (related-record ids per
+// relation path, written by buildMaterializedRow) — split it back out so the
+// API shape matches the live path's extra / extra_ids pair.
+function splitExtra(raw: string | null): {
+  extra: Record<string, unknown>
+  extra_ids: Record<string, string[]>
+} {
+  if (!raw) return { extra: {}, extra_ids: {} }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const { __ids, ...rest } = parsed
+    return { extra: rest, extra_ids: (__ids as Record<string, string[]>) ?? {} }
+  } catch {
+    return { extra: {}, extra_ids: {} }
+  }
+}
+
 export function requiresLiveResolveFallback(
   sort: string,
   filters: Record<string, unknown>
@@ -438,7 +455,7 @@ export async function fetchMaterializedQueueItems(
       claimed_by: r.claimed_by
         ? { id: r.claimed_by, name: claimantNameById.get(r.claimed_by) ?? '' }
         : null,
-      extra: r.extra ? JSON.parse(r.extra) : {},
+      ...splitExtra(r.extra),
       url: r.url
     }
   })

@@ -48,6 +48,8 @@ export interface QueueSourceRow {
   label_template?: string | null
   sla_filter: string | null
   extra_fields: string | null
+  /** JSON: Record<extraFieldPath, { enabled?: boolean; layout_id?: number | null }> — per-column drill-down config. */
+  drilldown?: string | null
   sort: number
 }
 
@@ -102,6 +104,8 @@ export interface QueueItem {
   aging_hours: number | null
   claimed_by: QueueOwner | null
   extra?: Record<string, unknown>
+  /** Related-record ids per relation extra-field path — powers drill-down. */
+  extra_ids?: Record<string, string[]>
   url: string
 }
 
@@ -725,12 +729,19 @@ function userDisplayName(row: {
 
 // ─── Relation path resolution ──────────────────────────────────────────────────
 
+// Resolved cell for one row: the display string plus the id(s) of the FINAL
+// related entity on the path (empty for plain columns) — ids power drill-down.
+export interface PathValue {
+  value: string
+  ids: string[]
+}
+
 export async function resolvePathValues(
   collection: string,
   ids: string[],
   segments: string[],
   relationsCache: Map<string, CMSRelation[]>
-): Promise<Map<string, string>> {
+): Promise<Map<string, PathValue>> {
   if (ids.length === 0 || segments.length === 0) return new Map()
 
   let relations = relationsCache.get(collection)
@@ -746,10 +757,10 @@ export async function resolvePathValues(
     const rows = await selectInChunks(ids, 2000, (chunk) =>
       db(collection).whereIn('id', chunk).select(['id', head])
     )
-    const out = new Map<string, string>()
+    const out = new Map<string, PathValue>()
     for (const row of rows as Array<Record<string, unknown>>) {
       const v = row[head]
-      out.set(String(row.id), v == null ? '' : String(v))
+      out.set(String(row.id), { value: v == null ? '' : String(v), ids: [] })
     }
     return out
   }
@@ -775,7 +786,7 @@ export async function resolvePathValues(
         rest,
         relationsCache
       )
-      const out = new Map<string, string>()
+      const out = new Map<string, PathValue>()
       for (const [rowId, fk] of fkByRowId) {
         const v = nested.get(fk)
         if (v !== undefined) out.set(rowId, v)
@@ -793,10 +804,10 @@ export async function resolvePathValues(
     for (const r of relatedRows as Array<Record<string, unknown>>) {
       displayById.set(String(r.id), resolveDisplayValue(r, template))
     }
-    const out = new Map<string, string>()
+    const out = new Map<string, PathValue>()
     for (const [rowId, fk] of fkByRowId) {
       const v = displayById.get(fk)
-      if (v !== undefined) out.set(rowId, v)
+      if (v !== undefined) out.set(rowId, { value: v, ids: [fk] })
     }
     return out
   }
@@ -823,11 +834,14 @@ export async function resolvePathValues(
       list.push(row)
       grouped.set(parentId, list)
     }
-    const out = new Map<string, string>()
+    const out = new Map<string, PathValue>()
     for (const rowId of ids) {
       const related = grouped.get(rowId) ?? []
       const values = related.slice(0, 3).map((r) => resolveDisplayValue(r, template))
-      out.set(rowId, formatMultiValueCell(values, related.length))
+      out.set(rowId, {
+        value: formatMultiValueCell(values, related.length),
+        ids: related.slice(0, 50).map((r) => String(r.id))
+      })
     }
     return out
   }
@@ -843,6 +857,7 @@ export async function resolvePathValues(
       )
       .select([
         `_j.${classified.junctionFkToParent} as __parent_id`,
+        '_rel.id as __rel_id',
         ...selectFields.map((f) => `_rel.${f}`)
       ])
   )
@@ -853,11 +868,14 @@ export async function resolvePathValues(
     list.push(row)
     grouped.set(parentId, list)
   }
-  const out = new Map<string, string>()
+  const out = new Map<string, PathValue>()
   for (const rowId of ids) {
     const related = grouped.get(rowId) ?? []
     const values = related.slice(0, 3).map((r) => resolveDisplayValue(r, template))
-    out.set(rowId, formatMultiValueCell(values, related.length))
+    out.set(rowId, {
+      value: formatMultiValueCell(values, related.length),
+      ids: related.slice(0, 50).map((r) => String(r.__rel_id ?? r.id))
+    })
   }
   return out
 }
@@ -1007,7 +1025,7 @@ export async function resolveCollectionSource(
   // independent of each other's results — they only read `ids`/`instances`/
   // `source.collection` and are combined together in the final items.map() below. Run
   // them concurrently instead of sequentially awaiting each in turn.
-  const [labels, ownersByItem, atRiskMap, extraById] = await Promise.all([
+  const [labels, ownersByItem, atRiskMap, extraResolved] = await Promise.all([
     source.label_template
       ? renderTemplateLabels(source.collection, ids, source.label_template)
       : getLabels(new Map([[source.collection, new Set(ids)]])),
@@ -1029,10 +1047,14 @@ export async function resolveCollectionSource(
       )
       return evaluateRows(riskRows as Record<string, unknown>[], rules)
     })(),
-    (async (): Promise<Map<string, Record<string, unknown>>> => {
+    (async (): Promise<{
+      extraById: Map<string, Record<string, unknown>>
+      extraIdsById: Map<string, Record<string, string[]>>
+    }> => {
       const extraFieldPaths = (parseJson(source.extra_fields) as string[] | null) ?? []
       const extraById = new Map<string, Record<string, unknown>>()
-      if (!extraFieldPaths.length || !ids.length) return extraById
+      const extraIdsById = new Map<string, Record<string, string[]>>()
+      if (!extraFieldPaths.length || !ids.length) return { extraById, extraIdsById }
       const relationsCache = new Map<string, CMSRelation[]>()
       // Parallelized across paths. relationsCache is a shared Map populated via a
       // check-then-fetch-then-set pattern — concurrent calls for the same collection may
@@ -1049,10 +1071,15 @@ export async function resolveCollectionSource(
               segments,
               relationsCache
             )
-            for (const [rowId, value] of valuesByRowId) {
+            for (const [rowId, pv] of valuesByRowId) {
               const extra = extraById.get(rowId) ?? {}
-              extra[path] = value
+              extra[path] = pv.value
               extraById.set(rowId, extra)
+              if (pv.ids.length > 0) {
+                const idsRec = extraIdsById.get(rowId) ?? {}
+                idsRec[path] = pv.ids
+                extraIdsById.set(rowId, idsRec)
+              }
             }
           } catch {
             // Degrade gracefully — a stale/deleted/relational field config must not
@@ -1061,7 +1088,7 @@ export async function resolveCollectionSource(
           }
         })
       )
-      return extraById
+      return { extraById, extraIdsById }
     })()
   ])
 
@@ -1076,7 +1103,8 @@ export async function resolveCollectionSource(
     at_risk: !!atRiskMap[id]?.at_risk,
     aging_hours: slaMap[id]?.elapsed_hours ?? null,
     claimed_by: null,
-    extra: extraById.get(id) ?? {},
+    extra: extraResolved.extraById.get(id) ?? {},
+    extra_ids: extraResolved.extraIdsById.get(id) ?? {},
     url: `/collections/${source.collection}/${id}`
   }))
 

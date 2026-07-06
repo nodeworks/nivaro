@@ -74,6 +74,38 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: { layout, groups, assignments, ungrouped_sort } })
   })
 
+  // GET /collection-layouts/detail/:collection?layout_id= — resolve the detail
+  // layout a drill-down sheet should render: explicit layout_id (must be a
+  // detail layout of this collection) → active detail layout → null (caller
+  // falls back to auto read-only rendering).
+  app.get('/detail/:collection', { preHandler: authenticate }, async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    const { layout_id } = req.query as { layout_id?: string }
+
+    let layout: Record<string, unknown> | undefined
+    if (layout_id) {
+      layout = await db('nivaro_collection_layouts')
+        .where({ id: Number(layout_id), collection, layout_type: 'detail' })
+        .first()
+    }
+    if (!layout) {
+      layout = await db('nivaro_collection_layouts')
+        .where({ collection, layout_type: 'detail' })
+        .orderByRaw('is_active desc, sort asc')
+        .first()
+    }
+    if (!layout) return reply.send({ data: null })
+
+    const [groups, assignments] = await Promise.all([
+      db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
+      db('nivaro_layout_field_assignments')
+        .where({ layout_id: layout.id })
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'overrides')
+        .orderBy('sort', 'asc')
+    ])
+    return reply.send({ data: { layout, groups, assignments } })
+  })
+
   // GET /collection-layouts?collection=x[&active=true]
   app.get('/', { preHandler: authenticate }, async (req, reply) => {
     const { collection, active } = req.query as { collection?: string; active?: string }
@@ -191,15 +223,19 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     if (count <= 1) return reply.code(409).send({ error: 'Cannot delete the only layout for a collection' })
 
-    // If deleting the active layout, promote the next one first
+    // If deleting the active layout, promote the next one of the SAME type first
+    // (activation is type-scoped — grouped and detail defaults are independent).
     if (existing.is_active) {
+      const layoutType = existing.layout_type ?? 'grouped'
       const next = await db('nivaro_collection_layouts')
-        .where({ collection: existing.collection })
+        .where({ collection: existing.collection, layout_type: layoutType })
         .whereNot({ id: Number(id) })
         .orderBy('sort', 'asc')
         .first('id')
       if (next) {
-        await db('nivaro_collection_layouts').where({ collection: existing.collection }).update({ is_active: 0 })
+        await db('nivaro_collection_layouts')
+          .where({ collection: existing.collection, layout_type: layoutType })
+          .update({ is_active: 0 })
         await db('nivaro_collection_layouts').where({ id: next.id }).update({ is_active: 1 })
       }
     }
@@ -217,8 +253,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
+    // Activation is scoped to the layout's type: one active 'grouped' layout
+    // (ItemEdit default) and one active 'detail' layout (drill-down default)
+    // coexist per collection.
     await db('nivaro_collection_layouts')
-      .where({ collection: existing.collection })
+      .where({ collection: existing.collection, layout_type: existing.layout_type ?? 'grouped' })
       .update({ is_active: 0 })
     await db('nivaro_collection_layouts').where({ id }).update({ is_active: 1 })
 

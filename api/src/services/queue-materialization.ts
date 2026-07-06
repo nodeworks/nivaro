@@ -212,6 +212,7 @@ async function buildMaterializedRow(
 
   const extraFieldPaths = (parseJson(source.extra_fields) as string[] | null) ?? []
   const extra: Record<string, unknown> = {}
+  const extraIds: Record<string, string[]> = {}
   if (extraFieldPaths.length) {
     const relationsCache = new Map<string, CMSRelation[]>()
     for (const path of extraFieldPaths) {
@@ -223,7 +224,10 @@ async function buildMaterializedRow(
           relationsCache
         )
         const value = valuesByRowId.get(itemId)
-        if (value !== undefined) extra[path] = value
+        if (value !== undefined) {
+          extra[path] = value.value
+          if (value.ids.length > 0) extraIds[path] = value.ids
+        }
       } catch {
         // Degrade gracefully — same as the live-resolve path's extra-field handling
       }
@@ -257,7 +261,11 @@ async function buildMaterializedRow(
       at_risk: atRisk,
       at_risk_color: atRiskColor,
       owner_names: ownerNames,
-      extra: JSON.stringify(extra),
+      // Reserved __ids key carries related-record ids for drill-down — the read
+      // path (fetchMaterializedQueueItems) splits it back out into extra_ids.
+      extra: JSON.stringify(
+        Object.keys(extraIds).length > 0 ? { ...extra, __ids: extraIds } : extra
+      ),
       url: `/collections/${collection}/${itemId}`,
       updated_at: new Date()
     },

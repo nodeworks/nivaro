@@ -37,7 +37,8 @@ function formatSource(row: QueueSourceRow) {
     ...row,
     filters: parseJson(row.filters),
     state_values: parseJson(row.state_values),
-    extra_fields: parseJson(row.extra_fields)
+    extra_fields: parseJson(row.extra_fields),
+    drilldown: parseJson(row.drilldown) ?? {}
   }
 }
 
@@ -261,6 +262,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         label_template?: string | null
         sla_filter?: string | null
         extra_fields?: unknown
+        drilldown?: unknown
         sort?: number
       }>
     }
@@ -333,6 +335,10 @@ export async function queuesRoutes(app: FastifyInstance) {
           label_template: s.label_template?.trim().slice(0, 500) || null,
           sla_filter: s.sla_filter ?? null,
           extra_fields: toJsonStr(s.extra_fields ?? []),
+          drilldown:
+            s.drilldown && typeof s.drilldown === 'object' && Object.keys(s.drilldown).length > 0
+              ? toJsonStr(s.drilldown)
+              : null,
           sort: s.sort ?? i
         }))
       )
