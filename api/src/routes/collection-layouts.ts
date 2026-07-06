@@ -50,12 +50,20 @@ async function resolveLayout(collection: string, userRoleId: string | null | und
 export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // GET /collection-layouts/active?collection=x — MUST be before /:id
   app.get('/active', { preHandler: authenticate }, async (req, reply) => {
-    const { collection } = req.query as { collection?: string }
+    const { collection, slug } = req.query as { collection?: string; slug?: string }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
-    // Admins always see the default layout (no conditional override).
-    const userRoleId = req.isAdmin ? null : (req.user?.role ?? null)
-    const layout = await resolveLayout(collection, userRoleId)
+    // Explicit slug pins a specific layout (any type — detail layouts use this
+    // for drill-down rendering), bypassing role-conditional resolution.
+    let layout: Record<string, unknown> | undefined | null
+    if (slug) {
+      layout = await db('nivaro_collection_layouts').where({ collection, slug }).first()
+    }
+    if (!layout) {
+      // Admins always see the default layout (no conditional override).
+      const userRoleId = req.isAdmin ? null : (req.user?.role ?? null)
+      layout = await resolveLayout(collection, userRoleId)
+    }
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
 
     layout.conditions = parseConditions(layout.conditions)
