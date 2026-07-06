@@ -80,6 +80,7 @@ export interface QueueRow {
   is_active: boolean | number
   materialized: boolean | number
   claims_enabled: boolean | number
+  column_aliases: string | null
   created_at: Date
   updated_at: Date | null
 }

@@ -69,6 +69,7 @@ interface Queue {
   view_mode: 'table' | 'kanban' | 'both'
   is_active: boolean
   claims_enabled: boolean
+  column_aliases: Record<string, string>
 }
 
 interface QueueDetailData extends Queue {
@@ -520,6 +521,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
   const [description, setDescription] = useState('')
   const [isShared, setIsShared] = useState(false)
   const [claimsEnabled, setClaimsEnabled] = useState(true)
+  const [columnAliases, setColumnAliases] = useState<Record<string, string>>({})
   const [sources, setSources] = useState<QueueSource[]>([])
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
 
@@ -528,6 +530,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     setDescription(queue.description ?? '')
     setIsShared(queue.is_shared)
     setClaimsEnabled(queue.claims_enabled)
+    setColumnAliases(queue.column_aliases ?? {})
     setSources(queue.sources)
     setLoadedFor(queue.id)
   }
@@ -546,7 +549,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
         name,
         description,
         is_shared: isShared,
-        claims_enabled: claimsEnabled
+        claims_enabled: claimsEnabled,
+        column_aliases: columnAliases
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queues'] })
@@ -647,6 +651,49 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
         <Label htmlFor='claims-enabled' className='text-[12px] text-slate-600'>
           Allow claiming items
         </Label>
+      </div>
+
+      <div>
+        <Label className='mb-1 block text-[12px] text-slate-600'>Column aliases</Label>
+        <p className='mb-2 text-[11px] text-slate-400'>
+          Rename the worklist table columns for everyone viewing this queue. Blank = default.
+        </p>
+        <div className='space-y-1.5'>
+          {[
+            { key: 'label', label: 'Item' },
+            { key: 'collection', label: 'Collection' },
+            { key: 'state', label: 'State' },
+            { key: 'owners', label: 'Owners' },
+            { key: 'aging_hours', label: 'Aging' },
+            { key: 'sla_status', label: 'SLA' },
+            { key: 'at_risk', label: 'Risk' },
+            ...[...new Set(sources.flatMap((s) => s.extra_fields ?? []))].map((f) => ({
+              key: `extra.${f}`,
+              label: f
+                .split('.')
+                .map((seg) => seg.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
+                .join(' → ')
+            }))
+          ].map((col) => (
+            <div key={col.key} className='flex items-center gap-2'>
+              <span className='w-40 shrink-0 truncate text-[11px] text-slate-500'>{col.label}</span>
+              <Input
+                value={columnAliases[col.key] ?? ''}
+                onChange={(e) =>
+                  setColumnAliases((prev) => {
+                    const next = { ...prev }
+                    if (e.target.value) next[col.key] = e.target.value
+                    else delete next[col.key]
+                    return next
+                  })
+                }
+                placeholder={col.label}
+                disabled={!canEdit}
+                className='h-7 max-w-[240px] text-[12px]'
+              />
+            </div>
+          ))}
+        </div>
       </div>
 
       {canEdit && (

@@ -27,7 +27,8 @@ function formatQueue(row: QueueRow) {
     is_shared: !!row.is_shared,
     is_active: !!row.is_active,
     materialized: !!row.materialized,
-    claims_enabled: !!row.claims_enabled
+    claims_enabled: !!row.claims_enabled,
+    column_aliases: parseJson(row.column_aliases) ?? {}
   }
 }
 
@@ -178,6 +179,7 @@ export async function queuesRoutes(app: FastifyInstance) {
       view_mode?: 'table' | 'kanban' | 'both'
       is_active?: boolean
       claims_enabled?: boolean
+      column_aliases?: Record<string, string> | null
     }
 
     const update: Record<string, unknown> = { updated_at: new Date() }
@@ -193,6 +195,14 @@ export async function queuesRoutes(app: FastifyInstance) {
     if (body.view_mode !== undefined) update.view_mode = body.view_mode
     if (body.is_active !== undefined) update.is_active = !!body.is_active
     if (body.claims_enabled !== undefined) update.claims_enabled = !!body.claims_enabled
+    if (body.column_aliases !== undefined) {
+      // Keep only non-empty string labels; empty map stores as null.
+      const cleaned: Record<string, string> = {}
+      for (const [k, v] of Object.entries(body.column_aliases ?? {})) {
+        if (typeof v === 'string' && v.trim()) cleaned[k] = v.trim().slice(0, 100)
+      }
+      update.column_aliases = Object.keys(cleaned).length > 0 ? toJsonStr(cleaned) : null
+    }
 
     await db('nivaro_queues').where({ id }).update(update)
     const updated = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as QueueRow

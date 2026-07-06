@@ -103,6 +103,7 @@ interface QueueMeta {
   description: string | null
   materialized: boolean
   claims_enabled: boolean
+  column_aliases?: Record<string, string>
   sources?: QueueSource[]
   available_extra_fields?: string[]
   extra_field_meta?: ExtraFieldMeta[]
@@ -351,6 +352,8 @@ export function QueueDetailPage() {
   // sorting routes them back to live resolution (sla math is JS-only), which
   // would defeat the 5k+ row cache; the Priority chip remains an explicit opt-in.
   const claimsEnabled = queue?.claims_enabled !== false
+  const aliasFor = (key: string, fallback: string): string =>
+    queue?.column_aliases?.[key]?.trim() || fallback
 
   const defaultSortApplied = useRef(false)
   useEffect(() => {
@@ -923,19 +926,19 @@ export function QueueDetailPage() {
   const baseColumns: Column<QueueItemRow>[] = [
     {
       key: 'collection',
-      header: 'Collection',
+      header: aliasFor('collection', 'Collection'),
       sortable: true,
       render: (row) => <Badge variant='outline'>{collectionLabel(row.collection)}</Badge>
     },
     {
       key: 'label',
-      header: 'Item',
+      header: aliasFor('label', 'Item'),
       sortable: true,
       render: (row) => <span className='font-medium'>{row.label}</span>
     },
     {
       key: 'state',
-      header: 'State',
+      header: aliasFor('state', 'State'),
       sortable: true,
       render: (row) =>
         row.state ? (
@@ -954,25 +957,25 @@ export function QueueDetailPage() {
     },
     {
       key: 'owners',
-      header: 'Owners',
+      header: aliasFor('owners', 'Owners'),
       sortable: true,
       render: (row) => <OwnerAvatars owners={row.owners} />
     },
     {
       key: 'aging_hours',
-      header: 'Aging',
+      header: aliasFor('aging_hours', 'Aging'),
       sortable: true,
       render: (row) => formatAging(row.aging_hours)
     },
     {
       key: 'sla_status',
-      header: 'SLA',
+      header: aliasFor('sla_status', 'SLA'),
       sortable: true,
       render: (row) => <SlaPill status={row.sla_status} />
     },
     {
       key: 'at_risk',
-      header: 'Risk',
+      header: aliasFor('at_risk', 'Risk'),
       sortable: true,
       render: (row) => (row.at_risk ? <span className='text-red-500'>⚑ At risk</span> : null)
     }
@@ -1011,7 +1014,7 @@ export function QueueDetailPage() {
 
   const extraColumns: Column<QueueItemRow>[] = extraFieldKeys.map((field) => ({
     key: `extra.${field}`,
-    header: formatColumnHeader(field),
+    header: aliasFor(`extra.${field}`, formatColumnHeader(field)),
     sortable: true,
     render: (row) => {
       const value = row.extra?.[field]
@@ -1089,7 +1092,7 @@ export function QueueDetailPage() {
     { value: 'aging', label: 'Aging' },
     ...extraFieldKeys
       .filter((f) => effectiveVisible.has(`extra.${f}`))
-      .map((f) => ({ value: `extra.${f}`, label: formatColumnHeader(f) }))
+      .map((f) => ({ value: `extra.${f}`, label: aliasFor(`extra.${f}`, formatColumnHeader(f)) }))
   ]
 
   // Server-backed autocomplete for relation extra-fields: searches the FINAL
@@ -1128,7 +1131,7 @@ export function QueueDetailPage() {
   const filterDefs: FilterDef[] = [
     {
       key: 'collection',
-      placeholder: 'Collection',
+      placeholder: aliasFor('collection', 'Collection'),
       type: 'combobox' as const,
       multi: true,
       options: (data?.available_values.collection ?? []).map((c) => ({
@@ -1138,7 +1141,7 @@ export function QueueDetailPage() {
     },
     {
       key: 'state',
-      placeholder: 'State',
+      placeholder: aliasFor('state', 'State'),
       type: 'combobox' as const,
       multi: true,
       options: (data?.available_values.state ?? []).map((s) => ({
@@ -1168,7 +1171,7 @@ export function QueueDetailPage() {
     { key: 'aging_hours', placeholder: 'Aging (hours)', type: 'range' as const },
     {
       key: 'label',
-      placeholder: 'Item',
+      placeholder: aliasFor('label', 'Item'),
       type: 'combobox' as const,
       multi: true,
       loadOptions: async (search: string) => {
@@ -1178,13 +1181,17 @@ export function QueueDetailPage() {
         return ((res.data.data ?? []) as string[]).map((l) => ({ label: l, value: l }))
       }
     },
-    { key: 'owners', placeholder: 'Search owners…', type: 'text' as const },
+    {
+      key: 'owners',
+      placeholder: `Search ${aliasFor('owners', 'owners')}…`,
+      type: 'text' as const
+    },
     ...extraFieldKeys.map((f) => {
       const meta = extraFieldMetaByPath.get(f)
       if (meta?.kind === 'relation') {
         return {
           key: `extra.${f}`,
-          placeholder: formatColumnHeader(f),
+          placeholder: aliasFor(`extra.${f}`, formatColumnHeader(f)),
           type: 'combobox' as const,
           multi: true,
           loadOptions: makeRelationLoader(meta)
@@ -1192,7 +1199,7 @@ export function QueueDetailPage() {
       }
       return {
         key: `extra.${f}`,
-        placeholder: `Search ${formatColumnHeader(f)}…`,
+        placeholder: `Search ${aliasFor(`extra.${f}`, formatColumnHeader(f))}…`,
         type: 'text' as const
       }
     })
