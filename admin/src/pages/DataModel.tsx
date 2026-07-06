@@ -45,7 +45,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api } from '@/lib/api'
-import { useAuth } from '@/lib/auth'
 import { type DBTableSummary, schemaApi } from '@/lib/schema-api'
 import { cn, formatNumber, resolveCollectionIcon } from '@/lib/utils'
 import { FieldRulesSection } from '@/pages/FieldRulesSection'
@@ -118,7 +117,9 @@ function TableListItem({
           <span
             className={cn(
               'block truncate text-[12.5px] font-medium',
-              selected ? 'text-slate-900 dark:text-foreground' : 'text-slate-700 dark:text-slate-300'
+              selected
+                ? 'text-slate-900 dark:text-foreground'
+                : 'text-slate-700 dark:text-slate-300'
             )}
           >
             {table.display_name || table.name}
@@ -150,49 +151,6 @@ function NoTableSelected({ onCreate }: { onCreate: () => void }) {
           create a new one
         </button>
       </p>
-    </div>
-  )
-}
-
-// ─── Table detail header ──────────────────────────────────────────────────────
-
-function TableDetailHeader({ table, onOpen }: { table: DBTableSummary; onOpen: () => void }) {
-  return (
-    <div className='shrink-0 border-b border-slate-200 bg-white px-6 py-5 dark:border-border dark:bg-card'>
-      <div className='flex items-start justify-between gap-4'>
-        <div className='flex min-w-0 items-start gap-3'>
-          <div className='mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 dark:border-border dark:bg-muted'>
-            <Table2 className='h-3.5 w-3.5 text-slate-400' />
-          </div>
-          <div className='min-w-0'>
-            <div className='flex flex-wrap items-center gap-2'>
-              <h2 className='font-mono text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-                {table.name}
-              </h2>
-              {table.registered ? (
-                <span className='inline-flex items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'>
-                  registered
-                </span>
-              ) : (
-                <span className='inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-muted dark:text-muted-foreground'>
-                  raw table
-                </span>
-              )}
-            </div>
-            {table.display_name && table.display_name !== table.name && (
-              <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
-                {table.display_name}
-              </p>
-            )}
-            <p className='mt-1 text-[11px] text-slate-400'>
-              {formatNumber(table.column_count)} {table.column_count === 1 ? 'column' : 'columns'}
-            </p>
-          </div>
-        </div>
-        <Button size='sm' onClick={onOpen} className='shrink-0'>
-          Open editor
-        </Button>
-      </div>
     </div>
   )
 }
@@ -831,7 +789,7 @@ function TreeEnableForm({
 
 // ─── Tree section ─────────────────────────────────────────────────────────────
 
-function TreeSection({ collection, isAdmin }: { collection: string; isAdmin: boolean }) {
+export function TreeSection({ collection, isAdmin }: { collection: string; isAdmin: boolean }) {
   const [showForm, setShowForm] = useState(false)
 
   const { data: treeConfig, refetch: refetchTree } = useQuery({
@@ -1021,70 +979,12 @@ function TreeSection({ collection, isAdmin }: { collection: string; isAdmin: boo
   )
 }
 
-// ─── Selected table view ──────────────────────────────────────────────────────
-
-type TabId = 'tree' | 'field-rules'
-
-function SelectedTableView({
-  table,
-  isAdmin,
-  onOpen
-}: {
-  table: DBTableSummary
-  isAdmin: boolean
-  onOpen: () => void
-}) {
-  const tabs: Array<{ id: TabId; label: string }> = [
-    { id: 'tree', label: 'Tree' },
-    ...(table.registered ? [{ id: 'field-rules' as TabId, label: 'Field rules' }] : [])
-  ]
-  const [activeTab, setActiveTab] = usePersistedTab<TabId>(`nvr_tab_datamodel_${table.name}`, 'tree')
-
-  return (
-    <div className='flex min-h-0 flex-1 flex-col'>
-      <TableDetailHeader table={table} onOpen={onOpen} />
-
-      {/* Tab bar */}
-      {tabs.length > 1 && (
-        <div className='flex shrink-0 gap-0 border-b border-slate-200 bg-white px-6 dark:border-border dark:bg-card'>
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type='button'
-              onClick={() => setActiveTab(t.id)}
-              className={cn(
-                '-mb-px border-b-2 px-3 py-2.5 text-[13px] font-medium transition-colors',
-                activeTab === t.id
-                  ? 'border-[#00ceff] text-[#00ceff]'
-                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Tab content */}
-      <div className='flex-1 overflow-y-auto p-6'>
-        {activeTab === 'tree' && <TreeSection collection={table.name} isAdmin={isAdmin} />}
-        {activeTab === 'field-rules' && table.registered && (
-          <FieldRulesSection collection={table.name} isAdmin={isAdmin} />
-        )}
-      </div>
-    </div>
-  )
-}
-
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function DataModelPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { user } = useAuth()
-  const isAdmin = (user as { is_admin?: boolean } | null)?.is_admin ?? false
   const [search, setSearch] = useState('')
-  const [selectedName, setSelectedName] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [unregCollapsed, setUnregCollapsed] = useState(true)
   const [sysCollapsed, setSysCollapsed] = useState(true)
@@ -1095,7 +995,9 @@ export function DataModelPage() {
     queryFn: schemaApi.listTables
   })
 
-  const { data: collectionsData } = useQuery<{ collection: string; display_name: string | null; sort: number | null; color: string | null }[]>({
+  const { data: collectionsData } = useQuery<
+    { collection: string; display_name: string | null; sort: number | null; color: string | null }[]
+  >({
     queryKey: ['collections'],
     queryFn: () => api.get('/collections').then((r) => r.data.data),
     staleTime: 60_000
@@ -1127,7 +1029,6 @@ export function DataModelPage() {
   const registered = filtered.filter((t) => t.registered)
   const unregistered = filtered.filter((t) => !t.registered && !t.name.startsWith('nivaro_'))
   const systemTables = filtered.filter((t) => !t.registered && t.name.startsWith('nivaro_'))
-  const selectedTable = tables.find((t) => t.name === selectedName) ?? null
 
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
@@ -1147,7 +1048,6 @@ export function DataModelPage() {
             size='sm'
             onClick={() => {
               setIsCreating(true)
-              setSelectedName(null)
             }}
           >
             <Plus className='mr-1.5 h-3.5 w-3.5' /> Create Table
@@ -1197,109 +1097,125 @@ export function DataModelPage() {
               </div>
             ) : (
               <>
-                {registered.length > 0 && (() => {
-                  const tableMap = new Map(tables.map((t) => [t.name, t]))
-                  const ungrouped = registered
-                    .filter((t) => !t.group)
-                    .sort((a, b) => {
-                      const sa = a.sort ?? null
-                      const sb = b.sort ?? null
+                {registered.length > 0 &&
+                  (() => {
+                    const tableMap = new Map(tables.map((t) => [t.name, t]))
+                    const ungrouped = registered
+                      .filter((t) => !t.group)
+                      .sort((a, b) => {
+                        const sa = a.sort ?? null
+                        const sb = b.sort ?? null
+                        if (sa !== null && sb !== null) return sa - sb
+                        if (sa !== null) return -1
+                        if (sb !== null) return 1
+                        return (a.display_name ?? a.name).localeCompare(b.display_name ?? b.name)
+                      })
+                    const groupNames = [
+                      ...new Set(registered.filter((t) => t.group).map((t) => t.group as string))
+                    ].sort((a, b) => {
+                      const sa = folderSortMap.get(a)?.sort ?? tableMap.get(a)?.sort ?? null
+                      const sb = folderSortMap.get(b)?.sort ?? tableMap.get(b)?.sort ?? null
                       if (sa !== null && sb !== null) return sa - sb
                       if (sa !== null) return -1
                       if (sb !== null) return 1
-                      return (a.display_name ?? a.name).localeCompare(b.display_name ?? b.name)
+                      const la =
+                        folderSortMap.get(a)?.display_name ?? tableMap.get(a)?.display_name ?? a
+                      const lb =
+                        folderSortMap.get(b)?.display_name ?? tableMap.get(b)?.display_name ?? b
+                      return la.localeCompare(lb)
                     })
-                  const groupNames = [...new Set(
-                    registered.filter((t) => t.group).map((t) => t.group as string)
-                  )].sort((a, b) => {
-                    const sa = folderSortMap.get(a)?.sort ?? tableMap.get(a)?.sort ?? null
-                    const sb = folderSortMap.get(b)?.sort ?? tableMap.get(b)?.sort ?? null
-                    if (sa !== null && sb !== null) return sa - sb
-                    if (sa !== null) return -1
-                    if (sb !== null) return 1
-                    const la = folderSortMap.get(a)?.display_name ?? tableMap.get(a)?.display_name ?? a
-                    const lb = folderSortMap.get(b)?.display_name ?? tableMap.get(b)?.display_name ?? b
-                    return la.localeCompare(lb)
-                  })
 
-                  return (
-                  <div>
-                    <SectionHeader
-                      icon={<CheckCircle2 className='h-3 w-3 text-emerald-500' />}
-                      label='Registered'
-                      count={registered.length}
-                    />
+                    return (
+                      <div>
+                        <SectionHeader
+                          icon={<CheckCircle2 className='h-3 w-3 text-emerald-500' />}
+                          label='Registered'
+                          count={registered.length}
+                        />
 
-                    {/* Groups first */}
-                    {groupNames.map((grpName) => {
-                      const grpMeta = folderSortMap.get(grpName) ?? tableMap.get(grpName)
-                      const grpColor = grpMeta?.color ?? '#94a3b8'
-                      const grpLabel = grpMeta?.display_name ?? grpName
-                      const isCollapsed = collapsedGroups.has(grpName)
-                      const members = registered
-                        .filter((t) => t.group === grpName)
-                        .sort((a, b) => {
-                          const sa = a.sort ?? null
-                          const sb = b.sort ?? null
-                          if (sa !== null && sb !== null) return sa - sb
-                          if (sa !== null) return -1
-                          if (sb !== null) return 1
-                          return (a.display_name ?? a.name).localeCompare(b.display_name ?? b.name)
-                        })
-                      return (
-                        <div key={grpName}>
-                          <button
-                            type='button'
-                            className='flex w-full items-center gap-2 px-3 py-1.5 transition-colors hover:brightness-95'
-                            style={{ backgroundColor: `${grpColor}12` }}
-                            onClick={() => setCollapsedGroups((prev) => {
-                              const next = new Set(prev)
-                              next.has(grpName) ? next.delete(grpName) : next.add(grpName)
-                              return next
-                            })}
-                          >
-                            <FolderOpen className='h-3 w-3 shrink-0' style={{ color: grpColor }} />
-                            <span className='flex-1 text-left text-[11px] font-semibold' style={{ color: grpColor }}>
-                              {grpLabel}
-                            </span>
-                            <ChevronDown
-                              className={cn('h-3 w-3 transition-transform', isCollapsed && '-rotate-90')}
-                              style={{ color: grpColor }}
-                            />
-                          </button>
-                          {!isCollapsed && (
-                            <ul>
-                              {members.map((t) => (
-                                <TableListItem
-                                  key={t.name}
-                                  table={t}
-                                  indent
-                                  selected={!isCreating && selectedName === t.name}
-                                  onClick={() => { setSelectedName(t.name); setIsCreating(false) }}
+                        {/* Groups first */}
+                        {groupNames.map((grpName) => {
+                          const grpMeta = folderSortMap.get(grpName) ?? tableMap.get(grpName)
+                          const grpColor = grpMeta?.color ?? '#94a3b8'
+                          const grpLabel = grpMeta?.display_name ?? grpName
+                          const isCollapsed = collapsedGroups.has(grpName)
+                          const members = registered
+                            .filter((t) => t.group === grpName)
+                            .sort((a, b) => {
+                              const sa = a.sort ?? null
+                              const sb = b.sort ?? null
+                              if (sa !== null && sb !== null) return sa - sb
+                              if (sa !== null) return -1
+                              if (sb !== null) return 1
+                              return (a.display_name ?? a.name).localeCompare(
+                                b.display_name ?? b.name
+                              )
+                            })
+                          return (
+                            <div key={grpName}>
+                              <button
+                                type='button'
+                                className='flex w-full items-center gap-2 px-3 py-1.5 transition-colors hover:brightness-95'
+                                style={{ backgroundColor: `${grpColor}12` }}
+                                onClick={() =>
+                                  setCollapsedGroups((prev) => {
+                                    const next = new Set(prev)
+                                    next.has(grpName) ? next.delete(grpName) : next.add(grpName)
+                                    return next
+                                  })
+                                }
+                              >
+                                <FolderOpen
+                                  className='h-3 w-3 shrink-0'
+                                  style={{ color: grpColor }}
                                 />
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      )
-                    })}
+                                <span
+                                  className='flex-1 text-left text-[11px] font-semibold'
+                                  style={{ color: grpColor }}
+                                >
+                                  {grpLabel}
+                                </span>
+                                <ChevronDown
+                                  className={cn(
+                                    'h-3 w-3 transition-transform',
+                                    isCollapsed && '-rotate-90'
+                                  )}
+                                  style={{ color: grpColor }}
+                                />
+                              </button>
+                              {!isCollapsed && (
+                                <ul>
+                                  {members.map((t) => (
+                                    <TableListItem
+                                      key={t.name}
+                                      table={t}
+                                      indent
+                                      selected={false}
+                                      onClick={() => navigate(`/data-model/${t.name}`)}
+                                    />
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          )
+                        })}
 
-                    {/* Ungrouped after groups */}
-                    {ungrouped.length > 0 && (
-                      <ul>
-                        {ungrouped.map((t) => (
-                          <TableListItem
-                            key={t.name}
-                            table={t}
-                            selected={!isCreating && selectedName === t.name}
-                            onClick={() => { setSelectedName(t.name); setIsCreating(false) }}
-                          />
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                  )
-                })()}
+                        {/* Ungrouped after groups */}
+                        {ungrouped.length > 0 && (
+                          <ul>
+                            {ungrouped.map((t) => (
+                              <TableListItem
+                                key={t.name}
+                                table={t}
+                                selected={false}
+                                onClick={() => navigate(`/data-model/${t.name}`)}
+                              />
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )
+                  })()}
                 {unregistered.length > 0 && (
                   <div>
                     <SectionHeader
@@ -1315,8 +1231,8 @@ export function DataModelPage() {
                           <TableListItem
                             key={t.name}
                             table={t}
-                            selected={!isCreating && selectedName === t.name}
-                            onClick={() => { setSelectedName(t.name); setIsCreating(false) }}
+                            selected={false}
+                            onClick={() => navigate(`/data-model/${t.name}`)}
                           />
                         ))}
                       </ul>
@@ -1338,8 +1254,8 @@ export function DataModelPage() {
                           <TableListItem
                             key={t.name}
                             table={t}
-                            selected={!isCreating && selectedName === t.name}
-                            onClick={() => { setSelectedName(t.name); setIsCreating(false) }}
+                            selected={false}
+                            onClick={() => navigate(`/data-model/${t.name}`)}
                           />
                         ))}
                       </ul>
@@ -1361,12 +1277,6 @@ export function DataModelPage() {
                 saving={createMutation.isPending}
               />
             </div>
-          ) : selectedTable ? (
-            <SelectedTableView
-              table={selectedTable}
-              isAdmin={isAdmin}
-              onOpen={() => navigate(`/data-model/${selectedTable.name}`)}
-            />
           ) : (
             <NoTableSelected onCreate={() => setIsCreating(true)} />
           )}

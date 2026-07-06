@@ -104,6 +104,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
+import { useAuth } from '@/lib/auth'
+import { TreeSection } from '@/pages/DataModel'
+import { FieldRulesSection } from '@/pages/FieldRulesSection'
 import { api, type CMSField, type CMSRelation } from '@/lib/api'
 import {
   CHOICE_INTERFACES,
@@ -12960,13 +12963,15 @@ function ContentTab({
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-type Tab = 'fields' | 'relations' | 'attributes' | 'groups' | 'behavior' | 'content' | 'settings'
+type Tab = 'fields' | 'relations' | 'attributes' | 'groups' | 'behavior' | 'rules' | 'tree' | 'content' | 'settings'
 
 export function TableEditorPage() {
   const { table } = useParams<{ table: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [tab, setTab] = usePersistedTab<Tab>(`nvr_tab_tableeditor_${table ?? ''}`, 'fields')
+  const { user } = useAuth()
+  const isAdmin = (user as { is_admin?: boolean } | null)?.is_admin ?? false
   const [showDrop, setShowDrop] = useState(false)
   const [dropConfirm, setDropConfirm] = useState('')
   const [extendMode, setExtendMode] = useState(false)
@@ -13094,7 +13099,7 @@ export function TableEditorPage() {
           {(
             (isSystem
               ? ['fields', 'relations'] as const
-              : ['fields', 'relations', 'groups', 'behavior', 'content', 'attributes', 'settings'] as const)
+              : ['fields', 'relations', 'groups', 'behavior', 'rules', 'tree', 'content', 'attributes', 'settings'] as const)
           ).map((t) => (
             <button
               key={t}
@@ -13111,9 +13116,11 @@ export function TableEditorPage() {
                 ? 'Layout'
                 : t === 'behavior'
                   ? 'Behavior'
-                  : t === 'content'
-                    ? 'Content'
-                    : t}
+                  : t === 'rules'
+                    ? 'Field Rules'
+                    : t === 'content'
+                      ? 'Content'
+                      : t}
             </button>
           ))}
         </div>
@@ -13156,6 +13163,8 @@ export function TableEditorPage() {
                 onRefresh={() => refetch()}
               />
             )}
+            {tab === 'rules' && <FieldRulesSection collection={table ?? ''} isAdmin={isAdmin} />}
+            {tab === 'tree' && <TreeSection collection={table ?? ''} isAdmin={isAdmin} />}
             {tab === 'attributes' && <AttributesTab tableName={table ?? ''} />}
             {tab === 'settings' && (
               <SettingsTab
