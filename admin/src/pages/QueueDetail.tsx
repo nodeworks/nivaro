@@ -513,7 +513,11 @@ export function QueueDetailPage() {
     data: QueueItemRow[]
     stats: QueueStats
     filtered_stats: QueueStats | null
-    available_values: { collection: string[]; state: string[] }
+    available_values: {
+      collection: string[]
+      state: string[]
+      owners?: Array<{ id: string; name: string }>
+    }
     truncated: boolean
     total: number
   }>({
@@ -1283,8 +1287,13 @@ export function QueueDetailPage() {
     },
     {
       key: 'owners',
-      placeholder: `Search ${aliasFor('owners', 'owners')}…`,
-      type: 'text' as const
+      placeholder: aliasFor('owners', 'Owners'),
+      type: 'combobox' as const,
+      multi: true,
+      options: (data?.available_values.owners ?? []).map((o) => ({
+        label: o.name,
+        value: o.id
+      }))
     },
     ...extraFieldKeys.map((f) => {
       const meta = extraFieldMetaByPath.get(f)

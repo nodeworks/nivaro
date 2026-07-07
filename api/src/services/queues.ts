@@ -325,8 +325,15 @@ export function applyColumnFilters(
         if (!matchesAny(value, (needle) => haystack.includes(needle.toLowerCase()))) return false
       }
       else if (key === 'owners') {
-        const names = item.owners.map((o) => o.name.toLowerCase()).join(' ')
-        if (!names.includes(String(value).toLowerCase())) return false
+        // Array = user-id multiselect (matches ANY selected owner); plain
+        // string keeps the legacy substring-on-names behavior so saved views
+        // created before the combobox still work.
+        if (Array.isArray(value)) {
+          if (value.length > 0 && !item.owners.some((o) => value.includes(o.id))) return false
+        } else {
+          const names = item.owners.map((o) => o.name.toLowerCase()).join(' ')
+          if (!names.includes(String(value).toLowerCase())) return false
+        }
       } else if (key.startsWith('extra.')) {
         const path = key.slice('extra.'.length)
         const v = item.extra?.[path]
@@ -392,14 +399,23 @@ export function sortItems(items: QueueItem[], sort: string): QueueItem[] {
 export function computeAvailableValues(items: QueueItem[]): {
   collection: string[]
   state: string[]
+  owners: Array<{ id: string; name: string }>
 } {
   const collections = new Set<string>()
   const states = new Set<string>()
+  const owners = new Map<string, string>()
   for (const item of items) {
     collections.add(item.collection)
     if (item.state) states.add(item.state)
+    for (const o of item.owners) if (!owners.has(o.id)) owners.set(o.id, o.name)
   }
-  return { collection: [...collections].sort(), state: [...states].sort() }
+  return {
+    collection: [...collections].sort(),
+    state: [...states].sort(),
+    owners: [...owners]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
 }
 
 export function paginateItems<T>(
@@ -1466,7 +1482,11 @@ export async function fetchQueueItems(
   stats: QueueStats
   /** Stats over the column-filtered set; null when no column filters are active. */
   filteredStats: QueueStats | null
-  availableValues: { collection: string[]; state: string[] }
+  availableValues: {
+    collection: string[]
+    state: string[]
+    owners: Array<{ id: string; name: string }>
+  }
   truncated: boolean
   total: number
 }> {
@@ -1480,7 +1500,11 @@ export async function fetchQueueItems(
   // 20,000 for large queues.
   let materializedStats: Promise<{
     stats: QueueStats
-    availableValues: { collection: string[]; state: string[] }
+    availableValues: {
+    collection: string[]
+    state: string[]
+    owners: Array<{ id: string; name: string }>
+  }
   }> | null = null
   if (queueRow?.materialized) {
     const { requiresLiveResolveFallback, fetchMaterializedQueueItems, fetchMaterializedStats } =

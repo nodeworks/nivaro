@@ -664,16 +664,34 @@ describe('computeAvailableValues', () => {
     ]
     expect(computeAvailableValues(items)).toEqual({
       collection: ['articles', 'tickets'],
-      state: ['draft', 'review']
+      state: ['draft', 'review'],
+      owners: []
     })
   })
 
   it('excludes null states, returns empty arrays for no items', () => {
     expect(computeAvailableValues([item({ state: null })])).toEqual({
       collection: ['articles'],
-      state: []
+      state: [],
+      owners: []
     })
-    expect(computeAvailableValues([])).toEqual({ collection: [], state: [] })
+    expect(computeAvailableValues([])).toEqual({ collection: [], state: [], owners: [] })
+  })
+
+  it('collects distinct owners across items, sorted by name', () => {
+    const items = [
+      item({ owners: [{ id: 'u2', name: 'Zed Alpha' }] }),
+      item({
+        owners: [
+          { id: 'u1', name: 'Amy Beta' },
+          { id: 'u2', name: 'Zed Alpha' }
+        ]
+      })
+    ]
+    expect(computeAvailableValues(items).owners).toEqual([
+      { id: 'u1', name: 'Amy Beta' },
+      { id: 'u2', name: 'Zed Alpha' }
+    ])
   })
 })
 
@@ -948,5 +966,49 @@ describe('normalizeDisplayConfig', () => {
   it('drops unknown keys', () => {
     const dc = normalizeDisplayConfig({ extra_key: 1 }) as unknown as Record<string, unknown>
     expect(dc.extra_key).toBeUndefined()
+  })
+})
+
+describe('applyColumnFilters — owners multiselect', () => {
+  const base: QueueItem = {
+    collection: 'articles',
+    item_id: '1',
+    label: 'Test',
+    state: 'draft',
+    state_color: null,
+    owners: [],
+    sla_status: null,
+    at_risk: false,
+    aging_hours: null,
+    claimed_by: null,
+    extra: {},
+    url: '/collections/articles/1'
+  }
+  const rows: QueueItem[] = [
+    { ...base, item_id: '1', owners: [{ id: 'u1', name: 'Amy Beta' }] },
+    {
+      ...base,
+      item_id: '2',
+      owners: [
+        { id: 'u2', name: 'Zed Alpha' },
+        { id: 'u3', name: 'Cal Gamma' }
+      ]
+    },
+    { ...base, item_id: '3', owners: [] }
+  ]
+
+  it('array value matches items owned by ANY selected user id', () => {
+    expect(applyColumnFilters(rows, { owners: ['u1', 'u3'] }).map((r) => r.item_id)).toEqual([
+      '1',
+      '2'
+    ])
+  })
+
+  it('empty array is a no-op', () => {
+    expect(applyColumnFilters(rows, { owners: [] })).toHaveLength(3)
+  })
+
+  it('string value keeps legacy substring-on-names behavior', () => {
+    expect(applyColumnFilters(rows, { owners: 'zed' }).map((r) => r.item_id)).toEqual(['2'])
   })
 })

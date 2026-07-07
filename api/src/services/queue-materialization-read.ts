@@ -169,7 +169,11 @@ export async function fetchMaterializedStats(
   scope: QueueScope
 ): Promise<{
   stats: QueueStats
-  availableValues: { collection: string[]; state: string[] }
+  availableValues: {
+    collection: string[]
+    state: string[]
+    owners: Array<{ id: string; name: string }>
+  }
 }> {
   const scopeBase = applyScope(db('nivaro_queue_items as qi'), queueId, user, scope)
 
@@ -237,6 +241,18 @@ export async function fetchMaterializedStats(
     .distinct('qi.state as state')) as Array<{
     state: string
   }>
+  // Distinct users appearing as owners of this queue's cached items — feeds
+  // the Owners filter combobox (mirrors computeAvailableValues' live path).
+  const ownersRow = (await scopeBase
+    .clone()
+    .join('nivaro_queue_item_owners as qio', 'qio.queue_item_id', 'qi.id')
+    .join('nivaro_users as u', 'u.id', 'qio.user_id')
+    .distinct('u.id as id', 'u.first_name', 'u.last_name', 'u.email')) as Array<{
+    id: string
+    first_name: string | null
+    last_name: string | null
+    email: string
+  }>
 
   return {
     stats: {
@@ -249,7 +265,13 @@ export async function fetchMaterializedStats(
     },
     availableValues: {
       collection: collectionsRow.map((r) => r.collection).sort(),
-      state: statesRow.map((r) => r.state).sort()
+      state: statesRow.map((r) => r.state).sort(),
+      owners: ownersRow
+        .map((u) => ({
+          id: String(u.id),
+          name: [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name))
     }
   }
 }
@@ -263,7 +285,11 @@ export async function fetchMaterializedQueueItems(
   items: QueueItem[]
   stats: QueueStats
   filteredStats: QueueStats | null
-  availableValues: { collection: string[]; state: string[] }
+  availableValues: {
+    collection: string[]
+    state: string[]
+    owners: Array<{ id: string; name: string }>
+  }
   truncated: boolean
   total: number
 }> {
@@ -309,7 +335,21 @@ export async function fetchMaterializedQueueItems(
     })
   }
   if (filters.owners) {
-    base.whereRaw('LOWER(qi.owner_names) LIKE ?', [`%${String(filters.owners).toLowerCase()}%`])
+    // Array = user-id multiselect (ANY match, via the owners M2M); string =
+    // legacy substring match on the denormalized name string.
+    if (Array.isArray(filters.owners)) {
+      const ids = filters.owners.map(String).filter(Boolean)
+      if (ids.length > 0) {
+        base.whereExists(function () {
+          this.select('*')
+            .from('nivaro_queue_item_owners as qio')
+            .whereRaw('qio.queue_item_id = qi.id')
+            .whereIn('qio.user_id', ids)
+        })
+      }
+    } else {
+      base.whereRaw('LOWER(qi.owner_names) LIKE ?', [`%${String(filters.owners).toLowerCase()}%`])
+    }
   }
   if (filters.at_risk) base.where('qi.at_risk', filters.at_risk === 'yes')
 
