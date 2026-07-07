@@ -255,6 +255,33 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     // Virtual fields (O2M/M2M alias with no nivaro_fields row) that are in assignments
     for (const [field, fieldAssignments] of assignmentsByField.entries()) {
       if (knownFields.has(field)) continue
+      // Relation-path field ('purchase_order.workflow.workflow_id'): read-only
+      // display of a value reached through M2O hops. Rendered via the shared
+      // form's relation-path handling; value resolved by /items/:col/:id/resolve-paths.
+      if (field.includes('.') && !field.startsWith('__')) {
+        for (const a of fieldAssignments) {
+          const autoLabel = field
+            .split('.')
+            .map((seg) => seg.replace(/_/g, ' ').replace(/(^|\s)\S/g, (c) => c.toUpperCase()))
+            .join(' → ')
+          formatted.push({
+            field,
+            label: autoLabel, note: null, hidden: false, readonly: true, required: false,
+            interface: 'relation-path',
+            display: null, display_options: null,
+            options: null,
+            group_key: a.group_key, sort: a.sort,
+            label_override: a.label_override, is_visible: a.is_visible, default_expanded: a.default_expanded,
+            show_row_revisions: false, show_approval_chain: null,
+            lock_conditions: null, allow_revision_restore: false,
+            widget_id: null, input_bindings: null,
+            layout_assigned: true, is_virtual: true as unknown, dependency_config: null,
+            type: 'string',
+            _overrides: a.overrides ?? null
+          })
+        }
+        continue
+      }
       for (const a of fieldAssignments) {
         const ov = a.overrides ?? null
         let virtualOpts: Record<string, unknown> | null = a.show_row_revisions ? { show_row_revisions: true } : null

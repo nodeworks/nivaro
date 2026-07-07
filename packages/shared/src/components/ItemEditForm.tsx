@@ -578,6 +578,38 @@ export function ItemEditForm({
     }
   }, [itemData])
 
+  // Relation-path fields ('purchase_order.workflow.workflow_id'): read-only
+  // values reached through M2O hops, resolved server-side in one batched call
+  // and merged into the draft for display. Excluded from saves via readonly.
+  const relationPathFields = useMemo(
+    () =>
+      (fieldConfig ?? [])
+        .filter((f) => f.interface === 'relation-path' && f.field.includes('.'))
+        .map((f) => f.field),
+    [fieldConfig]
+  )
+  const { data: resolvedPaths } = useQuery<Record<string, { value: string; ids: string[] }>>({
+    queryKey: ['resolve-paths', collection, itemId, relationPathFields.join(',')],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, { value: string; ids: string[] }> }>(
+          get(`/items/${collection}/${itemId}/resolve-paths`, {
+            paths: relationPathFields.join(',')
+          })
+        )
+        .then((r) => r.data ?? {}),
+    enabled: !isNew && relationPathFields.length > 0,
+    staleTime: 30_000
+  })
+  useEffect(() => {
+    if (!resolvedPaths) return
+    const merged: Record<string, unknown> = {}
+    for (const [path, pv] of Object.entries(resolvedPaths)) merged[path] = pv.value
+    if (Object.keys(merged).length === 0) return
+    initialDataRef.current = { ...initialDataRef.current, ...merged }
+    setDraft((prev) => ({ ...prev, ...merged }))
+  }, [resolvedPaths])
+
   const handleFieldChange = useCallback(
     (field: string, value: unknown) => {
       setDraft((prev) => {

@@ -64,7 +64,7 @@ import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { CollectionFieldPickerPanel, FieldPicker, FieldPickerPanel, type PickedField } from '@/components/field-picker'
+import { CollectionFieldPicker, CollectionFieldPickerPanel, FieldPicker, FieldPickerPanel, type PickedField } from '@/components/field-picker'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import { FormulaBuilder } from '@/components/formula-builder'
 import { IconPicker } from '@/components/icon-picker'
@@ -10315,6 +10315,23 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     changeSeqRef.current++
   }, [])
 
+  // Add a relation-path field ('purchase_order.workflow.workflow_id') to the
+  // Ungrouped zone — rendered read-only by the form, draggable into any group.
+  const handleAddRelationPath = useCallback((picked: PickedField) => {
+    const path = picked.path.join('.')
+    if (picked.path.length < 2) {
+      toast.error('Pick a field on a related collection (at least one hop)')
+      return
+    }
+    setLocalFieldOrder(prev => {
+      if ((prev.__unassigned__ ?? []).includes(path)) return prev
+      return { ...prev, __unassigned__: [...(prev.__unassigned__ ?? []), path] }
+    })
+    setLocalAssignments(a => ({ ...a, [path]: null }))
+    hasLocalChangeRef.current = true
+    changeSeqRef.current++
+  }, [])
+
   // Bulk: move every field from the Unassigned pool into the Ungrouped zone
   const handleAddAllToUngrouped = useCallback(() => {
     setLocalFieldOrder(prev => {
@@ -10799,6 +10816,15 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                     <X className='h-2.5 w-2.5' />
                   </button>
                 )}
+              </div>
+              {/* Relation-path field: pull a field from a related collection (any depth) */}
+              <div className='mt-1.5'>
+                <CollectionFieldPicker
+                  collection={tableName}
+                  value=''
+                  onChange={handleAddRelationPath}
+                  placeholder='＋ Related field (via relations)…'
+                />
               </div>
               {/* Category filter pills */}
               {(() => {

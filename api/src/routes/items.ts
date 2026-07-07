@@ -12,6 +12,7 @@ import {
   readOne,
   updateOne
 } from '../services/items.js'
+import { can } from '../services/permissions.js'
 import {
   coerceBool,
   parseJson,
@@ -337,6 +338,80 @@ export async function itemsRoutes(app: FastifyInstance) {
     } catch (err) {
       return handleError(err, reply)
     }
+  })
+
+  // GET /items/:collection/resolve-paths?ids=1,2&paths=a.b.c — bulk variant for
+  // inline tables (one call per table, all rows × all dotted columns).
+  // Registered as a static segment so it wins over GET /:collection/:id.
+  app.get('/:collection/resolve-paths', async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    const { ids, paths } = req.query as { ids?: string; paths?: string }
+    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await can(req.user!, 'read', collection))) return reply.code(403).send({ error: 'Forbidden' })
+    const idList = (ids ?? '').split(',').map((v) => v.trim()).filter(Boolean).slice(0, 500)
+    const pathList = (paths ?? '')
+      .split(',')
+      .map((p) => p.trim())
+      .filter((p) => p && p.includes('.') && /^[a-zA-Z0-9_.]+$/.test(p))
+      .slice(0, 20)
+    if (!idList.length || !pathList.length) return reply.send({ data: {} })
+
+    const { resolvePathValues } = await import('../services/queues.js')
+    const relationsCache = new Map<string, import('../types.js').CMSRelation[]>()
+    const out: Record<string, Record<string, string>> = {}
+    await Promise.all(
+      pathList.map(async (path) => {
+        try {
+          const byRow = await resolvePathValues(collection, idList, path.split('.'), relationsCache)
+          for (const [rowId, pv] of byRow) {
+            ;(out[rowId] ??= {})[path] = pv.value
+          }
+        } catch {
+          // skip broken path
+        }
+      })
+    )
+    return reply.send({ data: out })
+  })
+
+  // GET /items/:collection/:id/resolve-paths?paths=a.b.c,d.e — resolve dotted
+  // relation paths for one record (layout relation-path fields). Read access to
+  // the base record is required; values resolve via the same machinery queue
+  // extra-field columns use (M2O chains, M2M/O2M leaf as "A, B +N more").
+  app.get('/:collection/:id/resolve-paths', async (req, reply) => {
+    const { collection, id } = req.params as { collection: string; id: string }
+    const { paths } = req.query as { paths?: string }
+    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+    if (!paths) return reply.send({ data: {} })
+    const pathList = paths
+      .split(',')
+      .map((p) => p.trim())
+      .filter((p) => p && p.includes('.') && /^[a-zA-Z0-9_.]+$/.test(p))
+      .slice(0, 20)
+    if (pathList.length === 0) return reply.send({ data: {} })
+
+    try {
+      const item = await readOne(req.user!, collection, id, req.workspaceId ?? undefined, ['id'])
+      if (!item) return reply.code(404).send({ error: 'Not found' })
+    } catch (err) {
+      return handleError(err, reply)
+    }
+
+    const { resolvePathValues } = await import('../services/queues.js')
+    const relationsCache = new Map<string, import('../types.js').CMSRelation[]>()
+    const out: Record<string, { value: string; ids: string[] }> = {}
+    await Promise.all(
+      pathList.map(async (path) => {
+        try {
+          const byRow = await resolvePathValues(collection, [String(id)], path.split('.'), relationsCache)
+          const pv = byRow.get(String(id))
+          if (pv) out[path] = pv
+        } catch {
+          // Stale/deleted path config — skip this path, resolve the rest.
+        }
+      })
+    )
+    return reply.send({ data: out })
   })
 
   app.post('/:collection', async (req, reply) => {

@@ -402,15 +402,39 @@ export function InlineTableField({
   const pendingEdits = isPendingMode && staging ? staging.getPendingEdits(relatedCollection, manyField) : new Map<string, Record<string, unknown>>()
   const pendingDeletes = isPendingMode && staging ? staging.getPendingDeletes(relatedCollection, manyField) : new Set<string>()
 
+  // Relation-path columns ('purchase_order.workflow.workflow_id'): read-only
+  // values resolved server-side in one bulk call and merged into each row for
+  // display. Never editable, never saved.
+  const relationPathCols = useMemo(
+    () => cols.filter((c) => c.interface === 'relation-path' && c.field.includes('.')).map((c) => c.field),
+    [cols]
+  )
+  const { data: resolvedPathRows } = useQuery<Record<string, Record<string, string>>>({
+    queryKey: ['o2m-resolve-paths', relatedCollection, manyField, parentId, relationPathCols.join(',')],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, Record<string, string>> }>(
+          get(`/items/${relatedCollection}/resolve-paths`, {
+            ids: rawRows.map((r) => String(r.id)).join(','),
+            paths: relationPathCols.join(',')
+          })
+        )
+        .then((r) => r.data ?? {}),
+    enabled: !isNew && relationPathCols.length > 0 && rawRows.length > 0,
+    staleTime: 30_000
+  })
+
   const rows = useMemo(() => {
-    let sorted = rawRows
+    let sorted = resolvedPathRows
+      ? rawRows.map((r) => ({ ...r, ...(resolvedPathRows[String(r.id)] ?? {}) }))
+      : rawRows
     if (rowOrderField) {
       const getOrder = (r: Record<string, unknown>): number => {
         const pe = isPendingMode ? pendingEdits.get(String(r.id)) : undefined
         const val = pe?.[rowOrderField] ?? r[rowOrderField]
         return Number(val ?? -1)
       }
-      sorted = [...rawRows].sort((a, b) => getOrder(a) - getOrder(b))
+      sorted = [...sorted].sort((a, b) => getOrder(a) - getOrder(b))
     }
     if (sortField) {
       sorted = [...sorted].sort((a, b) => {
@@ -428,7 +452,7 @@ export function InlineTableField({
       })
     }
     return sorted
-  }, [rawRows, rowOrderField, isPendingMode, pendingEdits, sortField, sortDir])
+  }, [rawRows, resolvedPathRows, rowOrderField, isPendingMode, pendingEdits, sortField, sortDir])
 
   const computedWriteCols = useMemo(
     () => cols.filter(c => c.computed_type === 'write' && typeof c.computed_formula === 'string' && c.computed_formula.trim()),
