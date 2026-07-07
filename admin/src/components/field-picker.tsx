@@ -54,7 +54,7 @@ export function FieldPicker({
           className={
             value
               ? 'font-mono text-[12px] flex-1 text-left truncate'
-              : 'text-slate-400 flex-1 text-left'
+              : 'text-slate-400 flex-1 text-left truncate whitespace-nowrap'
           }
         >
           {valueLabel || value || placeholder || 'Select field…'}

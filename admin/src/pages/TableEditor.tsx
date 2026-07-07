@@ -10823,7 +10823,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                   collection={tableName}
                   value=''
                   onChange={handleAddRelationPath}
-                  placeholder='＋ Related field (via relations)…'
+                  placeholder='＋ Related field…'
                 />
               </div>
               {/* Category filter pills */}
