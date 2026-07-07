@@ -6330,10 +6330,14 @@ function FieldSettingsPopover({
 
   type RelRow = { many_collection?: string; many_field?: string; one_collection?: string; one_field?: string; junction_field?: string | null }
   const isInlineTable = iface === 'inline-table' || settings.interface === 'inline-table'
+  // Grouped combobox pickers (Group by / Option field) list the target
+  // collection's M2O fields — the relations fetch must run for that interface
+  // too, not just inline tables, or the pickers render empty.
+  const isRelationGrouped = iface === 'relation-grouped' || settings.interface === 'relation-grouped'
   const { data: childRelationsRaw = [] } = useQuery<RelRow[]>({
     queryKey: ['relations-for', relatedCollection],
     queryFn: () => api.get<{ data: RelRow[] }>(`/data-model/relations/for/${relatedCollection}`).then(r => r.data.data ?? []),
-    enabled: !!relatedCollection && isInlineTable,
+    enabled: !!relatedCollection && (isInlineTable || isRelationGrouped),
     staleTime: 5 * 60 * 1000
   })
 
