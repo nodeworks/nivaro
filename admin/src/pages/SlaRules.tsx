@@ -261,10 +261,10 @@ export function SlaRulesPage() {
 
   const { data: templates = [] } = useQuery<WorkflowTemplate[]>({
     queryKey: ['workflow-templates-for-sla'],
-    queryFn: () =>
-      api
-        .get<{ data: WorkflowTemplate[] }>('/pipelines/workflow-templates')
-        .then((r) => r.data.data)
+    // Same template list the Workflows/Pipelines pages use — there is no
+    // /pipelines/workflow-templates route (the old path 404'd silently and
+    // left this dropdown empty).
+    queryFn: () => api.get<{ data: WorkflowTemplate[] }>('/pipelines').then((r) => r.data.data)
   })
 
   const { data: users = [] } = useQuery<CmsUser[]>({
