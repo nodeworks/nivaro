@@ -203,11 +203,19 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       }
     }
 
-    const knownFields = new Set(rows.map((r) => r.field))
+    // Dotted relation-path fields may have a nivaro_fields alias row (created by
+    // the rename PATCH) — capture its label but keep them OUT of the normal
+    // emission so they always render via the relation-path virtual branch.
+    const dottedLabels = new Map<string, string | null>()
+    for (const r of rows) {
+      if (r.field.includes('.') && !r.field.startsWith('__')) dottedLabels.set(r.field, r.label ?? null)
+    }
+    const plainRows = rows.filter((r) => !dottedLabels.has(r.field))
+    const knownFields = new Set(plainRows.map((r) => r.field))
 
     // Emit one formatted row per (field, group_key) assignment — multi-group fields appear multiple times
     const formatted: unknown[] = []
-    for (const [rowIdx, row] of rows.entries()) {
+    for (const [rowIdx, row] of plainRows.entries()) {
       const fieldAssignments = assignmentsByField.get(row.field)
       const base = formatFieldConfig(row)
 
@@ -264,9 +272,15 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
             .split('.')
             .map((seg) => seg.replace(/_/g, ' ').replace(/(^|\s)\S/g, (c) => c.toUpperCase()))
             .join(' → ')
+          const aliasLabel = dottedLabels.get(field) ?? null
+          const ov = a.overrides ?? null
           formatted.push({
             field,
-            label: autoLabel, note: null, hidden: false, readonly: true, required: false,
+            // Alias precedence: chip settings (overrides.label) -> inline rename
+            // (label_override) -> nivaro_fields alias row -> auto from the path.
+            label: (ov?.label as string | null) ?? a.label_override ?? aliasLabel ?? autoLabel,
+            note: (ov?.note as string | null) ?? null,
+            hidden: false, readonly: true, required: false,
             interface: 'relation-path',
             display: null, display_options: null,
             options: null,
