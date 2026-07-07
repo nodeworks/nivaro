@@ -497,231 +497,251 @@ function SourceRow({
           </Button>
         )}
       </div>
-      <div className='space-y-3 p-3'>
-        {source.type === 'collection' && (
-          <div className='space-y-1'>
-            <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
-              Extra columns
-              <span className='ml-1.5 font-normal text-slate-400'>shown in the worklist table</span>
-            </Label>
-            <div className='flex flex-wrap items-center gap-1.5'>
-              {currentExtraFields.map((f) => {
-                const meta = extraFieldMeta.find((m) => m.path === f)
-                return (
-                  <Badge key={f} className='gap-1 font-mono text-[11px]'>
-                    {f}
-                    {canEdit && meta?.kind === 'relation' && meta.target_collection && (
-                      <DrilldownChipConfig
-                        path={f}
-                        targetCollection={meta.target_collection}
-                        cfg={source.drilldown?.[f]}
-                        onChange={(next) =>
-                          onChange({
-                            ...source,
-                            drilldown: { ...(source.drilldown ?? {}), [f]: next }
-                          })
+      {source.type === 'collection' && (
+        <div className='grid gap-x-8 gap-y-5 p-4 md:grid-cols-2'>
+          {/* Which items appear: narrowing (states + field filters) */}
+          <div className='space-y-4'>
+            <h4 className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+              Which items appear
+            </h4>
+            {isCollection && states.length > 0 && (
+              <div className='space-y-1'>
+                <div className='flex items-center gap-2'>
+                  <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                    States
+                  </Label>
+                  <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+                    {(['include', 'exclude'] as const).map((m) => (
+                      <button
+                        key={m}
+                        type='button'
+                        disabled={!canEdit}
+                        onClick={() => onChange({ ...source, state_mode: m })}
+                        className={cn(
+                          'px-2 py-0.5 text-[11px] font-medium capitalize',
+                          stateMode === m
+                            ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                            : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                        )}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                  {stateValues.length === 0 && (
+                    <span className='text-[11px] text-slate-400'>No state filter — all states</span>
+                  )}
+                </div>
+                <div className='flex flex-wrap items-center gap-1.5'>
+                  {stateValues.map((k) => (
+                    <Badge key={k} className='gap-1 text-[11px]'>
+                      {k === '__none__'
+                        ? '(No state)'
+                        : (states.find((s) => s.key === k)?.label ?? k)}
+                      <button
+                        type='button'
+                        aria-label={`Remove ${k}`}
+                        disabled={!canEdit}
+                        onClick={() =>
+                          onChange({ ...source, state_values: stateValues.filter((x) => x !== k) })
                         }
+                        className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
+                      >
+                        <X className='h-3 w-3' />
+                      </button>
+                    </Badge>
+                  ))}
+                  {canEdit && (
+                    <div className='w-[200px]'>
+                      <FieldCombobox
+                        value=''
+                        onChange={(v) => {
+                          const key = resolveStateKey(v)
+                          if (key && !stateValues.includes(key)) {
+                            onChange({ ...source, state_values: [...stateValues, key] })
+                          }
+                        }}
+                        options={[
+                          ...(stateValues.includes('__none__')
+                            ? []
+                            : [{ value: '__none__', label: '(No state)' }]),
+                          ...states
+                            .filter((s) => !stateValues.includes(s.key))
+                            .map((s) => ({ value: s.key, label: s.label }))
+                        ]}
+                        placeholder={stateMode === 'exclude' ? 'Exclude state…' : 'Include state…'}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {isCollection && (
+              <div className='space-y-1'>
+                <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                  Filters
+                  <span className='ml-1.5 font-normal text-slate-400'>all must match</span>
+                </Label>
+                {conditions.map((c, idx) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: rows have no stable identity
+                  <div key={idx} className='flex items-center gap-1.5'>
+                    <div className='w-44 shrink-0'>
+                      <FieldCombobox
+                        value={c.field}
+                        onChange={(v) => updateCondition(idx, { field: resolveField(v) })}
+                        options={filterFieldOptions}
+                        placeholder='Field…'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    <div className='w-32 shrink-0'>
+                      <FieldCombobox
+                        value={c.op}
+                        onChange={(v) => updateCondition(idx, { op: v || 'eq' })}
+                        options={FILTER_OPS}
+                        placeholder='Op…'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    {c.op !== 'null' && c.op !== 'nnull' && (
+                      <Input
+                        value={String(c.value ?? '')}
+                        onChange={(e) => updateCondition(idx, { value: e.target.value })}
+                        placeholder='Value'
+                        disabled={!canEdit}
+                        className='h-8 w-40 text-[12px]'
                       />
                     )}
-                    <button
-                      type='button'
-                      aria-label={`Remove ${f}`}
-                      onClick={() =>
-                        onChange({
-                          ...source,
-                          extra_fields: currentExtraFields.filter((x) => x !== f)
-                        })
-                      }
-                      className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
-                      disabled={!canEdit}
-                    >
-                      <X className='h-3 w-3' />
-                    </button>
-                  </Badge>
-                )
-              })}
-              {canEdit && currentExtraFields.length < 10 && source.collection && (
-                <div className='w-[220px]'>
-                  <CollectionFieldPicker
-                    collection={source.collection}
-                    value=''
-                    onChange={(picked: PickedField) => {
-                      const path = picked.path.join('.')
-                      if (!currentExtraFields.includes(path)) {
-                        onChange({ ...source, extra_fields: [...currentExtraFields, path] })
-                      }
-                    }}
-                    placeholder='Add column…'
-                  />
-                </div>
-              )}
-              {canEdit && currentExtraFields.length >= 10 && (
-                <span className='text-[11px] text-slate-400'>
-                  10/10 columns — remove one to add another
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-        {isCollection && states.length > 0 && (
-          <div className='space-y-1'>
-            <div className='flex items-center gap-2'>
-              <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
-                States
-              </Label>
-              <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
-                {(['include', 'exclude'] as const).map((m) => (
-                  <button
-                    key={m}
-                    type='button'
-                    disabled={!canEdit}
-                    onClick={() => onChange({ ...source, state_mode: m })}
-                    className={cn(
-                      'px-2 py-0.5 text-[11px] font-medium capitalize',
-                      stateMode === m
-                        ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                    {canEdit && (
+                      <Button
+                        variant='ghost'
+                        size='sm'
+                        className='h-8 w-8 shrink-0 p-0 text-slate-400 hover:text-red-500'
+                        onClick={() =>
+                          onChange({ ...source, filters: conditions.filter((_, i) => i !== idx) })
+                        }
+                      >
+                        <X className='h-3.5 w-3.5' />
+                      </Button>
                     )}
-                  >
-                    {m}
-                  </button>
+                  </div>
                 ))}
-              </div>
-              {stateValues.length === 0 && (
-                <span className='text-[11px] text-slate-400'>No state filter — all states</span>
-              )}
-            </div>
-            <div className='flex flex-wrap items-center gap-1.5'>
-              {stateValues.map((k) => (
-                <Badge key={k} className='gap-1 text-[11px]'>
-                  {k === '__none__' ? '(No state)' : (states.find((s) => s.key === k)?.label ?? k)}
-                  <button
-                    type='button'
-                    aria-label={`Remove ${k}`}
-                    disabled={!canEdit}
-                    onClick={() =>
-                      onChange({ ...source, state_values: stateValues.filter((x) => x !== k) })
-                    }
-                    className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
-                  >
-                    <X className='h-3 w-3' />
-                  </button>
-                </Badge>
-              ))}
-              {canEdit && (
-                <div className='w-[200px]'>
-                  <FieldCombobox
-                    value=''
-                    onChange={(v) => {
-                      const key = resolveStateKey(v)
-                      if (key && !stateValues.includes(key)) {
-                        onChange({ ...source, state_values: [...stateValues, key] })
-                      }
-                    }}
-                    options={[
-                      ...(stateValues.includes('__none__')
-                        ? []
-                        : [{ value: '__none__', label: '(No state)' }]),
-                      ...states
-                        .filter((s) => !stateValues.includes(s.key))
-                        .map((s) => ({ value: s.key, label: s.label }))
-                    ]}
-                    placeholder={stateMode === 'exclude' ? 'Exclude state…' : 'Include state…'}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        {isCollection && (
-          <div className='space-y-1'>
-            <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
-              Filters
-              <span className='ml-1.5 font-normal text-slate-400'>all must match</span>
-            </Label>
-            {conditions.map((c, idx) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: rows have no stable identity
-              <div key={idx} className='flex items-center gap-1.5'>
-                <div className='w-44 shrink-0'>
-                  <FieldCombobox
-                    value={c.field}
-                    onChange={(v) => updateCondition(idx, { field: resolveField(v) })}
-                    options={filterFieldOptions}
-                    placeholder='Field…'
-                    disabled={!canEdit}
-                  />
-                </div>
-                <div className='w-32 shrink-0'>
-                  <FieldCombobox
-                    value={c.op}
-                    onChange={(v) => updateCondition(idx, { op: v || 'eq' })}
-                    options={FILTER_OPS}
-                    placeholder='Op…'
-                    disabled={!canEdit}
-                  />
-                </div>
-                {c.op !== 'null' && c.op !== 'nnull' && (
-                  <Input
-                    value={String(c.value ?? '')}
-                    onChange={(e) => updateCondition(idx, { value: e.target.value })}
-                    placeholder='Value'
-                    disabled={!canEdit}
-                    className='h-8 w-40 text-[12px]'
-                  />
-                )}
                 {canEdit && (
                   <Button
                     variant='ghost'
                     size='sm'
-                    className='h-8 w-8 shrink-0 p-0 text-slate-400 hover:text-red-500'
+                    className='h-7 gap-1 px-2 text-[11px] text-slate-500 hover:text-slate-700'
                     onClick={() =>
-                      onChange({ ...source, filters: conditions.filter((_, i) => i !== idx) })
+                      onChange({
+                        ...source,
+                        filters: [...conditions, { field: '', op: 'eq', value: '' }]
+                      })
                     }
                   >
-                    <X className='h-3.5 w-3.5' />
+                    <Plus className='h-3 w-3' /> Add filter
                   </Button>
                 )}
               </div>
-            ))}
-            {canEdit && (
-              <Button
-                variant='ghost'
-                size='sm'
-                className='h-7 gap-1 px-2 text-[11px] text-slate-500 hover:text-slate-700'
-                onClick={() =>
-                  onChange({
-                    ...source,
-                    filters: [...conditions, { field: '', op: 'eq', value: '' }]
-                  })
-                }
-              >
-                <Plus className='h-3 w-3' /> Add filter
-              </Button>
             )}
           </div>
-        )}
-        {isCollection && (
-          <div className='space-y-1'>
-            <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
-              Item label
-              <span className='ml-1.5 font-normal text-slate-400'>what the Item column shows</span>
-            </Label>
-            <div className='max-w-[520px]'>
-              <DisplayTemplateEditor
-                value={source.label_template ?? ''}
-                onChange={(v) => onChange({ ...source, label_template: v || null })}
-                collection={source.collection as string}
-                placeholder='Add fields and text — controls the Item column'
-                disabled={!canEdit}
-              />
-            </div>
-            <p className='text-[11px] text-slate-400'>
-              Empty = the collection's display template, then title/name/label/subject. Direct
-              fields of this collection only.
-            </p>
+          {/* How items display: label template + extra table columns */}
+          <div className='space-y-4 md:border-l md:border-slate-100 md:pl-8 dark:md:border-border'>
+            <h4 className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+              How items display
+            </h4>
+            {isCollection && (
+              <div className='space-y-1'>
+                <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                  Item label
+                  <span className='ml-1.5 font-normal text-slate-400'>
+                    what the Item column shows
+                  </span>
+                </Label>
+                <div className='max-w-[520px]'>
+                  <DisplayTemplateEditor
+                    value={source.label_template ?? ''}
+                    onChange={(v) => onChange({ ...source, label_template: v || null })}
+                    collection={source.collection as string}
+                    placeholder='Add fields and text — controls the Item column'
+                    disabled={!canEdit}
+                  />
+                </div>
+                <p className='text-[11px] text-slate-400'>
+                  Empty = the collection's display template, then title/name/label/subject. Direct
+                  fields of this collection only.
+                </p>
+              </div>
+            )}
+            {source.type === 'collection' && (
+              <div className='space-y-1'>
+                <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                  Extra columns
+                  <span className='ml-1.5 font-normal text-slate-400'>
+                    shown in the worklist table
+                  </span>
+                </Label>
+                <div className='flex flex-wrap items-center gap-1.5'>
+                  {currentExtraFields.map((f) => {
+                    const meta = extraFieldMeta.find((m) => m.path === f)
+                    return (
+                      <Badge key={f} className='gap-1 font-mono text-[11px]'>
+                        {f}
+                        {canEdit && meta?.kind === 'relation' && meta.target_collection && (
+                          <DrilldownChipConfig
+                            path={f}
+                            targetCollection={meta.target_collection}
+                            cfg={source.drilldown?.[f]}
+                            onChange={(next) =>
+                              onChange({
+                                ...source,
+                                drilldown: { ...(source.drilldown ?? {}), [f]: next }
+                              })
+                            }
+                          />
+                        )}
+                        <button
+                          type='button'
+                          aria-label={`Remove ${f}`}
+                          onClick={() =>
+                            onChange({
+                              ...source,
+                              extra_fields: currentExtraFields.filter((x) => x !== f)
+                            })
+                          }
+                          className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
+                          disabled={!canEdit}
+                        >
+                          <X className='h-3 w-3' />
+                        </button>
+                      </Badge>
+                    )
+                  })}
+                  {canEdit && currentExtraFields.length < 10 && source.collection && (
+                    <div className='w-[220px]'>
+                      <CollectionFieldPicker
+                        collection={source.collection}
+                        value=''
+                        onChange={(picked: PickedField) => {
+                          const path = picked.path.join('.')
+                          if (!currentExtraFields.includes(path)) {
+                            onChange({ ...source, extra_fields: [...currentExtraFields, path] })
+                          }
+                        }}
+                        placeholder='Add column…'
+                      />
+                    </div>
+                  )}
+                  {canEdit && currentExtraFields.length >= 10 && (
+                    <span className='text-[11px] text-slate-400'>
+                      10/10 columns — remove one to add another
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
