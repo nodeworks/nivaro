@@ -48,6 +48,11 @@ export const queuesGuide: DocSection = {
       type: 'p',
       text: 'Open Queues in the Automation nav section. Click New Queue, then add sources — for a collection source, pick the target collection and (optionally) restrict to specific state keys. Toggle "Shared with everyone" to make a queue visible to all users rather than just its owner.'
     },
+    { type: 'h3', text: 'Display settings' },
+    {
+      type: 'p',
+      text: 'Per-queue display toggles live in the builder Settings tab: which views are available (Table is always on; Kanban and Workload are optional), the default view and default items scope when the queue opens, and whether the Work Next button and bulk actions are offered. These are presentation controls for viewers of the queue — they do not restrict data access. Saved views that reference a view that has since been disallowed fall back to the first allowed view.'
+    },
     { type: 'h3', text: 'Kanban view and claiming' },
     {
       type: 'ul',

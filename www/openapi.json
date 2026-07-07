@@ -14405,8 +14405,8 @@
         "tags": [
           "Workflows"
         ],
-        "operationId": "listWorkflows",
-        "summary": "List workflows",
+        "operationId": "listWorkflow",
+        "summary": "List Workflows",
         "parameters": [
           {
             "name": "limit",
@@ -14467,7 +14467,7 @@
                     "data": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/Workflows"
+                        "$ref": "#/components/schemas/Workflow"
                       }
                     },
                     "total": {
@@ -14490,14 +14490,14 @@
         "tags": [
           "Workflows"
         ],
-        "operationId": "createWorkflows",
-        "summary": "Create workflows",
+        "operationId": "createWorkflow",
+        "summary": "Create Workflow",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Workflows"
+                "$ref": "#/components/schemas/Workflow"
               }
             }
           }
@@ -14511,7 +14511,7 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/Workflows"
+                      "$ref": "#/components/schemas/Workflow"
                     }
                   }
                 }
@@ -14526,8 +14526,8 @@
         "tags": [
           "Workflows"
         ],
-        "operationId": "getWorkflows",
-        "summary": "Get workflows by id",
+        "operationId": "getWorkflow",
+        "summary": "Get Workflow by id",
         "parameters": [
           {
             "name": "id",
@@ -14547,7 +14547,7 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/Workflows"
+                      "$ref": "#/components/schemas/Workflow"
                     }
                   }
                 }
@@ -14563,8 +14563,8 @@
         "tags": [
           "Workflows"
         ],
-        "operationId": "updateWorkflows",
-        "summary": "Update workflows",
+        "operationId": "updateWorkflow",
+        "summary": "Update Workflow",
         "parameters": [
           {
             "name": "id",
@@ -14580,7 +14580,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Workflows"
+                "$ref": "#/components/schemas/Workflow"
               }
             }
           }
@@ -14594,7 +14594,7 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/Workflows"
+                      "$ref": "#/components/schemas/Workflow"
                     }
                   }
                 }
@@ -14610,8 +14610,8 @@
         "tags": [
           "Workflows"
         ],
-        "operationId": "deleteWorkflows",
-        "summary": "Delete workflows",
+        "operationId": "deleteWorkflow",
+        "summary": "Delete Workflow",
         "parameters": [
           {
             "name": "id",
@@ -53844,296 +53844,10 @@
         },
         "required": []
       },
-      "Workflows": {
+      "Workflow": {
         "type": "object",
-        "properties": {
-          "project_type": {
-            "type": "integer"
-          },
-          "workflows_additional_contact": {
-            "type": "string"
-          },
-          "local_tracking": {
-            "type": "string"
-          },
-          "workflow_type": {
-            "type": "integer"
-          },
-          "funding_years": {
-            "type": "string"
-          },
-          "workflow_id": {
-            "type": "string"
-          },
-          "divisions": {
-            "type": "string"
-          },
-          "id": {
-            "type": "integer"
-          },
-          "name": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          },
-          "skip_forecast_cron": {
-            "type": "boolean"
-          },
-          "project": {
-            "type": "integer"
-          },
-          "workflow_task": {
-            "type": "integer"
-          },
-          "regions": {
-            "type": "string"
-          },
-          "workflow_source": {
-            "type": "integer"
-          },
-          "project_sub_types": {
-            "type": "string"
-          },
-          "default_sub_type": {
-            "type": "integer"
-          },
-          "org_code": {
-            "type": "integer"
-          },
-          "vendor": {
-            "type": "integer"
-          },
-          "categories": {
-            "type": "string"
-          },
-          "purchase_orders": {
-            "type": "string"
-          },
-          "workflow_lines": {
-            "type": "string"
-          },
-          "deployments": {
-            "type": "string"
-          },
-          "requisition_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "project_name": {
-            "type": "string"
-          },
-          "p2": {
-            "type": "boolean"
-          },
-          "project_start_date": {
-            "type": "string",
-            "format": "date"
-          },
-          "project_end_date": {
-            "type": "string",
-            "format": "date"
-          },
-          "sustainable_project": {
-            "type": "boolean"
-          },
-          "car_project_type": {
-            "type": "integer"
-          },
-          "is_on_hold": {
-            "type": "boolean"
-          },
-          "is_send_back": {
-            "type": "boolean"
-          },
-          "internal_contact": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "vendor_contact": {
-            "type": "string"
-          },
-          "project_dependencies": {
-            "type": "string"
-          },
-          "objective": {
-            "type": "string"
-          },
-          "overview_of_situation": {
-            "type": "string",
-            "description": "this is a test"
-          },
-          "considerations": {
-            "type": "string"
-          },
-          "program": {
-            "type": "integer"
-          },
-          "risks_drawbacks": {
-            "type": "string"
-          },
-          "benefits": {
-            "type": "string"
-          },
-          "billing_location": {
-            "type": "integer"
-          },
-          "shipping_location": {
-            "type": "integer"
-          },
-          "shipping_address_line_1": {
-            "type": "string"
-          },
-          "shipping_address_line_2": {
-            "type": "string"
-          },
-          "shipping_city": {
-            "type": "string"
-          },
-          "shipping_state": {
-            "type": "string"
-          },
-          "shipping_zip": {
-            "type": "string"
-          },
-          "date_required": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "service_start_date": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "service_end_date": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "notes": {
-            "type": "string"
-          },
-          "forecasts": {
-            "type": "string"
-          },
-          "addendums": {
-            "type": "string"
-          },
-          "nuvolo_id": {
-            "type": "string"
-          },
-          "lines_ready_for_upload": {
-            "type": "boolean"
-          },
-          "has_mismatched_lines": {
-            "type": "boolean"
-          },
-          "forecast_status": {
-            "type": "string"
-          },
-          "nuvolo_payment_status": {
-            "type": "string"
-          },
-          "files": {
-            "type": "string"
-          },
-          "additional_contact": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "mwf_queue": {
-            "type": "string"
-          },
-          "last_state_change": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "creator": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "created": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "changed": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "alternative_options": {
-            "type": "string"
-          },
-          "current_open_month": {
-            "type": "string",
-            "format": "date"
-          },
-          "last_billing_day": {
-            "type": "string",
-            "format": "date"
-          },
-          "markComplete": {
-            "type": "boolean"
-          },
-          "isStateChange": {
-            "type": "boolean"
-          },
-          "is_cancel": {
-            "type": "boolean"
-          },
-          "createProject": {
-            "type": "boolean"
-          },
-          "source_template": {
-            "type": "integer"
-          },
-          "funding_entity": {
-            "type": "integer"
-          },
-          "workflow_state": {
-            "type": "integer"
-          },
-          "test": {
-            "type": "string"
-          },
-          "line_of_business": {
-            "type": "integer"
-          },
-          "department": {
-            "type": "integer"
-          },
-          "requisition_amount": {
-            "type": "number"
-          },
-          "number_of_homes_passed": {
-            "type": "string"
-          },
-          "product": {
-            "type": "integer"
-          },
-          "strategy": {
-            "type": "integer"
-          },
-          "business_benefit": {
-            "type": "string"
-          },
-          "scope": {
-            "type": "string"
-          },
-          "major_deliverables": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "project_type",
-          "workflow_type",
-          "funding_years",
-          "divisions",
-          "description",
-          "project",
-          "regions",
-          "project_sub_types",
-          "vendor"
-        ]
+        "properties": {},
+        "required": []
       },
       "Allocations": {
         "type": "object",
@@ -54371,6 +54085,9 @@
       "Forecasts": {
         "type": "object",
         "properties": {
+          "forecasts_funding_years": {
+            "type": "string"
+          },
           "id": {
             "type": "integer"
           },
@@ -55946,11 +55663,6 @@
             "type": "number"
           }
         },
-        "required": []
-      },
-      "Workflow": {
-        "type": "object",
-        "properties": {},
         "required": []
       },
       "WorkflowPurchaseOrdersJunction": {
