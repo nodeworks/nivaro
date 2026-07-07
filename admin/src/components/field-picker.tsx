@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronRight, Loader2, Search, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api, type CMSField, type CMSRelation } from '@/lib/api'
 import { titleCase } from '@/lib/utils'
@@ -39,6 +40,41 @@ export function FieldPicker({
 }: FieldPickerProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  // Portal positioning: the dropdown renders on document.body so overflow
+  // containers (layout editor field palette, sheets) can't clip it.
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) return
+    const update = () => {
+      const r = triggerRef.current?.getBoundingClientRect()
+      if (!r) return
+      const width = 288 // w-72
+      const left = Math.min(r.left, window.innerWidth - width - 8)
+      const top = Math.min(r.bottom + 4, window.innerHeight - 60)
+      setPos({ top, left: Math.max(8, left) })
+    }
+    update()
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (triggerRef.current?.contains(t) || dropdownRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
 
   const sorted = [...fields].sort((a, b) => a.field.localeCompare(b.field))
   const filtered = sorted.filter((f) => f.field.toLowerCase().includes(query.trim().toLowerCase()))
@@ -47,6 +83,7 @@ export function FieldPicker({
     <div className='relative'>
       <button
         type='button'
+        ref={triggerRef}
         onClick={() => setOpen((v) => !v)}
         className={`flex h-8 w-full items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white text-[13px] text-slate-700 hover:border-slate-300 ${value && onClear ? 'pl-2.5 pr-8' : 'px-2.5'}`}
       >
@@ -73,8 +110,12 @@ export function FieldPicker({
           <X className='h-3 w-3' />
         </button>
       )}
-      {open && (
-        <div className='absolute left-0 top-full z-50 mt-1 w-72 rounded-xl border border-slate-200 bg-white shadow-lg'>
+      {open && pos && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{ position: 'fixed', top: pos.top, left: pos.left }}
+          className='z-50 w-72 rounded-xl border border-slate-200 bg-white shadow-lg'
+        >
           <div className='p-2'>
             <div className='relative mb-1.5'>
               <Search className='absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
@@ -106,7 +147,8 @@ export function FieldPicker({
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
