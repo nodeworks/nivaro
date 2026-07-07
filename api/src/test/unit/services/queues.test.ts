@@ -11,10 +11,12 @@ import {
   computePriorityScore,
   computeStatsFromIdMeta,
   computeStats,
+  DEFAULT_DISPLAY_CONFIG,
   filterBySlaStatus,
   formatMultiValueCell,
   groupByOwner,
   mergeSourceResults,
+  normalizeDisplayConfig,
   paginateItems,
   parsePaginationParams,
   type QueueItem,
@@ -890,5 +892,61 @@ describe('applyColumnFilters — label arrays', () => {
 
   it('single string label keeps contains semantics', () => {
     expect(applyColumnFilters(rows, { label: 'gecar' }).map((r) => r.item_id)).toEqual(['2', '3'])
+  })
+})
+
+describe('normalizeDisplayConfig', () => {
+  it('returns full defaults for null/undefined/non-object', () => {
+    for (const raw of [null, undefined, 'junk', 42]) {
+      expect(normalizeDisplayConfig(raw)).toEqual({
+        views: ['table', 'kanban', 'workload'],
+        default_view: 'table',
+        default_scope: 'all',
+        work_next: true,
+        bulk_actions: true
+      })
+    }
+  })
+
+  it('equals DEFAULT_DISPLAY_CONFIG for empty object', () => {
+    expect(normalizeDisplayConfig({})).toEqual(DEFAULT_DISPLAY_CONFIG)
+  })
+
+  it('forces table into views and keeps canonical order', () => {
+    expect(normalizeDisplayConfig({ views: ['workload', 'kanban'] }).views).toEqual([
+      'table',
+      'kanban',
+      'workload'
+    ])
+  })
+
+  it('drops unknown view names', () => {
+    expect(normalizeDisplayConfig({ views: ['table', 'gantt'] }).views).toEqual(['table'])
+  })
+
+  it('coerces default_view outside views to table', () => {
+    const dc = normalizeDisplayConfig({ views: ['table'], default_view: 'kanban' })
+    expect(dc.default_view).toBe('table')
+  })
+
+  it('keeps a valid default_view', () => {
+    const dc = normalizeDisplayConfig({ views: ['table', 'kanban'], default_view: 'kanban' })
+    expect(dc.default_view).toBe('kanban')
+  })
+
+  it('coerces invalid default_scope to all', () => {
+    expect(normalizeDisplayConfig({ default_scope: 'claimed' }).default_scope).toBe('all')
+    expect(normalizeDisplayConfig({ default_scope: 'mine' }).default_scope).toBe('mine')
+  })
+
+  it('coerces work_next / bulk_actions to booleans (only literal false disables)', () => {
+    expect(normalizeDisplayConfig({ work_next: false }).work_next).toBe(false)
+    expect(normalizeDisplayConfig({ work_next: 0 }).work_next).toBe(true)
+    expect(normalizeDisplayConfig({ bulk_actions: false }).bulk_actions).toBe(false)
+  })
+
+  it('drops unknown keys', () => {
+    const dc = normalizeDisplayConfig({ extra_key: 1 }) as unknown as Record<string, unknown>
+    expect(dc.extra_key).toBeUndefined()
   })
 })

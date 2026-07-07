@@ -83,8 +83,58 @@ export interface QueueRow {
   materialized: boolean | number
   claims_enabled: boolean | number
   column_aliases: string | null
+  display_config: string | null
   created_at: Date
   updated_at: Date | null
+}
+
+export const QUEUE_VIEWS = ['table', 'kanban', 'workload'] as const
+export type QueueViewKind = (typeof QUEUE_VIEWS)[number]
+
+const DEFAULTABLE_SCOPES = ['mine', 'unowned', 'all'] as const
+export type QueueDefaultScope = (typeof DEFAULTABLE_SCOPES)[number]
+
+export interface QueueDisplayConfig {
+  views: QueueViewKind[]
+  default_view: QueueViewKind
+  default_scope: QueueDefaultScope
+  work_next: boolean
+  bulk_actions: boolean
+}
+
+export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
+  views: [...QUEUE_VIEWS],
+  default_view: 'table',
+  default_scope: 'all',
+  work_next: true,
+  bulk_actions: true
+}
+
+/**
+ * Fill defaults and coerce invalid values so consumers never see a partial
+ * config. 'table' is always present in views; default_view must be a member
+ * of views; NULL/garbage input yields DEFAULT_DISPLAY_CONFIG.
+ */
+export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
+  const src = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<
+    string,
+    unknown
+  >
+  const rawViews = Array.isArray(src.views) ? src.views : [...QUEUE_VIEWS]
+  const views = QUEUE_VIEWS.filter((v) => v === 'table' || rawViews.includes(v))
+  const default_view = views.includes(src.default_view as QueueViewKind)
+    ? (src.default_view as QueueViewKind)
+    : 'table'
+  const default_scope = DEFAULTABLE_SCOPES.includes(src.default_scope as QueueDefaultScope)
+    ? (src.default_scope as QueueDefaultScope)
+    : 'all'
+  return {
+    views,
+    default_view,
+    default_scope,
+    work_next: src.work_next !== false,
+    bulk_actions: src.bulk_actions !== false
+  }
 }
 
 export interface QueueOwner {
