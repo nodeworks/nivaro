@@ -119,12 +119,15 @@ const BATCH_CAP = 500
 
 export interface SlaBatchEntry {
   state_key: string
+  /** Hours since entering the current state — present for EVERY item with a
+   * workflow instance + history, rule or not (aging is rule-independent). */
   elapsed_hours: number
-  duration_hours: number
-  warning_threshold_pct: number
+  /** Rule-dependent fields are null when the state has no active SLA rule. */
+  duration_hours: number | null
+  warning_threshold_pct: number | null
   business_hours_only: boolean
-  status: 'ok' | 'warning' | 'breached'
-  remaining_hours: number
+  status: 'ok' | 'warning' | 'breached' | null
+  remaining_hours: number | null
   entered_at: Date
 }
 
@@ -204,12 +207,11 @@ export async function computeStatusBatch(
           (r) => String(r.workflow_template) === String(template) && r.state_key === stateKey
         )
 
-  const withRules = candidates.filter((i) => ruleFor(i.template, keyOf(i.current_state)))
-  if (withRules.length === 0) return out
-
-  // Most recent entry into the current state, per instance
+  // Most recent entry into the current state, per instance — for ALL
+  // candidates, not just ruled ones: aging (elapsed in state) is
+  // rule-independent; only the thresholds need a rule.
   const history = await selectInChunks(
-    withRules.map((i) => i.id),
+    candidates.map((i) => i.id),
     2000,
     (chunk) => db('nivaro_workflow_history').whereIn('instance', chunk).orderBy('timestamp', 'desc')
   )
@@ -221,27 +223,34 @@ export async function computeStatusBatch(
   }
 
   const now = new Date()
-  for (const inst of withRules) {
-    const rule = ruleFor(inst.template, keyOf(inst.current_state))!
+  for (const inst of candidates) {
+    const stateKey = keyOf(inst.current_state)
+    const rule = ruleFor(inst.template, stateKey)
     const entered = enteredAt.get(`${inst.id}::${inst.current_state}`)
     if (!entered) continue
 
-    const elapsedHours = rule.business_hours_only
+    const elapsedHours = rule?.business_hours_only
       ? businessHoursElapsed(entered, now)
       : (now.getTime() - entered.getTime()) / (1000 * 60 * 60)
 
-    const pctUsed = (elapsedHours / rule.duration_hours) * 100
+    const pctUsed = rule ? (elapsedHours / rule.duration_hours) * 100 : null
     const status: SlaBatchEntry['status'] =
-      pctUsed >= 100 ? 'breached' : pctUsed >= rule.warning_threshold_pct ? 'warning' : 'ok'
+      pctUsed === null
+        ? null
+        : pctUsed >= 100
+          ? 'breached'
+          : pctUsed >= (rule?.warning_threshold_pct ?? 100)
+            ? 'warning'
+            : 'ok'
 
     out[String(inst.item)] = {
-      state_key: keyOf(inst.current_state) ?? String(inst.current_state),
+      state_key: stateKey ?? String(inst.current_state),
       elapsed_hours: round1(elapsedHours),
-      duration_hours: rule.duration_hours,
-      warning_threshold_pct: rule.warning_threshold_pct,
-      business_hours_only: !!rule.business_hours_only,
+      duration_hours: rule?.duration_hours ?? null,
+      warning_threshold_pct: rule?.warning_threshold_pct ?? null,
+      business_hours_only: !!rule?.business_hours_only,
       status,
-      remaining_hours: round1(rule.duration_hours - elapsedHours),
+      remaining_hours: rule ? round1(rule.duration_hours - elapsedHours) : null,
       entered_at: entered
     }
   }
@@ -251,14 +260,11 @@ export async function computeStatusBatch(
 
 /**
  * Batch entered_state_at for many items in one collection, independent of whether an
- * active SLA rule exists for the item's current state. computeStatusBatch() above only
- * returns an entry for items with a matching active rule (its `withRules` filter) — the
- * queue materialization backfill (queue-materialization-jobs.ts) needs entered_state_at
- * populated whenever there's a current workflow state, rule or not, to match the
- * single-item sync path (queue-materialization.ts's buildMaterializedRow). Without this,
- * an item with a state but no SLA rule would get entered_state_at=null from backfill but
- * a real timestamp from live sync, making aging_hours/sla_status sort order depend on
- * which path last wrote the row.
+ * active SLA rule exists for the item's current state. Note: computeStatusBatch() now
+ * also emits rule-less entries (entered_at + elapsed_hours with null rule fields), so
+ * this helper is largely redundant — kept because the queue materialization backfill
+ * (queue-materialization-jobs.ts) already consumes it for entered_state_at, matching
+ * the single-item sync path (queue-materialization.ts's buildMaterializedRow).
  */
 export async function computeEnteredStateAtBatch(
   collection: string,

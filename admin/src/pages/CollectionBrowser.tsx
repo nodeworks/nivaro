@@ -126,10 +126,12 @@ interface AtRiskHit {
 interface SlaBatchEntry {
   state_key: string
   elapsed_hours: number
-  duration_hours: number
-  warning_threshold_pct: number
-  status: 'ok' | 'warning' | 'breached'
-  remaining_hours: number
+  // Rule-dependent fields are null when the state has no active SLA rule —
+  // such entries carry aging only and render no chip here.
+  duration_hours: number | null
+  warning_threshold_pct: number | null
+  status: 'ok' | 'warning' | 'breached' | null
+  remaining_hours: number | null
 }
 
 function formatHrs(h: number): string {
@@ -522,7 +524,9 @@ export function CollectionBrowserPage() {
     refetchInterval: 60_000,
     retry: false
   })
-  const hasSlaData = !!slaMap && Object.keys(slaMap).length > 0
+  // Entries now exist for any workflow-bound row (aging is rule-independent);
+  // only show the SLA column when something actually has a ruled status.
+  const hasSlaData = !!slaMap && Object.values(slaMap).some((s) => s.status != null)
   const displayName = colMeta?.display_name ?? titleCase(collection ?? '')
   const allNonHiddenFields: CMSField[] =
     (colMeta?.fields as CMSField[] | undefined)?.filter((f) => !f.hidden) ?? []
@@ -635,7 +639,8 @@ export function CollectionBrowserPage() {
         sortable: false,
         render: (row: Record<string, unknown>) => {
           const s = slaMap?.[String(row.id ?? '')]
-          if (!s) return <span className='text-[12px] text-slate-300'>—</span>
+          if (!s || s.status == null || s.duration_hours == null || s.remaining_hours == null)
+            return <span className='text-[12px] text-slate-300'>—</span>
           const label =
             s.status === 'breached'
               ? `overdue ${formatHrs(s.remaining_hours)}`

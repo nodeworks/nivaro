@@ -465,7 +465,7 @@ export function groupByOwner(
 
 export function filterBySlaStatus(
   ids: string[],
-  slaMap: Record<string, { status: string }>,
+  slaMap: Record<string, { status: string | null }>,
   filter: string | null
 ): string[] {
   if (!filter) return ids

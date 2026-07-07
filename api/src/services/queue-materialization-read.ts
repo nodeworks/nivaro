@@ -58,16 +58,22 @@ function computeSla(row: {
   sla_warning_pct: number | null
   sla_business_hours_only: boolean
 }): { status: 'ok' | 'warning' | 'breached' | null; aging_hours: number | null } {
-  if (!row.entered_state_at || row.sla_duration_hours == null || row.sla_warning_pct == null) {
+  // Aging (time in current state) is rule-independent — any row with an
+  // entered_state_at gets it. Only the status thresholds need rule params.
+  if (!row.entered_state_at) {
     return { status: null, aging_hours: null }
   }
   const now = new Date()
   const elapsed = row.sla_business_hours_only
     ? businessHoursElapsed(new Date(row.entered_state_at), now)
     : (now.getTime() - new Date(row.entered_state_at).getTime()) / (1000 * 60 * 60)
+  const aging_hours = Math.round(elapsed * 10) / 10
+  if (row.sla_duration_hours == null || row.sla_warning_pct == null) {
+    return { status: null, aging_hours }
+  }
   const pctUsed = (elapsed / row.sla_duration_hours) * 100
   const status = pctUsed >= 100 ? 'breached' : pctUsed >= row.sla_warning_pct ? 'warning' : 'ok'
-  return { status, aging_hours: Math.round(elapsed * 10) / 10 }
+  return { status, aging_hours }
 }
 
 // Applies queue_id + scope (mine/unowned/claimed/all) to a fresh query builder.
