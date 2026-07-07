@@ -110,6 +110,13 @@ interface QueueMeta {
   sources?: QueueSource[]
   available_extra_fields?: string[]
   extra_field_meta?: ExtraFieldMeta[]
+  display_config?: {
+    views: Array<'table' | 'kanban' | 'workload'>
+    default_view: 'table' | 'kanban' | 'workload'
+    default_scope: 'mine' | 'unowned' | 'all'
+    work_next: boolean
+    bulk_actions: boolean
+  }
 }
 
 type Scope = 'mine' | 'unowned' | 'all' | 'claimed'
@@ -374,6 +381,10 @@ export function QueueDetailPage() {
   // sorting routes them back to live resolution (sla math is JS-only), which
   // would defeat the 5k+ row cache; the Priority chip remains an explicit opt-in.
   const claimsEnabled = queue?.claims_enabled !== false
+  const displayConfig = queue?.display_config
+  const allowedViews = displayConfig?.views ?? ['table', 'kanban', 'workload']
+  const workNextEnabled = displayConfig?.work_next !== false
+  const bulkActionsEnabled = displayConfig?.bulk_actions !== false
   const aliasFor = (key: string, fallback: string): string =>
     queue?.column_aliases?.[key]?.trim() || fallback
 
@@ -383,6 +394,20 @@ export function QueueDetailPage() {
     defaultSortApplied.current = true
     if (!queue.materialized) setSort('-priority')
   }, [queue])
+
+  // Apply the queue's configured default view + scope once, when meta loads.
+  const displayDefaultsApplied = useRef(false)
+  useEffect(() => {
+    if (!queue?.display_config || displayDefaultsApplied.current) return
+    displayDefaultsApplied.current = true
+    setView(queue.display_config.default_view)
+    setScope(queue.display_config.default_scope)
+  }, [queue])
+
+  // If the current view was removed from the queue's allowed views, snap back.
+  useEffect(() => {
+    if (queue?.display_config && !allowedViews.includes(view)) setView(allowedViews[0])
+  }, [queue, view, allowedViews])
 
   // Live-refresh: join a collection:* room per distinct collection-type source
   // and invalidate this queue's item/workload queries on collection:update, so
@@ -871,7 +896,7 @@ export function QueueDetailPage() {
     setFilterValues(s.filters ?? {})
     setSort(s.sort ?? '')
     setGroupBy(s.group_by ?? null)
-    if (s.view) setView(s.view)
+    if (s.view) setView(allowedViews.includes(s.view) ? s.view : allowedViews[0])
     setPage(1)
     setActiveViewId(v.id)
   }
@@ -1489,7 +1514,9 @@ export function QueueDetailPage() {
                 { value: 'kanban', label: 'Kanban' },
                 { value: 'workload', label: 'Workload' }
               ] as const
-            ).map((v, i) => (
+            )
+              .filter((v) => allowedViews.includes(v.value))
+              .map((v, i) => (
               <button
                 key={v.value}
                 type='button'
@@ -1663,7 +1690,7 @@ export function QueueDetailPage() {
               </PopoverContent>
             </Popover>
           )}
-          {view === 'table' && visibleRows.length > 0 && (
+          {view === 'table' && workNextEnabled && visibleRows.length > 0 && (
             <button
               type='button'
               onClick={() => startWorkNext()}
@@ -1707,8 +1734,8 @@ export function QueueDetailPage() {
             rowGroups={rowGroups ?? undefined}
             collapsedGroups={collapsedGroups}
             onToggleGroup={toggleGroup}
-            selectedIds={selectedIds}
-            onSelectionChange={setSelectedIds}
+            selectedIds={bulkActionsEnabled ? selectedIds : undefined}
+            onSelectionChange={bulkActionsEnabled ? setSelectedIds : undefined}
           />
         ) : view === 'kanban' ? (
           <QueueKanbanBoard
@@ -1727,33 +1754,35 @@ export function QueueDetailPage() {
         )}
       </div>
 
-      <QueueBulkBar
-        count={selectedIds.length}
-        claimsEnabled={claimsEnabled}
-        states={(data?.available_values.state ?? []).map((s) => ({
-          value: s,
-          label: stateLabel(s)
-        }))}
-        busy={bulkBusy}
-        onClaim={() =>
-          runBulk('Claim', (row) =>
-            api.post(`/queues/${id}/claim`, {
-              source_collection: row.collection,
-              item_id: row.item_id
-            })
-          )
-        }
-        onRelease={() =>
-          runBulk('Release', (row) =>
-            api.post(`/queues/${id}/release`, {
-              source_collection: row.collection,
-              item_id: row.item_id
-            })
-          )
-        }
-        onTransition={(state) => runBulk('Transition', (row) => performTransition(row, state))}
-        onClear={() => setSelectedIds([])}
-      />
+      {bulkActionsEnabled && (
+        <QueueBulkBar
+          count={selectedIds.length}
+          claimsEnabled={claimsEnabled}
+          states={(data?.available_values.state ?? []).map((s) => ({
+            value: s,
+            label: stateLabel(s)
+          }))}
+          busy={bulkBusy}
+          onClaim={() =>
+            runBulk('Claim', (row) =>
+              api.post(`/queues/${id}/claim`, {
+                source_collection: row.collection,
+                item_id: row.item_id
+              })
+            )
+          }
+          onRelease={() =>
+            runBulk('Release', (row) =>
+              api.post(`/queues/${id}/release`, {
+                source_collection: row.collection,
+                item_id: row.item_id
+              })
+            )
+          }
+          onTransition={(state) => runBulk('Transition', (row) => performTransition(row, state))}
+          onClear={() => setSelectedIds([])}
+        />
+      )}
 
       {drilldown && (
         <RecordDrilldownSheet
