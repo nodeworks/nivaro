@@ -1,9 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clock, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronsUpDown, Clock, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
 import {
   Dialog,
   DialogBody,
@@ -14,6 +22,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -31,10 +40,16 @@ import {
   TableRow
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
+import { cn, titleCase } from '@/lib/utils'
 
 interface WorkflowTemplate {
   id: string
   name: string
+}
+
+interface WorkflowStateOption {
+  key: string
+  label: string
 }
 
 interface CmsUser {
@@ -61,9 +76,11 @@ interface SlaRule {
   template_name?: string
 }
 
-interface SlaRuleFormData {
+// What the form edits. state_keys is a multiselect: create fans out one
+// POST per selected state; edit updates the rule with the single selection.
+interface SlaRuleFormValues {
   workflow_template: string
-  state_key: string
+  state_keys: string[]
   name: string
   duration_hours: number
   warning_threshold_pct: number
@@ -74,9 +91,9 @@ interface SlaRuleFormData {
   is_active: boolean
 }
 
-const FORM_DEFAULTS: SlaRuleFormData = {
+const FORM_DEFAULTS: SlaRuleFormValues = {
   workflow_template: '',
-  state_key: '',
+  state_keys: [],
   name: '',
   duration_hours: 24,
   warning_threshold_pct: 80,
@@ -96,26 +113,54 @@ function SlaRuleForm({
   initial,
   templates,
   users,
+  multiState,
   onSave,
   onCancel,
   saving
 }: {
-  initial?: SlaRuleFormData
+  initial?: SlaRuleFormValues
   templates: WorkflowTemplate[]
   users: CmsUser[]
-  onSave: (data: SlaRuleFormData) => void
+  /** create mode: pick many states, one rule per state; edit mode: single. */
+  multiState: boolean
+  onSave: (data: SlaRuleFormValues) => void
   onCancel: () => void
   saving: boolean
 }) {
-  const [form, setForm] = useState<SlaRuleFormData>(initial ?? FORM_DEFAULTS)
+  const [form, setForm] = useState<SlaRuleFormValues>(initial ?? FORM_DEFAULTS)
+  const [statesOpen, setStatesOpen] = useState(false)
 
-  function set<K extends keyof SlaRuleFormData>(key: K, value: SlaRuleFormData[K]) {
+  function set<K extends keyof SlaRuleFormValues>(key: K, value: SlaRuleFormValues[K]) {
     setForm((prev) => ({ ...prev, [key]: value }))
+  }
+
+  // States of the selected template feed the state combobox.
+  const { data: stateOptions = [] } = useQuery<WorkflowStateOption[]>({
+    queryKey: ['pipeline-states-for-sla', form.workflow_template],
+    enabled: !!form.workflow_template,
+    queryFn: () =>
+      api
+        .get<{ data: { states: WorkflowStateOption[] } }>(`/pipelines/${form.workflow_template}`)
+        .then((r) => r.data.data.states ?? [])
+  })
+  const stateLabel = (key: string) => stateOptions.find((s) => s.key === key)?.label ?? key
+
+  function toggleState(key: string) {
+    setForm((prev) => {
+      const has = prev.state_keys.includes(key)
+      const next = multiState
+        ? has
+          ? prev.state_keys.filter((k) => k !== key)
+          : [...prev.state_keys, key]
+        : [key]
+      return { ...prev, state_keys: next }
+    })
+    if (!multiState) setStatesOpen(false)
   }
 
   const isValid =
     form.workflow_template.trim() !== '' &&
-    form.state_key.trim() !== '' &&
+    form.state_keys.length > 0 &&
     form.name.trim() !== '' &&
     form.duration_hours > 0
 
@@ -133,7 +178,12 @@ function SlaRuleForm({
 
       <div className='space-y-1.5'>
         <Label htmlFor='sla-template'>Workflow Template</Label>
-        <Select value={form.workflow_template} onValueChange={(v) => set('workflow_template', v)}>
+        <Select
+          value={form.workflow_template}
+          onValueChange={(v) =>
+            setForm((prev) => ({ ...prev, workflow_template: v, state_keys: [] }))
+          }
+        >
           <SelectTrigger id='sla-template'>
             <SelectValue placeholder='Select workflow…' />
           </SelectTrigger>
@@ -148,15 +198,60 @@ function SlaRuleForm({
       </div>
 
       <div className='space-y-1.5'>
-        <Label htmlFor='sla-state-key'>State Key</Label>
-        <Input
-          id='sla-state-key'
-          value={form.state_key}
-          onChange={(e) => set('state_key', e.target.value)}
-          placeholder='e.g. in_review'
-        />
+        <Label htmlFor='sla-state-key'>{multiState ? 'States' : 'State'}</Label>
+        <Popover open={statesOpen} onOpenChange={setStatesOpen}>
+          <PopoverTrigger asChild>
+            <button
+              id='sla-state-key'
+              type='button'
+              disabled={!form.workflow_template}
+              className='flex min-h-9 w-full flex-wrap items-center gap-1 rounded-md border border-input bg-transparent px-3 py-1.5 text-left text-sm shadow-sm disabled:cursor-not-allowed disabled:opacity-50'
+            >
+              {form.state_keys.length === 0 ? (
+                <span className='text-muted-foreground'>
+                  {form.workflow_template ? 'Select state…' : 'Select a workflow template first'}
+                </span>
+              ) : (
+                form.state_keys.map((k) => (
+                  <Badge key={k} variant='outline' className='text-[11px] font-normal'>
+                    {stateLabel(k)}
+                  </Badge>
+                ))
+              )}
+              <ChevronsUpDown className='ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground' />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-[--radix-popover-trigger-width] p-0' align='start'>
+            <Command>
+              <CommandInput placeholder='Search states…' />
+              <CommandList>
+                <CommandEmpty>No states found.</CommandEmpty>
+                <CommandGroup>
+                  {stateOptions.map((s) => (
+                    <CommandItem
+                      key={s.key}
+                      value={`${s.label} ${s.key}`}
+                      onSelect={() => toggleState(s.key)}
+                    >
+                      <Check
+                        className={cn(
+                          'mr-2 h-3.5 w-3.5',
+                          form.state_keys.includes(s.key) ? 'opacity-100' : 'opacity-0'
+                        )}
+                      />
+                      {s.label}
+                      <code className='ml-auto text-[10px] text-muted-foreground'>{s.key}</code>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
         <p className='text-[11px] text-muted-foreground'>
-          The workflow state key this SLA applies to.
+          {multiState
+            ? 'One SLA rule is created per selected state.'
+            : 'The workflow state this SLA applies to.'}
         </p>
       </div>
 
@@ -277,18 +372,39 @@ export function SlaRulesPage() {
   const [deleting, setDeleting] = useState<SlaRule | null>(null)
 
   const createMut = useMutation({
-    mutationFn: (body: SlaRuleFormData) => api.post('/sla/rules', body),
-    onSuccess: () => {
+    // One rule per selected state; with several states the state label is
+    // appended to the name so the resulting rows stay distinguishable.
+    mutationFn: async (values: SlaRuleFormValues) => {
+      const { state_keys, ...rest } = values
+      const results = await Promise.allSettled(
+        state_keys.map((state_key) =>
+          api.post('/sla/rules', {
+            ...rest,
+            state_key,
+            name:
+              state_keys.length > 1
+                ? `${rest.name} — ${titleCase(state_key.replace(/_/g, ' '))}`
+                : rest.name
+          })
+        )
+      )
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { created: results.length - failed, failed }
+    },
+    onSuccess: ({ created, failed }) => {
       qc.invalidateQueries({ queryKey: ['sla-rules'] })
       setCreating(false)
-      toast.success('SLA rule created')
+      if (failed > 0) toast.warning(`${created} SLA rules created, ${failed} failed`)
+      else toast.success(created > 1 ? `${created} SLA rules created` : 'SLA rule created')
     },
     onError: () => toast.error('Failed to create SLA rule')
   })
 
   const updateMut = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: SlaRuleFormData }) =>
-      api.patch(`/sla/rules/${id}`, body),
+    mutationFn: ({ id, body }: { id: number; body: SlaRuleFormValues }) => {
+      const { state_keys, ...rest } = body
+      return api.patch(`/sla/rules/${id}`, { ...rest, state_key: state_keys[0] })
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sla-rules'] })
       setEditing(null)
@@ -307,10 +423,10 @@ export function SlaRulesPage() {
     onError: () => toast.error('Failed to delete SLA rule')
   })
 
-  function toFormData(rule: SlaRule): SlaRuleFormData {
+  function toFormData(rule: SlaRule): SlaRuleFormValues {
     return {
       workflow_template: rule.workflow_template,
-      state_key: rule.state_key,
+      state_keys: [rule.state_key],
       name: rule.name,
       duration_hours: rule.duration_hours,
       warning_threshold_pct: rule.warning_threshold_pct,
@@ -447,6 +563,7 @@ export function SlaRulesPage() {
             <SlaRuleForm
               templates={templates}
               users={users}
+              multiState
               onSave={(body) => createMut.mutate(body)}
               onCancel={() => setCreating(false)}
               saving={createMut.isPending}
@@ -472,6 +589,7 @@ export function SlaRulesPage() {
                 initial={toFormData(editing)}
                 templates={templates}
                 users={users}
+                multiState={false}
                 onSave={(body) => updateMut.mutate({ id: editing.id, body })}
                 onCancel={() => setEditing(null)}
                 saving={updateMut.isPending}
