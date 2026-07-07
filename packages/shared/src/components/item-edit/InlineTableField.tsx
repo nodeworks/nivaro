@@ -1352,7 +1352,7 @@ export function InlineTableField({
                           />
                         </div>
                       ) : (
-                        <div className='py-0.5 overflow-hidden'>{renderCell(c, displayRow[c.field])}</div>
+                        <div className='py-0.5 overflow-hidden'>{renderCell(c, displayRow[c.field], row.id != null ? String(row.id) : undefined)}</div>
                       )}
                     </td>
                   )
@@ -1502,7 +1502,7 @@ export function InlineTableField({
                   {isPendingMode && <td className='w-20' />}
                   {displayCols.map((c) => (
                     <td key={c.field} className={`px-2 py-1.5 text-[11px] ${changedFields.has(c.field) ? 'bg-amber-50 text-amber-900' : 'text-slate-700'}`}>
-                      {renderCell(c, row[c.field])}
+                      {renderCell(c, row[c.field], row.id != null ? String(row.id) : undefined)}
                     </td>
                   ))}
                   <td className='w-20 px-2 py-1.5 text-right'>
