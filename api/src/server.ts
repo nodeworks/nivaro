@@ -166,13 +166,16 @@ export async function buildServer() {
 
         if (row?.activity_retention_days) {
           const cutoff = new Date(Date.now() - row.activity_retention_days * 86_400_000)
-          await db('nivaro_activity').where('timestamp', '<', cutoff).delete()
+          // Imported legacy history (legacy_id NOT NULL) is permanent — retention applies to organic rows only.
+          await db('nivaro_activity').where('timestamp', '<', cutoff).whereNull('legacy_id').delete()
         }
 
         if (row?.revision_retention_count) {
           const n = row.revision_retention_count as number
+          // Imported legacy history (legacy_id NOT NULL) is permanent — retention applies to organic rows only.
           const pairs = await (db('nivaro_revisions')
             .select('collection', 'item')
+            .whereNull('legacy_id')
             .count({ cnt: '*' })
             .groupBy('collection', 'item')
             .havingRaw('COUNT(*) > ?', [n]) as unknown as Promise<
@@ -181,12 +184,14 @@ export async function buildServer() {
           for (const pair of pairs) {
             const keep = await db('nivaro_revisions')
               .where({ collection: pair.collection, item: pair.item })
+              .whereNull('legacy_id')
               .orderBy('id', 'desc')
               .limit(n)
               .pluck('id')
             if (keep.length) {
               await db('nivaro_revisions')
                 .where({ collection: pair.collection, item: pair.item })
+                .whereNull('legacy_id')
                 .whereNotIn('id', keep)
                 .delete()
             }
