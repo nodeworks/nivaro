@@ -58,11 +58,21 @@ async function computeStatus(collection: string, item: string) {
     return { status: 'none' }
   }
 
+  // instance.current_state is the state's uuid; rules are keyed by the state
+  // KEY string — translate before matching or no rule ever matches.
+  const stateRow = await db('nivaro_workflow_states')
+    .where({ id: instance.current_state })
+    .first()
+  const stateKey = stateRow?.key ? String(stateRow.key) : null
+  if (!stateKey) {
+    return { status: 'none' }
+  }
+
   // Find active SLA rule for this workflow_template + state_key
   const rule = await db<SlaRule>('nivaro_sla_rules')
     .where({
       workflow_template: instance.template,
-      state_key: instance.current_state,
+      state_key: stateKey,
       is_active: true
     })
     .first()
@@ -94,7 +104,7 @@ async function computeStatus(collection: string, item: string) {
 
   return {
     status,
-    state_key: instance.current_state,
+    state_key: stateKey,
     sla_rule: formatRule(rule),
     entered_at: enteredAt,
     elapsed_hours: elapsedHours,
@@ -179,12 +189,22 @@ export async function computeStatusBatch(
     .where({ is_active: true })
     .whereIn('workflow_template', templates)
 
-  const ruleFor = (template: unknown, state: unknown) =>
-    rules.find(
-      (r) => String(r.workflow_template) === String(template) && r.state_key === String(state)
-    )
+  // current_state holds the state uuid; rules are keyed by the state KEY
+  // string — translate before matching or no rule ever matches.
+  const stateRows = (await db('nivaro_workflow_states')
+    .whereIn('template', templates)
+    .select('id', 'key')) as Array<{ id: string; key: string }>
+  const keyByStateId = new Map(stateRows.map((s) => [String(s.id).toUpperCase(), String(s.key)]))
+  const keyOf = (stateId: unknown) => keyByStateId.get(String(stateId).toUpperCase()) ?? null
 
-  const withRules = candidates.filter((i) => ruleFor(i.template, i.current_state))
+  const ruleFor = (template: unknown, stateKey: string | null) =>
+    stateKey === null
+      ? undefined
+      : rules.find(
+          (r) => String(r.workflow_template) === String(template) && r.state_key === stateKey
+        )
+
+  const withRules = candidates.filter((i) => ruleFor(i.template, keyOf(i.current_state)))
   if (withRules.length === 0) return out
 
   // Most recent entry into the current state, per instance
@@ -202,7 +222,7 @@ export async function computeStatusBatch(
 
   const now = new Date()
   for (const inst of withRules) {
-    const rule = ruleFor(inst.template, inst.current_state)!
+    const rule = ruleFor(inst.template, keyOf(inst.current_state))!
     const entered = enteredAt.get(`${inst.id}::${inst.current_state}`)
     if (!entered) continue
 
@@ -215,7 +235,7 @@ export async function computeStatusBatch(
       pctUsed >= 100 ? 'breached' : pctUsed >= rule.warning_threshold_pct ? 'warning' : 'ok'
 
     out[String(inst.item)] = {
-      state_key: String(inst.current_state),
+      state_key: keyOf(inst.current_state) ?? String(inst.current_state),
       elapsed_hours: round1(elapsedHours),
       duration_hours: rule.duration_hours,
       warning_threshold_pct: rule.warning_threshold_pct,

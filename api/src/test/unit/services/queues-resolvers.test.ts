@@ -131,6 +131,8 @@ describe('resolveCollectionSource — state_values filters the full match set, n
       }
       if (table === 'nivaro_workflow_instances') return makeDbChain([])
       if (table === 'nivaro_sla_rules') return makeDbChain([])
+      // computeStatusBatch resolves state uuids → keys before rule matching
+      if (table === 'nivaro_workflow_states') return makeDbChain([])
       if (table === 'nivaro_at_risk_rules') return makeDbChain([])
       if (table === 'nivaro_fields') return makeDbChain([{ field: 'id' }])
       if (table === 'nivaro_pipeline_owner_groups') return makeDbChain([])

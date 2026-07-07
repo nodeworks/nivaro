@@ -57,10 +57,18 @@ export async function checkSlaForInstance(
     const instance = await db('nivaro_workflow_instances').where({ id: workflowInstanceId }).first()
     if (!instance || !instance.current_state) return
 
+    // current_state is the state uuid; rules are keyed by the state KEY
+    // string — translate before matching or no rule ever matches.
+    const stateRow = await db('nivaro_workflow_states')
+      .where({ id: instance.current_state })
+      .first()
+    const stateKey = stateRow?.key ? String(stateRow.key) : null
+    if (!stateKey) return
+
     const rule = await db('nivaro_sla_rules')
       .where({
         workflow_template: instance.template,
-        state_key: instance.current_state,
+        state_key: stateKey,
         is_active: true
       })
       .first()
@@ -90,7 +98,7 @@ export async function checkSlaForInstance(
 
     const subject =
       status === 'breached' ? `SLA Breached: ${rule.name}` : `SLA Warning: ${rule.name}`
-    const message = `Item ${item} in ${collection} has been in state "${instance.current_state}" for ${Math.round(elapsedHours)} hours (${Math.round(pctUsed)}% of ${rule.duration_hours}h SLA)`
+    const message = `Item ${item} in ${collection} has been in state "${stateKey}" for ${Math.round(elapsedHours)} hours (${Math.round(pctUsed)}% of ${rule.duration_hours}h SLA)`
 
     const usersToNotify: string[] = []
     if (rule.escalation_user) usersToNotify.push(rule.escalation_user)
