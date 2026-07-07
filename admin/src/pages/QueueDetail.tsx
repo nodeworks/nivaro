@@ -49,6 +49,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { buildGroups } from '@/lib/queue-grouping'
+import { useDebounced } from '@/lib/useDebounced'
 import { cn, formatNumber } from '@/lib/utils'
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
@@ -452,9 +453,13 @@ export function QueueDetailPage() {
     }
   }, [id, queue?.sources, user?.static_token, qc])
 
+  // Inputs stay bound to filterValues (instant UI); the items query keys off
+  // this trailing copy so text filters don't fire a request per keystroke.
+  const debouncedFilterValues = useDebounced(filterValues, 350)
+
   const apiFilters = (() => {
     const out: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(filterValues)) {
+    for (const [key, value] of Object.entries(debouncedFilterValues)) {
       if (!value) continue
       if (Array.isArray(value)) {
         if (value.length > 0) out[key] = value
@@ -517,7 +522,7 @@ export function QueueDetailPage() {
       id,
       scope,
       sort,
-      filterValues,
+      debouncedFilterValues,
       view === 'table' && !groupBy ? page : 'all',
       groupBy
     ],
