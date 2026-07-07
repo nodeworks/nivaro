@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronsUpDown, Inbox, Plus, Trash2, X, Settings2 } from 'lucide-react'
+import { Check, ChevronsUpDown, Inbox, Plus, Settings2, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
@@ -238,9 +238,7 @@ function DrilldownChipConfig({
 }: {
   path: string
   targetCollection: string
-  cfg:
-    | { enabled?: boolean; layout_id?: number | null; width?: number | string | null }
-    | undefined
+  cfg: { enabled?: boolean; layout_id?: number | null; width?: number | string | null } | undefined
   onChange: (next: {
     enabled: boolean
     layout_id: number | null
@@ -387,6 +385,7 @@ function SourceRow({
   source,
   collectionOptions,
   extraFieldMeta,
+  index,
   onChange,
   onRemove,
   canEdit
@@ -394,6 +393,7 @@ function SourceRow({
   source: QueueSource
   collectionOptions: { value: string; label: string }[]
   extraFieldMeta: Array<{ path: string; kind: 'relation' | 'plain'; target_collection?: string }>
+  index?: number
   onChange: (next: QueueSource) => void
   onRemove: () => void
   canEdit: boolean
@@ -439,8 +439,14 @@ function SourceRow({
   }
 
   return (
-    <div className='flex flex-col gap-2 rounded-md border border-slate-200 p-2 dark:border-border'>
-      <div className='flex items-start gap-2'>
+    <div className='overflow-visible rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      {/* Header: what this source pulls from */}
+      <div className='flex items-start gap-2 rounded-t-lg border-b border-slate-100 bg-slate-50/70 p-2.5 dark:border-border dark:bg-muted/40'>
+        {index !== undefined && (
+          <span className='mt-1.5 w-5 shrink-0 text-center text-[11px] font-medium tabular-nums text-slate-400'>
+            {index + 1}
+          </span>
+        )}
         <div className='w-44 shrink-0'>
           <FieldCombobox
             value={source.type}
@@ -491,221 +497,238 @@ function SourceRow({
           </Button>
         )}
       </div>
-      {source.type === 'collection' && (
-        <div className='space-y-1 pl-1'>
-          <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-            Extra columns
-          </Label>
-          <div className='flex flex-wrap items-center gap-1.5'>
-            {currentExtraFields.map((f) => {
-              const meta = extraFieldMeta.find((m) => m.path === f)
-              return (
-                <Badge key={f} className='gap-1 font-mono text-[11px]'>
-                  {f}
-                  {canEdit && meta?.kind === 'relation' && meta.target_collection && (
-                    <DrilldownChipConfig
-                      path={f}
-                      targetCollection={meta.target_collection}
-                      cfg={source.drilldown?.[f]}
-                      onChange={(next) =>
-                        onChange({ ...source, drilldown: { ...(source.drilldown ?? {}), [f]: next } })
+      <div className='space-y-3 p-3'>
+        {source.type === 'collection' && (
+          <div className='space-y-1'>
+            <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+              Extra columns
+              <span className='ml-1.5 font-normal text-slate-400'>shown in the worklist table</span>
+            </Label>
+            <div className='flex flex-wrap items-center gap-1.5'>
+              {currentExtraFields.map((f) => {
+                const meta = extraFieldMeta.find((m) => m.path === f)
+                return (
+                  <Badge key={f} className='gap-1 font-mono text-[11px]'>
+                    {f}
+                    {canEdit && meta?.kind === 'relation' && meta.target_collection && (
+                      <DrilldownChipConfig
+                        path={f}
+                        targetCollection={meta.target_collection}
+                        cfg={source.drilldown?.[f]}
+                        onChange={(next) =>
+                          onChange({
+                            ...source,
+                            drilldown: { ...(source.drilldown ?? {}), [f]: next }
+                          })
+                        }
+                      />
+                    )}
+                    <button
+                      type='button'
+                      aria-label={`Remove ${f}`}
+                      onClick={() =>
+                        onChange({
+                          ...source,
+                          extra_fields: currentExtraFields.filter((x) => x !== f)
+                        })
                       }
-                    />
-                  )}
+                      className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
+                      disabled={!canEdit}
+                    >
+                      <X className='h-3 w-3' />
+                    </button>
+                  </Badge>
+                )
+              })}
+              {canEdit && currentExtraFields.length < 10 && source.collection && (
+                <div className='w-[220px]'>
+                  <CollectionFieldPicker
+                    collection={source.collection}
+                    value=''
+                    onChange={(picked: PickedField) => {
+                      const path = picked.path.join('.')
+                      if (!currentExtraFields.includes(path)) {
+                        onChange({ ...source, extra_fields: [...currentExtraFields, path] })
+                      }
+                    }}
+                    placeholder='Add column…'
+                  />
+                </div>
+              )}
+              {canEdit && currentExtraFields.length >= 10 && (
+                <span className='text-[11px] text-slate-400'>
+                  10/10 columns — remove one to add another
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+        {isCollection && states.length > 0 && (
+          <div className='space-y-1'>
+            <div className='flex items-center gap-2'>
+              <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                States
+              </Label>
+              <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+                {(['include', 'exclude'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type='button'
+                    disabled={!canEdit}
+                    onClick={() => onChange({ ...source, state_mode: m })}
+                    className={cn(
+                      'px-2 py-0.5 text-[11px] font-medium capitalize',
+                      stateMode === m
+                        ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                    )}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+              {stateValues.length === 0 && (
+                <span className='text-[11px] text-slate-400'>No state filter — all states</span>
+              )}
+            </div>
+            <div className='flex flex-wrap items-center gap-1.5'>
+              {stateValues.map((k) => (
+                <Badge key={k} className='gap-1 text-[11px]'>
+                  {k === '__none__' ? '(No state)' : (states.find((s) => s.key === k)?.label ?? k)}
                   <button
                     type='button'
-                    aria-label={`Remove ${f}`}
+                    aria-label={`Remove ${k}`}
+                    disabled={!canEdit}
                     onClick={() =>
-                      onChange({ ...source, extra_fields: currentExtraFields.filter((x) => x !== f) })
+                      onChange({ ...source, state_values: stateValues.filter((x) => x !== k) })
                     }
                     className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
-                    disabled={!canEdit}
                   >
                     <X className='h-3 w-3' />
                   </button>
                 </Badge>
-              )
-            })}
-            {canEdit && currentExtraFields.length < 10 && source.collection && (
-              <div className='w-[220px]'>
-                <CollectionFieldPicker
-                  collection={source.collection}
-                  value=''
-                  onChange={(picked: PickedField) => {
-                    const path = picked.path.join('.')
-                    if (!currentExtraFields.includes(path)) {
-                      onChange({ ...source, extra_fields: [...currentExtraFields, path] })
-                    }
-                  }}
-                  placeholder='Add column…'
-                />
-              </div>
-            )}
-            {canEdit && currentExtraFields.length >= 10 && (
-              <span className='text-[11px] text-slate-400'>
-                10/10 columns — remove one to add another
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-      {isCollection && states.length > 0 && (
-        <div className='space-y-1 pl-1'>
-          <div className='flex items-center gap-2'>
-            <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>States</Label>
-            <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
-              {(['include', 'exclude'] as const).map((m) => (
-                <button
-                  key={m}
-                  type='button'
-                  disabled={!canEdit}
-                  onClick={() => onChange({ ...source, state_mode: m })}
-                  className={cn(
-                    'px-2 py-0.5 text-[11px] font-medium capitalize',
-                    stateMode === m
-                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
-                  )}
-                >
-                  {m}
-                </button>
               ))}
+              {canEdit && (
+                <div className='w-[200px]'>
+                  <FieldCombobox
+                    value=''
+                    onChange={(v) => {
+                      const key = resolveStateKey(v)
+                      if (key && !stateValues.includes(key)) {
+                        onChange({ ...source, state_values: [...stateValues, key] })
+                      }
+                    }}
+                    options={[
+                      ...(stateValues.includes('__none__')
+                        ? []
+                        : [{ value: '__none__', label: '(No state)' }]),
+                      ...states
+                        .filter((s) => !stateValues.includes(s.key))
+                        .map((s) => ({ value: s.key, label: s.label }))
+                    ]}
+                    placeholder={stateMode === 'exclude' ? 'Exclude state…' : 'Include state…'}
+                  />
+                </div>
+              )}
             </div>
-            {stateValues.length === 0 && (
-              <span className='text-[11px] text-slate-400'>No state filter — all states</span>
-            )}
           </div>
-          <div className='flex flex-wrap items-center gap-1.5'>
-            {stateValues.map((k) => (
-              <Badge key={k} className='gap-1 text-[11px]'>
-                {k === '__none__' ? '(No state)' : (states.find((s) => s.key === k)?.label ?? k)}
-                <button
-                  type='button'
-                  aria-label={`Remove ${k}`}
-                  disabled={!canEdit}
-                  onClick={() =>
-                    onChange({ ...source, state_values: stateValues.filter((x) => x !== k) })
-                  }
-                  className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
-                >
-                  <X className='h-3 w-3' />
-                </button>
-              </Badge>
+        )}
+        {isCollection && (
+          <div className='space-y-1'>
+            <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+              Filters
+              <span className='ml-1.5 font-normal text-slate-400'>all must match</span>
+            </Label>
+            {conditions.map((c, idx) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: rows have no stable identity
+              <div key={idx} className='flex items-center gap-1.5'>
+                <div className='w-44 shrink-0'>
+                  <FieldCombobox
+                    value={c.field}
+                    onChange={(v) => updateCondition(idx, { field: resolveField(v) })}
+                    options={filterFieldOptions}
+                    placeholder='Field…'
+                    disabled={!canEdit}
+                  />
+                </div>
+                <div className='w-32 shrink-0'>
+                  <FieldCombobox
+                    value={c.op}
+                    onChange={(v) => updateCondition(idx, { op: v || 'eq' })}
+                    options={FILTER_OPS}
+                    placeholder='Op…'
+                    disabled={!canEdit}
+                  />
+                </div>
+                {c.op !== 'null' && c.op !== 'nnull' && (
+                  <Input
+                    value={String(c.value ?? '')}
+                    onChange={(e) => updateCondition(idx, { value: e.target.value })}
+                    placeholder='Value'
+                    disabled={!canEdit}
+                    className='h-8 w-40 text-[12px]'
+                  />
+                )}
+                {canEdit && (
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    className='h-8 w-8 shrink-0 p-0 text-slate-400 hover:text-red-500'
+                    onClick={() =>
+                      onChange({ ...source, filters: conditions.filter((_, i) => i !== idx) })
+                    }
+                  >
+                    <X className='h-3.5 w-3.5' />
+                  </Button>
+                )}
+              </div>
             ))}
             {canEdit && (
-              <div className='w-[200px]'>
-                <FieldCombobox
-                  value=''
-                  onChange={(v) => {
-                    const key = resolveStateKey(v)
-                    if (key && !stateValues.includes(key)) {
-                      onChange({ ...source, state_values: [...stateValues, key] })
-                    }
-                  }}
-                  options={[
-                    ...(stateValues.includes('__none__')
-                      ? []
-                      : [{ value: '__none__', label: '(No state)' }]),
-                    ...states
-                      .filter((s) => !stateValues.includes(s.key))
-                      .map((s) => ({ value: s.key, label: s.label }))
-                  ]}
-                  placeholder={stateMode === 'exclude' ? 'Exclude state…' : 'Include state…'}
-                />
-              </div>
+              <Button
+                variant='ghost'
+                size='sm'
+                className='h-7 gap-1 px-2 text-[11px] text-slate-500 hover:text-slate-700'
+                onClick={() =>
+                  onChange({
+                    ...source,
+                    filters: [...conditions, { field: '', op: 'eq', value: '' }]
+                  })
+                }
+              >
+                <Plus className='h-3 w-3' /> Add filter
+              </Button>
             )}
           </div>
-        </div>
-      )}
-      {isCollection && (
-        <div className='space-y-1 pl-1'>
-          <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>Filters</Label>
-          {conditions.map((c, idx) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: rows have no stable identity
-            <div key={idx} className='flex items-center gap-1.5'>
-              <div className='w-44 shrink-0'>
-                <FieldCombobox
-                  value={c.field}
-                  onChange={(v) => updateCondition(idx, { field: resolveField(v) })}
-                  options={filterFieldOptions}
-                  placeholder='Field…'
-                  disabled={!canEdit}
-                />
-              </div>
-              <div className='w-32 shrink-0'>
-                <FieldCombobox
-                  value={c.op}
-                  onChange={(v) => updateCondition(idx, { op: v || 'eq' })}
-                  options={FILTER_OPS}
-                  placeholder='Op…'
-                  disabled={!canEdit}
-                />
-              </div>
-              {c.op !== 'null' && c.op !== 'nnull' && (
-                <Input
-                  value={String(c.value ?? '')}
-                  onChange={(e) => updateCondition(idx, { value: e.target.value })}
-                  placeholder='Value'
-                  disabled={!canEdit}
-                  className='h-8 w-40 text-[12px]'
-                />
-              )}
-              {canEdit && (
-                <Button
-                  variant='ghost'
-                  size='sm'
-                  className='h-8 w-8 shrink-0 p-0 text-slate-400 hover:text-red-500'
-                  onClick={() =>
-                    onChange({ ...source, filters: conditions.filter((_, i) => i !== idx) })
-                  }
-                >
-                  <X className='h-3.5 w-3.5' />
-                </Button>
-              )}
+        )}
+        {isCollection && (
+          <div className='space-y-1'>
+            <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+              Item label
+              <span className='ml-1.5 font-normal text-slate-400'>what the Item column shows</span>
+            </Label>
+            <div className='max-w-[520px]'>
+              <DisplayTemplateEditor
+                value={source.label_template ?? ''}
+                onChange={(v) => onChange({ ...source, label_template: v || null })}
+                collection={source.collection as string}
+                placeholder='Add fields and text — controls the Item column'
+                disabled={!canEdit}
+              />
             </div>
-          ))}
-          {canEdit && (
-            <Button
-              variant='ghost'
-              size='sm'
-              className='h-7 gap-1 px-2 text-[11px] text-slate-500 hover:text-slate-700'
-              onClick={() =>
-                onChange({
-                  ...source,
-                  filters: [...conditions, { field: '', op: 'eq', value: '' }]
-                })
-              }
-            >
-              <Plus className='h-3 w-3' /> Add filter
-            </Button>
-          )}
-        </div>
-      )}
-      {isCollection && (
-        <div className='space-y-1 pl-1'>
-          <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-            Item label
-          </Label>
-          <div className='max-w-[520px]'>
-            <DisplayTemplateEditor
-              value={source.label_template ?? ''}
-              onChange={(v) => onChange({ ...source, label_template: v || null })}
-              collection={source.collection as string}
-              placeholder='Add fields and text — controls the Item column'
-              disabled={!canEdit}
-            />
+            <p className='text-[11px] text-slate-400'>
+              Empty = the collection's display template, then title/name/label/subject. Direct
+              fields of this collection only.
+            </p>
           </div>
-          <p className='text-[11px] text-slate-400'>
-            Empty = the collection's display template, then title/name/label/subject. Direct fields
-            of this collection only.
-          </p>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
 
 // ─── Builder panel ──────────────────────────────────────────────────────────
+
+type BuilderTab = 'sources' | 'columns' | 'settings'
 
 function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () => void }) {
   const qc = useQueryClient()
@@ -730,6 +753,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
   const [columnAliases, setColumnAliases] = useState<Record<string, string>>({})
   const [sources, setSources] = useState<QueueSource[]>([])
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
+  const [tab, setTab] = useState<BuilderTab>('sources')
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   if (queue && loadedFor !== queue.id) {
     setName(queue.name)
@@ -739,6 +764,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     setColumnAliases(queue.column_aliases ?? {})
     setSources(queue.sources)
     setLoadedFor(queue.id)
+    setTab('sources')
+    setConfirmDelete(false)
   }
 
   const collectionOptions = collections.map((c) => ({
@@ -795,183 +822,323 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     onError: () => toast.error('Failed to delete queue')
   })
 
-  if (!queue) return <div className='p-6 text-[13px] text-slate-400'>Loading…</div>
+  if (!queue)
+    return (
+      <div className='flex flex-1 items-center justify-center text-[13px] text-slate-400'>
+        Loading…
+      </div>
+    )
 
   const canEdit = isAdmin || queue.owner === user?.id
 
+  const metaDirty =
+    name !== queue.name ||
+    description !== (queue.description ?? '') ||
+    isShared !== queue.is_shared ||
+    claimsEnabled !== queue.claims_enabled ||
+    JSON.stringify(columnAliases) !== JSON.stringify(queue.column_aliases ?? {})
+  const sourcesDirty = JSON.stringify(sources) !== JSON.stringify(queue.sources)
+  const dirty = metaDirty || sourcesDirty
+  const saving = saveMetaMut.isPending || saveSourcesMut.isPending
+
+  async function saveAll() {
+    try {
+      if (metaDirty) await saveMetaMut.mutateAsync()
+      if (sourcesDirty) await saveSourcesMut.mutateAsync()
+    } catch {
+      /* mutation onError already toasts */
+    }
+  }
+
+  const aliasColumns = [
+    { key: 'label', label: 'Item' },
+    { key: 'collection', label: 'Collection' },
+    { key: 'state', label: 'State' },
+    { key: 'owners', label: 'Owners' },
+    { key: 'aging_hours', label: 'Aging' },
+    { key: 'sla_status', label: 'SLA' },
+    { key: 'at_risk', label: 'Risk' }
+  ]
+  const extraAliasColumns = [...new Set(sources.flatMap((sc) => sc.extra_fields ?? []))].map(
+    (f) => ({
+      key: `extra.${f}`,
+      label: f
+        .split('.')
+        .map((seg) => seg.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
+        .join(' → ')
+    })
+  )
+
+  const aliasRow = (col: { key: string; label: string }) => (
+    <div key={col.key} className='flex items-center gap-3'>
+      <span className='w-40 shrink-0 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
+        {col.label}
+      </span>
+      <Input
+        value={columnAliases[col.key] ?? ''}
+        onChange={(e) =>
+          setColumnAliases((prev) => {
+            const next = { ...prev }
+            if (e.target.value) next[col.key] = e.target.value
+            else delete next[col.key]
+            return next
+          })
+        }
+        placeholder={col.label}
+        disabled={!canEdit}
+        className='h-8 flex-1 text-[12px]'
+      />
+    </div>
+  )
+
+  const TABS: Array<{ key: BuilderTab; label: string; count?: number }> = [
+    { key: 'sources', label: 'Sources', count: sources.length },
+    { key: 'columns', label: 'Columns' },
+    { key: 'settings', label: 'Settings' }
+  ]
+
   return (
-    <div className='mx-auto max-w-2xl space-y-6 p-6'>
-      <div className='flex items-center justify-between'>
-        <h2 className='text-[15px] font-semibold text-slate-800 dark:text-slate-100'>Edit Queue</h2>
-        <Link to={`/queues/${queueId}`}>
-          <Button variant='outline' size='sm'>
-            Open Worklist →
-          </Button>
-        </Link>
-      </div>
-
-      {!canEdit && (
-        <p className='text-[11px] text-slate-400'>You do not own this queue — read only</p>
-      )}
-
-      <div className='space-y-1'>
-        <Label className='text-[11px] text-slate-500'>Name</Label>
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className='h-9 text-[13px]'
-          disabled={!canEdit}
-        />
-      </div>
-
-      <div className='space-y-1'>
-        <Label className='text-[11px] text-slate-500'>Description</Label>
-        <Textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          className='text-[13px]'
-          rows={2}
-          disabled={!canEdit}
-        />
-      </div>
-
-      <div className='flex items-center gap-2'>
-        <Checkbox
-          checked={isShared}
-          onCheckedChange={(v) => setIsShared(!!v)}
-          id='is-shared'
-          disabled={!canEdit}
-        />
-        <Label htmlFor='is-shared' className='text-[12px] text-slate-600'>
-          Shared with everyone
-        </Label>
-      </div>
-
-      <div className='flex items-center gap-2'>
-        <Checkbox
-          checked={claimsEnabled}
-          onCheckedChange={(v) => setClaimsEnabled(!!v)}
-          id='claims-enabled'
-          disabled={!canEdit}
-        />
-        <Label htmlFor='claims-enabled' className='text-[12px] text-slate-600'>
-          Allow claiming items
-        </Label>
-      </div>
-
-      <div>
-        <Label className='mb-1 block text-[12px] text-slate-600'>Column aliases</Label>
-        <p className='mb-2 text-[11px] text-slate-400'>
-          Rename the worklist table columns for everyone viewing this queue. Blank = default.
-        </p>
-        <div className='space-y-1.5'>
-          {[
-            { key: 'label', label: 'Item' },
-            { key: 'collection', label: 'Collection' },
-            { key: 'state', label: 'State' },
-            { key: 'owners', label: 'Owners' },
-            { key: 'aging_hours', label: 'Aging' },
-            { key: 'sla_status', label: 'SLA' },
-            { key: 'at_risk', label: 'Risk' },
-            ...[...new Set(sources.flatMap((s) => s.extra_fields ?? []))].map((f) => ({
-              key: `extra.${f}`,
-              label: f
-                .split('.')
-                .map((seg) => seg.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
-                .join(' → ')
-            }))
-          ].map((col) => (
-            <div key={col.key} className='flex items-center gap-2'>
-              <span className='w-40 shrink-0 truncate text-[11px] text-slate-500'>{col.label}</span>
-              <Input
-                value={columnAliases[col.key] ?? ''}
-                onChange={(e) =>
-                  setColumnAliases((prev) => {
-                    const next = { ...prev }
-                    if (e.target.value) next[col.key] = e.target.value
-                    else delete next[col.key]
-                    return next
-                  })
-                }
-                placeholder={col.label}
-                disabled={!canEdit}
-                className='h-7 max-w-[240px] text-[12px]'
-              />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {canEdit && (
-        <Button size='sm' onClick={() => saveMetaMut.mutate()} disabled={saveMetaMut.isPending}>
-          Save Details
-        </Button>
-      )}
-
-      <div className='border-t border-slate-100 pt-4 dark:border-border'>
-        <div className='mb-2 flex items-center justify-between'>
-          <Label className='text-[11px] text-slate-500'>Sources</Label>
-          {canEdit && (
-            <Button
-              variant='outline'
-              size='sm'
-              className='h-7 gap-1 text-[11px]'
-              onClick={() =>
-                setSources([
-                  ...sources,
-                  {
-                    type: 'collection',
-                    collection: null,
-                    filters: null,
-                    state_values: null,
-                    sla_filter: null,
-                    extra_fields: [],
-                    sort: sources.length
-                  }
-                ])
-              }
-            >
-              <Plus className='h-3 w-3' /> Add source
-            </Button>
-          )}
-        </div>
-        <div className='space-y-2'>
-          {sources.map((s, i) => (
-            <SourceRow
-              extraFieldMeta={queue?.extra_field_meta ?? []}
-              key={s.id ?? `new-${i}`}
-              source={s}
-              collectionOptions={collectionOptions}
-              onChange={(next) => setSources(sources.map((x, xi) => (xi === i ? next : x)))}
-              onRemove={() => setSources(sources.filter((_, xi) => xi !== i))}
-              canEdit={canEdit}
+    <div className='flex min-h-0 flex-1 flex-col'>
+      {/* ── Header: identity + one Save ── */}
+      <div className='shrink-0 border-b border-slate-200 bg-white px-6 pt-4 dark:border-border dark:bg-card'>
+        <div className='flex items-start justify-between gap-4'>
+          <div className='-ml-2 min-w-0 flex-1'>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={!canEdit}
+              placeholder='Queue name'
+              className='w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-[16px] font-semibold text-slate-900 outline-none transition-colors hover:border-slate-200 focus:border-nvr-cyan focus:ring-2 focus:ring-nvr-cyan/20 dark:text-foreground dark:hover:border-border'
             />
+            <input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              disabled={!canEdit}
+              placeholder='Add a description…'
+              className='mt-0.5 w-full rounded-md border border-transparent bg-transparent px-2 py-0.5 text-[12px] text-slate-500 outline-none transition-colors placeholder:text-slate-400 hover:border-slate-200 focus:border-nvr-cyan focus:ring-2 focus:ring-nvr-cyan/20 dark:text-muted-foreground dark:hover:border-border'
+            />
+          </div>
+          <div className='flex shrink-0 items-center gap-2 pt-0.5'>
+            {!canEdit && (
+              <span className='rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-muted dark:text-muted-foreground'>
+                Read only
+              </span>
+            )}
+            {canEdit && dirty && (
+              <span className='flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400'>
+                <span className='h-1.5 w-1.5 rounded-full bg-amber-400' />
+                Unsaved changes
+              </span>
+            )}
+            <Link to={`/queues/${queueId}`}>
+              <Button variant='outline' size='sm' className='h-8 text-[12px]'>
+                Open Worklist →
+              </Button>
+            </Link>
+            {canEdit && (
+              <Button
+                size='sm'
+                className='h-8 text-[12px]'
+                onClick={saveAll}
+                disabled={!dirty || saving}
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
+            )}
+          </div>
+        </div>
+        {/* Tabs */}
+        <div className='mt-2 flex gap-1'>
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type='button'
+              onClick={() => setTab(t.key)}
+              className={cn(
+                'flex items-center gap-1.5 border-b-2 px-3 pb-2 pt-1 text-[12px] font-medium transition-colors',
+                tab === t.key
+                  ? 'border-nvr-cyan text-slate-900 dark:text-foreground'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-muted-foreground dark:hover:text-foreground'
+              )}
+            >
+              {t.label}
+              {t.count !== undefined && (
+                <span
+                  className={cn(
+                    'rounded-full px-1.5 text-[10px] tabular-nums',
+                    tab === t.key
+                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                      : 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-muted-foreground'
+                  )}
+                >
+                  {t.count}
+                </span>
+              )}
+            </button>
           ))}
         </div>
-        {canEdit && (
-          <Button
-            size='sm'
-            className='mt-3'
-            onClick={() => saveSourcesMut.mutate()}
-            disabled={saveSourcesMut.isPending}
-          >
-            Save Sources
-          </Button>
+      </div>
+
+      {/* ── Tab content ── */}
+      <div className='min-h-0 flex-1 overflow-y-auto px-6 py-5'>
+        {tab === 'sources' && (
+          <div className='mx-auto max-w-3xl space-y-3'>
+            <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+              Sources decide which items appear in this queue. Each source pulls from one place — a
+              collection, tasks, or approvals — and can narrow by state, SLA, and field filters.
+            </p>
+            {sources.map((sc, i) => (
+              <SourceRow
+                extraFieldMeta={queue?.extra_field_meta ?? []}
+                key={sc.id ?? `new-${i}`}
+                index={i}
+                source={sc}
+                collectionOptions={collectionOptions}
+                onChange={(next) => setSources(sources.map((x, xi) => (xi === i ? next : x)))}
+                onRemove={() => setSources(sources.filter((_, xi) => xi !== i))}
+                canEdit={canEdit}
+              />
+            ))}
+            {sources.length === 0 && (
+              <div className='rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-[12px] text-slate-400 dark:border-border'>
+                No sources yet — this queue is empty until you add one.
+              </div>
+            )}
+            {canEdit && (
+              <button
+                type='button'
+                onClick={() =>
+                  setSources([
+                    ...sources,
+                    {
+                      type: 'collection',
+                      collection: null,
+                      filters: null,
+                      state_values: null,
+                      sla_filter: null,
+                      extra_fields: [],
+                      sort: sources.length
+                    }
+                  ])
+                }
+                className='flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 py-2.5 text-[12px] font-medium text-slate-500 transition-colors hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-muted-foreground dark:hover:border-nvr-cyan dark:hover:text-nvr-cyan'
+              >
+                <Plus className='h-3.5 w-3.5' /> Add source
+              </button>
+            )}
+          </div>
+        )}
+
+        {tab === 'columns' && (
+          <div className='mx-auto max-w-3xl space-y-6'>
+            <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+              Rename worklist table columns for everyone viewing this queue. Leave blank to keep the
+              default label.
+            </p>
+            <div>
+              <h3 className='mb-2 text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                Standard columns
+              </h3>
+              <div className='grid gap-x-8 gap-y-2 sm:grid-cols-2'>
+                {aliasColumns.map(aliasRow)}
+              </div>
+            </div>
+            {extraAliasColumns.length > 0 && (
+              <div>
+                <h3 className='mb-2 text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                  Columns from sources
+                </h3>
+                <div className='grid gap-x-8 gap-y-2 sm:grid-cols-2'>
+                  {extraAliasColumns.map(aliasRow)}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'settings' && (
+          <div className='mx-auto max-w-3xl space-y-6'>
+            <div className='space-y-3'>
+              <label htmlFor='q-shared' className='flex cursor-pointer items-start gap-3'>
+                <Checkbox
+                  id='q-shared'
+                  checked={isShared}
+                  onCheckedChange={(v) => setIsShared(!!v)}
+                  disabled={!canEdit}
+                  className='mt-0.5'
+                />
+                <span>
+                  <span className='block text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+                    Shared with everyone
+                  </span>
+                  <span className='block text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    Anyone can open this queue. Off = only you (and admins) see it.
+                  </span>
+                </span>
+              </label>
+              <label htmlFor='q-claims' className='flex cursor-pointer items-start gap-3'>
+                <Checkbox
+                  id='q-claims'
+                  checked={claimsEnabled}
+                  onCheckedChange={(v) => setClaimsEnabled(!!v)}
+                  disabled={!canEdit}
+                  className='mt-0.5'
+                />
+                <span>
+                  <span className='block text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+                    Allow claiming items
+                  </span>
+                  <span className='block text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    Viewers can claim items to work on; Work Next auto-claims. Off hides all claim
+                    controls.
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            {canEdit && (
+              <div className='rounded-lg border border-red-200 p-4 dark:border-red-900/50'>
+                <h3 className='text-[13px] font-medium text-red-700 dark:text-red-400'>
+                  Delete this queue
+                </h3>
+                <p className='mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                  Removes the queue, its saved views, and claims. Items themselves are untouched.
+                </p>
+                {confirmDelete ? (
+                  <div className='mt-2 flex items-center gap-2'>
+                    <Button
+                      variant='destructive'
+                      size='sm'
+                      className='h-7 text-[12px]'
+                      onClick={() => deleteMut.mutate()}
+                      disabled={deleteMut.isPending}
+                    >
+                      Confirm delete
+                    </Button>
+                    <Button
+                      variant='ghost'
+                      size='sm'
+                      className='h-7 text-[12px]'
+                      onClick={() => setConfirmDelete(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    className='mt-2 h-7 border-red-200 text-[12px] text-red-600 hover:bg-red-50 dark:border-red-900/50 dark:hover:bg-red-950/30'
+                    onClick={() => setConfirmDelete(true)}
+                  >
+                    Delete Queue
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
-
-      {canEdit && (
-        <div className='border-t border-slate-100 pt-4 dark:border-border'>
-          <Button
-            variant='destructive'
-            size='sm'
-            onClick={() => deleteMut.mutate()}
-            disabled={deleteMut.isPending}
-          >
-            Delete Queue
-          </Button>
-        </div>
-      )}
     </div>
   )
 }
@@ -1027,7 +1194,7 @@ export function QueuesPage() {
             </ul>
           )}
         </aside>
-        <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+        <div className='flex flex-1 flex-col overflow-hidden bg-slate-50 dark:bg-background'>
           {selectedId ? (
             <QueueBuilder queueId={selectedId} onDeleted={() => setSelectedId(null)} />
           ) : (
