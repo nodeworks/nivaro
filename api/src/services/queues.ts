@@ -828,7 +828,7 @@ export async function resolvePathValues(
     const relatedRows = await selectInChunks(ids, 2000, (chunk) =>
       db(classified.relatedCollection)
         .whereIn(manyField, chunk)
-        .select([manyField, ...selectFields])
+        .select(rest.length > 0 ? [manyField, 'id'] : [manyField, ...selectFields])
     )
     const grouped = new Map<string, Record<string, unknown>[]>()
     for (const row of relatedRows as Array<Record<string, unknown>>) {
@@ -836,6 +836,13 @@ export async function resolvePathValues(
       const list = grouped.get(parentId) ?? []
       list.push(row)
       grouped.set(parentId, list)
+    }
+    // Multi-valued hop with remaining segments: recurse the rest of the path
+    // per related row and join the distinct results per parent.
+    if (rest.length > 0) {
+      const allRelatedIds = [...new Set((relatedRows as Array<Record<string, unknown>>).map((r) => String(r.id)))]
+      const nested = await resolvePathValues(classified.relatedCollection, allRelatedIds, rest, relationsCache)
+      return joinMultiHop(ids, grouped, nested)
     }
     const out = new Map<string, PathValue>()
     for (const rowId of ids) {
@@ -871,6 +878,19 @@ export async function resolvePathValues(
     list.push(row)
     grouped.set(parentId, list)
   }
+  if (rest.length > 0) {
+    const allRelatedIds = [
+      ...new Set(
+        (junctionRows as Array<Record<string, unknown>>).map((r) => String(r.__rel_id ?? r.id))
+      )
+    ]
+    const nested = await resolvePathValues(classified.relatedCollection, allRelatedIds, rest, relationsCache)
+    const groupedIds = new Map<string, Record<string, unknown>[]>()
+    for (const [parentId, list] of grouped) {
+      groupedIds.set(parentId, list.map((r) => ({ id: r.__rel_id ?? r.id })))
+    }
+    return joinMultiHop(ids, groupedIds, nested)
+  }
   const out = new Map<string, PathValue>()
   for (const rowId of ids) {
     const related = grouped.get(rowId) ?? []
@@ -878,6 +898,37 @@ export async function resolvePathValues(
     out.set(rowId, {
       value: formatMultiValueCell(values, related.length),
       ids: related.slice(0, 50).map((r) => String(r.__rel_id ?? r.id))
+    })
+  }
+  return out
+}
+
+// Join a multi-valued hop's children through the resolved remainder of the
+// path: per parent, collect each related row's resolved value, dedupe, and
+// render up to 3 + "+N more"; ids = the FINAL entities' ids from the remainder.
+function joinMultiHop(
+  parentIds: string[],
+  relatedByParent: Map<string, Record<string, unknown>[]>,
+  nested: Map<string, PathValue>
+): Map<string, PathValue> {
+  const out = new Map<string, PathValue>()
+  for (const parentId of parentIds) {
+    const related = relatedByParent.get(parentId) ?? []
+    const values: string[] = []
+    const idSet = new Set<string>()
+    for (const r of related) {
+      const pv = nested.get(String(r.id))
+      if (!pv) continue
+      if (pv.value !== '' && !values.includes(pv.value)) values.push(pv.value)
+      if (pv.ids.length > 0) for (const id of pv.ids) idSet.add(id)
+      // Plain leaf remainder reports no ids — the final ENTITY is this hop's
+      // related row (e.g. the workflow whose workflow_id we just read).
+      else idSet.add(String(r.id))
+    }
+    if (values.length === 0 && idSet.size === 0) continue
+    out.set(parentId, {
+      value: formatMultiValueCell(values.slice(0, 3), values.length),
+      ids: [...idSet].slice(0, 50)
     })
   }
   return out
