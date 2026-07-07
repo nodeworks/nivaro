@@ -70,6 +70,9 @@ export function FieldPicker({
     const handler = (e: MouseEvent) => {
       const t = e.target as Node
       if (triggerRef.current?.contains(t) || dropdownRef.current?.contains(t)) return
+      // Nested relation levels render as Radix popovers portaled to body —
+      // clicks inside them are part of this picker, not outside.
+      if ((t as Element).closest?.('[data-radix-popper-content-wrapper]')) return
       setOpen(false)
     }
     document.addEventListener('mousedown', handler)
