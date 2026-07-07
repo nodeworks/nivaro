@@ -340,6 +340,30 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
   })
 
+  // Every hop of a dotted path must be a collection the requester can read —
+  // otherwise resolve-paths would leak related-collection data (e.g. a
+  // line_items reader pulling vendors or nivaro_users values) past RBAC.
+  async function pathHopsReadable(
+    user: import('../types.js').User,
+    baseCollection: string,
+    segments: string[]
+  ): Promise<boolean> {
+    const { classifyRelationSegment } = await import('../services/queues.js')
+    const { getRelations } = await import('../services/collections.js')
+    let current = baseCollection
+    for (const seg of segments) {
+      const relations = await getRelations(current)
+      const info = classifyRelationSegment(current, seg, relations)
+      if (!info) return true // plain column leaf — no further hop
+      const target = info.relatedCollection
+      if (!target) return false
+      if (target.startsWith('nivaro_') && target !== 'nivaro_users') return false
+      if (!(await can(user, 'read', target))) return false
+      current = target
+    }
+    return true
+  }
+
   // GET /items/:collection/resolve-paths?ids=1,2&paths=a.b.c — bulk variant for
   // inline tables (one call per table, all rows × all dotted columns).
   // Registered as a static segment so it wins over GET /:collection/:id.
@@ -348,13 +372,35 @@ export async function itemsRoutes(app: FastifyInstance) {
     const { ids, paths } = req.query as { ids?: string; paths?: string }
     if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
     if (!(await can(req.user!, 'read', collection))) return reply.code(403).send({ error: 'Forbidden' })
-    const idList = (ids ?? '').split(',').map((v) => v.trim()).filter(Boolean).slice(0, 500)
+    const requestedIds = (ids ?? '').split(',').map((v) => v.trim()).filter(Boolean).slice(0, 500)
     const pathList = (paths ?? '')
       .split(',')
       .map((p) => p.trim())
       .filter((p) => p && p.includes('.') && /^[a-zA-Z0-9_.]+$/.test(p))
       .slice(0, 20)
-    if (!idList.length || !pathList.length) return reply.send({ data: {} })
+    if (!requestedIds.length || !pathList.length) return reply.send({ data: {} })
+
+    // Row-level security on the base ids: keep only rows the items service
+    // would let this user read (policies + row_filter applied by readItems).
+    let idList: string[]
+    try {
+      const visible = await readItems(
+        req.user!,
+        collection,
+        {
+          filter: { id: { _in: requestedIds } },
+          fields: ['id'],
+          limit: requestedIds.length
+        } as ItemsQuery,
+        req,
+        req.workspaceId ?? undefined
+      )
+      const visibleIds = new Set(visible.data.map((r) => String((r as { id?: unknown }).id)))
+      idList = requestedIds.filter((id) => visibleIds.has(id))
+    } catch (err) {
+      return handleError(err, reply)
+    }
+    if (!idList.length) return reply.send({ data: {} })
 
     const { resolvePathValues } = await import('../services/queues.js')
     const relationsCache = new Map<string, import('../types.js').CMSRelation[]>()
@@ -362,7 +408,9 @@ export async function itemsRoutes(app: FastifyInstance) {
     await Promise.all(
       pathList.map(async (path) => {
         try {
-          const byRow = await resolvePathValues(collection, idList, path.split('.'), relationsCache)
+          const segments = path.split('.')
+          if (!(await pathHopsReadable(req.user!, collection, segments))) return
+          const byRow = await resolvePathValues(collection, idList, segments, relationsCache)
           for (const [rowId, pv] of byRow) {
             ;(out[rowId] ??= {})[path] = pv.value
           }
@@ -403,7 +451,9 @@ export async function itemsRoutes(app: FastifyInstance) {
     await Promise.all(
       pathList.map(async (path) => {
         try {
-          const byRow = await resolvePathValues(collection, [String(id)], path.split('.'), relationsCache)
+          const segments = path.split('.')
+          if (!(await pathHopsReadable(req.user!, collection, segments))) return
+          const byRow = await resolvePathValues(collection, [String(id)], segments, relationsCache)
           const pv = byRow.get(String(id))
           if (pv) out[path] = pv
         } catch {
