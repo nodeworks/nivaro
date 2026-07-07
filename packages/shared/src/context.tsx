@@ -86,3 +86,52 @@ export const ParentDraftContext = createContext<ParentDraftContextValue | null>(
 export function useParentDraft(): ParentDraftContextValue | null {
   return useContext(ParentDraftContext)
 }
+
+// ─── Drill-down ────────────────────────────────────────────────────────────────
+// Provided by the host app (admin) to open a record detail sheet when a
+// relation field configured for drill-down is clicked. Null (default) = no
+// drill affordances render; headless consumers are unaffected.
+
+export interface DrilldownTarget {
+  collection: string
+  itemId: string
+  layoutId?: number | null
+  width?: number | string | null
+  title?: string
+}
+
+export interface DrilldownContextValue {
+  open: (target: DrilldownTarget) => void
+}
+
+export const DrilldownContext = createContext<DrilldownContextValue | null>(null)
+export function useDrilldown(): DrilldownContextValue | null {
+  return useContext(DrilldownContext)
+}
+
+// Per-field drill-down config stored in the layout assignment's overrides.
+export interface FieldDrilldownConfig {
+  enabled?: boolean
+  layout_id?: number | null
+  width?: number | string | null
+}
+
+export function fieldDrilldownConfig(field: {
+  interface?: string | null
+  _overrides?: Record<string, unknown> | null
+}): FieldDrilldownConfig | null {
+  const raw = field._overrides?.drilldown
+  const cfg = raw && typeof raw === 'object' ? (raw as FieldDrilldownConfig) : null
+  // relation-path fields drill by default; M2O/M2M are opt-in.
+  const defaultEnabled = field.interface === 'relation-path'
+  const enabled = cfg?.enabled ?? defaultEnabled
+  if (!enabled) return null
+  return { enabled: true, layout_id: cfg?.layout_id ?? null, width: cfg?.width ?? null }
+}
+
+// Resolved relation-path metadata (ids + final collection per dotted field),
+// provided by ItemEditForm so deep field renderers can build drill targets.
+export const RelationPathDataContext = createContext<Record<
+  string,
+  { ids: string[]; target_collection: string | null }
+> | null>(null)

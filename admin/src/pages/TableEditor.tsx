@@ -4554,6 +4554,7 @@ interface FieldSettings {
   max_values: number | null
   options?: string | null
   placeholder: string | null
+  drilldown?: { enabled?: boolean; layout_id?: number | null; width?: number | string | null } | null
 }
 
 // ── Cascade Filters ───────────────────────────────────────────────────────────
@@ -6289,6 +6290,36 @@ function FieldSettingsPopover({
   const [required, setRequired] = useState(settings.required)
   const [hidden, setHidden] = useState(settings.hidden)
   const [readonly, setReadonly] = useState(settings.readonly)
+  // Drill-down config (M2O / M2M / relation-path): overrides.drilldown
+  const ddQualifies = isM2O || isM2M || (settings.interface ?? '') === 'relation-path'
+  const [ddEnabled, setDdEnabled] = useState(
+    settings.drilldown?.enabled ?? ((settings.interface ?? '') === 'relation-path')
+  )
+  const [ddLayoutId, setDdLayoutId] = useState<number | null>(settings.drilldown?.layout_id ?? null)
+  const [ddWidth, setDdWidth] = useState<string>(
+    settings.drilldown?.width != null ? String(settings.drilldown.width) : ''
+  )
+  const ddTargetCollection = useMemo(() => {
+    if (relatedCollection) return relatedCollection
+    try {
+      const opts = settings.options ? (JSON.parse(settings.options) as Record<string, unknown>) : {}
+      return (opts.path_target_collection as string | undefined) ?? null
+    } catch {
+      return null
+    }
+  }, [relatedCollection, settings.options])
+  const { data: ddDetailLayouts = [] } = useQuery<Array<{ id: number; name: string; layout_type?: string }>>({
+    queryKey: ['detail-layouts', ddTargetCollection],
+    enabled: !!ddTargetCollection && ddQualifies,
+    queryFn: () =>
+      api
+        .get(`/collection-layouts?collection=${ddTargetCollection}`)
+        .then((r) =>
+          ((r.data.data ?? []) as Array<{ id: number; name: string; layout_type?: string }>).filter(
+            (l) => l.layout_type === 'detail'
+          )
+        )
+  })
   const [inlineRelation, setInlineRelation] = useState(settings.inline_relation)
   const [maxValues, setMaxValues] = useState<string>(settings.max_values != null ? String(settings.max_values) : '')
   const [cascadeRules, setCascadeRules] = useState<CascadeFilterRule[]>([])
@@ -6506,11 +6537,23 @@ function FieldSettingsPopover({
         optionsPatch = JSON.stringify({ ...(isNumericAbstractType && numFormat ? { format: numFormat, ...(numFormat === 'decimal' ? { precision: parseInt(numPrecisionFmt, 10) || 2 } : {}), ...(numFormat === 'currency' ? { currency: numCurrency } : {}) } : {}) })
       }
     }
+    const normalizedDdWidth = (() => {
+      const t = ddWidth.trim().toLowerCase()
+      if (!t) return null
+      const pct = t.match(/^(\d{1,3})\s*%$/)
+      if (pct) return `${Math.min(96, Math.max(10, Number(pct[1])))}%`
+      const px = t.match(/^(\d{2,4})\s*(px)?$/)
+      if (px) return Math.min(2000, Math.max(320, Number(px[1])))
+      return null
+    })()
     const patch: Partial<FieldSettings> & { dependency_config?: Record<string, unknown> | null; options?: string | null } = {
       label: label.trim() !== '' ? label.trim() : (settings.label === '' ? '' : null),
       interface: iface || null,
       note: note.trim() || null,
       placeholder: placeholder.trim() || null,
+      ...(ddQualifies
+        ? { drilldown: ddEnabled ? { enabled: true, layout_id: ddLayoutId, width: normalizedDdWidth } : { enabled: false } }
+        : {}),
       required,
       hidden,
       readonly,
@@ -6716,6 +6759,51 @@ function FieldSettingsPopover({
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* ── Drill-down ── */}
+          {ddQualifies && (
+            <div className='space-y-2'>
+              <SectionHeader label='Drill-down' />
+              <label className='flex cursor-pointer items-center justify-between'>
+                <span className='text-[11px] text-slate-600'>Click value opens detail panel</span>
+                <input
+                  type='checkbox'
+                  checked={ddEnabled}
+                  onChange={(e) => setDdEnabled(e.target.checked)}
+                  className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                />
+              </label>
+              {ddEnabled && (
+                <div className='grid grid-cols-2 gap-2'>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-slate-500'>Detail layout</Label>
+                    <select
+                      value={ddLayoutId ?? ''}
+                      onChange={(e) => setDdLayoutId(e.target.value ? Number(e.target.value) : null)}
+                      className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                    >
+                      <option value=''>Default (active detail)</option>
+                      {ddDetailLayouts.map((l) => (
+                        <option key={l.id} value={l.id}>{l.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-slate-500'>Panel width</Label>
+                    <Input
+                      value={ddWidth}
+                      onChange={(e) => setDdWidth(e.target.value)}
+                      placeholder='640, 900px or 75%'
+                      className='h-[26px] text-[11px]'
+                    />
+                  </div>
+                </div>
+              )}
+              {ddEnabled && !ddTargetCollection && (
+                <p className='text-[10px] text-slate-400'>Target collection unknown — save the layout once, then reopen.</p>
+              )}
             </div>
           )}
 
@@ -9992,7 +10080,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   })
 
   // Keys that are per-layout overrides (not global field settings)
-  const LAYOUT_OVERRIDE_KEYS = ['label', 'interface', 'note', 'placeholder', 'required', 'hidden', 'readonly', 'options', 'inline_relation', 'max_values']
+  const LAYOUT_OVERRIDE_KEYS = ['label', 'interface', 'note', 'placeholder', 'required', 'hidden', 'readonly', 'options', 'inline_relation', 'max_values', 'drilldown']
 
   // Option keys inside `options` JSON that are scoped to a specific layout and must NOT
   // be written to nivaro_fields (global). They live in layout_field_assignments.overrides.options.
@@ -10276,6 +10364,10 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       inline_relation: mergedOpts.inline_relation === true,
       max_values: typeof mergedOpts.max_values === 'number' ? mergedOpts.max_values : null,
       options: Object.keys(mergedOpts).length > 0 ? JSON.stringify(mergedOpts) : null,
+      drilldown:
+        (ov.drilldown as FieldSettings['drilldown']) ??
+        ((fc as Record<string, unknown> | undefined)?._overrides as Record<string, unknown> | null | undefined)?.drilldown as FieldSettings['drilldown'] ??
+        null,
     }
   }, [fieldConfig, localOverrides])
 

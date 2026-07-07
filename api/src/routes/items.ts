@@ -347,21 +347,23 @@ export async function itemsRoutes(app: FastifyInstance) {
     user: import('../types.js').User,
     baseCollection: string,
     segments: string[]
-  ): Promise<boolean> {
+  ): Promise<{ readable: boolean; target: string | null }> {
     const { classifyRelationSegment } = await import('../services/queues.js')
     const { getRelations } = await import('../services/collections.js')
     let current = baseCollection
+    let target: string | null = null
     for (const seg of segments) {
       const relations = await getRelations(current)
       const info = classifyRelationSegment(current, seg, relations)
-      if (!info) return true // plain column leaf — no further hop
-      const target = info.relatedCollection
-      if (!target) return false
-      if (target.startsWith('nivaro_') && target !== 'nivaro_users') return false
-      if (!(await can(user, 'read', target))) return false
-      current = target
+      if (!info) return { readable: true, target } // plain column leaf — no further hop
+      const hop = info.relatedCollection
+      if (!hop) return { readable: false, target: null }
+      if (hop.startsWith('nivaro_') && hop !== 'nivaro_users') return { readable: false, target: null }
+      if (!(await can(user, 'read', hop))) return { readable: false, target: null }
+      current = hop
+      target = hop
     }
-    return true
+    return { readable: true, target }
   }
 
   // GET /items/:collection/resolve-paths?ids=1,2&paths=a.b.c — bulk variant for
@@ -404,22 +406,25 @@ export async function itemsRoutes(app: FastifyInstance) {
 
     const { resolvePathValues } = await import('../services/queues.js')
     const relationsCache = new Map<string, import('../types.js').CMSRelation[]>()
-    const out: Record<string, Record<string, string>> = {}
+    const rowsOut: Record<string, Record<string, { value: string; ids: string[] }>> = {}
+    const targets: Record<string, string | null> = {}
     await Promise.all(
       pathList.map(async (path) => {
         try {
           const segments = path.split('.')
-          if (!(await pathHopsReadable(req.user!, collection, segments))) return
+          const hops = await pathHopsReadable(req.user!, collection, segments)
+          if (!hops.readable) return
+          targets[path] = hops.target
           const byRow = await resolvePathValues(collection, idList, segments, relationsCache)
           for (const [rowId, pv] of byRow) {
-            ;(out[rowId] ??= {})[path] = pv.value
+            ;(rowsOut[rowId] ??= {})[path] = { value: pv.value, ids: pv.ids }
           }
         } catch {
           // skip broken path
         }
       })
     )
-    return reply.send({ data: out })
+    return reply.send({ data: { rows: rowsOut, targets } })
   })
 
   // GET /items/:collection/:id/resolve-paths?paths=a.b.c,d.e — resolve dotted
@@ -447,15 +452,16 @@ export async function itemsRoutes(app: FastifyInstance) {
 
     const { resolvePathValues } = await import('../services/queues.js')
     const relationsCache = new Map<string, import('../types.js').CMSRelation[]>()
-    const out: Record<string, { value: string; ids: string[] }> = {}
+    const out: Record<string, { value: string; ids: string[]; target_collection: string | null }> = {}
     await Promise.all(
       pathList.map(async (path) => {
         try {
           const segments = path.split('.')
-          if (!(await pathHopsReadable(req.user!, collection, segments))) return
+          const hops = await pathHopsReadable(req.user!, collection, segments)
+          if (!hops.readable) return
           const byRow = await resolvePathValues(collection, [String(id)], segments, relationsCache)
           const pv = byRow.get(String(id))
-          if (pv) out[path] = pv
+          if (pv) out[path] = { ...pv, target_collection: hops.target }
         } catch {
           // Stale/deleted path config — skip this path, resolve the rest.
         }

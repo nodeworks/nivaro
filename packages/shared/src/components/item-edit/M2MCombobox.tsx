@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronDown, ChevronsUpDown, Loader2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useNivaroClient } from '../../context'
+import { useNivaroClient, useDrilldown } from '../../context'
 import { get } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
@@ -26,7 +26,8 @@ export function M2MCombobox({
   allRelations,
   extraFilter,
   requiredParent,
-  onCountChange
+  onCountChange,
+  drilldown
 }: {
   relation: CMSRelation
   parentId: string
@@ -34,8 +35,11 @@ export function M2MCombobox({
   extraFilter?: Record<string, unknown>
   requiredParent?: string
   onCountChange?: (count: number) => void
+  /** When set (and a DrilldownContext is provided), chips open the record's detail sheet. */
+  drilldown?: { layout_id?: number | null; width?: number | string | null } | null
 }) {
   const client = useNivaroClient()
+  const drill = useDrilldown()
   const staging = useM2MStaging()
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -184,13 +188,34 @@ export function M2MCombobox({
                 )}
               >
                 {isStaleTag && <AlertTriangle className='h-3 w-3 shrink-0 text-amber-500' />}
-                {relatedCollection && (
-                  <RelatedItemLabel
-                    collection={relatedCollection}
-                    id={relId}
-                    displayTemplate={colMeta?.display_template}
-                  />
-                )}
+                {relatedCollection &&
+                  (drilldown && drill ? (
+                    <button
+                      type='button'
+                      title='Open detail panel'
+                      onClick={() =>
+                        drill.open({
+                          collection: relatedCollection,
+                          itemId: String(relId),
+                          layoutId: drilldown.layout_id,
+                          width: drilldown.width
+                        })
+                      }
+                      className='underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-[#00ceff] dark:hover:text-[#00ceff]'
+                    >
+                      <RelatedItemLabel
+                        collection={relatedCollection}
+                        id={relId}
+                        displayTemplate={colMeta?.display_template}
+                      />
+                    </button>
+                  ) : (
+                    <RelatedItemLabel
+                      collection={relatedCollection}
+                      id={relId}
+                      displayTemplate={colMeta?.display_template}
+                    />
+                  ))}
                 <button
                   type='button'
                   onClick={() => staging?.stageUnlink(stagingKey, ji.id)}

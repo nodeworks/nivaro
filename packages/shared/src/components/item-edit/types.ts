@@ -19,6 +19,8 @@ export interface CMSField {
   repeater_schema: Record<string, unknown>[] | string | null
   dependency_config: Record<string, unknown> | string | null
   layout_assigned?: boolean
+  /** Raw layout-assignment overrides (label, readonly, drilldown, ...) — passed through by field-config. */
+  _overrides?: Record<string, unknown> | null
 }
 
 export interface CMSRelation {

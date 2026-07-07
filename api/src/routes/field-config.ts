@@ -267,6 +267,20 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       // display of a value reached through M2O hops. Rendered via the shared
       // form's relation-path handling; value resolved by /items/:col/:id/resolve-paths.
       if (field.includes('.') && !field.startsWith('__')) {
+        // Final entity collection of the chain — lets the layout settings popover
+        // list the target's detail layouts for drill-down config.
+        let pathTarget: string | null = null
+        try {
+          const { classifyRelationSegment } = await import('../services/queues.js')
+          const { getRelations } = await import('../services/collections.js')
+          let cur = collection
+          for (const seg of field.split('.')) {
+            const info = classifyRelationSegment(cur, seg, await getRelations(cur))
+            if (!info?.relatedCollection) break
+            cur = info.relatedCollection
+            pathTarget = cur
+          }
+        } catch { /* leave null */ }
         for (const a of fieldAssignments) {
           const autoLabel = field
             .split('.')
@@ -283,7 +297,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
             hidden: false, readonly: true, required: false,
             interface: 'relation-path',
             display: null, display_options: null,
-            options: null,
+            options: pathTarget ? { path_target_collection: pathTarget } : null,
             group_key: a.group_key, sort: a.sort,
             label_override: a.label_override, is_visible: a.is_visible, default_expanded: a.default_expanded,
             show_row_revisions: false, show_approval_chain: null,

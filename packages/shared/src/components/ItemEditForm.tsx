@@ -11,7 +11,7 @@ import {
   useState
 } from 'react'
 import { toast } from 'sonner'
-import { ItemEditAuthContext, ParentDraftContext, useNivaroClient } from '../context'
+import { ItemEditAuthContext, ParentDraftContext, useNivaroClient, RelationPathDataContext } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { FieldRow } from './item-edit/FieldRow'
@@ -588,11 +588,15 @@ export function ItemEditForm({
         .map((f) => f.field),
     [fieldConfig]
   )
-  const { data: resolvedPaths } = useQuery<Record<string, { value: string; ids: string[] }>>({
+  const { data: resolvedPaths } = useQuery<
+    Record<string, { value: string; ids: string[]; target_collection: string | null }>
+  >({
     queryKey: ['resolve-paths', collection, itemId, relationPathFields.join(',')],
     queryFn: () =>
       client
-        .request<{ data: Record<string, { value: string; ids: string[] }> }>(
+        .request<{
+          data: Record<string, { value: string; ids: string[]; target_collection: string | null }>
+        }>(
           get(`/items/${collection}/${itemId}/resolve-paths`, {
             paths: relationPathFields.join(',')
           })
@@ -601,6 +605,14 @@ export function ItemEditForm({
     enabled: !isNew && relationPathFields.length > 0,
     staleTime: 30_000
   })
+  const relationPathData = useMemo(() => {
+    if (!resolvedPaths) return null
+    const out: Record<string, { ids: string[]; target_collection: string | null }> = {}
+    for (const [path, pv] of Object.entries(resolvedPaths)) {
+      out[path] = { ids: pv.ids, target_collection: pv.target_collection }
+    }
+    return out
+  }, [resolvedPaths])
   useEffect(() => {
     if (!resolvedPaths) return
     const merged: Record<string, unknown> = {}
@@ -2484,6 +2496,7 @@ export function ItemEditForm({
   const canDelete = !isNew && isAdmin && effectiveShowDelete
 
   return (
+    <RelationPathDataContext.Provider value={relationPathData}>
     <AddendumO2MContext.Provider value={addendumO2MMap}>
     <AddendumViewContext.Provider value={addendumViewId}>
     <AddendumFieldContext.Provider value={addendumFieldMap}>
@@ -2952,5 +2965,6 @@ export function ItemEditForm({
     </AddendumFieldContext.Provider>
     </AddendumViewContext.Provider>
     </AddendumO2MContext.Provider>
+    </RelationPathDataContext.Provider>
   )
 }

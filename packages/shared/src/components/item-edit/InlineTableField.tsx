@@ -12,7 +12,7 @@ export interface RowRule {
   only_if_empty?: boolean
   sort?: number
 }
-import { useNivaroClient, useParentDraft } from '../../context'
+import { useNivaroClient, useParentDraft, useDrilldown, fieldDrilldownConfig } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import {
@@ -166,6 +166,7 @@ export function InlineTableField({
   parentFieldKey?: string
 }) {
   const client = useNivaroClient()
+  const drill = useDrilldown()
   const qc = useQueryClient()
   const staging = useO2MStaging()
   const addendumO2MEntries = useAddendumO2M()[parentFieldKey ?? ''] ?? []
@@ -409,20 +410,37 @@ export function InlineTableField({
     () => cols.filter((c) => c.interface === 'relation-path' && c.field.includes('.')).map((c) => c.field),
     [cols]
   )
-  const { data: resolvedPathRows } = useQuery<Record<string, Record<string, string>>>({
+  const { data: resolvedPathData } = useQuery<{
+    rows: Record<string, Record<string, { value: string; ids: string[] }>>
+    targets: Record<string, string | null>
+  }>({
     queryKey: ['o2m-resolve-paths', relatedCollection, manyField, parentId, relationPathCols.join(',')],
     queryFn: () =>
       client
-        .request<{ data: Record<string, Record<string, string>> }>(
+        .request<{
+          data: {
+            rows: Record<string, Record<string, { value: string; ids: string[] }>>
+            targets: Record<string, string | null>
+          }
+        }>(
           get(`/items/${relatedCollection}/resolve-paths`, {
             ids: rawRows.map((r) => String(r.id)).join(','),
             paths: relationPathCols.join(',')
           })
         )
-        .then((r) => r.data ?? {}),
+        .then((r) => r.data ?? { rows: {}, targets: {} }),
     enabled: !isNew && relationPathCols.length > 0 && rawRows.length > 0,
     staleTime: 30_000
   })
+  const resolvedPathRows = useMemo(() => {
+    if (!resolvedPathData) return undefined
+    const flat: Record<string, Record<string, string>> = {}
+    for (const [rowId, paths] of Object.entries(resolvedPathData.rows)) {
+      flat[rowId] = {}
+      for (const [path, pv] of Object.entries(paths)) flat[rowId][path] = pv.value
+    }
+    return flat
+  }, [resolvedPathData])
 
   const rows = useMemo(() => {
     let sorted = resolvedPathRows
@@ -891,12 +909,59 @@ export function InlineTableField({
     }
   }
 
-  function renderCell(col: CMSField, val: unknown) {
+  function renderCell(col: CMSField, val: unknown, rowId?: string) {
     if (val === null || val === undefined) return <span className='text-slate-300'>—</span>
+    // Relation-path cells configured for drill-down open the final entity.
+    if (col.interface === 'relation-path' && drill && rowId) {
+      const cfg = fieldDrilldownConfig(col)
+      const rowMeta = resolvedPathData?.rows[rowId]?.[col.field]
+      const target = resolvedPathData?.targets[col.field]
+      if (cfg && rowMeta && target && rowMeta.ids.length > 0) {
+        return (
+          <button
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              drill.open({
+                collection: target,
+                itemId: rowMeta.ids[0],
+                layoutId: cfg.layout_id,
+                width: cfg.width,
+                title: String(val)
+              })
+            }}
+            className='block max-w-full truncate text-left underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-[#00ceff] dark:hover:text-[#00ceff]'
+          >
+            {String(val)}
+          </button>
+        )
+      }
+    }
     const m2oRel = m2oRelMap.get(col.field)
     if (m2oRel?.one_collection) {
       const display = m2oDisplays[m2oRel.one_collection]?.[String(val)]
       if (!display && m2oFetching) return <Loader2 className='h-3 w-3 animate-spin text-slate-300' />
+      const cfg = drill ? fieldDrilldownConfig(col) : null
+      if (cfg && drill) {
+        return (
+          <button
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              drill.open({
+                collection: m2oRel.one_collection as string,
+                itemId: String(val),
+                layoutId: cfg.layout_id,
+                width: cfg.width,
+                title: display ?? String(val)
+              })
+            }}
+            className='block max-w-full truncate text-left underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-[#00ceff] dark:hover:text-[#00ceff]'
+          >
+            {display ?? String(val)}
+          </button>
+        )
+      }
       return <span className='block truncate'>{display ?? String(val)}</span>
     }
     if (col.type === 'boolean')
@@ -1173,7 +1238,7 @@ export function InlineTableField({
                           />
                         </div>
                       ) : (
-                        <div className='py-0.5 overflow-hidden'>{renderCell(c, row[c.field])}</div>
+                        <div className='py-0.5 overflow-hidden'>{renderCell(c, row[c.field], String(row.id))}</div>
                       )}
                     </td>
                   )

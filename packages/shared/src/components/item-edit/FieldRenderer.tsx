@@ -1,3 +1,6 @@
+import { ExternalLink } from 'lucide-react'
+import { useContext } from 'react'
+import { fieldDrilldownConfig, RelationPathDataContext, useDrilldown } from '../../context'
 import { Badge } from '../ui/badge'
 import { formatDisplayValue } from './GroupSection'
 import { Input } from '../ui/input'
@@ -39,6 +42,8 @@ export function FieldRenderer({
   displayOnly?: boolean
   prefillParentId?: string
 }) {
+  const drill = useDrilldown()
+  const relationPathData = useContext(RelationPathDataContext)
   const iface = field.interface ?? ''
   const isRelIface =
     !iface ||
@@ -75,7 +80,8 @@ export function FieldRenderer({
         )
       }
     }
-    return (
+    const m2oDrillCfg = drill && value != null && value !== '' ? fieldDrilldownConfig(field) : null
+    const combobox = (
       <RelationCombobox
         collection={m2oRel.one_collection}
         value={value}
@@ -85,6 +91,27 @@ export function FieldRenderer({
         extraFilter={cascadeFilter}
         requiredParent={requiredParentLabel ?? undefined}
       />
+    )
+    if (!m2oDrillCfg) return combobox
+    return (
+      <div className='flex items-center gap-1.5'>
+        <div className='min-w-0 flex-1'>{combobox}</div>
+        <button
+          type='button'
+          title='Open detail panel'
+          onClick={() =>
+            drill?.open({
+              collection: m2oRel.one_collection as string,
+              itemId: String(value),
+              layoutId: m2oDrillCfg.layout_id,
+              width: m2oDrillCfg.width
+            })
+          }
+          className='shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-[#00ceff] dark:hover:bg-slate-800'
+        >
+          <ExternalLink className='h-3.5 w-3.5' />
+        </button>
+      </div>
     )
   }
 
@@ -133,7 +160,7 @@ export function FieldRenderer({
         extraFilter={cascadeFilter}
         requiredParent={requiredParentLabel ?? undefined}
         onCountChange={onCountChange}
-      />
+      drilldown={fieldDrilldownConfig(field)} />
     )
   }
 
@@ -143,6 +170,33 @@ export function FieldRenderer({
   // Inline tables are exempt: they render the full table in read-only mode
   // (same display, no edit affordances) further down.
   if (field.readonly && iface !== 'inline-table') {
+    // Relation-path fields configured for drill-down render as a link to the
+    // final entity's detail sheet (host app provides the DrilldownContext).
+    if (iface === 'relation-path' && value != null && value !== '' && drill) {
+      const cfg = fieldDrilldownConfig(field)
+      const meta = relationPathData?.[field.field]
+      if (cfg && meta?.target_collection && meta.ids.length > 0) {
+        return (
+          <div className='min-h-[36px] flex items-center'>
+            <button
+              type='button'
+              onClick={() =>
+                drill.open({
+                  collection: meta.target_collection as string,
+                  itemId: meta.ids[0],
+                  layoutId: cfg.layout_id,
+                  width: cfg.width,
+                  title: String(value)
+                })
+              }
+              className='text-left text-sm text-slate-700 underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-[#00ceff] dark:text-slate-200 dark:hover:text-[#00ceff]'
+            >
+              {formatDisplayValue(value, field)}
+            </button>
+          </div>
+        )
+      }
+    }
     const display =
       value === null || value === undefined ? (
         <span className='text-muted-foreground italic text-sm'>—</span>

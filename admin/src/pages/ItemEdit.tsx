@@ -36,7 +36,8 @@ import { Switch } from '@/components/ui/switch'
 import { api, type CMSField } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, titleCase } from '@/lib/utils'
-import { ItemEditAuthContext, ItemEditForm, NavigationContext, NivaroProvider, WidgetSlot } from '@nivaro/shared'
+import { DrilldownContext, type DrilldownTarget, ItemEditAuthContext, ItemEditForm, NavigationContext, NivaroProvider, WidgetSlot } from '@nivaro/shared'
+import { RecordDrilldownSheet } from '@/components/record-drilldown-sheet'
 import { createNivaro } from '@nivaro/sdk'
 
 // ─── Local types ──────────────────────────────────────────────────────────────
@@ -237,6 +238,8 @@ export function ItemEditPage() {
   const { user } = useAuth()
 
   const client = useMemo(() => createNivaro(window.location.origin), [])
+  const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
+  const drillCtx = useMemo(() => ({ open: (t: DrilldownTarget) => setDrilldown(t) }), [])
   const isNew = id === 'new'
 
   const [summarizing, setSummarizing] = useState(false)
@@ -453,6 +456,17 @@ export function ItemEditPage() {
     <NivaroProvider client={client}>
     <NavigationContext.Provider value={{ navigate }}>
     <ItemEditAuthContext.Provider value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}>
+    <DrilldownContext.Provider value={drillCtx}>
+    {drilldown && (
+      <RecordDrilldownSheet
+        collection={drilldown.collection}
+        itemId={drilldown.itemId}
+        layoutId={drilldown.layoutId}
+        width={drilldown.width}
+        title={drilldown.title}
+        onClose={() => setDrilldown(null)}
+      />
+    )}
       <div className='flex flex-1 min-h-0 flex-col'>
 
         {/* Admin sticky header */}
@@ -609,6 +623,7 @@ export function ItemEditPage() {
             : {})}
         />
       </div>
+    </DrilldownContext.Provider>
     </ItemEditAuthContext.Provider>
     </NavigationContext.Provider>
     </NivaroProvider>
