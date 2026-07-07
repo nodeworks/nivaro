@@ -10,6 +10,7 @@ import {
   computeExtraFieldMeta,
   fetchQueueItems,
   fetchQueueWorkload,
+  normalizeDisplayConfig,
   parsePaginationParams
 } from '../services/queues.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
@@ -28,7 +29,8 @@ function formatQueue(row: QueueRow) {
     is_active: !!row.is_active,
     materialized: !!row.materialized,
     claims_enabled: !!row.claims_enabled,
-    column_aliases: parseJson(row.column_aliases) ?? {}
+    column_aliases: parseJson(row.column_aliases) ?? {},
+    display_config: normalizeDisplayConfig(parseJson(row.display_config))
   }
 }
 
@@ -118,7 +120,6 @@ export async function queuesRoutes(app: FastifyInstance) {
       color?: string
       is_shared?: boolean
       role_id?: string | null
-      view_mode?: 'table' | 'kanban' | 'both'
     }
 
     if (!body.name?.trim()) return reply.code(400).send({ error: 'name is required' })
@@ -132,7 +133,6 @@ export async function queuesRoutes(app: FastifyInstance) {
         owner: req.user!.id,
         is_shared: !!body.is_shared,
         role_id: body.role_id ?? null,
-        view_mode: body.view_mode ?? 'table',
         is_active: true,
         created_at: new Date()
       })
@@ -177,10 +177,10 @@ export async function queuesRoutes(app: FastifyInstance) {
       color?: string | null
       is_shared?: boolean
       role_id?: string | null
-      view_mode?: 'table' | 'kanban' | 'both'
       is_active?: boolean
       claims_enabled?: boolean
       column_aliases?: Record<string, string> | null
+      display_config?: unknown
     }
 
     const update: Record<string, unknown> = { updated_at: new Date() }
@@ -193,7 +193,6 @@ export async function queuesRoutes(app: FastifyInstance) {
     if (body.color !== undefined) update.color = body.color
     if (body.is_shared !== undefined) update.is_shared = !!body.is_shared
     if (body.role_id !== undefined) update.role_id = body.role_id
-    if (body.view_mode !== undefined) update.view_mode = body.view_mode
     if (body.is_active !== undefined) update.is_active = !!body.is_active
     if (body.claims_enabled !== undefined) update.claims_enabled = !!body.claims_enabled
     if (body.column_aliases !== undefined) {
@@ -203,6 +202,11 @@ export async function queuesRoutes(app: FastifyInstance) {
         if (typeof v === 'string' && v.trim()) cleaned[k] = v.trim().slice(0, 100)
       }
       update.column_aliases = Object.keys(cleaned).length > 0 ? toJsonStr(cleaned) : null
+    }
+    if (body.display_config !== undefined) {
+      // Normalize before write so the stored JSON is always valid/complete.
+      update.display_config =
+        body.display_config === null ? null : toJsonStr(normalizeDisplayConfig(body.display_config))
     }
 
     await db('nivaro_queues').where({ id }).update(update)
