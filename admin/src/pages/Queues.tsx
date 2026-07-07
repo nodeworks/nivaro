@@ -63,6 +63,29 @@ const FILTER_OPS: { value: string; label: string }[] = [
   { value: 'nnull', label: 'is not empty' }
 ]
 
+type QueueViewKind = 'table' | 'kanban' | 'workload'
+type QueueDefaultScope = 'mine' | 'unowned' | 'all'
+
+interface QueueDisplayConfig {
+  views: QueueViewKind[]
+  default_view: QueueViewKind
+  default_scope: QueueDefaultScope
+  work_next: boolean
+  bulk_actions: boolean
+}
+
+const VIEW_LABELS: Record<QueueViewKind, string> = {
+  table: 'Table',
+  kanban: 'Kanban',
+  workload: 'Workload'
+}
+
+const SCOPE_LABELS: Record<QueueDefaultScope, string> = {
+  mine: 'My Items',
+  unowned: 'No Owners',
+  all: 'All Items'
+}
+
 interface Queue {
   id: string
   name: string
@@ -70,10 +93,10 @@ interface Queue {
   owner: string
   is_shared: boolean
   role_id: string | null
-  view_mode: 'table' | 'kanban' | 'both'
   is_active: boolean
   claims_enabled: boolean
   column_aliases: Record<string, string>
+  display_config: QueueDisplayConfig
 }
 
 interface QueueDetailData extends Queue {
@@ -748,6 +771,62 @@ function SourceRow({
 
 // ─── Builder panel ──────────────────────────────────────────────────────────
 
+function SimpleCombobox({
+  value,
+  options,
+  onChange,
+  disabled
+}: {
+  value: string
+  options: { value: string; label: string }[]
+  onChange: (v: string) => void
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const current = options.find((o) => o.value === value)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          disabled={disabled}
+          className='flex h-8 w-44 items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-800 disabled:opacity-50 dark:border-border dark:bg-card dark:text-slate-100'
+        >
+          {current?.label ?? value}
+          <ChevronsUpDown className='h-3.5 w-3.5 text-slate-400' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-44 p-0' align='start'>
+        <Command>
+          <CommandList>
+            <CommandGroup>
+              {options.map((o) => (
+                <CommandItem
+                  key={o.value}
+                  value={o.value}
+                  onSelect={() => {
+                    onChange(o.value)
+                    setOpen(false)
+                  }}
+                  className='text-[12px]'
+                >
+                  <Check
+                    className={cn(
+                      'mr-2 h-3.5 w-3.5',
+                      value === o.value ? 'opacity-100' : 'opacity-0'
+                    )}
+                  />
+                  {o.label}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 type BuilderTab = 'sources' | 'columns' | 'settings'
 
 function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () => void }) {
@@ -771,6 +850,13 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
   const [isShared, setIsShared] = useState(false)
   const [claimsEnabled, setClaimsEnabled] = useState(true)
   const [columnAliases, setColumnAliases] = useState<Record<string, string>>({})
+  const [displayConfig, setDisplayConfig] = useState<QueueDisplayConfig>({
+    views: ['table', 'kanban', 'workload'],
+    default_view: 'table',
+    default_scope: 'all',
+    work_next: true,
+    bulk_actions: true
+  })
   const [sources, setSources] = useState<QueueSource[]>([])
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
   const [tab, setTab] = useState<BuilderTab>('sources')
@@ -782,6 +868,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     setIsShared(queue.is_shared)
     setClaimsEnabled(queue.claims_enabled)
     setColumnAliases(queue.column_aliases ?? {})
+    setDisplayConfig(queue.display_config)
     setSources(queue.sources)
     setLoadedFor(queue.id)
     setTab('sources')
@@ -803,7 +890,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
         description,
         is_shared: isShared,
         claims_enabled: claimsEnabled,
-        column_aliases: columnAliases
+        column_aliases: columnAliases,
+        display_config: displayConfig
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queues'] })
@@ -856,6 +944,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     description !== (queue.description ?? '') ||
     isShared !== queue.is_shared ||
     claimsEnabled !== queue.claims_enabled ||
+    JSON.stringify(displayConfig) !== JSON.stringify(queue.display_config) ||
     JSON.stringify(columnAliases) !== JSON.stringify(queue.column_aliases ?? {})
   const sourcesDirty = JSON.stringify(sources) !== JSON.stringify(queue.sources)
   const dirty = metaDirty || sourcesDirty
@@ -1111,6 +1200,110 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                   <span className='block text-[11px] text-slate-500 dark:text-muted-foreground'>
                     Viewers can claim items to work on; Work Next auto-claims. Off hides all claim
                     controls.
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            <div className='space-y-3 border-t border-slate-200 pt-5 dark:border-border'>
+              <h3 className='text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+                Display
+              </h3>
+              <div className='space-y-2'>
+                <span className='block text-[11px] font-medium uppercase tracking-wide text-slate-400'>
+                  Views
+                </span>
+                {(['table', 'kanban', 'workload'] as const).map((v) => (
+                  <label key={v} className='flex cursor-pointer items-center gap-3'>
+                    <Checkbox
+                      checked={displayConfig.views.includes(v)}
+                      disabled={!canEdit || v === 'table'}
+                      onCheckedChange={(on) =>
+                        setDisplayConfig((prev) => {
+                          const views = (['table', 'kanban', 'workload'] as const).filter((k) =>
+                            k === v ? !!on : prev.views.includes(k)
+                          )
+                          return {
+                            ...prev,
+                            views,
+                            default_view: views.includes(prev.default_view)
+                              ? prev.default_view
+                              : 'table'
+                          }
+                        })
+                      }
+                    />
+                    <span className='text-[13px] text-slate-800 dark:text-slate-100'>
+                      {VIEW_LABELS[v]}
+                      {v === 'table' && (
+                        <span className='ml-1.5 text-[11px] text-slate-400'>always on</span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className='flex items-center gap-3'>
+                <span className='w-40 shrink-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+                  Default view
+                </span>
+                <SimpleCombobox
+                  value={displayConfig.default_view}
+                  options={displayConfig.views.map((v) => ({ value: v, label: VIEW_LABELS[v] }))}
+                  disabled={!canEdit}
+                  onChange={(v) =>
+                    setDisplayConfig((prev) => ({ ...prev, default_view: v as QueueViewKind }))
+                  }
+                />
+              </div>
+              <div className='flex items-center gap-3'>
+                <span className='w-40 shrink-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+                  Default items scope
+                </span>
+                <SimpleCombobox
+                  value={displayConfig.default_scope}
+                  options={(['mine', 'unowned', 'all'] as const).map((s) => ({
+                    value: s,
+                    label: SCOPE_LABELS[s]
+                  }))}
+                  disabled={!canEdit}
+                  onChange={(s) =>
+                    setDisplayConfig((prev) => ({ ...prev, default_scope: s as QueueDefaultScope }))
+                  }
+                />
+              </div>
+              <label className='flex cursor-pointer items-start gap-3'>
+                <Checkbox
+                  checked={displayConfig.work_next}
+                  disabled={!canEdit}
+                  onCheckedChange={(on) =>
+                    setDisplayConfig((prev) => ({ ...prev, work_next: !!on }))
+                  }
+                  className='mt-0.5'
+                />
+                <span>
+                  <span className='block text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+                    Work Next button
+                  </span>
+                  <span className='block text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    Guided one-item-at-a-time triage from the table view.
+                  </span>
+                </span>
+              </label>
+              <label className='flex cursor-pointer items-start gap-3'>
+                <Checkbox
+                  checked={displayConfig.bulk_actions}
+                  disabled={!canEdit}
+                  onCheckedChange={(on) =>
+                    setDisplayConfig((prev) => ({ ...prev, bulk_actions: !!on }))
+                  }
+                  className='mt-0.5'
+                />
+                <span>
+                  <span className='block text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+                    Bulk actions
+                  </span>
+                  <span className='block text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    Row selection with bulk claim, release and transition.
                   </span>
                 </span>
               </label>
