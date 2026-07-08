@@ -21,8 +21,8 @@ function formatDateTemplate(raw: string, template: string): string {
   const d = new Date(raw)
   if (Number.isNaN(d.getTime())) return raw
   if (template === 'relative') return formatRelative(d)
-  // Longest tokens first so YYYY wins over YY and MMM over MM.
-  return template.replace(/YYYY|MMM|YY|MM|DD|HH|mm|ss/g, (token) => {
+  // Longest tokens first so YYYY wins over YY, MMM over MM, hh over h.
+  return template.replace(/YYYY|MMM|YY|MM|DD|HH|hh|mm|ss|h|A|a/g, (token) => {
     switch (token) {
       case 'YYYY':
         return String(d.getFullYear())
@@ -36,10 +36,18 @@ function formatDateTemplate(raw: string, template: string): string {
         return pad(d.getDate())
       case 'HH':
         return pad(d.getHours())
+      case 'hh':
+        return pad(d.getHours() % 12 || 12)
+      case 'h':
+        return String(d.getHours() % 12 || 12)
       case 'mm':
         return pad(d.getMinutes())
       case 'ss':
         return pad(d.getSeconds())
+      case 'A':
+        return d.getHours() < 12 ? 'AM' : 'PM'
+      case 'a':
+        return d.getHours() < 12 ? 'am' : 'pm'
       default:
         return token
     }

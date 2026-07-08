@@ -40,6 +40,26 @@ describe('formatValue datetime', () => {
       'not a date'
     )
   })
+
+  it('renders 12-hour tokens h/hh and meridiem A/a from local hours', () => {
+    const h24 = d.getHours()
+    const h12 = h24 % 12 || 12
+    const out = formatValue(iso, { type: 'datetime', template: 'h hh A a' })
+    expect(out).toBe(`${h12} ${pad(h12)} ${h24 < 12 ? 'AM' : 'PM'} ${h24 < 12 ? 'am' : 'pm'}`)
+  })
+
+  it('12-hour tokens map midnight and noon to 12, not 0', () => {
+    // Local-time constructor: hours are exactly what we assert against.
+    const midnight = new Date(2026, 2, 5, 0, 30).toISOString()
+    const noon = new Date(2026, 2, 5, 12, 30).toISOString()
+    expect(formatValue(midnight, { type: 'datetime', template: 'h:mm A' })).toBe('12:30 AM')
+    expect(formatValue(noon, { type: 'datetime', template: 'h:mm A' })).toBe('12:30 PM')
+  })
+
+  it('hh beats h in token precedence (no double substitution)', () => {
+    const midnight = new Date(2026, 2, 5, 0, 5).toISOString()
+    expect(formatValue(midnight, { type: 'datetime', template: 'hh:mm' })).toBe('12:05')
+  })
 })
 
 describe('formatValue number', () => {

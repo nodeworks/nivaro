@@ -351,6 +351,12 @@ function DatetimeFormatFields({
           className='w-full rounded border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] dark:border-border dark:bg-background'
         />
       )}
+      {custom && (
+        <p className='text-[10px] leading-4 text-slate-400'>
+          Tokens: <code>YYYY YY MMM MM DD</code> · <code>HH mm ss</code> (24h) ·{' '}
+          <code>h hh A a</code> (12h/AM-PM) · or <code>relative</code>. Anything else is literal.
+        </p>
+      )}
       <p className='text-[10px] text-slate-400'>
         Preview: {formatValue(new Date().toISOString(), format)}
       </p>
