@@ -661,7 +661,8 @@ export function validateColumnFormats(input: unknown): string | null {
       }
     } else if (c.type === 'number') {
       if (c.decimals !== undefined) {
-        if (typeof c.decimals !== 'number' || !Number.isInteger(c.decimals) || c.decimals < 0 || c.decimals > 10) {
+        const d = c.decimals
+        if (typeof d !== 'number' || !Number.isInteger(d) || d < 0 || d > 10) {
           return `column_formats.${path}: decimals must be an integer 0-10`
         }
       }
@@ -672,7 +673,8 @@ export function validateColumnFormats(input: unknown): string | null {
       }
     } else if (c.type === 'boolean') {
       for (const k of ['true_label', 'false_label'] as const) {
-        if (typeof c[k] !== 'string' || (c[k] as string).length === 0 || (c[k] as string).length > 30) {
+        const label = c[k]
+        if (typeof label !== 'string' || label.length === 0 || label.length > 30) {
           return `column_formats.${path}: ${k} must be a string of 1-30 chars`
         }
       }
