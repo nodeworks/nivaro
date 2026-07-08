@@ -27,9 +27,32 @@ export async function snapshotAllQueues(): Promise<{ ok: number; failed: number 
         failed++
         continue
       }
-      const { stats } = await fetchQueueItems(queue.id, ownerUser, 'all', {})
+      const { stats, items } = await fetchQueueItems(queue.id, ownerUser, 'all', {})
+
+      // Per-owner rollup from the same resolved item set — an item with N
+      // owners counts once for each of them.
+      const byOwner = new Map<
+        string,
+        { owned: number; sla_warning: number; sla_breached: number; at_risk: number }
+      >()
+      for (const item of items) {
+        for (const o of item.owners) {
+          const row = byOwner.get(o.id) ?? {
+            owned: 0,
+            sla_warning: 0,
+            sla_breached: 0,
+            at_risk: 0
+          }
+          row.owned++
+          if (item.sla_status === 'warning') row.sla_warning++
+          if (item.sla_status === 'breached') row.sla_breached++
+          if (item.at_risk) row.at_risk++
+          byOwner.set(o.id, row)
+        }
+      }
+
       // Idempotent upsert keyed on UNIQUE(queue_id, snapshot_date) — a manual
-      // re-run replaces today's row.
+      // re-run replaces today's rows (queue-wide and per-owner alike).
       await db.transaction(async (trx) => {
         await trx('nivaro_queue_stat_snapshots')
           .where({ queue_id: queue.id, snapshot_date: snapshotDate })
@@ -45,6 +68,23 @@ export async function snapshotAllQueues(): Promise<{ ok: number; failed: number 
           by_state: JSON.stringify(stats.by_state),
           created_at: new Date()
         })
+        await trx('nivaro_queue_owner_snapshots')
+          .where({ queue_id: queue.id, snapshot_date: snapshotDate })
+          .delete()
+        const ownerRows = [...byOwner.entries()].map(([userId, r]) => ({
+          queue_id: queue.id,
+          snapshot_date: snapshotDate,
+          user: userId,
+          owned: r.owned,
+          sla_warning: r.sla_warning,
+          sla_breached: r.sla_breached,
+          at_risk: r.at_risk,
+          created_at: new Date()
+        }))
+        // 8 bound params per row keeps chunks far under MSSQL's ~2100-param cap.
+        for (let i = 0; i < ownerRows.length; i += 200) {
+          await trx('nivaro_queue_owner_snapshots').insert(ownerRows.slice(i, i + 200))
+        }
       })
       ok++
     } catch (err) {
