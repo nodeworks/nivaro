@@ -11,7 +11,8 @@ import {
   fetchQueueItems,
   fetchQueueWorkload,
   normalizeDisplayConfig,
-  parsePaginationParams
+  parsePaginationParams,
+  validateColumnFormats
 } from '../services/queues.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 
@@ -40,7 +41,8 @@ function formatSource(row: QueueSourceRow) {
     filters: parseJson(row.filters),
     state_values: parseJson(row.state_values),
     extra_fields: parseJson(row.extra_fields),
-    drilldown: parseJson(row.drilldown) ?? {}
+    drilldown: parseJson(row.drilldown) ?? {},
+    column_formats: parseJson(row.column_formats) ?? {}
   }
 }
 
@@ -267,6 +269,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         sla_filter?: string | null
         extra_fields?: unknown
         drilldown?: unknown
+        column_formats?: unknown
         sort?: number
       }>
     }
@@ -316,6 +319,10 @@ export async function queuesRoutes(app: FastifyInstance) {
           }
         }
       }
+      const cfError = validateColumnFormats(s.column_formats)
+      if (cfError) {
+        return reply.code(400).send({ error: cfError })
+      }
     }
 
     await db.transaction(async (trx) => {
@@ -340,6 +347,12 @@ export async function queuesRoutes(app: FastifyInstance) {
           drilldown:
             s.drilldown && typeof s.drilldown === 'object' && Object.keys(s.drilldown).length > 0
               ? toJsonStr(s.drilldown)
+              : null,
+          column_formats:
+            s.column_formats &&
+            typeof s.column_formats === 'object' &&
+            Object.keys(s.column_formats).length > 0
+              ? toJsonStr(s.column_formats)
               : null,
           sort: s.sort ?? i
         }))
