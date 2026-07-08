@@ -491,6 +491,9 @@ function ColumnChipConfig({
         )
   })
   const enabled = cfg?.enabled !== false
+  // Relation columns tint when drill-down is enabled or a format is set;
+  // plain columns (no drill-down concept) tint only when a format is set.
+  const active = targetCollection ? enabled || format !== undefined : format !== undefined
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -499,7 +502,7 @@ function ColumnChipConfig({
           aria-label={`Column settings for ${path}`}
           className={cn(
             'ml-0.5 rounded-sm hover:opacity-100',
-            enabled || format ? 'opacity-80 text-nvr-cyan' : 'opacity-40'
+            active ? 'opacity-80 text-nvr-cyan' : 'opacity-40'
           )}
         >
           <Settings2 className='h-3 w-3' />
@@ -959,11 +962,12 @@ function SourceRow({
                               })
                             }
                             onFormatChange={(next) => {
+                              // Always store while editing — empty boolean labels
+                              // are stripped at save time (saveSourcesMut), so
+                              // backspacing a label mid-edit doesn't unmount the
+                              // boolean fields section.
                               const current = { ...(source.column_formats ?? {}) }
-                              if (
-                                next === null ||
-                                (next.type === 'boolean' && (!next.true_label || !next.false_label))
-                              ) {
+                              if (next === null) {
                                 delete current[f]
                               } else {
                                 current[f] = next
@@ -1154,6 +1158,14 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
           // Drop half-built condition rows — an empty field name would make the
           // source's SQL query throw and the source silently resolve empty.
           filters: (s.filters ?? []).filter((c) => c.field && c.op),
+          // Strip half-built boolean formats (empty label) — kept in state so
+          // mid-edit backspacing doesn't discard the entry, but the server's
+          // validation rejects empty labels.
+          column_formats: Object.fromEntries(
+            Object.entries(s.column_formats ?? {}).filter(
+              ([, cfg]) => cfg.type !== 'boolean' || (cfg.true_label && cfg.false_label)
+            )
+          ),
           sort: i
         }))
       }),
