@@ -1,10 +1,83 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
 import * as svc from '../services/collections.js'
-import type { CMSCollection } from '../types.js'
+import type { CMSCollection, CMSField } from '../types.js'
+
+// Column names that must never surface through synthesized field metadata
+// (credential material on system tables like nivaro_users) — offering them in
+// relation/column pickers would let queue columns display their VALUES.
+const SENSITIVE_COLUMN_RE = /token|secret|password|hash|totp/i
+
+const SQL_TYPE_MAP: Record<string, string> = {
+  int: 'integer',
+  bigint: 'bigInteger',
+  bit: 'boolean',
+  decimal: 'decimal',
+  float: 'float',
+  real: 'float',
+  datetime: 'dateTime',
+  datetime2: 'dateTime',
+  date: 'date',
+  time: 'time',
+  uniqueidentifier: 'uuid',
+  ntext: 'text',
+  text: 'text'
+}
+
+/**
+ * Registered collections whose fields were never added to nivaro_fields
+ * (system tables like nivaro_users) return fields: [] — breaking every
+ * relation/field picker that drills into them. Synthesize minimal read-only
+ * field rows from the physical schema instead.
+ */
+async function synthesizeFields(collection: string): Promise<CMSField[]> {
+  try {
+    const cols = rawRows<{ COLUMN_NAME: string; DATA_TYPE: string; ORDINAL_POSITION: number }>(
+      await db.raw(
+        `SELECT COLUMN_NAME AS "COLUMN_NAME", DATA_TYPE AS "DATA_TYPE",
+                ORDINAL_POSITION AS "ORDINAL_POSITION"
+         FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?
+         ORDER BY ORDINAL_POSITION`,
+        [collection]
+      )
+    )
+    return cols
+      .filter((c) => !SENSITIVE_COLUMN_RE.test(c.COLUMN_NAME))
+      .map(
+        (c): CMSField => ({
+          id: 0,
+          collection,
+          field: c.COLUMN_NAME,
+          type: SQL_TYPE_MAP[c.DATA_TYPE.toLowerCase()] ?? 'string',
+          db_column: c.COLUMN_NAME,
+          interface: null,
+          display: null,
+          display_options: null,
+          options: null,
+          note: null,
+          hidden: false,
+          readonly: true,
+          required: false,
+          sort: c.ORDINAL_POSITION,
+          group: null,
+          special: null,
+          validation: null,
+          validation_message: null,
+          computed_formula: null,
+          computed_type: null,
+          computed_store: false,
+          created_at: new Date(0),
+          updated_at: new Date(0)
+        })
+      )
+  } catch {
+    return []
+  }
+}
 
 export async function collectionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
@@ -24,10 +97,11 @@ export async function collectionsRoutes(app: FastifyInstance) {
     const { collection } = req.params as { collection: string }
     const col = await svc.getCollection(collection)
     if (!col) return reply.code(404).send({ error: 'Not found' })
-    const [fields, relations] = await Promise.all([
+    const [metaFields, relations] = await Promise.all([
       svc.getFields(collection),
       svc.getRelations(collection)
     ])
+    const fields = metaFields.length > 0 ? metaFields : await synthesizeFields(collection)
     return reply.send({ data: { ...col, fields, relations } })
   })
 
