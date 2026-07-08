@@ -739,7 +739,7 @@ function SourceRow({
                       </Badge>
                     )
                   })}
-                  {canEdit && currentExtraFields.length < 10 && source.collection && (
+                  {canEdit && source.collection && (
                     <div className='w-[220px]'>
                       <CollectionFieldPicker
                         collection={source.collection}
@@ -753,11 +753,6 @@ function SourceRow({
                         placeholder='Add column…'
                       />
                     </div>
-                  )}
-                  {canEdit && currentExtraFields.length >= 10 && (
-                    <span className='text-[11px] text-slate-400'>
-                      10/10 columns — remove one to add another
-                    </span>
                   )}
                 </div>
               </div>
@@ -1214,8 +1209,13 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                   Views
                 </span>
                 {(['table', 'kanban', 'workload'] as const).map((v) => (
-                  <label key={v} className='flex cursor-pointer items-center gap-3'>
+                  <label
+                    key={v}
+                    htmlFor={`q-view-${v}`}
+                    className='flex cursor-pointer items-center gap-3'
+                  >
                     <Checkbox
+                      id={`q-view-${v}`}
                       checked={displayConfig.views.includes(v)}
                       disabled={!canEdit || v === 'table'}
                       onCheckedChange={(on) =>
@@ -1271,8 +1271,9 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                   }
                 />
               </div>
-              <label className='flex cursor-pointer items-start gap-3'>
+              <label htmlFor='q-work-next' className='flex cursor-pointer items-start gap-3'>
                 <Checkbox
+                  id='q-work-next'
                   checked={displayConfig.work_next}
                   disabled={!canEdit}
                   onCheckedChange={(on) =>
@@ -1289,8 +1290,9 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                   </span>
                 </span>
               </label>
-              <label className='flex cursor-pointer items-start gap-3'>
+              <label htmlFor='q-bulk-actions' className='flex cursor-pointer items-start gap-3'>
                 <Checkbox
+                  id='q-bulk-actions'
                   checked={displayConfig.bulk_actions}
                   disabled={!canEdit}
                   onCheckedChange={(on) =>
