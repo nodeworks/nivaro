@@ -46,6 +46,7 @@ import {
   SlidersHorizontal,
   Terminal,
   ThumbsUp,
+  TrendingUp,
   Upload,
   UserRound,
   Users,
@@ -137,6 +138,7 @@ export const navCategories: NavCategory[] = [
     items: [
       { icon: Activity, label: 'Activity', to: '/activity' },
       { icon: FileBarChart, label: 'Reports', to: '/reports' },
+      { icon: TrendingUp, label: 'Team Throughput', to: '/team-throughput' },
       { icon: BellDot, label: 'Alerts', to: '/alerts' },
       { icon: AlertTriangle, label: 'At-Risk Rules', to: '/at-risk' },
       { icon: Clock, label: 'SLA Rules', to: '/sla-rules' },
@@ -591,7 +593,10 @@ export function AppLayout() {
               </div>
 
               {/* Nav items — no horizontal padding so active rows span full width */}
-              <nav className='min-h-0 flex-1 overflow-y-auto py-3' aria-label={`${activeCat.label} navigation`}>
+              <nav
+                className='min-h-0 flex-1 overflow-y-auto py-3'
+                aria-label={`${activeCat.label} navigation`}
+              >
                 <div className='space-y-0.5'>
                   {panelItems.map((item) => (
                     <PanelNavItem key={item.to} {...item} />
@@ -606,7 +611,8 @@ export function AppLayout() {
         <main id='main-content' className='flex flex-1 flex-col overflow-hidden bg-secondary'>
           <PageErrorBoundary key={location.pathname}>
             <Suspense fallback={null}>
-              {disabledPaths.size > 0 && [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
+              {disabledPaths.size > 0 &&
+              [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
                 <Navigate to='/' replace />
               ) : (
                 <div

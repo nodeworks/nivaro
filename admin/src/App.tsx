@@ -138,6 +138,9 @@ const ImportJobPage = lazy(() =>
 const SlaRulesPage = lazy(() =>
   import('@/pages/SlaRules').then((m) => ({ default: m.SlaRulesPage }))
 )
+const TeamThroughputPage = lazy(() =>
+  import('@/pages/TeamThroughput').then((m) => ({ default: m.TeamThroughputPage }))
+)
 const AlertsPage = lazy(() => import('@/pages/Alerts').then((m) => ({ default: m.AlertsPage })))
 const AlertEditPage = lazy(() =>
   import('@/pages/AlertEdit').then((m) => ({ default: m.AlertEditPage }))
@@ -358,6 +361,7 @@ export default function App() {
                 <Route path='imports' element={<ImportsPage />} />
                 <Route path='imports/:id' element={<ImportJobPage />} />
                 <Route path='sla-rules' element={<SlaRulesPage />} />
+                <Route path='team-throughput' element={<TeamThroughputPage />} />
                 <Route path='alerts' element={<AlertsPage />} />
                 <Route path='alerts/:id' element={<AlertEditPage />} />
                 <Route path='hierarchies' element={<HierarchiesPage />} />
