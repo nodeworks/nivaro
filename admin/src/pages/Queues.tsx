@@ -1175,8 +1175,10 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
       qc.invalidateQueries({ queryKey: ['queue', queueId] })
       toast.success('Sources saved')
     },
-    onError: () =>
-      toast.error('Failed to save sources — check each source has a collection selected')
+    onError: (err) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Failed to save sources — check each source has a collection selected')
+    }
   })
 
   const deleteMut = useMutation({

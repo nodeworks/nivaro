@@ -975,9 +975,21 @@ export function QueueDetailPage() {
     else toast.success(`${label}: ${ok} succeeded`)
   }
 
+  const formatConfigFor = (path: string): ColumnFormatConfig | null => {
+    for (const src of queue?.sources ?? []) {
+      const cfg = src.column_formats?.[path]
+      if (cfg) return cfg
+    }
+    return null
+  }
+
   const groupKeyLabel = (key: string): string => {
     if (groupBy === 'state') return key === 'No state' ? key : stateLabel(key)
     if (groupBy === 'collection') return collectionLabel(key)
+    if (groupBy?.startsWith('extra.') && key !== '—') {
+      const fmt = formatConfigFor(groupBy.slice('extra.'.length))
+      if (fmt) return formatMultiValue(key, fmt)
+    }
     return key
   }
 
@@ -1115,14 +1127,6 @@ export function QueueDetailPage() {
         }
     }
     return { enabled: true, layout_id: null, width: null }
-  }
-
-  const formatConfigFor = (path: string): ColumnFormatConfig | null => {
-    for (const src of queue?.sources ?? []) {
-      const cfg = src.column_formats?.[path]
-      if (cfg) return cfg
-    }
-    return null
   }
 
   const mergedColumnFormats = useMemo(() => {
