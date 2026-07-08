@@ -705,19 +705,27 @@ export function QueueDetailPage() {
   }
 
   // ── Trends (daily snapshots → sparklines + deltas on the global tiles) ──
-  const { data: trends } = useQuery<{
-    data: Array<{
-      snapshot_date: string
-      total: number
-      unowned: number
-      sla_warning: number
-      sla_breached: number
-      at_risk: number
-    }>
-  }>({
+  interface TrendRow {
+    snapshot_date: string
+    total: number
+    unowned: number
+    sla_warning: number
+    sla_breached: number
+    at_risk: number
+  }
+
+  const { data: trends } = useQuery<{ data: TrendRow[] }>({
     queryKey: ['queue-trends', id],
     queryFn: () => api.get(`/queues/${id}/trends`, { params: { days: 14 } }).then((r) => r.data),
     enabled: !!id,
+    staleTime: 5 * 60 * 1000
+  })
+
+  const { data: mineTrends } = useQuery<{ data: TrendRow[] }>({
+    queryKey: ['queue-trends', id, 'mine'],
+    queryFn: () =>
+      api.get(`/queues/${id}/trends`, { params: { days: 14, scope: 'mine' } }).then((r) => r.data),
+    enabled: !!id && scope === 'mine',
     staleTime: 5 * 60 * 1000
   })
 
@@ -725,11 +733,11 @@ export function QueueDetailPage() {
     trend?: number[]
     delta?: number | null
   } {
-    // Snapshots are whole-queue (daily cron, no per-user history), so trends
-    // are only truthful against the All Items scope — a scoped tab's tile
-    // counts would be compared to queue-wide history and read as fake drops.
-    if (scope !== 'all') return {}
-    const rows = trends?.data ?? []
+    // Queue-wide snapshots back the All Items scope; the viewer's own series
+    // (nivaro_queue_owner_snapshots) backs My Items. unowned/claimed scopes
+    // have no per-scope history — no trend shown there.
+    const source = scope === 'all' ? trends?.data : scope === 'mine' ? mineTrends?.data : undefined
+    const rows = source ?? []
     if (rows.length === 0) return {}
     const series = rows.map((r) => r[metric])
     const last = rows[rows.length - 1]
