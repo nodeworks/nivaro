@@ -397,13 +397,16 @@ export function QueueDetailPage() {
   }, [queue])
 
   // Apply the queue's configured default view + scope once, when meta loads.
-  const displayDefaultsApplied = useRef(false)
+  // Until then the page holds chrome + the items query, so the configured
+  // defaults never flash-in over the hard-coded initial state (and the items
+  // query never fires once with the wrong scope only to refire).
+  const [displayReady, setDisplayReady] = useState(false)
   useEffect(() => {
-    if (!queue?.display_config || displayDefaultsApplied.current) return
-    displayDefaultsApplied.current = true
+    if (!queue?.display_config || displayReady) return
     setView(queue.display_config.default_view)
     setScope(queue.display_config.default_scope)
-  }, [queue])
+    setDisplayReady(true)
+  }, [queue, displayReady])
 
   // If the current view was removed from the queue's allowed views, snap back.
   useEffect(() => {
@@ -543,8 +546,12 @@ export function QueueDetailPage() {
           }
         })
         .then((r) => r.data),
-    enabled: !!id
+    // Wait for display_config so the first fetch uses the configured default
+    // scope/view instead of firing once with the hard-coded initial state.
+    enabled: !!id && displayReady
   })
+
+  const showLoading = isLoading || !displayReady
 
   async function performTransition(item: QueueItemRow, targetState: string) {
     const instanceRes = await api.get(`/pipelines/instance/${item.collection}/${item.item_id}`)
@@ -1370,7 +1377,7 @@ export function QueueDetailPage() {
             count={stats?.total ?? 0}
             filteredCount={filteredStats ? filteredStats.total : null}
             active={Object.values(filterValues).every(isFilterEmpty) && scope === 'all'}
-            isLoading={isLoading}
+            isLoading={showLoading}
             {...trendFor('total')}
             onClick={clearAllTileFilters}
           />
@@ -1380,7 +1387,7 @@ export function QueueDetailPage() {
             filteredCount={filteredStats ? filteredStats.sla_warning : null}
             tone='amber'
             active={filterValues.sla_status === 'warning'}
-            isLoading={isLoading}
+            isLoading={showLoading}
             deltaBadIsUp
             {...trendFor('sla_warning')}
             onClick={() => toggleTileFilter('sla_status', 'warning')}
@@ -1391,7 +1398,7 @@ export function QueueDetailPage() {
             filteredCount={filteredStats ? filteredStats.sla_breached : null}
             tone='red'
             active={filterValues.sla_status === 'breached'}
-            isLoading={isLoading}
+            isLoading={showLoading}
             deltaBadIsUp
             {...trendFor('sla_breached')}
             onClick={() => toggleTileFilter('sla_status', 'breached')}
@@ -1402,7 +1409,7 @@ export function QueueDetailPage() {
             filteredCount={filteredStats ? filteredStats.at_risk : null}
             tone='red'
             active={filterValues.at_risk === 'yes'}
-            isLoading={isLoading}
+            isLoading={showLoading}
             deltaBadIsUp
             {...trendFor('at_risk')}
             onClick={() => toggleTileFilter('at_risk', 'yes')}
@@ -1412,7 +1419,7 @@ export function QueueDetailPage() {
             count={stats?.unowned ?? 0}
             filteredCount={filteredStats ? filteredStats.unowned : null}
             active={scope === 'unowned'}
-            isLoading={isLoading}
+            isLoading={showLoading}
             deltaBadIsUp
             {...trendFor('unowned')}
             onClick={() => {
@@ -1439,7 +1446,12 @@ export function QueueDetailPage() {
         )}
 
         <div className='mb-3 flex flex-wrap items-center gap-1 border-b border-slate-200 dark:border-border'>
-          {SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map((tab) => (
+          {/* Tabs wait for display_config so the configured default scope is
+              active on first paint instead of flashing in. */}
+          {!displayReady && (
+            <div className='mb-2 h-[21px] w-64 animate-pulse rounded bg-slate-100 dark:bg-muted' />
+          )}
+          {displayReady && SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map((tab) => (
             <button
               key={tab.value}
               type='button'
@@ -1521,6 +1533,11 @@ export function QueueDetailPage() {
         </div>
 
         <div className='mb-4 flex flex-wrap items-center gap-2'>
+          {/* Hold the switcher until display_config applies — otherwise all
+              three views flash before hidden ones disappear. */}
+          {!displayReady ? (
+            <div className='h-[30px] w-40 animate-pulse rounded-md bg-slate-100 dark:bg-muted' />
+          ) : (
           <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
             {(
               [
@@ -1547,6 +1564,7 @@ export function QueueDetailPage() {
               </button>
             ))}
           </div>
+          )}
           {view === 'table' && (
             <Popover>
               <PopoverTrigger asChild>
@@ -1724,7 +1742,7 @@ export function QueueDetailPage() {
             total={data?.total ?? 0}
             page={page}
             limit={limit}
-            isLoading={isLoading}
+            isLoading={showLoading}
             onPageChange={setPage}
             onRowClick={(row) => {
               setHighlightedId(rowId(row))
