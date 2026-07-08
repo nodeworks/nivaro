@@ -16,6 +16,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
+  Filter,
   Flame,
   GripVertical,
   Play,
@@ -27,13 +28,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
-import { type Column, DataTable, type FilterDef } from '@/components/data-table'
+import { type Column, DataTable, FilterControl, type FilterDef } from '@/components/data-table'
 import { OwnerAvatars } from '@/components/owner-avatars'
-import { RecordDrilldownSheet } from '@/components/record-drilldown-sheet'
 import { QueueBulkBar } from '@/components/queue-bulk-bar'
 import { QueueItemSheet } from '@/components/queue-item-sheet'
 import { QueueKanbanBoard } from '@/components/queue-kanban-board'
 import { QueueWorkloadView } from '@/components/queue-workload-view'
+import { RecordDrilldownSheet } from '@/components/record-drilldown-sheet'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -51,7 +52,7 @@ import { useAuth } from '@/lib/auth'
 import { type ColumnFormatConfig, formatMultiValue } from '@/lib/format-value'
 import { buildGroups } from '@/lib/queue-grouping'
 import { useDebounced } from '@/lib/useDebounced'
-import { cn, formatNumber } from '@/lib/utils'
+import { cn, formatDate, formatDateTime, formatNumber } from '@/lib/utils'
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
@@ -91,7 +92,10 @@ interface QueueSource {
   id: number
   type: 'collection' | 'tasks' | 'approvals' | 'owned_by_me'
   collection: string | null
-  drilldown?: Record<string, { enabled?: boolean; layout_id?: number | null; width?: number | string | null }>
+  drilldown?: Record<
+    string,
+    { enabled?: boolean; layout_id?: number | null; width?: number | string | null }
+  >
   column_formats?: Record<string, ColumnFormatConfig>
 }
 
@@ -172,7 +176,10 @@ function Sparkline({ points }: { points: number[] }) {
   const range = max - min || 1
   const step = w / (points.length - 1)
   const path = points
-    .map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${(h - 2 - ((v - min) / range) * (h - 4)).toFixed(1)}`)
+    .map(
+      (v, i) =>
+        `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${(h - 2 - ((v - min) / range) * (h - 4)).toFixed(1)}`
+    )
     .join(' ')
   return (
     <svg width={w} height={h} className='mt-1.5 opacity-40' aria-hidden='true'>
@@ -233,8 +240,12 @@ function StatTile({
         <p className='flex items-baseline gap-1.5 text-[22px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
           {filteredCount != null ? (
             <>
-              <span className='text-nvr-navy dark:text-nvr-cyan'>{formatNumber(filteredCount)}</span>
-              <span className='text-[13px] font-medium text-slate-400'>/ {formatNumber(count)}</span>
+              <span className='text-nvr-navy dark:text-nvr-cyan'>
+                {formatNumber(filteredCount)}
+              </span>
+              <span className='text-[13px] font-medium text-slate-400'>
+                / {formatNumber(count)}
+              </span>
             </>
           ) : (
             formatNumber(count)
@@ -243,11 +254,7 @@ function StatTile({
             <span
               className={cn(
                 'text-[11px] font-medium',
-                deltaBadIsUp
-                  ? delta > 0
-                    ? 'text-red-500'
-                    : 'text-emerald-600'
-                  : 'text-slate-400'
+                deltaBadIsUp ? (delta > 0 ? 'text-red-500' : 'text-emerald-600') : 'text-slate-400'
               )}
             >
               {delta > 0 ? '↑' : '↓'}
@@ -512,6 +519,24 @@ export function QueueDetailPage() {
     setScope('all')
     setPage(1)
   }
+
+  // Column filters live in a collapsible left rail (the inline per-column row
+  // stopped scaling past ~8 columns). Open state persists per queue.
+  const [filtersOpen, setFiltersOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(`nivaro_queue_filters_open:${id}`) === '1'
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(`nivaro_queue_filters_open:${id}`, filtersOpen ? '1' : '0')
+    } catch {
+      /* private mode */
+    }
+  }, [filtersOpen, id])
+  const activeFilterCount = Object.values(filterValues).filter((v) => !isFilterEmpty(v)).length
 
   const { data, isLoading } = useQuery<{
     data: QueueItemRow[]
@@ -850,8 +875,7 @@ export function QueueDetailPage() {
     // biome-ignore lint/correctness/useExhaustiveDependencies: sync only when data changes
   }, [items])
 
-  const workNextEligible = (row: QueueItemRow) =>
-    !row.claimed_by || row.claimed_by.id === user?.id
+  const workNextEligible = (row: QueueItemRow) => !row.claimed_by || row.claimed_by.id === user?.id
 
   function startWorkNext(after?: QueueItemRow) {
     const startIdx = after ? visibleRows.findIndex((r) => rowId(r) === rowId(after)) + 1 : 0
@@ -881,9 +905,7 @@ export function QueueDetailPage() {
       ) {
         return
       }
-      const idx = highlightedId
-        ? visibleRows.findIndex((r) => rowId(r) === highlightedId)
-        : -1
+      const idx = highlightedId ? visibleRows.findIndex((r) => rowId(r) === highlightedId) : -1
       if (e.key === 'j' || e.key === 'ArrowDown') {
         e.preventDefault()
         const next = visibleRows[Math.min(idx + 1, visibleRows.length - 1)]
@@ -906,7 +928,17 @@ export function QueueDetailPage() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [view, visibleRows, highlightedId, sheetItem, user?.id, claimMut, releaseMut, navigate, claimsEnabled])
+  }, [
+    view,
+    visibleRows,
+    highlightedId,
+    sheetItem,
+    user?.id,
+    claimMut,
+    releaseMut,
+    navigate,
+    claimsEnabled
+  ])
 
   // ── Saved views ──
   const { data: views } = useQuery<{ data: QueueView[] }>({
@@ -1013,18 +1045,30 @@ export function QueueDetailPage() {
     )
   }))
 
+  // Single-collection queues waste a column repeating the same badge on every
+  // row — only offer/show Collection when the queue actually mixes collections.
+  const multiCollection = (data?.available_values.collection?.length ?? 0) > 1
+
   const baseColumns: Column<QueueItemRow>[] = [
-    {
-      key: 'collection',
-      header: aliasFor('collection', 'Collection'),
-      sortable: true,
-      render: (row) => <Badge variant='outline'>{collectionLabel(row.collection)}</Badge>
-    },
+    ...(multiCollection
+      ? [
+          {
+            key: 'collection',
+            header: aliasFor('collection', 'Collection'),
+            sortable: true,
+            render: (row) => <Badge variant='outline'>{collectionLabel(row.collection)}</Badge>
+          } satisfies Column<QueueItemRow>
+        ]
+      : []),
     {
       key: 'label',
       header: aliasFor('label', 'Item'),
       sortable: true,
-      render: (row) => <span className='font-medium'>{row.label}</span>
+      render: (row) => (
+        <span className='block max-w-[160px] truncate font-medium' title={row.label}>
+          {row.label}
+        </span>
+      )
     },
     {
       key: 'state',
@@ -1033,11 +1077,12 @@ export function QueueDetailPage() {
       render: (row) =>
         row.state ? (
           <span
-            className='rounded px-1.5 py-0.5 text-[11px] font-medium'
+            className='inline-block max-w-[190px] truncate whitespace-nowrap rounded px-1.5 py-0.5 align-middle text-[11px] font-medium'
             style={{
               backgroundColor: row.state_color ? `${row.state_color}1a` : undefined,
               color: row.state_color ?? undefined
             }}
+            title={stateLabel(row.state)}
           >
             {stateLabel(row.state)}
           </span>
@@ -1138,6 +1183,24 @@ export function QueueDetailPage() {
     return out
   }, [queue?.sources])
 
+  // Compact cell text: emails show the local part, unformatted ISO datetimes
+  // render as short dates — the full value always lives in the hover title.
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:/
+  function compactCell(display: string): { text: string; title: string } {
+    if (EMAIL_RE.test(display)) return { text: display.split('@')[0], title: display }
+    if (ISO_DATETIME_RE.test(display)) {
+      const d = new Date(display)
+      if (!Number.isNaN(d.getTime())) {
+        return {
+          text: formatDate(d, { month: '2-digit', day: '2-digit', year: '2-digit' }),
+          title: formatDateTime(d)
+        }
+      }
+    }
+    return { text: display, title: display }
+  }
+
   const extraColumns: Column<QueueItemRow>[] = extraFieldKeys.map((field) => ({
     key: `extra.${field}`,
     header: aliasFor(`extra.${field}`, formatColumnHeader(field)),
@@ -1147,10 +1210,16 @@ export function QueueDetailPage() {
       if (value == null || value === '') return <span className='text-slate-300'>—</span>
       const fmt = formatConfigFor(field)
       const display = fmt ? formatMultiValue(String(value), fmt) : String(value)
+      const { text, title } = compactCell(display)
       const meta = (queue?.extra_field_meta ?? []).find((m) => m.path === field)
       const targetIds = row.extra_ids?.[field] ?? []
       const cfg = drilldownConfigFor(field)
-      if (meta?.kind === 'relation' && meta.target_collection && targetIds.length > 0 && cfg.enabled) {
+      if (
+        meta?.kind === 'relation' &&
+        meta.target_collection &&
+        targetIds.length > 0 &&
+        cfg.enabled
+      ) {
         return (
           <button
             type='button'
@@ -1164,18 +1233,23 @@ export function QueueDetailPage() {
                 title: display
               })
             }}
-            className='text-left text-[12px] text-slate-700 underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-nvr-navy hover:decoration-nvr-cyan dark:text-slate-200 dark:hover:text-nvr-cyan'
+            title={title}
+            className='block max-w-[200px] truncate text-left text-[12px] text-slate-700 underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-nvr-navy hover:decoration-nvr-cyan dark:text-slate-200 dark:hover:text-nvr-cyan'
           >
-            {display}
+            {text}
           </button>
         )
       }
-      return <span className='text-[12px]'>{display}</span>
+      return (
+        <span className='block max-w-[200px] truncate text-[12px]' title={title}>
+          {text}
+        </span>
+      )
     }
   }))
 
   const TOGGLEABLE_KEYS = [
-    'collection',
+    ...(multiCollection ? ['collection'] : []),
     'state',
     'owners',
     'aging_hours',
@@ -1185,7 +1259,7 @@ export function QueueDetailPage() {
   ]
 
   const DEFAULT_VISIBLE_COLUMNS = [
-    'collection',
+    ...(multiCollection ? ['collection'] : []),
     'state',
     'owners',
     'aging_hours',
@@ -1272,9 +1346,7 @@ export function QueueDetailPage() {
       return out
     }
 
-  const extraFieldMetaByPath = new Map(
-    (queue?.extra_field_meta ?? []).map((m) => [m.path, m])
-  )
+  const extraFieldMetaByPath = new Map((queue?.extra_field_meta ?? []).map((m) => [m.path, m]))
 
   const filterDefs: FilterDef[] = [
     {
@@ -1488,24 +1560,25 @@ export function QueueDetailPage() {
           {!displayReady && (
             <div className='mb-2 h-[21px] w-64 animate-pulse rounded bg-slate-100 dark:bg-muted' />
           )}
-          {displayReady && SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map((tab) => (
-            <button
-              key={tab.value}
-              type='button'
-              onClick={() => {
-                setScope(tab.value)
-                setPage(1)
-              }}
-              className={cn(
-                'border-b-2 px-3 py-2 text-[13px] font-medium transition-colors',
-                scope === tab.value
-                  ? 'border-nvr-cyan text-nvr-navy dark:text-nvr-cyan'
-                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-muted-foreground'
-              )}
-            >
-              {tab.label}
-            </button>
-          ))}
+          {displayReady &&
+            SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map((tab) => (
+              <button
+                key={tab.value}
+                type='button'
+                onClick={() => {
+                  setScope(tab.value)
+                  setPage(1)
+                }}
+                className={cn(
+                  'border-b-2 px-3 py-2 text-[13px] font-medium transition-colors',
+                  scope === tab.value
+                    ? 'border-nvr-cyan text-nvr-navy dark:text-nvr-cyan'
+                    : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-muted-foreground'
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
           <div className='ml-auto flex flex-wrap items-center gap-1.5 pb-1.5'>
             {(views?.data ?? []).map((v) => (
               <span
@@ -1575,32 +1648,32 @@ export function QueueDetailPage() {
           {!displayReady ? (
             <div className='h-[30px] w-40 animate-pulse rounded-md bg-slate-100 dark:bg-muted' />
           ) : (
-          <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
-            {(
-              [
-                { value: 'table', label: 'Table' },
-                { value: 'kanban', label: 'Kanban' },
-                { value: 'workload', label: 'Workload' }
-              ] as const
-            )
-              .filter((v) => allowedViews.includes(v.value))
-              .map((v, i) => (
-              <button
-                key={v.value}
-                type='button'
-                onClick={() => setView(v.value)}
-                className={cn(
-                  'px-3 py-1.5 text-[12px] font-medium transition-colors',
-                  i > 0 && 'border-l border-slate-200 dark:border-border',
-                  view === v.value
-                    ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                    : 'bg-white text-slate-500 hover:text-slate-700 dark:bg-card dark:hover:text-foreground'
-                )}
-              >
-                {v.label}
-              </button>
-            ))}
-          </div>
+            <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+              {(
+                [
+                  { value: 'table', label: 'Table' },
+                  { value: 'kanban', label: 'Kanban' },
+                  { value: 'workload', label: 'Workload' }
+                ] as const
+              )
+                .filter((v) => allowedViews.includes(v.value))
+                .map((v, i) => (
+                  <button
+                    key={v.value}
+                    type='button'
+                    onClick={() => setView(v.value)}
+                    className={cn(
+                      'px-3 py-1.5 text-[12px] font-medium transition-colors',
+                      i > 0 && 'border-l border-slate-200 dark:border-border',
+                      view === v.value
+                        ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                        : 'bg-white text-slate-500 hover:text-slate-700 dark:bg-card dark:hover:text-foreground'
+                    )}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+            </div>
           )}
           {view === 'table' && (
             <Popover>
@@ -1720,6 +1793,27 @@ export function QueueDetailPage() {
           )}
           <div className='flex-1' />
           {view === 'table' && (
+            <button
+              type='button'
+              onClick={() => setFiltersOpen((o) => !o)}
+              aria-expanded={filtersOpen}
+              className={cn(
+                'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
+                filtersOpen || activeFilterCount > 0
+                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                  : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+              )}
+            >
+              <Filter className='h-3.5 w-3.5' />
+              Filters
+              {activeFilterCount > 0 && (
+                <span className='rounded-full bg-nvr-cyan px-1.5 text-[10px] font-semibold leading-4 text-white'>
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+          )}
+          {view === 'table' && (
             <Popover>
               <PopoverTrigger asChild>
                 <button
@@ -1772,40 +1866,81 @@ export function QueueDetailPage() {
         </div>
 
         {view === 'table' ? (
-          <DataTable<QueueItemRow>
-            columns={columns}
-            rows={items}
-            rowKey={(row) => `${row.collection}:${row.item_id}`}
-            total={data?.total ?? 0}
-            page={page}
-            limit={limit}
-            isLoading={showLoading}
-            onPageChange={setPage}
-            onRowClick={(row) => {
-              setHighlightedId(rowId(row))
-              setSheetItem(row)
-            }}
-            rowClassName={(row) =>
-              highlightedId === rowId(row) ? 'bg-nvr-cyan/5 dark:bg-nvr-cyan/10' : undefined
-            }
-            emptyMessage='Nothing in this queue.'
-            sort={sort}
-            onSortChange={(next) => {
-              setSort(next)
-              setPage(1)
-            }}
-            filterDefs={filterDefs}
-            filterValues={filterValues}
-            onFilterChange={(key, value) => {
-              setFilterValues((prev) => ({ ...prev, [key]: value }))
-              setPage(1)
-            }}
-            rowGroups={rowGroups ?? undefined}
-            collapsedGroups={collapsedGroups}
-            onToggleGroup={toggleGroup}
-            selectedIds={bulkActionsEnabled ? selectedIds : undefined}
-            onSelectionChange={bulkActionsEnabled ? setSelectedIds : undefined}
-          />
+          <div className='flex items-start gap-4'>
+            {filtersOpen && (
+              <aside className='w-[240px] shrink-0 self-start overflow-hidden rounded-lg border border-slate-200 bg-white motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-left-1 motion-safe:duration-200 dark:border-border dark:bg-card'>
+                <div className='flex h-10 items-center justify-between border-b border-slate-100 px-3 dark:border-border'>
+                  <span className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+                    Filters
+                  </span>
+                  {activeFilterCount > 0 && (
+                    <button
+                      type='button'
+                      onClick={() => {
+                        setFilterValues({})
+                        setPage(1)
+                      }}
+                      className='text-[11px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                    >
+                      Clear all
+                    </button>
+                  )}
+                </div>
+                <div className='max-h-[calc(100vh-360px)] space-y-3 overflow-y-auto p-3'>
+                  {filterDefs.map((def) => (
+                    <FilterControl
+                      key={def.key}
+                      def={def}
+                      layout='stacked'
+                      value={filterValues[def.key] ?? ''}
+                      onChange={(value) => {
+                        setFilterValues((prev) => ({ ...prev, [def.key]: value }))
+                        setPage(1)
+                      }}
+                    />
+                  ))}
+                </div>
+              </aside>
+            )}
+            <div className='min-w-0 flex-1'>
+              <DataTable<QueueItemRow>
+                columns={columns}
+                rows={items}
+                rowKey={(row) => `${row.collection}:${row.item_id}`}
+                total={data?.total ?? 0}
+                page={page}
+                limit={limit}
+                isLoading={showLoading}
+                onPageChange={setPage}
+                onRowClick={(row) => {
+                  setHighlightedId(rowId(row))
+                  setSheetItem(row)
+                }}
+                rowClassName={(row) =>
+                  highlightedId === rowId(row) ? 'bg-nvr-cyan/5 dark:bg-nvr-cyan/10' : undefined
+                }
+                emptyMessage='Nothing in this queue.'
+                sort={sort}
+                onSortChange={(next) => {
+                  setSort(next)
+                  setPage(1)
+                }}
+                filterDefs={filterDefs}
+                filterValues={filterValues}
+                onFilterChange={(key, value) => {
+                  setFilterValues((prev) => ({ ...prev, [key]: value }))
+                  setPage(1)
+                }}
+                rowGroups={rowGroups ?? undefined}
+                collapsedGroups={collapsedGroups}
+                onToggleGroup={toggleGroup}
+                selectedIds={bulkActionsEnabled ? selectedIds : undefined}
+                onSelectionChange={bulkActionsEnabled ? setSelectedIds : undefined}
+                hideFilterRow
+                nowrapCells
+              />
+            </div>
+          </div>
         ) : view === 'kanban' ? (
           <QueueKanbanBoard
             items={items}

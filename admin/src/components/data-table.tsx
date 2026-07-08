@@ -1,5 +1,15 @@
-import { Check, ChevronDown, ChevronRight, ChevronsUpDown, ChevronUp, Search, X } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronsUpDown,
+  ChevronUp,
+  Search,
+  X
+} from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Command,
   CommandEmpty,
@@ -7,10 +17,8 @@ import {
   CommandItem,
   CommandList
 } from '@/components/ui/command'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -80,6 +88,12 @@ export interface DataTableProps<T = Record<string, unknown>> {
   onFilterChange?: (key: string, value: string | string[]) => void
   toolbarRight?: React.ReactNode
   emptyMessage?: string
+  /** Suppress the inline filter-control row while keeping filterDefs available
+   *  to the host (e.g. a page rendering its own filter rail). */
+  hideFilterRow?: boolean
+  /** Force single-line cells (whitespace-nowrap on every body cell) — hosts
+   *  pair this with per-column truncation for dense, scannable tables. */
+  nowrapCells?: boolean
   selectedIds?: string[]
   onSelectionChange?: (ids: string[]) => void
   /** Optional per-row class — e.g. at-risk background tinting. */
@@ -153,19 +167,22 @@ function FilterCombobox({
     if (!isAsync || !open) return
     const seq = ++requestSeq.current
     setLoading(true)
-    const timer = setTimeout(() => {
-      def
-        .loadOptions?.(search)
-        .then((opts) => {
-          if (requestSeq.current === seq) setAsyncOptions(opts)
-        })
-        .catch(() => {
-          if (requestSeq.current === seq) setAsyncOptions([])
-        })
-        .finally(() => {
-          if (requestSeq.current === seq) setLoading(false)
-        })
-    }, search ? 250 : 0)
+    const timer = setTimeout(
+      () => {
+        def
+          .loadOptions?.(search)
+          .then((opts) => {
+            if (requestSeq.current === seq) setAsyncOptions(opts)
+          })
+          .catch(() => {
+            if (requestSeq.current === seq) setAsyncOptions([])
+          })
+          .finally(() => {
+            if (requestSeq.current === seq) setLoading(false)
+          })
+      },
+      search ? 250 : 0
+    )
     return () => clearTimeout(timer)
     // biome-ignore lint/correctness/useExhaustiveDependencies: def identity is unstable per render; keyed on search/open
   }, [search, open, isAsync])
@@ -254,9 +271,7 @@ function FilterCombobox({
                   }}
                   className='text-[12px]'
                 >
-                  <Check
-                    className={cn('mr-2 h-3 w-3', isSelected ? 'opacity-100' : 'opacity-0')}
-                  />
+                  <Check className={cn('mr-2 h-3 w-3', isSelected ? 'opacity-100' : 'opacity-0')} />
                   {opt.label}
                 </CommandItem>
               )
@@ -265,6 +280,102 @@ function FilterCombobox({
         </Command>
       </PopoverContent>
     </Popover>
+  )
+}
+
+// ─── FilterControl ────────────────────────────────────────────────────────────
+// One filter def rendered as its control. 'inline' = the classic compact
+// toolbar chip; 'stacked' = label above a full-width control, for filter rails.
+
+export function FilterControl({
+  def,
+  value,
+  onChange,
+  layout = 'inline'
+}: {
+  def: FilterDef
+  value: string | string[]
+  onChange: (value: string | string[]) => void
+  layout?: 'inline' | 'stacked'
+}) {
+  const stacked = layout === 'stacked'
+  const currentVal = typeof value === 'string' ? value : ''
+  const widthCls = stacked ? 'w-full' : 'w-40'
+
+  let control: React.ReactNode
+  if (def.type === 'text') {
+    control = (
+      <Input
+        className={cn('h-8 border-slate-200 bg-slate-50 text-[13px]', widthCls)}
+        placeholder={def.placeholder}
+        value={currentVal}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    )
+  } else if (def.type === 'combobox') {
+    control = (
+      <div className={cn(stacked && '[&>button]:w-full')}>
+        <FilterCombobox def={def} value={value} onChange={onChange} />
+      </div>
+    )
+  } else if (def.type === 'range') {
+    const [minVal, maxVal] = currentVal.split(':')
+    control = (
+      <div className='flex items-center gap-1'>
+        <Input
+          type='number'
+          className={cn(
+            'h-8 border-slate-200 bg-slate-50 text-[13px]',
+            stacked ? 'w-full' : 'w-20'
+          )}
+          placeholder='Min'
+          value={minVal ?? ''}
+          onChange={(e) => onChange(`${e.target.value}:${maxVal ?? ''}`)}
+        />
+        <span className='text-[12px] text-slate-400'>–</span>
+        <Input
+          type='number'
+          className={cn(
+            'h-8 border-slate-200 bg-slate-50 text-[13px]',
+            stacked ? 'w-full' : 'w-20'
+          )}
+          placeholder='Max'
+          value={maxVal ?? ''}
+          onChange={(e) => onChange(`${minVal ?? ''}:${e.target.value}`)}
+        />
+      </div>
+    )
+  } else {
+    // Radix crashes on empty string value — use __all__ as sentinel
+    const selectVal = currentVal === '' ? '__all__' : currentVal
+    control = (
+      <Select value={selectVal} onValueChange={(v) => onChange(v === '__all__' ? '' : v)}>
+        <SelectTrigger className={cn('h-8 border-slate-200 bg-slate-50 text-[13px]', widthCls)}>
+          <SelectValue placeholder={def.placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value='__all__'>{def.placeholder}</SelectItem>
+          {(def.options ?? []).map((opt) => (
+            <SelectItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    )
+  }
+
+  if (!stacked) return <>{control}</>
+  // Placeholders double as labels when stacked — drop the input-affordance
+  // words ("Search …", trailing ellipsis) so the label reads as a noun.
+  const label = def.placeholder.replace(/^Search\s+/i, '').replace(/[…]|\.{3}$/g, '')
+  return (
+    <div className='space-y-1'>
+      <span className='block text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
+        {label}
+      </span>
+      {control}
+    </div>
   )
 }
 
@@ -292,6 +403,8 @@ export function DataTable<T = Record<string, unknown>>({
   onFilterChange,
   toolbarRight,
   emptyMessage = 'No records found.',
+  hideFilterRow = false,
+  nowrapCells = false,
   selectedIds,
   onSelectionChange,
   rowClassName,
@@ -303,8 +416,8 @@ export function DataTable<T = Record<string, unknown>>({
   const start = (page - 1) * limit + 1
   const end = Math.min(page * limit, total)
 
-  const hasToolbar =
-    searchValue !== undefined || (filterDefs && filterDefs.length > 0) || toolbarRight !== undefined
+  const showFilterRow = !hideFilterRow && filterDefs && filterDefs.length > 0
+  const hasToolbar = searchValue !== undefined || showFilterRow || toolbarRight !== undefined
 
   const handleHeaderClick = (col: Column<T>) => {
     if (!col.sortable || !onSortChange) return
@@ -341,8 +454,13 @@ export function DataTable<T = Record<string, unknown>>({
           </TableCell>
         )}
         {columns.map((col) => (
-          <TableCell key={col.key} className={cn('px-3 py-2', col.className)}>
-            {col.render ? col.render(row, i) : String((row as Record<string, unknown>)[col.key] ?? '—')}
+          <TableCell
+            key={col.key}
+            className={cn('px-3 py-2', nowrapCells && 'whitespace-nowrap', col.className)}
+          >
+            {col.render
+              ? col.render(row, i)
+              : String((row as Record<string, unknown>)[col.key] ?? '—')}
           </TableCell>
         ))}
       </TableRow>
@@ -375,85 +493,15 @@ export function DataTable<T = Record<string, unknown>>({
               </div>
             )}
 
-            {filterDefs?.map((def) => {
-              const rawVal = filterValues[def.key] ?? ''
-              const currentVal = typeof rawVal === 'string' ? rawVal : ''
-
-              if (def.type === 'text') {
-                return (
-                  <Input
-                    key={def.key}
-                    className='h-8 w-40 border-slate-200 bg-slate-50 text-[13px]'
-                    placeholder={def.placeholder}
-                    value={currentVal}
-                    onChange={(e) => onFilterChange?.(def.key, e.target.value)}
-                  />
-                )
-              }
-
-              if (def.type === 'combobox') {
-                return (
-                  <FilterCombobox
-                    key={def.key}
-                    def={def}
-                    value={rawVal}
-                    onChange={(v) => onFilterChange?.(def.key, v)}
-                  />
-                )
-              }
-
-              if (def.type === 'range') {
-                const [minVal, maxVal] = currentVal.split(':')
-                return (
-                  <div key={def.key} className='flex items-center gap-1'>
-                    <Input
-                      type='number'
-                      className='h-8 w-20 border-slate-200 bg-slate-50 text-[13px]'
-                      placeholder='Min'
-                      value={minVal ?? ''}
-                      onChange={(e) =>
-                        onFilterChange?.(def.key, `${e.target.value}:${maxVal ?? ''}`)
-                      }
-                    />
-                    <span className='text-[12px] text-slate-400'>–</span>
-                    <Input
-                      type='number'
-                      className='h-8 w-20 border-slate-200 bg-slate-50 text-[13px]'
-                      placeholder='Max'
-                      value={maxVal ?? ''}
-                      onChange={(e) =>
-                        onFilterChange?.(def.key, `${minVal ?? ''}:${e.target.value}`)
-                      }
-                    />
-                  </div>
-                )
-              }
-
-              // Radix crashes on empty string value — use __all__ as sentinel
-              const selectVal = currentVal === '' ? '__all__' : currentVal
-
-              return (
-                <Select
+            {showFilterRow &&
+              filterDefs?.map((def) => (
+                <FilterControl
                   key={def.key}
-                  value={selectVal}
-                  onValueChange={(v) => {
-                    onFilterChange?.(def.key, v === '__all__' ? '' : v)
-                  }}
-                >
-                  <SelectTrigger className='h-8 w-40 border-slate-200 bg-slate-50 text-[13px]'>
-                    <SelectValue placeholder={def.placeholder} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value='__all__'>{def.placeholder}</SelectItem>
-                    {(def.options ?? []).map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )
-            })}
+                  def={def}
+                  value={filterValues[def.key] ?? ''}
+                  onChange={(v) => onFilterChange?.(def.key, v)}
+                />
+              ))}
 
             <div className='flex-1' />
 
@@ -507,7 +555,7 @@ export function DataTable<T = Record<string, unknown>>({
                     <TableHead
                       key={col.key}
                       className={cn(
-                        'h-9 bg-slate-50 px-3 py-0 text-[11px] font-medium text-slate-500',
+                        'h-9 whitespace-nowrap bg-slate-50 px-3 py-0 text-[11px] font-medium text-slate-500',
                         col.sortable &&
                           onSortChange &&
                           'cursor-pointer select-none hover:text-slate-600',
