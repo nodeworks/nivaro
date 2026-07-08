@@ -19,16 +19,25 @@ import {
   Filter,
   Flame,
   GripVertical,
+  PanelLeftClose,
   Play,
   RefreshCw,
   Rows3,
-  SlidersHorizontal
+  SlidersHorizontal,
+  X
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
-import { type Column, DataTable, FilterControl, type FilterDef } from '@/components/data-table'
+import {
+  type Column,
+  DataTable,
+  FilterControl,
+  type FilterDef,
+  filterDefLabel,
+  filterValueDisplay
+} from '@/components/data-table'
 import { OwnerAvatars } from '@/components/owner-avatars'
 import { QueueBulkBar } from '@/components/queue-bulk-bar'
 import { QueueItemSheet } from '@/components/queue-item-sheet'
@@ -1866,81 +1875,143 @@ export function QueueDetailPage() {
         </div>
 
         {view === 'table' ? (
-          <div className='flex items-start gap-4'>
-            {filtersOpen && (
-              <aside className='w-[240px] shrink-0 self-start overflow-hidden rounded-lg border border-slate-200 bg-white motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-left-1 motion-safe:duration-200 dark:border-border dark:bg-card'>
-                <div className='flex h-10 items-center justify-between border-b border-slate-100 px-3 dark:border-border'>
-                  <span className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
-                    Filters
-                  </span>
-                  {activeFilterCount > 0 && (
-                    <button
-                      type='button'
-                      onClick={() => {
-                        setFilterValues({})
-                        setPage(1)
-                      }}
-                      className='text-[11px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
-                    >
-                      Clear all
-                    </button>
-                  )}
-                </div>
-                <div className='max-h-[calc(100vh-360px)] space-y-3 overflow-y-auto p-3'>
-                  {filterDefs.map((def) => (
-                    <FilterControl
+          <>
+            {!filtersOpen && activeFilterCount > 0 && (
+              <div className='mb-3 flex flex-wrap items-center gap-1.5'>
+                {filterDefs
+                  .filter((def) => !isFilterEmpty(filterValues[def.key]))
+                  .map((def) => (
+                    <span
                       key={def.key}
-                      def={def}
-                      layout='stacked'
-                      value={filterValues[def.key] ?? ''}
-                      onChange={(value) => {
-                        setFilterValues((prev) => ({ ...prev, [def.key]: value }))
-                        setPage(1)
-                      }}
-                    />
+                      className='flex items-center overflow-hidden rounded-md border border-slate-200 bg-white text-[12px] dark:border-border dark:bg-card'
+                    >
+                      <button
+                        type='button'
+                        onClick={() => setFiltersOpen(true)}
+                        title='Edit filters'
+                        className='flex items-center gap-1 py-1 pl-2 pr-1 hover:bg-slate-50 dark:hover:bg-muted/50'
+                      >
+                        <span className='text-slate-500 dark:text-muted-foreground'>
+                          {filterDefLabel(def)}:
+                        </span>
+                        <span className='max-w-[180px] truncate font-medium text-slate-700 dark:text-slate-200'>
+                          {filterValueDisplay(def, filterValues[def.key] ?? '')}
+                        </span>
+                      </button>
+                      <button
+                        type='button'
+                        aria-label={`Clear ${filterDefLabel(def)} filter`}
+                        onClick={() => {
+                          setFilterValues((prev) => ({
+                            ...prev,
+                            [def.key]: Array.isArray(prev[def.key]) ? [] : ''
+                          }))
+                          setPage(1)
+                        }}
+                        className='self-stretch px-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-foreground'
+                      >
+                        <X className='h-3 w-3' />
+                      </button>
+                    </span>
                   ))}
-                </div>
-              </aside>
+                <button
+                  type='button'
+                  onClick={() => {
+                    setFilterValues({})
+                    setPage(1)
+                  }}
+                  className='px-1.5 py-1 text-[11px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                >
+                  Clear all
+                </button>
+              </div>
             )}
-            <div className='min-w-0 flex-1'>
-              <DataTable<QueueItemRow>
-                columns={columns}
-                rows={items}
-                rowKey={(row) => `${row.collection}:${row.item_id}`}
-                total={data?.total ?? 0}
-                page={page}
-                limit={limit}
-                isLoading={showLoading}
-                onPageChange={setPage}
-                onRowClick={(row) => {
-                  setHighlightedId(rowId(row))
-                  setSheetItem(row)
-                }}
-                rowClassName={(row) =>
-                  highlightedId === rowId(row) ? 'bg-nvr-cyan/5 dark:bg-nvr-cyan/10' : undefined
-                }
-                emptyMessage='Nothing in this queue.'
-                sort={sort}
-                onSortChange={(next) => {
-                  setSort(next)
-                  setPage(1)
-                }}
-                filterDefs={filterDefs}
-                filterValues={filterValues}
-                onFilterChange={(key, value) => {
-                  setFilterValues((prev) => ({ ...prev, [key]: value }))
-                  setPage(1)
-                }}
-                rowGroups={rowGroups ?? undefined}
-                collapsedGroups={collapsedGroups}
-                onToggleGroup={toggleGroup}
-                selectedIds={bulkActionsEnabled ? selectedIds : undefined}
-                onSelectionChange={bulkActionsEnabled ? setSelectedIds : undefined}
-                hideFilterRow
-                nowrapCells
-              />
+            <div className='flex items-start gap-4'>
+              {filtersOpen && (
+                <aside className='w-[240px] shrink-0 self-start overflow-hidden rounded-lg border border-slate-200 bg-white motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-left-1 motion-safe:duration-200 dark:border-border dark:bg-card'>
+                  <div className='flex h-10 items-center justify-between border-b border-slate-100 px-3 dark:border-border'>
+                    <span className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+                      Filters
+                    </span>
+                    <span className='flex items-center gap-2'>
+                      {activeFilterCount > 0 && (
+                        <button
+                          type='button'
+                          onClick={() => {
+                            setFilterValues({})
+                            setPage(1)
+                          }}
+                          className='text-[11px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                        >
+                          Clear all
+                        </button>
+                      )}
+                      <button
+                        type='button'
+                        onClick={() => setFiltersOpen(false)}
+                        aria-label='Collapse filters'
+                        className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-foreground'
+                      >
+                        <PanelLeftClose className='h-3.5 w-3.5' />
+                      </button>
+                    </span>
+                  </div>
+                  <div className='max-h-[calc(100vh-360px)] space-y-3 overflow-y-auto p-3'>
+                    {filterDefs.map((def) => (
+                      <FilterControl
+                        key={def.key}
+                        def={def}
+                        layout='stacked'
+                        value={filterValues[def.key] ?? ''}
+                        onChange={(value) => {
+                          setFilterValues((prev) => ({ ...prev, [def.key]: value }))
+                          setPage(1)
+                        }}
+                      />
+                    ))}
+                  </div>
+                </aside>
+              )}
+              <div className='min-w-0 flex-1'>
+                <DataTable<QueueItemRow>
+                  columns={columns}
+                  rows={items}
+                  rowKey={(row) => `${row.collection}:${row.item_id}`}
+                  total={data?.total ?? 0}
+                  page={page}
+                  limit={limit}
+                  isLoading={showLoading}
+                  onPageChange={setPage}
+                  onRowClick={(row) => {
+                    setHighlightedId(rowId(row))
+                    setSheetItem(row)
+                  }}
+                  rowClassName={(row) =>
+                    highlightedId === rowId(row) ? 'bg-nvr-cyan/5 dark:bg-nvr-cyan/10' : undefined
+                  }
+                  emptyMessage='Nothing in this queue.'
+                  sort={sort}
+                  onSortChange={(next) => {
+                    setSort(next)
+                    setPage(1)
+                  }}
+                  filterDefs={filterDefs}
+                  filterValues={filterValues}
+                  onFilterChange={(key, value) => {
+                    setFilterValues((prev) => ({ ...prev, [key]: value }))
+                    setPage(1)
+                  }}
+                  rowGroups={rowGroups ?? undefined}
+                  collapsedGroups={collapsedGroups}
+                  onToggleGroup={toggleGroup}
+                  selectedIds={bulkActionsEnabled ? selectedIds : undefined}
+                  onSelectionChange={bulkActionsEnabled ? setSelectedIds : undefined}
+                  hideFilterRow
+                  nowrapCells
+                />
+              </div>
             </div>
-          </div>
+          </>
         ) : view === 'kanban' ? (
           <QueueKanbanBoard
             items={items}

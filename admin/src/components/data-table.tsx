@@ -366,17 +366,35 @@ export function FilterControl({
   }
 
   if (!stacked) return <>{control}</>
-  // Placeholders double as labels when stacked — drop the input-affordance
-  // words ("Search …", trailing ellipsis) so the label reads as a noun.
-  const label = def.placeholder.replace(/^Search\s+/i, '').replace(/[…]|\.{3}$/g, '')
   return (
     <div className='space-y-1'>
       <span className='block text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
-        {label}
+        {filterDefLabel(def)}
       </span>
       {control}
     </div>
   )
+}
+
+// Placeholders double as labels in stacked rails and summary pills — drop the
+// input-affordance words ("Search …", trailing ellipsis) so they read as nouns.
+export function filterDefLabel(def: FilterDef): string {
+  return def.placeholder.replace(/^Search\s+/i, '').replace(/[…]|\.{3}$/g, '')
+}
+
+/** Human display for an applied filter value — option labels for comboboxes
+ * (ids → names), ≥/≤ for ranges, first two entries + count for multiselects. */
+export function filterValueDisplay(def: FilterDef, value: string | string[]): string {
+  const optLabel = (v: string) => def.options?.find((o) => o.value === v)?.label ?? v
+  if (Array.isArray(value)) {
+    const names = value.map(optLabel)
+    return names.slice(0, 2).join(', ') + (names.length > 2 ? ` +${names.length - 2}` : '')
+  }
+  if (def.type === 'range') {
+    const [min, max] = value.split(':')
+    return [min && `≥${min}`, max && `≤${max}`].filter(Boolean).join(' ')
+  }
+  return optLabel(value)
 }
 
 // ─── DataTable ────────────────────────────────────────────────────────────────
