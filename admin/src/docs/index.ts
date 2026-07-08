@@ -24,6 +24,7 @@ export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
 export * from './sections/security.js'
 export * from './sections/storage.js'
+export * from './sections/team-throughput.js'
 export * from './sections/tree-advanced.js'
 export * from './sections/trees.js'
 export * from './sections/workflows-pipelines.js'
@@ -289,6 +290,7 @@ import {
   storagePdfTemplates,
   storageProviders
 } from './sections/storage.js'
+import { teamThroughputGuide } from './sections/team-throughput.js'
 import {
   orgChartView,
   treeInheritedFields,
@@ -492,6 +494,7 @@ export const navSections: NavGroup[] = [
       queueSlaTimers,
       alertEngineGuide,
       atRiskFlagging,
+      teamThroughputGuide,
       anomalyDetection,
       smtpConfig,
       smsConfig,
