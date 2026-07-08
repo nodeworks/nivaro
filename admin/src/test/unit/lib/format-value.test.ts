@@ -48,9 +48,9 @@ describe('formatValue number', () => {
   })
 
   it('applies prefix and suffix', () => {
-    expect(
-      formatValue('42', { type: 'number', decimals: 0, prefix: '£', suffix: ' GBP' })
-    ).toBe('£42 GBP')
+    expect(formatValue('42', { type: 'number', decimals: 0, prefix: '£', suffix: ' GBP' })).toBe(
+      '£42 GBP'
+    )
   })
 
   it('no thousands grouping by default', () => {
@@ -94,7 +94,9 @@ describe('formatMultiValue', () => {
   })
 
   it('preserves +N more suffix', () => {
-    expect(formatMultiValue('2025-01-01T12:00:00, 2026-06-06T12:00:00 +2 more', cfg)).toBe('2025, 2026 +2 more')
+    expect(formatMultiValue('2025-01-01T12:00:00, 2026-06-06T12:00:00 +2 more', cfg)).toBe(
+      '2025, 2026 +2 more'
+    )
   })
 
   it('empty string stays empty', () => {
