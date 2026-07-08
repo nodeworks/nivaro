@@ -48,6 +48,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { type ColumnFormatConfig, formatMultiValue } from '@/lib/format-value'
 import { buildGroups } from '@/lib/queue-grouping'
 import { useDebounced } from '@/lib/useDebounced'
 import { cn, formatNumber } from '@/lib/utils'
@@ -91,6 +92,7 @@ interface QueueSource {
   type: 'collection' | 'tasks' | 'approvals' | 'owned_by_me'
   collection: string | null
   drilldown?: Record<string, { enabled?: boolean; layout_id?: number | null; width?: number | string | null }>
+  column_formats?: Record<string, ColumnFormatConfig>
 }
 
 interface ExtraFieldMeta {
@@ -1107,6 +1109,24 @@ export function QueueDetailPage() {
     return { enabled: true, layout_id: null, width: null }
   }
 
+  const formatConfigFor = (path: string): ColumnFormatConfig | null => {
+    for (const src of queue?.sources ?? []) {
+      const cfg = src.column_formats?.[path]
+      if (cfg) return cfg
+    }
+    return null
+  }
+
+  const mergedColumnFormats = useMemo(() => {
+    const out: Record<string, ColumnFormatConfig> = {}
+    for (const src of queue?.sources ?? []) {
+      for (const [path, cfg] of Object.entries(src.column_formats ?? {})) {
+        if (!(path in out)) out[path] = cfg
+      }
+    }
+    return out
+  }, [queue?.sources])
+
   const extraColumns: Column<QueueItemRow>[] = extraFieldKeys.map((field) => ({
     key: `extra.${field}`,
     header: aliasFor(`extra.${field}`, formatColumnHeader(field)),
@@ -1114,6 +1134,8 @@ export function QueueDetailPage() {
     render: (row) => {
       const value = row.extra?.[field]
       if (value == null || value === '') return <span className='text-slate-300'>—</span>
+      const fmt = formatConfigFor(field)
+      const display = fmt ? formatMultiValue(String(value), fmt) : String(value)
       const meta = (queue?.extra_field_meta ?? []).find((m) => m.path === field)
       const targetIds = row.extra_ids?.[field] ?? []
       const cfg = drilldownConfigFor(field)
@@ -1128,16 +1150,16 @@ export function QueueDetailPage() {
                 itemId: targetIds[0],
                 layoutId: cfg.layout_id,
                 width: cfg.width,
-                title: String(value)
+                title: display
               })
             }}
             className='text-left text-[12px] text-slate-700 underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-nvr-navy hover:decoration-nvr-cyan dark:text-slate-200 dark:hover:text-nvr-cyan'
           >
-            {String(value)}
+            {display}
           </button>
         )
       }
-      return <span className='text-[12px]'>{String(value)}</span>
+      return <span className='text-[12px]'>{display}</span>
     }
   }))
 
@@ -1836,6 +1858,7 @@ export function QueueDetailPage() {
         stateLabels={stateLabelByKey}
         collectionLabel={collectionLabel}
         claimsEnabled={claimsEnabled}
+        columnFormats={mergedColumnFormats}
         onOpenChange={(open) => {
           if (!open) {
             setSheetItem(null)

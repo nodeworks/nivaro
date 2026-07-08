@@ -7,6 +7,7 @@ import { OwnerAvatars } from '@/components/owner-avatars'
 import { Badge } from '@/components/ui/badge'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { api } from '@/lib/api'
+import { type ColumnFormatConfig, formatMultiValue } from '@/lib/format-value'
 import { cn, formatRelative } from '@/lib/utils'
 
 interface QueueOwner {
@@ -92,7 +93,8 @@ export function QueueItemSheet({
   refetchItems,
   stateLabels,
   collectionLabel,
-  claimsEnabled = true
+  claimsEnabled = true,
+  columnFormats
 }: {
   item: SheetItem | null
   onOpenChange: (open: boolean) => void
@@ -107,6 +109,8 @@ export function QueueItemSheet({
   collectionLabel?: (name: string) => string
   /** When false the claim/release button is hidden. */
   claimsEnabled?: boolean
+  /** Extra-field path → display format config (display-only). */
+  columnFormats?: Record<string, ColumnFormatConfig>
 }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -230,7 +234,11 @@ export function QueueItemSheet({
                 )}
                 {Object.entries(item.extra ?? {}).map(([key, value]) => (
                   <MetaCell key={key} label={formatFieldHeader(key)}>
-                    {value == null || value === '' ? '—' : String(value)}
+                    {value == null || value === ''
+                      ? '—'
+                      : columnFormats?.[key]
+                        ? formatMultiValue(String(value), columnFormats[key])
+                        : String(value)}
                   </MetaCell>
                 ))}
               </div>
