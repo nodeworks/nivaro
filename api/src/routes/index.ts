@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { activityRoutes } from './activity.js'
-import { addendumsRoutes } from './addendums.js'
 import { addendumConfigsRoutes } from './addendum-configs.js'
+import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
 import { aiSettingsRoutes } from './ai-settings.js'
 import { alertsRoutes } from './alerts.js'
@@ -79,6 +79,7 @@ import { subRowsRoutes } from './sub-rows.js'
 import { submissionFormsRoutes } from './submission-forms.js'
 import { syncJobsRoutes } from './sync-jobs.js'
 import { tasksRoutes } from './tasks.js'
+import { throughputRoutes } from './throughput.js'
 import { treeRoutes } from './tree.js'
 import { treePermissionsRoutes } from './tree-permissions.js'
 import { twoFactorRoutes } from './two-factor.js'
@@ -135,6 +136,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(fieldRulesRoutes, { prefix: '/field-rules' })
   await app.register(dashboardsRoutes, { prefix: '/dashboards' })
   await app.register(reportsRoutes, { prefix: '/reports' })
+  await app.register(throughputRoutes, { prefix: '/reports' })
   await app.register(presetsRoutes, { prefix: '/presets' })
   await app.register(workspacesRoutes, { prefix: '/workspaces' })
   await app.register(schemaRoutes)
