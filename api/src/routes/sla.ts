@@ -344,6 +344,27 @@ export async function slaRoutes(app: FastifyInstance) {
   })
 
   // POST /sla/rules — create rule
+  // Fire-and-forget cache refresh: materialized queues cache each row's SLA
+  // params at write time, so rule changes must trigger a rebuild of queues
+  // sourcing the collections bound to the rule's template. Never throws,
+  // never blocks the mutation response. Dynamic import breaks the cycle
+  // (queue-materialization-jobs.ts imports computeStatusBatch from this file).
+  async function refreshCachesForTemplates(templates: Array<string | undefined>): Promise<void> {
+    try {
+      const ids = [...new Set(templates.filter((t): t is string => !!t))]
+      if (ids.length === 0) return
+      const bindings = (await db('nivaro_workflow_bindings')
+        .whereIn('template', ids)
+        .select('collection')) as Array<{ collection: string }>
+      const { enqueueRebuildsForCollections } = await import(
+        '../functions/queue-materialization-jobs.js'
+      )
+      await enqueueRebuildsForCollections(bindings.map((b) => b.collection))
+    } catch (err) {
+      console.warn('SLA rule cache refresh not enqueued', err)
+    }
+  }
+
   app.post('/rules', { preHandler: requireAdmin }, async (req, reply) => {
     const body = req.body as {
       workflow_template: string
@@ -393,6 +414,7 @@ export async function slaRoutes(app: FastifyInstance) {
       req
     })
 
+    void refreshCachesForTemplates([body.workflow_template])
     return reply.code(201).send({ data: formatRule(created!) })
   })
 
@@ -441,6 +463,8 @@ export async function slaRoutes(app: FastifyInstance) {
       req
     })
 
+    // Old AND new template: a template change must refresh both sides.
+    void refreshCachesForTemplates([String(existing.workflow_template), body.workflow_template])
     return reply.send({ data: formatRule(updated!) })
   })
 
@@ -459,6 +483,7 @@ export async function slaRoutes(app: FastifyInstance) {
       req
     })
 
+    void refreshCachesForTemplates([String(existing.workflow_template)])
     return reply.code(204).send()
   })
 

@@ -379,10 +379,9 @@ export function QueueDetailPage() {
   const { user } = useAuth()
   const socketRef = useRef<Socket | null>(null)
 
-  // Non-materialized queues default to priority order — the table's default
-  // order IS the triage order. Materialized queues keep server order: priority
-  // sorting routes them back to live resolution (sla math is JS-only), which
-  // would defeat the 5k+ row cache; the Priority chip remains an explicit opt-in.
+  // Every queue defaults to priority order — the table's default order IS the
+  // triage order. Materialized queues serve priority sorts from a narrow scan
+  // of the cache (computeSla in JS), not the old full live resolve.
   const claimsEnabled = queue?.claims_enabled !== false
   const displayConfig = queue?.display_config
   const allowedViews = displayConfig?.views ?? ['table', 'kanban', 'workload']
@@ -395,7 +394,7 @@ export function QueueDetailPage() {
   useEffect(() => {
     if (!queue || defaultSortApplied.current) return
     defaultSortApplied.current = true
-    if (!queue.materialized) setSort('-priority')
+    setSort('-priority')
   }, [queue])
 
   // Apply the queue's configured default view + scope once, when meta loads.

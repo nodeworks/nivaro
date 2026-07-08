@@ -330,9 +330,9 @@ describe('syncMaterializedQueueItem', () => {
 })
 
 describe('requiresLiveResolveFallback', () => {
-  it('routes priority sorts to the live path (sla_status is JS-only math)', () => {
-    expect(requiresLiveResolveFallback('priority', {})).toBe(true)
-    expect(requiresLiveResolveFallback('-priority', {})).toBe(true)
+  it('serves priority sorts from the cache (narrow-scan JS path)', () => {
+    expect(requiresLiveResolveFallback('priority', {})).toBe(false)
+    expect(requiresLiveResolveFallback('-priority', {})).toBe(false)
   })
 
   it('keeps SQL-servable sorts on the materialized path', () => {
@@ -341,10 +341,10 @@ describe('requiresLiveResolveFallback', () => {
     expect(requiresLiveResolveFallback('', {})).toBe(false)
   })
 
-  it('still falls back for owners sorts and sla/aging filters', () => {
+  it('falls back ONLY for owners sorts; sla/aging filters use the narrow-scan JS path', () => {
     expect(requiresLiveResolveFallback('owners', {})).toBe(true)
-    expect(requiresLiveResolveFallback('', { sla_status: 'breached' })).toBe(true)
-    expect(requiresLiveResolveFallback('', { aging_hours: { min: 1 } })).toBe(true)
+    expect(requiresLiveResolveFallback('', { sla_status: 'breached' })).toBe(false)
+    expect(requiresLiveResolveFallback('', { aging_hours: { min: 1 } })).toBe(false)
   })
 
   it('serves extra.* filters and sorts from the cache (JSON_VALUE pushdown)', () => {

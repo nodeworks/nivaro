@@ -32,16 +32,16 @@ function splitExtra(raw: string | null): {
 
 export function requiresLiveResolveFallback(
   sort: string,
-  filters: Record<string, unknown>
+  _filters: Record<string, unknown>
 ): boolean {
   const sortKey = sort.startsWith('-') ? sort.slice(1) : sort
-  if (sortKey === 'owners') return true
-  // priority = f(sla_status, at_risk, aging_hours); sla math is business-hours
-  // JS — not expressible in SQL, so priority sorts live-resolve.
-  if (sortKey === 'priority') return true
-  if (filters.sla_status != null && filters.sla_status !== '') return true
-  if (filters.aging_hours != null) return true
-  return false
+  // Only an owners sort still live-resolves (it would need SQL string
+  // aggregation across the owners M2M). priority sorts and sla_status/
+  // aging_hours filters are served from the cache via a narrow scan +
+  // computeSla in JS (see fetchMaterializedQueueItems' useJsPath) — exact
+  // business-hours math over the same cached inputs the table columns show,
+  // WITHOUT the full live resolve that used to take ~48s on large queues.
+  return sortKey === 'owners'
 }
 
 // JSON path for an extra-field key: the cached `extra` object is FLAT — dotted
@@ -50,6 +50,97 @@ export function requiresLiveResolveFallback(
 // come from stored source config, not raw user input).
 function extraJsonPath(field: string): string {
   return `$."${field.replace(/"/g, '')}"`
+}
+
+// One narrow-scanned cache row with its SLA already computed — the unit the
+// JS filter/sort path operates on.
+export interface NarrowScanRow {
+  id: number
+  label: string
+  state: string | null
+  collection: string
+  at_risk: boolean
+  has_owner: boolean
+  sla_status: 'ok' | 'warning' | 'breached' | null
+  aging_hours: number | null
+  /** JSON_VALUE of the extra.* sort key when the request sorts by one; else null. */
+  sort_val: string | null
+}
+
+const SLA_RANK: Record<string, number> = { ok: 1, warning: 2, breached: 3 }
+
+/**
+ * Mirrors applyColumnFilters' sla_status/aging_hours cases, sortItems'
+ * nulls-last convention, and computePriorityScore's formula (queues.ts) —
+ * over pre-computed narrow rows instead of hydrated QueueItems.
+ */
+export function filterAndOrderNarrowRows(
+  rows: NarrowScanRow[],
+  filters: Record<string, unknown>,
+  sort: string
+): NarrowScanRow[] {
+  let out = rows
+  const sla = filters.sla_status
+  if (sla != null && sla !== '') out = out.filter((r) => r.sla_status === sla)
+  const aging = filters.aging_hours as { min?: number; max?: number } | undefined
+  if (aging != null) {
+    out = out.filter((r) => {
+      if (r.aging_hours == null) return false
+      if (aging.min != null && r.aging_hours < aging.min) return false
+      if (aging.max != null && r.aging_hours > aging.max) return false
+      return true
+    })
+  }
+  const desc = sort.startsWith('-')
+  const key = desc ? sort.slice(1) : sort
+  if (!key) return out
+  const val = (r: NarrowScanRow): number | string | null => {
+    if (key === 'priority') {
+      // Same formula as computePriorityScore in queues.ts (parity unit-tested).
+      const rank = r.sla_status === 'breached' ? 2 : r.sla_status === 'warning' ? 1 : 0
+      return rank * 1000 + (r.at_risk ? 500 : 0) + Math.min(r.aging_hours ?? 0, 499)
+    }
+    if (key === 'aging_hours') return r.aging_hours
+    if (key === 'sla_status') return r.sla_status ? (SLA_RANK[r.sla_status] ?? null) : null
+    if (key === 'at_risk') return r.at_risk ? 1 : 0
+    if (key === 'label') return r.label
+    if (key === 'state') return r.state
+    if (key === 'collection') return r.collection
+    if (key.startsWith('extra.')) return r.sort_val
+    return null
+  }
+  return [...out].sort((a, b) => {
+    const va = val(a)
+    const vb = val(b)
+    // Nulls last regardless of direction — sortItems' convention.
+    if (va == null && vb == null) return 0
+    if (va == null) return 1
+    if (vb == null) return -1
+    const cmp =
+      typeof va === 'number' && typeof vb === 'number'
+        ? va - vb
+        : String(va).localeCompare(String(vb))
+    return desc ? -cmp : cmp
+  })
+}
+
+/** QueueStats over an (already filtered) narrow-row set — feeds filtered_stats
+ * on the JS path, matching the live path's post-filter stats semantics. */
+export function statsFromNarrowRows(rows: NarrowScanRow[]): QueueStats {
+  const by_state: Record<string, number> = {}
+  let unowned = 0
+  let sla_warning = 0
+  let sla_breached = 0
+  let at_risk = 0
+  for (const r of rows) {
+    const stateKey = r.state ?? 'none'
+    by_state[stateKey] = (by_state[stateKey] ?? 0) + 1
+    if (!r.has_owner) unowned++
+    if (r.sla_status === 'warning') sla_warning++
+    if (r.sla_status === 'breached') sla_breached++
+    if (r.at_risk) at_risk++
+  }
+  return { total: rows.length, by_state, unowned, sla_warning, sla_breached, at_risk }
 }
 
 function computeSla(row: {
@@ -353,68 +444,29 @@ export async function fetchMaterializedQueueItems(
   }
   if (filters.at_risk) base.where('qi.at_risk', filters.at_risk === 'yes')
 
-  const countRow = (await base.clone().count('* as n').first()) as { n: number }
-  const total = Number(countRow.n)
-
   const sort = options.sort ?? ''
   const desc = sort.startsWith('-')
   const sortKey = desc ? sort.slice(1) : sort
-  if (sortKey === 'label' || sortKey === 'state' || sortKey === 'collection') {
-    base.orderBy(`qi.${sortKey}`, desc ? 'desc' : 'asc')
-  } else if (sortKey === 'aging_hours' || sortKey === 'sla_status') {
-    // entered_state_at is a correct proxy for elapsed time on non-business-hours
-    // rules; for business_hours_only rules it's a documented approximation
-    // (see design spec) — exact values are computed below, per returned row.
-    // MSSQL has no boolean-scalar expressions usable directly in ORDER BY (T-SQL
-    // rejects `col IS NULL` outside a predicate context), so nulls-last is done
-    // via CASE WHEN — matching the CASE WHEN pattern already used for MSSQL-safe
-    // ordering in services/permissions.ts. Nulls always sort last regardless of
-    // direction, matching sortItems' null-handling convention in queues.ts.
-    base.orderByRaw(
-      `CASE WHEN qi.entered_state_at IS NULL THEN 1 ELSE 0 END ASC, qi.entered_state_at ${desc ? 'ASC' : 'DESC'}`
-    )
-  } else if (sortKey === 'at_risk') {
-    base.orderBy('qi.at_risk', desc ? 'desc' : 'asc')
-  } else if (sortKey.startsWith('extra.')) {
-    const path = extraJsonPath(sortKey.slice('extra.'.length))
-    // Nulls last regardless of direction — matches sortItems' convention.
-    base.orderByRaw(
-      `CASE WHEN JSON_VALUE(qi.extra, ?) IS NULL THEN 1 ELSE 0 END ASC, JSON_VALUE(qi.extra, ?) ${desc ? 'DESC' : 'ASC'}`,
-      [path, path]
-    )
-  } else {
-    // MSSQL requires ORDER BY when OFFSET/FETCH is present but no real sort was
-    // requested — same fallback used in services/items.ts.
-    base.orderByRaw('(SELECT NULL)')
-  }
-
   const page = options.page ?? 1
-  const limit = options.limit ?? total
-  const rowsQuery = base
-    .clone()
-    .select(
-      'qi.id',
-      'qi.collection',
-      'qi.item_id',
-      'qi.label',
-      'qi.state',
-      'qi.state_color',
-      'qi.entered_state_at',
-      'qi.sla_duration_hours',
-      'qi.sla_warning_pct',
-      'qi.sla_business_hours_only',
-      'qi.at_risk',
-      'qi.at_risk_color',
-      'qi.claimed_by',
-      'qi.extra',
-      'qi.url'
-    )
-  // limit=0 (e.g. an unpaginated Kanban request against a zero-row materialized queue,
-  // where total===0) would produce an invalid `OFFSET 0 FETCH NEXT 0 ROWS ONLY` against
-  // MSSQL — skip the pagination clauses entirely; the WHERE clause already matches
-  // nothing, so the result set is empty either way.
-  if (limit > 0) rowsQuery.offset((page - 1) * limit).limit(limit)
-  const rows = (await rowsQuery) as Array<{
+
+  const FULL_ROW_COLUMNS = [
+    'qi.id',
+    'qi.collection',
+    'qi.item_id',
+    'qi.label',
+    'qi.state',
+    'qi.state_color',
+    'qi.entered_state_at',
+    'qi.sla_duration_hours',
+    'qi.sla_warning_pct',
+    'qi.sla_business_hours_only',
+    'qi.at_risk',
+    'qi.at_risk_color',
+    'qi.claimed_by',
+    'qi.extra',
+    'qi.url'
+  ]
+  interface FullRow {
     id: number
     collection: string
     item_id: string
@@ -430,7 +482,128 @@ export async function fetchMaterializedQueueItems(
     claimed_by: string | null
     extra: string | null
     url: string
-  }>
+  }
+
+  // JS path: priority scoring and sla_status/aging_hours filtering need the
+  // business-hours SLA math, which is JS-only. Instead of live-resolving the
+  // whole queue (the old fallback — ~48s on an 80k-source queue), narrow-scan
+  // the cached inputs, computeSla per row, then filter/sort/paginate in JS and
+  // hydrate only the page's rows by id.
+  const slaFilterActive = filters.sla_status != null && filters.sla_status !== ''
+  const agingFilterActive = filters.aging_hours != null
+  const useJsPath = sortKey === 'priority' || slaFilterActive || agingFilterActive
+
+  let rows: FullRow[]
+  let total: number
+  let jsFilteredStats: QueueStats | null = null
+
+  if (useJsPath) {
+    const narrowQuery = base
+      .clone()
+      .select(
+        'qi.id',
+        'qi.label',
+        'qi.state',
+        'qi.collection',
+        'qi.entered_state_at',
+        'qi.sla_duration_hours',
+        'qi.sla_warning_pct',
+        'qi.sla_business_hours_only',
+        'qi.at_risk',
+        db.raw(
+          'CASE WHEN EXISTS (SELECT 1 FROM nivaro_queue_item_owners qio WHERE qio.queue_item_id = qi.id) THEN 1 ELSE 0 END AS has_owner'
+        )
+      )
+    if (sortKey.startsWith('extra.')) {
+      narrowQuery.select(
+        db.raw('JSON_VALUE(qi.extra, ?) AS sort_val', [extraJsonPath(sortKey.slice('extra.'.length))])
+      )
+    }
+    const narrowRaw = (await narrowQuery) as Array<{
+      id: number
+      label: string
+      state: string | null
+      collection: string
+      entered_state_at: Date | null
+      sla_duration_hours: number | null
+      sla_warning_pct: number | null
+      sla_business_hours_only: boolean
+      at_risk: boolean
+      has_owner: number
+      sort_val?: string | null
+    }>
+    const narrow: NarrowScanRow[] = narrowRaw.map((r) => {
+      const sla = computeSla(r)
+      return {
+        id: r.id,
+        label: r.label,
+        state: r.state,
+        collection: r.collection,
+        at_risk: !!r.at_risk,
+        has_owner: !!r.has_owner,
+        sla_status: sla.status,
+        aging_hours: sla.aging_hours,
+        sort_val: r.sort_val ?? null
+      }
+    })
+    const ordered = filterAndOrderNarrowRows(narrow, filters, sort)
+    total = ordered.length
+    jsFilteredStats = statsFromNarrowRows(ordered)
+
+    const limit = options.limit ?? total
+    const pageIds = (limit > 0 ? ordered.slice((page - 1) * limit, page * limit) : []).map(
+      (r) => r.id
+    )
+    const fetched = pageIds.length
+      ? ((await db('nivaro_queue_items as qi')
+          .whereIn('qi.id', pageIds)
+          .select(FULL_ROW_COLUMNS)) as FullRow[])
+      : []
+    // whereIn loses the JS ordering — restore it by page-id position.
+    const posById = new Map(pageIds.map((id, i) => [id, i]))
+    rows = fetched.sort((a, b) => (posById.get(a.id) ?? 0) - (posById.get(b.id) ?? 0))
+  } else {
+    const countRow = (await base.clone().count('* as n').first()) as { n: number }
+    total = Number(countRow.n)
+
+    if (sortKey === 'label' || sortKey === 'state' || sortKey === 'collection') {
+      base.orderBy(`qi.${sortKey}`, desc ? 'desc' : 'asc')
+    } else if (sortKey === 'aging_hours' || sortKey === 'sla_status') {
+      // entered_state_at is a correct proxy for elapsed time on non-business-hours
+      // rules; for business_hours_only rules it's a documented approximation
+      // (see design spec) — exact values are computed below, per returned row.
+      // MSSQL has no boolean-scalar expressions usable directly in ORDER BY (T-SQL
+      // rejects `col IS NULL` outside a predicate context), so nulls-last is done
+      // via CASE WHEN — matching the CASE WHEN pattern already used for MSSQL-safe
+      // ordering in services/permissions.ts. Nulls always sort last regardless of
+      // direction, matching sortItems' null-handling convention in queues.ts.
+      base.orderByRaw(
+        `CASE WHEN qi.entered_state_at IS NULL THEN 1 ELSE 0 END ASC, qi.entered_state_at ${desc ? 'ASC' : 'DESC'}`
+      )
+    } else if (sortKey === 'at_risk') {
+      base.orderBy('qi.at_risk', desc ? 'desc' : 'asc')
+    } else if (sortKey.startsWith('extra.')) {
+      const path = extraJsonPath(sortKey.slice('extra.'.length))
+      // Nulls last regardless of direction — matches sortItems' convention.
+      base.orderByRaw(
+        `CASE WHEN JSON_VALUE(qi.extra, ?) IS NULL THEN 1 ELSE 0 END ASC, JSON_VALUE(qi.extra, ?) ${desc ? 'DESC' : 'ASC'}`,
+        [path, path]
+      )
+    } else {
+      // MSSQL requires ORDER BY when OFFSET/FETCH is present but no real sort was
+      // requested — same fallback used in services/items.ts.
+      base.orderByRaw('(SELECT NULL)')
+    }
+
+    const limit = options.limit ?? total
+    const rowsQuery = base.clone().select(FULL_ROW_COLUMNS)
+    // limit=0 (e.g. an unpaginated Kanban request against a zero-row materialized queue,
+    // where total===0) would produce an invalid `OFFSET 0 FETCH NEXT 0 ROWS ONLY` against
+    // MSSQL — skip the pagination clauses entirely; the WHERE clause already matches
+    // nothing, so the result set is empty either way.
+    if (limit > 0) rowsQuery.offset((page - 1) * limit).limit(limit)
+    rows = (await rowsQuery) as FullRow[]
+  }
 
   const ownerRows =
     rows.length > 0
@@ -511,8 +684,12 @@ export async function fetchMaterializedQueueItems(
   const { stats, availableValues } = await fetchMaterializedStats(queueId, user, scope)
 
   const { hasActiveColumnFilters } = await import('./queues.js')
+  // JS path already computed post-filter stats from the narrow scan (the SQL
+  // builder can't express the sla/aging filters it applied).
   const filteredStats = hasActiveColumnFilters(filters)
-    ? await computeStatsForBuilder(() => base.clone().clearSelect().clearOrder())
+    ? useJsPath
+      ? jsFilteredStats
+      : await computeStatsForBuilder(() => base.clone().clearSelect().clearOrder())
     : null
 
   return {

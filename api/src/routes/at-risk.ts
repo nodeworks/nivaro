@@ -240,6 +240,24 @@ export async function atRiskRoutes(app: FastifyInstance) {
   })
 
   // POST /at-risk/rules — create rule (admin)
+  // Fire-and-forget cache refresh: materialized queues cache each row's
+  // at_risk bit at write time, so rule changes must rebuild queues sourcing
+  // the rule's collection. Never throws, never blocks the mutation response.
+  // Dynamic import breaks the cycle (queue-materialization-jobs.ts imports
+  // evaluateRows from this file).
+  async function refreshCachesForCollections(collections: Array<string | undefined>): Promise<void> {
+    try {
+      const names = [...new Set(collections.filter((c): c is string => !!c))]
+      if (names.length === 0) return
+      const { enqueueRebuildsForCollections } = await import(
+        '../functions/queue-materialization-jobs.js'
+      )
+      await enqueueRebuildsForCollections(names)
+    } catch (err) {
+      console.warn('At-risk rule cache refresh not enqueued', err)
+    }
+  }
+
   app.post('/rules', { preHandler: requireAdmin }, async (req, reply) => {
     const body = req.body as {
       collection?: string
@@ -291,6 +309,7 @@ export async function atRiskRoutes(app: FastifyInstance) {
       req
     })
 
+    void refreshCachesForCollections([body.collection])
     return reply.code(201).send({ data: formatRule(created!) })
   })
 
@@ -349,6 +368,8 @@ export async function atRiskRoutes(app: FastifyInstance) {
       req
     })
 
+    // Old AND new collection: a collection change must refresh both sides.
+    void refreshCachesForCollections([existing.collection, body.collection])
     return reply.send({ data: formatRule(updated!) })
   })
 
@@ -367,6 +388,7 @@ export async function atRiskRoutes(app: FastifyInstance) {
       req
     })
 
+    void refreshCachesForCollections([existing.collection])
     return reply.code(204).send()
   })
 

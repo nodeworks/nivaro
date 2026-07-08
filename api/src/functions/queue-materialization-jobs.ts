@@ -30,6 +30,28 @@ export async function enqueueQueueMaterializationBackfill(queueId: string): Prom
   }
 }
 
+/**
+ * Rebuild every active materialized queue that sources any of these
+ * collections. Called (fire-and-forget) from SLA/at-risk rule CRUD so cached
+ * rule inputs (sla params, at_risk bits) refresh automatically instead of
+ * waiting for a manual POST /queues/:id/rematerialize.
+ */
+export async function enqueueRebuildsForCollections(collections: string[]): Promise<void> {
+  if (collections.length === 0) return
+  try {
+    const rows = (await db('nivaro_queues as q')
+      .join('nivaro_queue_sources as s', 's.queue_id', 'q.id')
+      .where('q.materialized', true)
+      .where('q.is_active', true)
+      .where('s.type', 'collection')
+      .whereIn('s.collection', collections)
+      .distinct('q.id as id')) as Array<{ id: string }>
+    await Promise.all(rows.map((r) => enqueueQueueMaterializationBackfill(String(r.id))))
+  } catch (err) {
+    console.warn('enqueueRebuildsForCollections failed (rule change not propagated to caches)', err)
+  }
+}
+
 const WRITE_CHUNK_SIZE = 1000
 
 // One row's worth of everything nivaro_queue_items + nivaro_queue_item_owners needs.
