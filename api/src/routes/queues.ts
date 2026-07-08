@@ -10,6 +10,7 @@ import {
   computeExtraFieldMeta,
   fetchQueueItems,
   fetchQueueWorkload,
+  isDisplayOnlySourceChange,
   normalizeDisplayConfig,
   parsePaginationParams,
   validateColumnFormats
@@ -325,48 +326,67 @@ export async function queuesRoutes(app: FastifyInstance) {
       }
     }
 
-    await db.transaction(async (trx) => {
-      // nivaro_queue_items.source_id is a NO ACTION FK to nivaro_queue_sources.id
-      // (deliberately, to avoid a different MSSQL multi-cascade-path error) — cached
-      // rows must be cleared before their source rows or the DELETE throws an FK
-      // violation. This also cascades nivaro_queue_item_owners via its own CASCADE FK
-      // to nivaro_queue_items.
-      await trx('nivaro_queue_items').where({ queue_id: id }).delete()
-      await trx('nivaro_queue_sources').where({ queue_id: id }).delete()
-      await trx('nivaro_queue_sources').insert(
-        body.sources!.map((s, i) => ({
-          queue_id: id,
-          type: s.type,
-          collection: s.collection ?? null,
-          filters: toJsonStr(s.filters),
-          state_values: toJsonStr(s.state_values),
-          state_mode: s.state_mode === 'exclude' ? 'exclude' : 'include',
-          label_template: s.label_template?.trim().slice(0, 500) || null,
-          sla_filter: s.sla_filter ?? null,
-          extra_fields: toJsonStr(s.extra_fields ?? []),
-          drilldown:
-            s.drilldown && typeof s.drilldown === 'object' && Object.keys(s.drilldown).length > 0
-              ? toJsonStr(s.drilldown)
-              : null,
-          column_formats:
-            s.column_formats &&
-            typeof s.column_formats === 'object' &&
-            Object.keys(s.column_formats).length > 0
-              ? toJsonStr(s.column_formats)
-              : null,
-          sort: s.sort ?? i
-        }))
-      )
-      // Demote materialized to false so reads live-resolve (zero cache rows) until the
-      // backfill enqueued below completes and flips it back to true — avoids ever
-      // serving an empty/stale materialized cache mid-rebuild.
-      if (queue.materialized) {
-        await trx('nivaro_queues').where({ id }).update({ materialized: false })
-      }
-    })
+    // Display-only edits (drilldown, column_formats — both applied client-side
+    // at render, never stored in cached rows) update source rows in place and
+    // keep the materialized cache. The teardown path below costs a demote +
+    // full rebuild: minutes of live-resolve reads on a large queue, for
+    // changes that never touched cached data.
+    const existingSources = (await db<QueueSourceRow>('nivaro_queue_sources')
+      .where({ queue_id: id })
+      .orderBy('sort')) as QueueSourceRow[]
+    const displayJson = (v: unknown): string | null =>
+      v && typeof v === 'object' && Object.keys(v).length > 0 ? toJsonStr(v) : null
 
-    if (queue.materialized) {
-      await enqueueQueueMaterializationBackfill(id)
+    if (isDisplayOnlySourceChange(existingSources, body.sources)) {
+      const ordered = body.sources
+        .map((raw, i) => ({ raw, sort: raw.sort ?? i }))
+        .sort((a, b) => a.sort - b.sort)
+      await db.transaction(async (trx) => {
+        for (let i = 0; i < existingSources.length; i++) {
+          await trx('nivaro_queue_sources')
+            .where({ id: existingSources[i].id })
+            .update({
+              drilldown: displayJson(ordered[i].raw.drilldown),
+              column_formats: displayJson(ordered[i].raw.column_formats)
+            })
+        }
+      })
+    } else {
+      await db.transaction(async (trx) => {
+        // nivaro_queue_items.source_id is a NO ACTION FK to nivaro_queue_sources.id
+        // (deliberately, to avoid a different MSSQL multi-cascade-path error) — cached
+        // rows must be cleared before their source rows or the DELETE throws an FK
+        // violation. This also cascades nivaro_queue_item_owners via its own CASCADE FK
+        // to nivaro_queue_items.
+        await trx('nivaro_queue_items').where({ queue_id: id }).delete()
+        await trx('nivaro_queue_sources').where({ queue_id: id }).delete()
+        await trx('nivaro_queue_sources').insert(
+          body.sources!.map((s, i) => ({
+            queue_id: id,
+            type: s.type,
+            collection: s.collection ?? null,
+            filters: toJsonStr(s.filters),
+            state_values: toJsonStr(s.state_values),
+            state_mode: s.state_mode === 'exclude' ? 'exclude' : 'include',
+            label_template: s.label_template?.trim().slice(0, 500) || null,
+            sla_filter: s.sla_filter ?? null,
+            extra_fields: toJsonStr(s.extra_fields ?? []),
+            drilldown: displayJson(s.drilldown),
+            column_formats: displayJson(s.column_formats),
+            sort: s.sort ?? i
+          }))
+        )
+        // Demote materialized to false so reads live-resolve (zero cache rows) until the
+        // backfill enqueued below completes and flips it back to true — avoids ever
+        // serving an empty/stale materialized cache mid-rebuild.
+        if (queue.materialized) {
+          await trx('nivaro_queues').where({ id }).update({ materialized: false })
+        }
+      })
+
+      if (queue.materialized) {
+        await enqueueQueueMaterializationBackfill(id)
+      }
     }
 
     const sources = (await db<QueueSourceRow>('nivaro_queue_sources')

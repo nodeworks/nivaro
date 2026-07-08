@@ -64,6 +64,60 @@ export type ColumnFormatConfig =
   | { type: 'number'; decimals?: number; thousands?: boolean; prefix?: string; suffix?: string }
   | { type: 'boolean'; true_label: string; false_label: string }
 
+/** Incoming source shape for PATCH /queues/:id/sources — pre-normalization. */
+export interface IncomingQueueSource {
+  type?: string
+  collection?: string | null
+  filters?: unknown
+  state_values?: unknown
+  state_mode?: string | null
+  label_template?: string | null
+  sla_filter?: string | null
+  extra_fields?: unknown
+  drilldown?: unknown
+  column_formats?: unknown
+  sort?: number
+}
+
+/**
+ * True when a sources PATCH only changes display-side config (drilldown,
+ * column_formats) — every field that feeds cached rows (type, collection,
+ * filters, states, label template, sla filter, extra fields, order) is
+ * unchanged. Such edits update source rows in place and keep the materialized
+ * cache; anything else costs a full teardown + demote + rebuild (minutes of
+ * live-resolve reads on a large queue). Comparison is conservative: JSON is
+ * canonicalized by parse→stringify, so a formatting-order mismatch merely
+ * falls back to the rebuild path, never the other way around.
+ */
+export function isDisplayOnlySourceChange(
+  existing: QueueSourceRow[],
+  incoming: IncomingQueueSource[]
+): boolean {
+  if (existing.length !== incoming.length || existing.length === 0) return false
+  const canon = (v: unknown): string => {
+    const parsed = typeof v === 'string' ? parseJson(v) : v
+    return JSON.stringify(parsed ?? null)
+  }
+  const ordered = incoming
+    .map((raw, i) => ({ raw, sort: raw.sort ?? i }))
+    .sort((a, b) => a.sort - b.sort)
+  const sortedExisting = [...existing].sort((a, b) => Number(a.sort) - Number(b.sort))
+  return sortedExisting.every((e, i) => {
+    const s = ordered[i].raw
+    return (
+      e.type === s.type &&
+      (e.collection ?? null) === (s.collection ?? null) &&
+      canon(e.filters) === canon(s.filters ?? null) &&
+      canon(e.state_values) === canon(s.state_values ?? null) &&
+      (e.state_mode ?? 'include') === (s.state_mode === 'exclude' ? 'exclude' : 'include') &&
+      (e.label_template ?? null) === (s.label_template?.trim().slice(0, 500) || null) &&
+      (e.sla_filter ?? null) === (s.sla_filter ?? null) &&
+      canon(e.extra_fields ?? []) === canon(s.extra_fields ?? []) &&
+      Number(e.sort) === ordered[i].sort
+    )
+  })
+}
+
 // State filtering semantics shared by the live resolver and the materialization
 // write-path matcher. Include: only listed states pass (stateless items drop
 // unless the '__none__' sentinel is listed). Exclude: listed states drop,
@@ -334,8 +388,7 @@ export function applyColumnFilters(
       else if (key === 'label') {
         const haystack = item.label.toLowerCase()
         if (!matchesAny(value, (needle) => haystack.includes(needle.toLowerCase()))) return false
-      }
-      else if (key === 'owners') {
+      } else if (key === 'owners') {
         // Array = user-id multiselect (matches ANY selected owner); plain
         // string keeps the legacy substring-on-names behavior so saved views
         // created before the combobox still work.
@@ -957,8 +1010,15 @@ export async function resolvePathValues(
     // Multi-valued hop with remaining segments: recurse the rest of the path
     // per related row and join the distinct results per parent.
     if (rest.length > 0) {
-      const allRelatedIds = [...new Set((relatedRows as Array<Record<string, unknown>>).map((r) => String(r.id)))]
-      const nested = await resolvePathValues(classified.relatedCollection, allRelatedIds, rest, relationsCache)
+      const allRelatedIds = [
+        ...new Set((relatedRows as Array<Record<string, unknown>>).map((r) => String(r.id)))
+      ]
+      const nested = await resolvePathValues(
+        classified.relatedCollection,
+        allRelatedIds,
+        rest,
+        relationsCache
+      )
       return joinMultiHop(ids, grouped, nested)
     }
     const out = new Map<string, PathValue>()
@@ -1001,10 +1061,18 @@ export async function resolvePathValues(
         (junctionRows as Array<Record<string, unknown>>).map((r) => String(r.__rel_id ?? r.id))
       )
     ]
-    const nested = await resolvePathValues(classified.relatedCollection, allRelatedIds, rest, relationsCache)
+    const nested = await resolvePathValues(
+      classified.relatedCollection,
+      allRelatedIds,
+      rest,
+      relationsCache
+    )
     const groupedIds = new Map<string, Record<string, unknown>[]>()
     for (const [parentId, list] of grouped) {
-      groupedIds.set(parentId, list.map((r) => ({ id: r.__rel_id ?? r.id })))
+      groupedIds.set(
+        parentId,
+        list.map((r) => ({ id: r.__rel_id ?? r.id }))
+      )
     }
     return joinMultiHop(ids, groupedIds, nested)
   }
@@ -1163,8 +1231,7 @@ export async function resolveCollectionSource(
       collection: source.collection as string,
       item_id: id,
       state: stateKeyByItem.get(id) ?? null,
-      sla_status:
-        (slaMap[id]?.status as 'ok' | 'warning' | 'breached' | undefined) ?? null
+      sla_status: (slaMap[id]?.status as 'ok' | 'warning' | 'breached' | undefined) ?? null
     }))
   }
 
@@ -1552,10 +1619,10 @@ export async function fetchQueueItems(
   let materializedStats: Promise<{
     stats: QueueStats
     availableValues: {
-    collection: string[]
-    state: string[]
-    owners: Array<{ id: string; name: string }>
-  }
+      collection: string[]
+      state: string[]
+      owners: Array<{ id: string; name: string }>
+    }
   }> | null = null
   if (queueRow?.materialized) {
     const { requiresLiveResolveFallback, fetchMaterializedQueueItems, fetchMaterializedStats } =

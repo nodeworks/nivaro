@@ -9,12 +9,13 @@ import {
   computeAvailableExtraFields,
   computeAvailableValues,
   computePriorityScore,
-  computeStatsFromIdMeta,
   computeStats,
+  computeStatsFromIdMeta,
   DEFAULT_DISPLAY_CONFIG,
   filterBySlaStatus,
   formatMultiValueCell,
   groupByOwner,
+  isDisplayOnlySourceChange,
   mergeSourceResults,
   normalizeDisplayConfig,
   paginateItems,
@@ -826,7 +827,12 @@ describe('stateFilterKeep', () => {
 })
 
 describe('computeStatsFromIdMeta', () => {
-  const meta = (collection: string, item_id: string, state: string | null = null, sla: 'ok' | 'warning' | 'breached' | null = null) => ({
+  const meta = (
+    collection: string,
+    item_id: string,
+    state: string | null = null,
+    sla: 'ok' | 'warning' | 'breached' | null = null
+  ) => ({
     collection,
     item_id,
     state,
@@ -1021,11 +1027,15 @@ describe('validateColumnFormats', () => {
   })
 
   it('accepts a valid datetime format', () => {
-    expect(validateColumnFormats({ due_date: { type: 'datetime', template: 'DD/MM/YYYY HH:mm' } })).toBeNull()
+    expect(
+      validateColumnFormats({ due_date: { type: 'datetime', template: 'DD/MM/YYYY HH:mm' } })
+    ).toBeNull()
   })
 
   it('accepts the relative datetime template', () => {
-    expect(validateColumnFormats({ due_date: { type: 'datetime', template: 'relative' } })).toBeNull()
+    expect(
+      validateColumnFormats({ due_date: { type: 'datetime', template: 'relative' } })
+    ).toBeNull()
   })
 
   it('accepts a valid number format', () => {
@@ -1053,9 +1063,9 @@ describe('validateColumnFormats', () => {
 
   it('rejects datetime without template or over 50 chars', () => {
     expect(validateColumnFormats({ f: { type: 'datetime' } })).toMatch(/template/)
-    expect(
-      validateColumnFormats({ f: { type: 'datetime', template: 'Y'.repeat(51) } })
-    ).toMatch(/template/)
+    expect(validateColumnFormats({ f: { type: 'datetime', template: 'Y'.repeat(51) } })).toMatch(
+      /template/
+    )
   })
 
   it('rejects number decimals out of range', () => {
@@ -1074,5 +1084,106 @@ describe('validateColumnFormats', () => {
 
   it('rejects boolean missing labels', () => {
     expect(validateColumnFormats({ f: { type: 'boolean', true_label: 'Yes' } })).toMatch(/label/)
+  })
+})
+
+describe('isDisplayOnlySourceChange', () => {
+  const existingSource = (over: Partial<QueueSourceRow> = {}): QueueSourceRow =>
+    ({
+      id: 1,
+      queue_id: 'q1',
+      type: 'collection',
+      collection: 'workflows',
+      filters: '[]',
+      state_values: '["started"]',
+      state_mode: 'include',
+      label_template: null,
+      sla_filter: null,
+      extra_fields: '["project.name"]',
+      drilldown: null,
+      column_formats: null,
+      sort: 0,
+      ...over
+    }) as QueueSourceRow
+
+  const incomingSource = (over: Record<string, unknown> = {}) => ({
+    type: 'collection',
+    collection: 'workflows',
+    filters: [],
+    state_values: ['started'],
+    state_mode: 'include',
+    label_template: null,
+    sla_filter: null,
+    extra_fields: ['project.name'],
+    drilldown: null,
+    column_formats: null,
+    sort: 0,
+    ...over
+  })
+
+  it('true when only column_formats changed', () => {
+    expect(
+      isDisplayOnlySourceChange(
+        [existingSource()],
+        [
+          incomingSource({
+            column_formats: { created: { type: 'datetime', template: 'MM/DD/YY' } }
+          })
+        ]
+      )
+    ).toBe(true)
+  })
+
+  it('true when only drilldown changed', () => {
+    expect(
+      isDisplayOnlySourceChange(
+        [existingSource({ drilldown: '{"project.name":{"enabled":true}}' })],
+        [incomingSource({ drilldown: { 'project.name': { enabled: false } } })]
+      )
+    ).toBe(true)
+  })
+
+  it('false when filters changed', () => {
+    expect(
+      isDisplayOnlySourceChange(
+        [existingSource()],
+        [incomingSource({ filters: [{ field: 'zone', op: 'eq', value: '1' }] })]
+      )
+    ).toBe(false)
+  })
+
+  it('false when extra_fields changed (cache stores them)', () => {
+    expect(
+      isDisplayOnlySourceChange(
+        [existingSource()],
+        [incomingSource({ extra_fields: ['project.name', 'vendor.name'] })]
+      )
+    ).toBe(false)
+  })
+
+  it('false when state_values, label_template, or source count changed', () => {
+    expect(
+      isDisplayOnlySourceChange([existingSource()], [incomingSource({ state_values: [] })])
+    ).toBe(false)
+    expect(
+      isDisplayOnlySourceChange(
+        [existingSource()],
+        [incomingSource({ label_template: '{{number}}' })]
+      )
+    ).toBe(false)
+    expect(
+      isDisplayOnlySourceChange([existingSource()], [incomingSource(), incomingSource({ sort: 1 })])
+    ).toBe(false)
+  })
+
+  it('false for an empty existing set (nothing to preserve)', () => {
+    expect(isDisplayOnlySourceChange([], [])).toBe(false)
+  })
+
+  it('null-vs-absent JSON falls back to rebuild, never the reverse', () => {
+    // stored filters null, incoming [] — conservative mismatch
+    expect(isDisplayOnlySourceChange([existingSource({ filters: null })], [incomingSource()])).toBe(
+      false
+    )
   })
 })
