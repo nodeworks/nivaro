@@ -36,6 +36,41 @@ describe('parseThroughputParams', () => {
     expect(r.params.user).toBe('abc-123')
     expect(r.params.bucket).toBe('day')
   })
+
+  it('treats a same-day from=to date-only range as valid and non-empty', () => {
+    const r = parseThroughputParams({
+      collection: 'workflows',
+      from: '2026-06-25',
+      to: '2026-06-25'
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.params.from.getTime()).toBeLessThan(r.params.toExclusive.getTime())
+  })
+
+  it('advances toExclusive by exactly one day for a date-only `to`', () => {
+    const r = parseThroughputParams({ collection: 'workflows', to: '2026-06-25' })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.params.toExclusive.getTime() - r.params.to.getTime()).toBe(86_400_000)
+  })
+
+  it('keeps to/toExclusive in sync for a full ISO datetime `to`', () => {
+    const r = parseThroughputParams({
+      collection: 'workflows',
+      to: '2026-06-25T12:30:00.000Z'
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.params.toExclusive.getTime()).toBe(r.params.to.getTime())
+  })
+
+  it('when `to` is absent, toExclusive equals to (now-ish behavior unchanged)', () => {
+    const r = parseThroughputParams({ collection: 'workflows' })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.params.toExclusive.getTime()).toBe(r.params.to.getTime())
+  })
 })
 
 describe('bucketExpr', () => {

@@ -6,12 +6,15 @@ export interface ThroughputParams {
   collection: string
   from: Date
   to: Date
+  /** Exclusive SQL upper bound: `to` advanced by one day when `to` was a date-only string, so the named day is fully included. Equals `to` otherwise. */
+  toExclusive: Date
   bucket: 'day' | 'week' | 'month'
   user?: string
 }
 
 const BUCKETS = new Set(['day', 'week', 'month'])
 const MAX_RANGE_DAYS = 730
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
 
 export function parseThroughputParams(
   q: Record<string, unknown>
@@ -20,7 +23,8 @@ export function parseThroughputParams(
   if (!collection) return { ok: false, error: 'collection is required' }
   const bucket = (q.bucket ?? 'week') as string
   if (!BUCKETS.has(bucket)) return { ok: false, error: `invalid bucket: ${bucket}` }
-  const to = q.to ? new Date(String(q.to)) : new Date()
+  const toStr = q.to ? String(q.to) : undefined
+  const to = toStr ? new Date(toStr) : new Date()
   const from = q.from ? new Date(String(q.from)) : new Date(to.getTime() - 90 * 86_400_000)
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     return { ok: false, error: 'from/to must be ISO dates' }
@@ -29,10 +33,18 @@ export function parseThroughputParams(
   if ((to.getTime() - from.getTime()) / 86_400_000 > MAX_RANGE_DAYS) {
     return { ok: false, error: `date range capped at ${MAX_RANGE_DAYS} days` }
   }
+  const toExclusive = toStr && DATE_ONLY.test(toStr) ? new Date(to.getTime() + 86_400_000) : to
   const user = typeof q.user === 'string' && q.user.trim() ? q.user.trim() : undefined
   return {
     ok: true,
-    params: { collection, from, to, bucket: bucket as ThroughputParams['bucket'], user }
+    params: {
+      collection,
+      from,
+      to,
+      toExclusive,
+      bucket: bucket as ThroughputParams['bucket'],
+      user
+    }
   }
 }
 
@@ -59,7 +71,7 @@ export async function aggregateThroughput(params: ThroughputParams): Promise<{
   unattributed_transitions: number
 }> {
   const expr = bucketExpr(params.bucket)
-  const bind: any[] = [params.collection, params.from, params.to]
+  const bind: any[] = [params.collection, params.from, params.toExclusive]
   let userFilter = ''
   if (params.user) {
     userFilter = 'AND usr = ?'
@@ -102,7 +114,7 @@ export async function aggregateThroughput(params: ThroughputParams): Promise<{
        FROM nivaro_workflow_history h
        JOIN nivaro_workflow_instances i ON i.id = h.instance AND i.collection = ?
        WHERE h.[timestamp] >= ? AND h.[timestamp] < ? AND h.[user] IS NULL`,
-      [params.collection, params.from, params.to]
+      [params.collection, params.from, params.toExclusive]
     )
   )
 
