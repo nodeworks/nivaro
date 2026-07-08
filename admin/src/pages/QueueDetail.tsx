@@ -1652,6 +1652,29 @@ export function QueueDetailPage() {
         </div>
 
         <div className='mb-4 flex flex-wrap items-center gap-2'>
+          {/* Filters toggle sits leftmost — the rail it opens is on the left,
+              so the control lives where its effect appears. */}
+          {view === 'table' && (
+            <button
+              type='button'
+              onClick={() => setFiltersOpen((o) => !o)}
+              aria-expanded={filtersOpen}
+              className={cn(
+                'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
+                filtersOpen || activeFilterCount > 0
+                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                  : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+              )}
+            >
+              <Filter className='h-3.5 w-3.5' />
+              Filters
+              {activeFilterCount > 0 && (
+                <span className='rounded-full bg-nvr-cyan px-1.5 text-[10px] font-semibold leading-4 text-white'>
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+          )}
           {/* Hold the switcher until display_config applies — otherwise all
               three views flash before hidden ones disappear. */}
           {!displayReady ? (
@@ -1801,27 +1824,6 @@ export function QueueDetailPage() {
             </button>
           )}
           <div className='flex-1' />
-          {view === 'table' && (
-            <button
-              type='button'
-              onClick={() => setFiltersOpen((o) => !o)}
-              aria-expanded={filtersOpen}
-              className={cn(
-                'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
-                filtersOpen || activeFilterCount > 0
-                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                  : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
-              )}
-            >
-              <Filter className='h-3.5 w-3.5' />
-              Filters
-              {activeFilterCount > 0 && (
-                <span className='rounded-full bg-nvr-cyan px-1.5 text-[10px] font-semibold leading-4 text-white'>
-                  {activeFilterCount}
-                </span>
-              )}
-            </button>
-          )}
           {view === 'table' && (
             <Popover>
               <PopoverTrigger asChild>
