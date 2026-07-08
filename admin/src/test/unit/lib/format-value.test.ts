@@ -86,15 +86,15 @@ describe('formatMultiValue', () => {
   const cfg = { type: 'datetime', template: 'YYYY' } as const
 
   it('single value formats directly', () => {
-    expect(formatMultiValue('2026-03-05', cfg)).toBe('2026')
+    expect(formatMultiValue('2026-03-05T12:00:00', cfg)).toBe('2026')
   })
 
   it('formats each comma-joined value', () => {
-    expect(formatMultiValue('2025-01-01, 2026-06-06', cfg)).toBe('2025, 2026')
+    expect(formatMultiValue('2025-01-01T12:00:00, 2026-06-06T12:00:00', cfg)).toBe('2025, 2026')
   })
 
   it('preserves +N more suffix', () => {
-    expect(formatMultiValue('2025-01-01, 2026-06-06 +2 more', cfg)).toBe('2025, 2026 +2 more')
+    expect(formatMultiValue('2025-01-01T12:00:00, 2026-06-06T12:00:00 +2 more', cfg)).toBe('2025, 2026 +2 more')
   })
 
   it('empty string stays empty', () => {
