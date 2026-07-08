@@ -7,10 +7,35 @@ import { logActivity } from '../services/activity.js'
 import * as svc from '../services/collections.js'
 import type { CMSCollection, CMSField } from '../types.js'
 
-// Column names that must never surface through synthesized field metadata
-// (credential material on system tables like nivaro_users) — offering them in
-// relation/column pickers would let queue columns display their VALUES.
-const SENSITIVE_COLUMN_RE = /token|secret|password|hash|totp/i
+// Synthesis policy: nivaro_* system tables get an explicit per-table column
+// ALLOWLIST (anything not listed never surfaces — pickers can display column
+// VALUES, so credential material must be unreachable, and a denylist can't be
+// trusted to anticipate every sensitive column name). Business tables get a
+// broad denylist instead: their columns are user-defined data, and blocking
+// credential-shaped names is enough.
+const SYSTEM_TABLE_ALLOWLIST: Record<string, string[]> = {
+  nivaro_users: [
+    'id',
+    'first_name',
+    'last_name',
+    'email',
+    'title',
+    'location',
+    'description',
+    'status',
+    'role',
+    'language',
+    'is_admin',
+    'is_out_of_office',
+    'manager_id',
+    'current_workspace',
+    'created_at',
+    'updated_at'
+  ]
+}
+
+const SENSITIVE_COLUMN_RE =
+  /token|secret|password|passwd|\bpass\b|_pass$|^pass_|hash|totp|salt|api[_-]?key|private[_-]?key|\bpin\b|otp|mfa|2fa|recovery|backup[_-]?code|session|remember|verification|reset|nonce|credential/i
 
 const SQL_TYPE_MAP: Record<string, string> = {
   int: 'integer',
@@ -35,6 +60,12 @@ const SQL_TYPE_MAP: Record<string, string> = {
  * field rows from the physical schema instead.
  */
 async function synthesizeFields(collection: string): Promise<CMSField[]> {
+  // System tables synthesize ONLY from their explicit allowlist; unknown
+  // nivaro_* tables synthesize nothing at all.
+  const allowlist = collection.startsWith('nivaro_')
+    ? (SYSTEM_TABLE_ALLOWLIST[collection] ?? [])
+    : null
+  if (allowlist !== null && allowlist.length === 0) return []
   try {
     const cols = rawRows<{ COLUMN_NAME: string; DATA_TYPE: string; ORDINAL_POSITION: number }>(
       await db.raw(
@@ -46,7 +77,11 @@ async function synthesizeFields(collection: string): Promise<CMSField[]> {
       )
     )
     return cols
-      .filter((c) => !SENSITIVE_COLUMN_RE.test(c.COLUMN_NAME))
+      .filter((c) =>
+        allowlist !== null
+          ? allowlist.includes(c.COLUMN_NAME.toLowerCase())
+          : !SENSITIVE_COLUMN_RE.test(c.COLUMN_NAME)
+      )
       .map(
         (c): CMSField => ({
           id: 0,
