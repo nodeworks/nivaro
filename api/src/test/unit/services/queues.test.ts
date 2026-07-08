@@ -23,7 +23,8 @@ import {
   type QueueScope,
   type QueueSourceRow,
   sortItems,
-  stateFilterKeep
+  stateFilterKeep,
+  validateColumnFormats
 } from '../../../services/queues.js'
 import type { CMSRelation } from '../../../types.js'
 
@@ -1010,5 +1011,68 @@ describe('applyColumnFilters — owners multiselect', () => {
 
   it('string value keeps legacy substring-on-names behavior', () => {
     expect(applyColumnFilters(rows, { owners: 'zed' }).map((r) => r.item_id)).toEqual(['2'])
+  })
+})
+
+describe('validateColumnFormats', () => {
+  it('accepts undefined and empty object', () => {
+    expect(validateColumnFormats(undefined)).toBeNull()
+    expect(validateColumnFormats({})).toBeNull()
+  })
+
+  it('accepts a valid datetime format', () => {
+    expect(validateColumnFormats({ due_date: { type: 'datetime', template: 'DD/MM/YYYY HH:mm' } })).toBeNull()
+  })
+
+  it('accepts the relative datetime template', () => {
+    expect(validateColumnFormats({ due_date: { type: 'datetime', template: 'relative' } })).toBeNull()
+  })
+
+  it('accepts a valid number format', () => {
+    expect(
+      validateColumnFormats({
+        amount: { type: 'number', decimals: 2, thousands: true, prefix: '£', suffix: '' }
+      })
+    ).toBeNull()
+  })
+
+  it('accepts a valid boolean format', () => {
+    expect(
+      validateColumnFormats({ active: { type: 'boolean', true_label: 'Yes', false_label: 'No' } })
+    ).toBeNull()
+  })
+
+  it('rejects non-object input', () => {
+    expect(validateColumnFormats('nope')).toMatch(/must be an object/)
+    expect(validateColumnFormats([1])).toMatch(/must be an object/)
+  })
+
+  it('rejects unknown type', () => {
+    expect(validateColumnFormats({ f: { type: 'currency' } })).toMatch(/invalid format type/)
+  })
+
+  it('rejects datetime without template or over 50 chars', () => {
+    expect(validateColumnFormats({ f: { type: 'datetime' } })).toMatch(/template/)
+    expect(
+      validateColumnFormats({ f: { type: 'datetime', template: 'Y'.repeat(51) } })
+    ).toMatch(/template/)
+  })
+
+  it('rejects number decimals out of range', () => {
+    expect(validateColumnFormats({ f: { type: 'number', decimals: 11 } })).toMatch(/decimals/)
+    expect(validateColumnFormats({ f: { type: 'number', decimals: -1 } })).toMatch(/decimals/)
+  })
+
+  it('rejects oversized prefix/suffix/labels', () => {
+    const long = 'x'.repeat(31)
+    expect(validateColumnFormats({ f: { type: 'number', prefix: long } })).toMatch(/30/)
+    expect(validateColumnFormats({ f: { type: 'number', suffix: long } })).toMatch(/30/)
+    expect(
+      validateColumnFormats({ f: { type: 'boolean', true_label: long, false_label: 'No' } })
+    ).toMatch(/30/)
+  })
+
+  it('rejects boolean missing labels', () => {
+    expect(validateColumnFormats({ f: { type: 'boolean', true_label: 'Yes' } })).toMatch(/label/)
   })
 })
