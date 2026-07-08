@@ -439,6 +439,31 @@ export async function queuesRoutes(app: FastifyInstance) {
     const days = Number.isFinite(daysRaw) ? Math.min(Math.max(Math.floor(daysRaw), 1), 90) : 14
     const since = new Date(Date.now() - days * 86_400_000)
 
+    const scope = (req.query as { scope?: string }).scope === 'mine' ? 'mine' : 'all'
+
+    if (scope === 'mine') {
+      // Per-owner series for the REQUESTING user (nivaro_queue_owner_snapshots
+      // accumulates from deploy — no retroactive backlog history exists).
+      const mineRows = (await db('nivaro_queue_owner_snapshots')
+        .where({ queue_id: id, user: req.user!.id })
+        .where('snapshot_date', '>=', since)
+        .orderBy('snapshot_date', 'asc')
+        .select('snapshot_date', 'owned', 'sla_warning', 'sla_breached', 'at_risk')) as Array<
+        Record<string, unknown>
+      >
+      return reply.send({
+        data: mineRows.map((r) => ({
+          snapshot_date: r.snapshot_date,
+          total: r.owned,
+          unowned: 0,
+          sla_warning: r.sla_warning,
+          sla_breached: r.sla_breached,
+          at_risk: r.at_risk,
+          by_state: {}
+        }))
+      })
+    }
+
     const rows = (await db('nivaro_queue_stat_snapshots')
       .where({ queue_id: id })
       .where('snapshot_date', '>=', since)
@@ -486,7 +511,11 @@ export async function queuesRoutes(app: FastifyInstance) {
       .orderBy('created_at', 'asc')) as Array<Record<string, unknown>>
 
     return reply.send({
-      data: rows.map((r) => ({ ...r, is_shared: !!r.is_shared, state: parseJson(r.state as string) }))
+      data: rows.map((r) => ({
+        ...r,
+        is_shared: !!r.is_shared,
+        state: parseJson(r.state as string)
+      }))
     })
   })
 
