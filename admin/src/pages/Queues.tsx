@@ -22,6 +22,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { type ColumnFormatConfig, formatValue } from '@/lib/format-value'
 import { cn } from '@/lib/utils'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -46,6 +47,7 @@ interface QueueSource {
     string,
     { enabled?: boolean; layout_id?: number | null; width?: number | string | null }
   > | null
+  column_formats?: Record<string, ColumnFormatConfig> | null
   sla_filter: string | null
   extra_fields: string[] | null
   sort: number
@@ -253,20 +255,221 @@ function normalizeDrilldownWidth(raw: string): number | string | null {
   return null
 }
 
-function DrilldownChipConfig({
+function ConfigCombobox({
+  value,
+  options,
+  onChange
+}: {
+  value: string
+  options: { value: string; label: string }[]
+  onChange: (value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const selected = options.find((o) => o.value === value)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          role='combobox'
+          aria-expanded={open}
+          className='flex w-full items-center justify-between rounded border border-slate-200 bg-white px-2 py-1 text-left text-[11px] dark:border-border dark:bg-background'
+        >
+          <span className='truncate'>{selected?.label ?? 'Select…'}</span>
+          <ChevronsUpDown className='ml-1 h-3 w-3 shrink-0 opacity-50' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[220px] p-0' align='start'>
+        <Command>
+          <CommandInput placeholder='Search…' className='h-8 text-[11px]' />
+          <CommandList>
+            <CommandEmpty>No match.</CommandEmpty>
+            <CommandGroup>
+              {options.map((o) => (
+                <CommandItem
+                  key={o.value}
+                  value={o.label}
+                  onSelect={() => {
+                    onChange(o.value)
+                    setOpen(false)
+                  }}
+                  className='text-[11px]'
+                >
+                  <Check
+                    className={cn(
+                      'mr-1.5 h-3 w-3',
+                      value === o.value ? 'opacity-100' : 'opacity-0'
+                    )}
+                  />
+                  {o.label}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+const DATETIME_PRESETS = [
+  { value: 'DD/MM/YYYY', label: 'Date (05/03/2026)' },
+  { value: 'DD/MM/YYYY HH:mm', label: 'Date + time (05/03/2026 14:07)' },
+  { value: 'relative', label: 'Relative (2h ago)' },
+  { value: 'YYYY-MM-DD HH:mm:ss', label: 'ISO (2026-03-05 14:07:09)' }
+]
+
+function DatetimeFormatFields({
+  format,
+  onFormatChange
+}: {
+  format: { type: 'datetime'; template: string }
+  onFormatChange: (next: ColumnFormatConfig) => void
+}) {
+  const isPreset = DATETIME_PRESETS.some((p) => p.value === format.template)
+  const [custom, setCustom] = useState(!isPreset)
+  return (
+    <div className='space-y-1'>
+      <ConfigCombobox
+        value={custom ? '__custom__' : format.template}
+        options={[...DATETIME_PRESETS, { value: '__custom__', label: 'Custom…' }]}
+        onChange={(v) => {
+          if (v === '__custom__') setCustom(true)
+          else {
+            setCustom(false)
+            onFormatChange({ type: 'datetime', template: v })
+          }
+        }}
+      />
+      {custom && (
+        <input
+          type='text'
+          value={format.template}
+          maxLength={50}
+          onChange={(e) => onFormatChange({ type: 'datetime', template: e.target.value })}
+          placeholder='DD MMM YYYY HH:mm'
+          className='w-full rounded border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] dark:border-border dark:bg-background'
+        />
+      )}
+      <p className='text-[10px] text-slate-400'>
+        Preview: {formatValue(new Date().toISOString(), format)}
+      </p>
+    </div>
+  )
+}
+
+function NumberFormatFields({
+  format,
+  onFormatChange
+}: {
+  format: {
+    type: 'number'
+    decimals?: number
+    thousands?: boolean
+    prefix?: string
+    suffix?: string
+  }
+  onFormatChange: (next: ColumnFormatConfig) => void
+}) {
+  return (
+    <div className='space-y-1'>
+      <div className='flex items-center gap-2'>
+        <label className='flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400'>
+          Decimals
+          <input
+            type='number'
+            min={0}
+            max={10}
+            value={format.decimals ?? 0}
+            onChange={(e) =>
+              onFormatChange({
+                ...format,
+                decimals: Math.round(Math.max(0, Math.min(10, Number(e.target.value) || 0)))
+              })
+            }
+            className='w-14 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] dark:border-border dark:bg-background'
+          />
+        </label>
+        <label className='flex cursor-pointer items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400'>
+          <input
+            type='checkbox'
+            checked={format.thousands ?? false}
+            onChange={(e) => onFormatChange({ ...format, thousands: e.target.checked })}
+            className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+          />
+          1,000s
+        </label>
+      </div>
+      <div className='flex items-center gap-1.5'>
+        <input
+          type='text'
+          value={format.prefix ?? ''}
+          maxLength={30}
+          onChange={(e) => onFormatChange({ ...format, prefix: e.target.value })}
+          placeholder='Prefix (£)'
+          className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+        />
+        <input
+          type='text'
+          value={format.suffix ?? ''}
+          maxLength={30}
+          onChange={(e) => onFormatChange({ ...format, suffix: e.target.value })}
+          placeholder='Suffix (%)'
+          className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+        />
+      </div>
+      <p className='text-[10px] text-slate-400'>Preview: {formatValue('1234.5', format)}</p>
+    </div>
+  )
+}
+
+function BooleanFormatFields({
+  format,
+  onFormatChange
+}: {
+  format: { type: 'boolean'; true_label: string; false_label: string }
+  onFormatChange: (next: ColumnFormatConfig) => void
+}) {
+  return (
+    <div className='flex items-center gap-1.5'>
+      <input
+        type='text'
+        value={format.true_label}
+        maxLength={30}
+        onChange={(e) => onFormatChange({ ...format, true_label: e.target.value })}
+        placeholder='True label'
+        className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+      />
+      <input
+        type='text'
+        value={format.false_label}
+        maxLength={30}
+        onChange={(e) => onFormatChange({ ...format, false_label: e.target.value })}
+        placeholder='False label'
+        className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+      />
+    </div>
+  )
+}
+
+function ColumnChipConfig({
   path,
   targetCollection,
   cfg,
-  onChange
+  format,
+  onChange,
+  onFormatChange
 }: {
   path: string
-  targetCollection: string
+  targetCollection: string | null
   cfg: { enabled?: boolean; layout_id?: number | null; width?: number | string | null } | undefined
+  format: ColumnFormatConfig | undefined
   onChange: (next: {
     enabled: boolean
     layout_id: number | null
     width: number | string | null
   }) => void
+  onFormatChange: (next: ColumnFormatConfig | null) => void
 }) {
   const presetValues = new Set(DRILLDOWN_WIDTHS.map((w) => w.value))
   const isCustom = cfg?.width != null && !presetValues.has(cfg.width as number)
@@ -276,11 +479,11 @@ function DrilldownChipConfig({
   const { data: detailLayouts = [] } = useQuery<
     Array<{ id: number; name: string; layout_type?: string }>
   >({
-    queryKey: ['detail-layouts', targetCollection],
-    enabled: open,
+    queryKey: ['detail-layouts', targetCollection ?? ''],
+    enabled: open && !!targetCollection,
     queryFn: () =>
       api
-        .get(`/collection-layouts?collection=${targetCollection}`)
+        .get(`/collection-layouts?collection=${targetCollection ?? ''}`)
         .then((r) =>
           ((r.data.data ?? []) as Array<{ id: number; name: string; layout_type?: string }>).filter(
             (l) => l.layout_type === 'detail'
@@ -288,115 +491,150 @@ function DrilldownChipConfig({
         )
   })
   const enabled = cfg?.enabled !== false
+  // Relation columns tint when drill-down is enabled or a format is set;
+  // plain columns (no drill-down concept) tint only when a format is set.
+  const active = targetCollection ? enabled || format !== undefined : format !== undefined
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type='button'
-          aria-label={`Drill-down settings for ${path}`}
+          aria-label={`Column settings for ${path}`}
           className={cn(
             'ml-0.5 rounded-sm hover:opacity-100',
-            enabled ? 'opacity-80 text-nvr-cyan' : 'opacity-40'
+            active ? 'opacity-80 text-nvr-cyan' : 'opacity-40'
           )}
         >
           <Settings2 className='h-3 w-3' />
         </button>
       </PopoverTrigger>
       <PopoverContent className='w-[240px] space-y-2 p-3' align='start'>
-        <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
-          Drill-down · {path}
-        </p>
-        <label className='flex cursor-pointer items-center justify-between'>
-          <span className='text-[11px] text-slate-500 dark:text-slate-400'>
-            Click value opens detail panel
-          </span>
-          <input
-            type='checkbox'
-            checked={enabled}
-            onChange={(e) =>
-              onChange({
-                enabled: e.target.checked,
-                layout_id: cfg?.layout_id ?? null,
-                width: cfg?.width ?? null
-              })
-            }
-            className='h-3.5 w-3.5 rounded accent-nvr-cyan'
-          />
-        </label>
-        {enabled && (
-          <div className='space-y-1'>
-            <span className='text-[10px] text-slate-400'>Detail layout</span>
-            <select
-              value={cfg?.layout_id ?? ''}
-              onChange={(e) =>
-                onChange({
-                  enabled: true,
-                  layout_id: e.target.value ? Number(e.target.value) : null,
-                  width: cfg?.width ?? null
-                })
-              }
-              className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
-            >
-              <option value=''>Default (active detail layout)</option>
-              {detailLayouts.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-            {detailLayouts.length === 0 && (
-              <p className='text-[10px] text-slate-400'>
-                No detail layouts on {targetCollection} yet — the panel falls back to a read-only
-                view. Create one in Data Model → Layout.
-              </p>
-            )}
-            <span className='text-[10px] text-slate-400'>Panel width</span>
-            <select
-              value={customMode ? '__custom__' : String(cfg?.width ?? 640)}
-              onChange={(e) => {
-                if (e.target.value === '__custom__') {
-                  setCustomMode(true)
-                  setCustomDraft(cfg?.width != null ? String(cfg.width) : '')
-                  return
+        {targetCollection && (
+          <>
+            <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+              Drill-down · {path}
+            </p>
+            <label className='flex cursor-pointer items-center justify-between'>
+              <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                Click value opens detail panel
+              </span>
+              <input
+                type='checkbox'
+                checked={enabled}
+                onChange={(e) =>
+                  onChange({
+                    enabled: e.target.checked,
+                    layout_id: cfg?.layout_id ?? null,
+                    width: cfg?.width ?? null
+                  })
                 }
-                setCustomMode(false)
-                const n = Number(e.target.value)
-                onChange({
-                  enabled: true,
-                  layout_id: cfg?.layout_id ?? null,
-                  width: n === 640 ? null : n
-                })
-              }}
-              className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
-            >
-              {DRILLDOWN_WIDTHS.map((w) => (
-                <option key={w.value} value={String(w.value)}>
-                  {w.label}
-                </option>
-              ))}
-              <option value='__custom__'>Custom…</option>
-            </select>
-            {customMode && (
-              <div className='space-y-0.5'>
-                <Input
-                  value={customDraft}
+                className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+              />
+            </label>
+            {enabled && (
+              <div className='space-y-1'>
+                <span className='text-[10px] text-slate-400'>Detail layout</span>
+                <select
+                  value={cfg?.layout_id ?? ''}
+                  onChange={(e) =>
+                    onChange({
+                      enabled: true,
+                      layout_id: e.target.value ? Number(e.target.value) : null,
+                      width: cfg?.width ?? null
+                    })
+                  }
+                  className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                >
+                  <option value=''>Default (active detail layout)</option>
+                  {detailLayouts.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+                {detailLayouts.length === 0 && (
+                  <p className='text-[10px] text-slate-400'>
+                    No detail layouts on {targetCollection} yet — the panel falls back to a
+                    read-only view. Create one in Data Model → Layout.
+                  </p>
+                )}
+                <span className='text-[10px] text-slate-400'>Panel width</span>
+                <select
+                  value={customMode ? '__custom__' : String(cfg?.width ?? 640)}
                   onChange={(e) => {
-                    setCustomDraft(e.target.value)
-                    const w = normalizeDrilldownWidth(e.target.value)
-                    if (w != null) {
-                      onChange({ enabled: true, layout_id: cfg?.layout_id ?? null, width: w })
+                    if (e.target.value === '__custom__') {
+                      setCustomMode(true)
+                      setCustomDraft(cfg?.width != null ? String(cfg.width) : '')
+                      return
                     }
+                    setCustomMode(false)
+                    const n = Number(e.target.value)
+                    onChange({
+                      enabled: true,
+                      layout_id: cfg?.layout_id ?? null,
+                      width: n === 640 ? null : n
+                    })
                   }}
-                  placeholder='e.g. 800px or 75%'
-                  className='h-7 text-[11px]'
-                />
-                <p className='text-[10px] text-slate-400'>
-                  Pixels (320–2000) or viewport percentage (10–96%).
-                </p>
+                  className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                >
+                  {DRILLDOWN_WIDTHS.map((w) => (
+                    <option key={w.value} value={String(w.value)}>
+                      {w.label}
+                    </option>
+                  ))}
+                  <option value='__custom__'>Custom…</option>
+                </select>
+                {customMode && (
+                  <div className='space-y-0.5'>
+                    <Input
+                      value={customDraft}
+                      onChange={(e) => {
+                        setCustomDraft(e.target.value)
+                        const w = normalizeDrilldownWidth(e.target.value)
+                        if (w != null) {
+                          onChange({ enabled: true, layout_id: cfg?.layout_id ?? null, width: w })
+                        }
+                      }}
+                      placeholder='e.g. 800px or 75%'
+                      className='h-7 text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      Pixels (320–2000) or viewport percentage (10–96%).
+                    </p>
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          </>
         )}
+        <div className='space-y-1 border-t border-slate-100 pt-2 dark:border-border'>
+          <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Format</p>
+          <ConfigCombobox
+            value={format?.type ?? ''}
+            options={[
+              { value: '', label: 'None (raw value)' },
+              { value: 'datetime', label: 'Date & time' },
+              { value: 'number', label: 'Number' },
+              { value: 'boolean', label: 'Yes / No' }
+            ]}
+            onChange={(t) => {
+              if (!t) onFormatChange(null)
+              else if (t === 'datetime')
+                onFormatChange({ type: 'datetime', template: 'DD/MM/YYYY' })
+              else if (t === 'number') onFormatChange({ type: 'number', decimals: 0 })
+              else onFormatChange({ type: 'boolean', true_label: 'Yes', false_label: 'No' })
+            }}
+          />
+          {format?.type === 'datetime' && (
+            <DatetimeFormatFields format={format} onFormatChange={onFormatChange} />
+          )}
+          {format?.type === 'number' && (
+            <NumberFormatFields format={format} onFormatChange={onFormatChange} />
+          )}
+          {format?.type === 'boolean' && (
+            <BooleanFormatFields format={format} onFormatChange={onFormatChange} />
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   )
@@ -709,17 +947,33 @@ function SourceRow({
                     return (
                       <Badge key={f} className='gap-1 font-mono text-[11px]'>
                         {f}
-                        {canEdit && meta?.kind === 'relation' && meta.target_collection && (
-                          <DrilldownChipConfig
+                        {canEdit && (
+                          <ColumnChipConfig
                             path={f}
-                            targetCollection={meta.target_collection}
+                            targetCollection={
+                              meta?.kind === 'relation' ? (meta.target_collection ?? null) : null
+                            }
                             cfg={source.drilldown?.[f]}
+                            format={source.column_formats?.[f]}
                             onChange={(next) =>
                               onChange({
                                 ...source,
                                 drilldown: { ...(source.drilldown ?? {}), [f]: next }
                               })
                             }
+                            onFormatChange={(next) => {
+                              // Always store while editing — empty boolean labels
+                              // are stripped at save time (saveSourcesMut), so
+                              // backspacing a label mid-edit doesn't unmount the
+                              // boolean fields section.
+                              const current = { ...(source.column_formats ?? {}) }
+                              if (next === null) {
+                                delete current[f]
+                              } else {
+                                current[f] = next
+                              }
+                              onChange({ ...source, column_formats: current })
+                            }}
                           />
                         )}
                         <button
@@ -904,6 +1158,16 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
           // Drop half-built condition rows — an empty field name would make the
           // source's SQL query throw and the source silently resolve empty.
           filters: (s.filters ?? []).filter((c) => c.field && c.op),
+          // Strip half-built formats (empty boolean label, empty custom datetime
+          // template) — kept in state so mid-edit backspacing doesn't discard the
+          // entry, but the server's validation rejects them.
+          column_formats: Object.fromEntries(
+            Object.entries(s.column_formats ?? {}).filter(([, cfg]) => {
+              if (cfg.type === 'boolean') return cfg.true_label && cfg.false_label
+              if (cfg.type === 'datetime') return cfg.template.trim().length > 0
+              return true
+            })
+          ),
           sort: i
         }))
       }),

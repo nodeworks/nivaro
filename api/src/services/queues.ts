@@ -50,8 +50,19 @@ export interface QueueSourceRow {
   extra_fields: string | null
   /** JSON: Record<extraFieldPath, { enabled?: boolean; layout_id?: number | null }> — per-column drill-down config. */
   drilldown?: string | null
+  /** JSON: Record<extraFieldPath, ColumnFormatConfig> — per-column display format, applied client-side. */
+  column_formats?: string | null
   sort: number
 }
+
+/** Per-column display format for extra columns. Applied CLIENT-SIDE at render
+ *  time only — raw values stay raw in QueueItem.extra, the materialized cache,
+ *  widget feeds, and the API response, so JSON_VALUE sort/filter stays correct
+ *  and format changes never require rematerialization. */
+export type ColumnFormatConfig =
+  | { type: 'datetime'; template: string }
+  | { type: 'number'; decimals?: number; thousands?: boolean; prefix?: string; suffix?: string }
+  | { type: 'boolean'; true_label: string; false_label: string }
 
 // State filtering semantics shared by the live resolver and the materialization
 // write-path matcher. Include: only listed states pass (stateless items drop
@@ -632,6 +643,46 @@ export function formatMultiValueCell(values: string[], totalCount: number, cap =
   const shown = values.slice(0, cap)
   const remaining = totalCount - shown.length
   return remaining > 0 ? `${shown.join(', ')} +${remaining} more` : shown.join(', ')
+}
+
+export function validateColumnFormats(input: unknown): string | null {
+  if (input === undefined || input === null) return null
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    return 'column_formats must be an object keyed by extra-field path'
+  }
+  for (const [path, cfg] of Object.entries(input as Record<string, unknown>)) {
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+      return `column_formats.${path} must be an object`
+    }
+    const c = cfg as Record<string, unknown>
+    if (c.type === 'datetime') {
+      if (typeof c.template !== 'string' || c.template.length === 0 || c.template.length > 50) {
+        return `column_formats.${path}: datetime template must be a string of 1-50 chars`
+      }
+    } else if (c.type === 'number') {
+      if (c.decimals !== undefined) {
+        const d = c.decimals
+        if (typeof d !== 'number' || !Number.isInteger(d) || d < 0 || d > 10) {
+          return `column_formats.${path}: decimals must be an integer 0-10`
+        }
+      }
+      for (const k of ['prefix', 'suffix'] as const) {
+        if (c[k] !== undefined && (typeof c[k] !== 'string' || (c[k] as string).length > 30)) {
+          return `column_formats.${path}: ${k} must be a string of at most 30 chars`
+        }
+      }
+    } else if (c.type === 'boolean') {
+      for (const k of ['true_label', 'false_label'] as const) {
+        const label = c[k]
+        if (typeof label !== 'string' || label.length === 0 || label.length > 30) {
+          return `column_formats.${path}: ${k} must be a string of 1-30 chars`
+        }
+      }
+    } else {
+      return `column_formats.${path}: invalid format type: ${String(c.type)}`
+    }
+  }
+  return null
 }
 
 export interface ConditionBuilder {

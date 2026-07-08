@@ -96,6 +96,15 @@ export const queuesGuide: DocSection = {
         'Every visible column can be filtered and sorted, and dragged to reorder (via the "Columns" popover\'s grip handle). Filtering and sorting happen after scope-filtering but never affect the stat strip, Kanban, or Workload views — those always reflect the full scope-filtered set. Filter and sort choices reset when you leave the queue; only which columns are visible and their order persist.'
       ]
     },
+    { type: 'h3', text: 'Column display formats' },
+    {
+      type: 'p',
+      text: 'Each extra column can carry a display format, set from the gear on the column chip in the builder: date & time (preset templates or a custom token template using YYYY YY MMM MM DD HH mm ss, plus a relative option), number (decimals, thousands separator, prefix/suffix), or yes/no labels for booleans.'
+    },
+    {
+      type: 'note',
+      text: 'Formats are applied at display time only. The underlying value stays raw, so sorting and filtering on the column remain exact, and changing a format never requires re-materializing the queue.'
+    },
     { type: 'h3', text: 'Stat strip filtering' },
     {
       type: 'p',
