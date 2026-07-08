@@ -384,7 +384,7 @@ function NumberFormatFields({
             onChange={(e) =>
               onFormatChange({
                 ...format,
-                decimals: Math.max(0, Math.min(10, Number(e.target.value) || 0))
+                decimals: Math.round(Math.max(0, Math.min(10, Number(e.target.value) || 0)))
               })
             }
             className='w-14 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] dark:border-border dark:bg-background'
@@ -1158,13 +1158,15 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
           // Drop half-built condition rows — an empty field name would make the
           // source's SQL query throw and the source silently resolve empty.
           filters: (s.filters ?? []).filter((c) => c.field && c.op),
-          // Strip half-built boolean formats (empty label) — kept in state so
-          // mid-edit backspacing doesn't discard the entry, but the server's
-          // validation rejects empty labels.
+          // Strip half-built formats (empty boolean label, empty custom datetime
+          // template) — kept in state so mid-edit backspacing doesn't discard the
+          // entry, but the server's validation rejects them.
           column_formats: Object.fromEntries(
-            Object.entries(s.column_formats ?? {}).filter(
-              ([, cfg]) => cfg.type !== 'boolean' || (cfg.true_label && cfg.false_label)
-            )
+            Object.entries(s.column_formats ?? {}).filter(([, cfg]) => {
+              if (cfg.type === 'boolean') return cfg.true_label && cfg.false_label
+              if (cfg.type === 'datetime') return cfg.template.trim().length > 0
+              return true
+            })
           ),
           sort: i
         }))
