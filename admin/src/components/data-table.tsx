@@ -94,6 +94,9 @@ export interface DataTableProps<T = Record<string, unknown>> {
   /** Force single-line cells (whitespace-nowrap on every body cell) — hosts
    *  pair this with per-column truncation for dense, scannable tables. */
   nowrapCells?: boolean
+  /** Pin the selection checkbox (when present) and the first data column so
+   *  they stay visible while the table scrolls horizontally. */
+  pinFirstColumn?: boolean
   selectedIds?: string[]
   onSelectionChange?: (ids: string[]) => void
   /** Optional per-row class — e.g. at-risk background tinting. */
@@ -423,6 +426,7 @@ export function DataTable<T = Record<string, unknown>>({
   emptyMessage = 'No records found.',
   hideFilterRow = false,
   nowrapCells = false,
+  pinFirstColumn = false,
   selectedIds,
   onSelectionChange,
   rowClassName,
@@ -445,12 +449,18 @@ export function DataTable<T = Record<string, unknown>>({
   const renderRow = (row: T, i: number) => {
     const rowId = rowKey ? rowKey(row, i) : String(i)
     const isSelected = selectedIds?.includes(rowId) ?? false
+    // Pinned cells use bg-inherit, so the row carries an opaque base bg (and a
+    // solid hover) for the pinned column to cover horizontally scrolled content.
     return (
       <TableRow
         key={rowId}
         className={cn(
           'border-slate-100',
-          onRowClick && 'cursor-pointer hover:bg-slate-50/80',
+          pinFirstColumn && 'bg-white dark:bg-card',
+          onRowClick &&
+            (pinFirstColumn
+              ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted'
+              : 'cursor-pointer hover:bg-slate-50/80'),
           rowClassName?.(row),
           isSelected && 'bg-nvr-cyan/5'
         )}
@@ -458,7 +468,7 @@ export function DataTable<T = Record<string, unknown>>({
       >
         {onSelectionChange && (
           <TableCell
-            className='w-9 px-3 py-2'
+            className={cn('w-9 px-3 py-2', pinFirstColumn && 'sticky left-0 z-[1] bg-inherit')}
             onClick={(e) => {
               e.stopPropagation()
               if (isSelected) {
@@ -471,10 +481,20 @@ export function DataTable<T = Record<string, unknown>>({
             <Checkbox checked={isSelected} aria-label='Select row' />
           </TableCell>
         )}
-        {columns.map((col) => (
+        {columns.map((col, colIdx) => (
           <TableCell
             key={col.key}
-            className={cn('px-3 py-2', nowrapCells && 'whitespace-nowrap', col.className)}
+            className={cn(
+              'px-3 py-2',
+              nowrapCells && 'whitespace-nowrap',
+              pinFirstColumn &&
+                colIdx === 0 &&
+                cn(
+                  'sticky z-[1] border-r border-slate-100 bg-inherit dark:border-border',
+                  onSelectionChange ? 'left-[27px]' : 'left-0'
+                ),
+              col.className
+            )}
           >
             {col.render
               ? col.render(row, i)
@@ -547,7 +567,12 @@ export function DataTable<T = Record<string, unknown>>({
               <TableHeader>
                 <TableRow className='border-b border-slate-200 hover:bg-transparent'>
                   {onSelectionChange && (
-                    <TableHead className='h-9 w-9 bg-slate-50 px-3 py-0'>
+                    <TableHead
+                      className={cn(
+                        'h-9 w-9 bg-slate-50 px-3 py-0',
+                        pinFirstColumn && 'sticky left-0 z-[2]'
+                      )}
+                    >
                       <Checkbox
                         checked={
                           rows.length > 0 &&
@@ -569,7 +594,7 @@ export function DataTable<T = Record<string, unknown>>({
                       />
                     </TableHead>
                   )}
-                  {columns.map((col) => (
+                  {columns.map((col, colIdx) => (
                     <TableHead
                       key={col.key}
                       className={cn(
@@ -577,6 +602,12 @@ export function DataTable<T = Record<string, unknown>>({
                         col.sortable &&
                           onSortChange &&
                           'cursor-pointer select-none hover:text-slate-600',
+                        pinFirstColumn &&
+                          colIdx === 0 &&
+                          cn(
+                            'sticky z-[2] border-r border-slate-200 dark:border-border',
+                            onSelectionChange ? 'left-[27px]' : 'left-0'
+                          ),
                         col.headerClassName
                       )}
                       onClick={() => handleHeaderClick(col)}

@@ -176,10 +176,10 @@ function SlaPill({ status }: { status: QueueItemRow['sla_status'] }) {
   return <span className={cn('rounded px-1.5 py-0.5 text-[11px] font-medium', cls)}>{status}</span>
 }
 
-function Sparkline({ points }: { points: number[] }) {
+function Sparkline({ points, inline = false }: { points: number[]; inline?: boolean }) {
   if (points.length < 2) return null
-  const w = 64
-  const h = 18
+  const w = inline ? 40 : 64
+  const h = inline ? 14 : 18
   const max = Math.max(...points)
   const min = Math.min(...points)
   const range = max - min || 1
@@ -191,7 +191,12 @@ function Sparkline({ points }: { points: number[] }) {
     )
     .join(' ')
   return (
-    <svg width={w} height={h} className='mt-1.5 opacity-40' aria-hidden='true'>
+    <svg
+      width={w}
+      height={h}
+      className={inline ? 'opacity-40' : 'mt-1.5 opacity-40'}
+      aria-hidden='true'
+    >
       <path d={path} fill='none' stroke='currentColor' strokeWidth='1.5' />
     </svg>
   )
@@ -222,47 +227,53 @@ function StatTile({
   deltaBadIsUp?: boolean
   onClick: () => void
 }) {
+  // Compact segment: "504 Total" on one line — number leads, label trails,
+  // delta + sparkline inline. Zero-count segments dim so live signals carry
+  // the visual weight.
   return (
     <button
       type='button'
       onClick={onClick}
       className={cn(
-        'bg-white px-4 py-3.5 text-left transition-colors hover:bg-slate-50 dark:bg-card dark:hover:bg-card/80',
-        active && 'ring-1 ring-inset ring-nvr-cyan bg-nvr-cyan/5 dark:bg-nvr-cyan/10'
+        'flex items-center gap-1.5 bg-white px-3 py-2 text-left transition-colors hover:bg-slate-50 dark:bg-card dark:hover:bg-card/80',
+        active && 'bg-nvr-cyan/5 ring-1 ring-inset ring-nvr-cyan dark:bg-nvr-cyan/10',
+        !active && !isLoading && count === 0 && 'opacity-50'
       )}
     >
-      <p
-        className={cn(
-          'mb-1 text-[11px] font-medium',
-          tone === 'red'
-            ? 'text-red-500 dark:text-red-400'
-            : tone === 'amber'
-              ? 'text-amber-600 dark:text-amber-400'
-              : 'text-slate-400 dark:text-muted-foreground'
-        )}
-      >
-        {label}
-      </p>
       {isLoading ? (
-        <Skeleton className='h-6 w-16 rounded' />
+        <Skeleton className='h-5 w-16 rounded' />
       ) : (
-        <p className='flex items-baseline gap-1.5 text-[22px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
-          {filteredCount != null ? (
-            <>
-              <span className='text-nvr-navy dark:text-nvr-cyan'>
-                {formatNumber(filteredCount)}
-              </span>
-              <span className='text-[13px] font-medium text-slate-400'>
-                / {formatNumber(count)}
-              </span>
-            </>
-          ) : (
-            formatNumber(count)
-          )}
+        <>
+          <span className='flex items-baseline gap-1 text-[15px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
+            {filteredCount != null ? (
+              <>
+                <span className='text-nvr-navy dark:text-nvr-cyan'>
+                  {formatNumber(filteredCount)}
+                </span>
+                <span className='text-[11px] font-medium text-slate-400'>
+                  / {formatNumber(count)}
+                </span>
+              </>
+            ) : (
+              formatNumber(count)
+            )}
+          </span>
+          <span
+            className={cn(
+              'text-[11px] font-medium leading-none',
+              tone === 'red'
+                ? 'text-red-500 dark:text-red-400'
+                : tone === 'amber'
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : 'text-slate-400 dark:text-muted-foreground'
+            )}
+          >
+            {label}
+          </span>
           {delta != null && delta !== 0 && (
             <span
               className={cn(
-                'text-[11px] font-medium',
+                'text-[10px] font-medium leading-none',
                 deltaBadIsUp ? (delta > 0 ? 'text-red-500' : 'text-emerald-600') : 'text-slate-400'
               )}
             >
@@ -270,9 +281,9 @@ function StatTile({
               {formatNumber(Math.abs(delta))}
             </span>
           )}
-        </p>
+          {trend && count > 0 && <Sparkline points={trend} inline />}
+        </>
       )}
-      {trend && <Sparkline points={trend} />}
     </button>
   )
 }
@@ -724,7 +735,6 @@ export function QueueDetailPage() {
   const items = data?.data ?? []
   const stats = data?.stats
   const filteredStats = data?.filtered_stats ?? null
-  const stateEntries = stats ? Object.entries(stats.by_state) : []
 
   // Any completed refetch clears the pending-updates pill — the data on screen
   // is current again, however the refetch was triggered.
@@ -816,13 +826,27 @@ export function QueueDetailPage() {
   const friendly = (v: string) => v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 
   const stateMetaByKey = useMemo(() => {
-    const map: Record<string, { label: string; color: string | null }> = {}
+    // The states endpoint returns rows ordered by workflow sort — array index
+    // IS the pipeline position, used to order the state chip strip.
+    const map: Record<string, { label: string; color: string | null; sort: number }> = {}
     for (const q of stateQueries) {
-      for (const st of q.data ?? []) map[st.key] = { label: st.label, color: st.color }
+      ;(q.data ?? []).forEach((st, i) => {
+        map[st.key] = { label: st.label, color: st.color, sort: i }
+      })
     }
     return map
     // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on fetched data identity
   }, [stateQueries.map((q) => q.data)])
+
+  // Chips follow the workflow's state order (early states first); states the
+  // meta lookup doesn't know — and the 'none' bucket — sink to the end.
+  const stateEntries = stats
+    ? Object.entries(stats.by_state).sort(
+        (a, b) =>
+          (stateMetaByKey[a[0]]?.sort ?? Number.MAX_SAFE_INTEGER) -
+          (stateMetaByKey[b[0]]?.sort ?? Number.MAX_SAFE_INTEGER)
+      )
+    : []
 
   const stateLabelByKey = useMemo(() => {
     const map: Record<string, string> = {}
@@ -1448,13 +1472,13 @@ export function QueueDetailPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <div className='sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='min-w-0'>
-          <h1 className='truncate text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+      <div className='sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-3 dark:border-border dark:bg-card'>
+        <div className='flex min-w-0 items-baseline gap-2.5'>
+          <h1 className='shrink-0 truncate text-[16px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
             {queue?.name ?? 'Queue'}
           </h1>
           {queue?.description && (
-            <p className='mt-0.5 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
+            <p className='hidden truncate text-[12px] text-slate-500 sm:block dark:text-muted-foreground'>
               {queue.description}
             </p>
           )}
@@ -1489,171 +1513,116 @@ export function QueueDetailPage() {
             </span>
           </div>
         )}
-        <div className='mb-3 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-5 dark:border-border dark:bg-border'>
-          <StatTile
-            label='Total'
-            count={stats?.total ?? 0}
-            filteredCount={filteredStats ? filteredStats.total : null}
-            active={Object.values(filterValues).every(isFilterEmpty) && scope === 'all'}
-            isLoading={showLoading}
-            {...trendFor('total')}
-            onClick={clearAllTileFilters}
-          />
-          <StatTile
-            label='Warning'
-            count={stats?.sla_warning ?? 0}
-            filteredCount={filteredStats ? filteredStats.sla_warning : null}
-            tone='amber'
-            active={filterValues.sla_status === 'warning'}
-            isLoading={showLoading}
-            deltaBadIsUp
-            {...trendFor('sla_warning')}
-            onClick={() => toggleTileFilter('sla_status', 'warning')}
-          />
-          <StatTile
-            label='Breached'
-            count={stats?.sla_breached ?? 0}
-            filteredCount={filteredStats ? filteredStats.sla_breached : null}
-            tone='red'
-            active={filterValues.sla_status === 'breached'}
-            isLoading={showLoading}
-            deltaBadIsUp
-            {...trendFor('sla_breached')}
-            onClick={() => toggleTileFilter('sla_status', 'breached')}
-          />
-          <StatTile
-            label='At Risk'
-            count={stats?.at_risk ?? 0}
-            filteredCount={filteredStats ? filteredStats.at_risk : null}
-            tone='red'
-            active={filterValues.at_risk === 'yes'}
-            isLoading={showLoading}
-            deltaBadIsUp
-            {...trendFor('at_risk')}
-            onClick={() => toggleTileFilter('at_risk', 'yes')}
-          />
-          <StatTile
-            label='Unowned'
-            count={stats?.unowned ?? 0}
-            filteredCount={filteredStats ? filteredStats.unowned : null}
-            active={scope === 'unowned'}
-            isLoading={showLoading}
-            deltaBadIsUp
-            {...trendFor('unowned')}
-            onClick={() => {
-              setScope(scope === 'unowned' ? 'all' : 'unowned')
-              setPage(1)
-            }}
-          />
-        </div>
-
-        {stateEntries.length > 0 && (
-          <div className='mb-4 flex flex-wrap items-center gap-1.5'>
-            {stateEntries.map(([state, count]) => (
-              <StateChip
-                key={state}
-                label={stateLabel(state)}
-                count={count}
-                filteredCount={filteredStats ? (filteredStats.by_state[state] ?? 0) : null}
-                color={stateMetaByKey[state]?.color ?? null}
-                active={stateFilterList.includes(state)}
-                onClick={() => toggleStateChip(state)}
-              />
-            ))}
+        {/* One insight band: compact stat segments + state chips share a wrapping
+            row — half the height of the old five-tile grid + separate chip row. */}
+        <div className='mb-3 flex flex-wrap items-center gap-x-4 gap-y-2'>
+          <div className='flex divide-x divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
+            <StatTile
+              label='Total'
+              count={stats?.total ?? 0}
+              filteredCount={filteredStats ? filteredStats.total : null}
+              active={Object.values(filterValues).every(isFilterEmpty) && scope === 'all'}
+              isLoading={showLoading}
+              {...trendFor('total')}
+              onClick={clearAllTileFilters}
+            />
+            <StatTile
+              label='Warning'
+              count={stats?.sla_warning ?? 0}
+              filteredCount={filteredStats ? filteredStats.sla_warning : null}
+              tone='amber'
+              active={filterValues.sla_status === 'warning'}
+              isLoading={showLoading}
+              deltaBadIsUp
+              {...trendFor('sla_warning')}
+              onClick={() => toggleTileFilter('sla_status', 'warning')}
+            />
+            <StatTile
+              label='Breached'
+              count={stats?.sla_breached ?? 0}
+              filteredCount={filteredStats ? filteredStats.sla_breached : null}
+              tone='red'
+              active={filterValues.sla_status === 'breached'}
+              isLoading={showLoading}
+              deltaBadIsUp
+              {...trendFor('sla_breached')}
+              onClick={() => toggleTileFilter('sla_status', 'breached')}
+            />
+            <StatTile
+              label='At Risk'
+              count={stats?.at_risk ?? 0}
+              filteredCount={filteredStats ? filteredStats.at_risk : null}
+              tone='red'
+              active={filterValues.at_risk === 'yes'}
+              isLoading={showLoading}
+              deltaBadIsUp
+              {...trendFor('at_risk')}
+              onClick={() => toggleTileFilter('at_risk', 'yes')}
+            />
+            <StatTile
+              label='Unowned'
+              count={stats?.unowned ?? 0}
+              filteredCount={filteredStats ? filteredStats.unowned : null}
+              active={scope === 'unowned'}
+              isLoading={showLoading}
+              deltaBadIsUp
+              {...trendFor('unowned')}
+              onClick={() => {
+                setScope(scope === 'unowned' ? 'all' : 'unowned')
+                setPage(1)
+              }}
+            />
           </div>
-        )}
 
-        <div className='mb-3 flex flex-wrap items-center gap-1 border-b border-slate-200 dark:border-border'>
-          {/* Tabs wait for display_config so the configured default scope is
-              active on first paint instead of flashing in. */}
-          {!displayReady && (
-            <div className='mb-2 h-[21px] w-64 animate-pulse rounded bg-slate-100 dark:bg-muted' />
-          )}
-          {displayReady &&
-            SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map((tab) => (
-              <button
-                key={tab.value}
-                type='button'
-                onClick={() => {
-                  setScope(tab.value)
-                  setPage(1)
-                }}
-                className={cn(
-                  'border-b-2 px-3 py-2 text-[13px] font-medium transition-colors',
-                  scope === tab.value
-                    ? 'border-nvr-cyan text-nvr-navy dark:text-nvr-cyan'
-                    : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-muted-foreground'
-                )}
-              >
-                {tab.label}
-              </button>
-            ))}
-          <div className='ml-auto flex flex-wrap items-center gap-1.5 pb-1.5'>
-            {(views?.data ?? []).map((v) => (
-              <span
-                key={v.id}
-                className={cn(
-                  'group flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium',
-                  activeViewId === v.id
-                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
-                )}
-              >
-                <button type='button' onClick={() => applyView(v)}>
-                  {v.name}
-                  {v.is_shared && <span className='ml-1 text-slate-400'>· shared</span>}
-                </button>
-                {v.user === user?.id && (
-                  <button
-                    type='button'
-                    onClick={() => deleteViewMut.mutate(v.id)}
-                    className='hidden text-slate-400 hover:text-red-500 group-hover:inline'
-                    aria-label={`Delete view ${v.name}`}
-                  >
-                    ×
-                  </button>
-                )}
-              </span>
-            ))}
-            <Popover open={saveOpen} onOpenChange={setSaveOpen}>
-              <PopoverTrigger asChild>
-                <button
-                  type='button'
-                  className='rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-400 dark:hover:text-nvr-cyan'
-                >
-                  + Save view
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className='w-[240px] p-3' align='end'>
-                <input
-                  value={saveName}
-                  onChange={(e) => setSaveName(e.target.value)}
-                  placeholder='View name'
-                  className='mb-2 w-full rounded-md border border-slate-200 px-2 py-1.5 text-[12px] focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
+          {stateEntries.length > 0 && (
+            <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+              {stateEntries.map(([state, count]) => (
+                <StateChip
+                  key={state}
+                  label={stateLabel(state)}
+                  count={count}
+                  filteredCount={filteredStats ? (filteredStats.by_state[state] ?? 0) : null}
+                  color={stateMetaByKey[state]?.color ?? null}
+                  active={stateFilterList.includes(state)}
+                  onClick={() => toggleStateChip(state)}
                 />
-                <label className='mb-2 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
-                  <Checkbox
-                    checked={saveShared}
-                    onCheckedChange={(c) => setSaveShared(c === true)}
-                  />
-                  Share with everyone
-                </label>
-                <button
-                  type='button'
-                  disabled={!saveName.trim() || saveViewMut.isPending}
-                  onClick={() => saveViewMut.mutate()}
-                  className='w-full rounded-md bg-nvr-cyan px-2 py-1.5 text-[12px] font-semibold text-white hover:bg-nvr-cyan/90 disabled:opacity-50'
-                >
-                  Save current view
-                </button>
-              </PopoverContent>
-            </Popover>
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className='mb-4 flex flex-wrap items-center gap-2'>
-          {/* Filters toggle sits leftmost — the rail it opens is on the left,
-              so the control lives where its effect appears. */}
+          {/* Scope control waits for display_config so the configured default
+              scope is active on first paint instead of flashing in. */}
+          {!displayReady ? (
+            <div className='h-[30px] w-64 animate-pulse rounded-md bg-slate-100 dark:bg-muted' />
+          ) : (
+            <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+              {SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map(
+                (tab, i) => (
+                  <button
+                    key={tab.value}
+                    type='button'
+                    onClick={() => {
+                      setScope(tab.value)
+                      setPage(1)
+                    }}
+                    className={cn(
+                      'px-3 py-1.5 text-[12px] font-medium transition-colors',
+                      i > 0 && 'border-l border-slate-200 dark:border-border',
+                      scope === tab.value
+                        ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                        : 'bg-white text-slate-500 hover:text-slate-700 dark:bg-card dark:hover:text-foreground'
+                    )}
+                  >
+                    {tab.label}
+                  </button>
+                )
+              )}
+            </div>
+          )}
+          {/* Filters toggle sits by the scope control — the rail it opens is on
+              the left, so the control lives where its effect appears. */}
           {view === 'table' && (
             <button
               type='button'
@@ -1823,57 +1792,117 @@ export function QueueDetailPage() {
               {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
             </button>
           )}
-          <div className='flex-1' />
-          {view === 'table' && (
-            <Popover>
+          <div className='ml-auto flex flex-wrap items-center gap-1.5'>
+            {(views?.data ?? []).map((v) => (
+              <span
+                key={v.id}
+                className={cn(
+                  'group flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium',
+                  activeViewId === v.id
+                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
+                )}
+              >
+                <button type='button' onClick={() => applyView(v)}>
+                  {v.name}
+                  {v.is_shared && <span className='ml-1 text-slate-400'>· shared</span>}
+                </button>
+                {v.user === user?.id && (
+                  <button
+                    type='button'
+                    onClick={() => deleteViewMut.mutate(v.id)}
+                    className='hidden text-slate-400 hover:text-red-500 group-hover:inline'
+                    aria-label={`Delete view ${v.name}`}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+            <Popover open={saveOpen} onOpenChange={setSaveOpen}>
               <PopoverTrigger asChild>
                 <button
                   type='button'
-                  className='flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                  className='rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-400 dark:hover:text-nvr-cyan'
                 >
-                  <SlidersHorizontal className='h-3.5 w-3.5' />
-                  Columns
+                  + Save view
                 </button>
               </PopoverTrigger>
-              <PopoverContent className='w-[220px] p-2' align='end'>
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragEnd={handleDragEnd}
+              <PopoverContent className='w-[240px] p-3' align='end'>
+                <input
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  placeholder='View name'
+                  className='mb-2 w-full rounded-md border border-slate-200 px-2 py-1.5 text-[12px] focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
+                />
+                <label className='mb-2 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+                  <Checkbox
+                    checked={saveShared}
+                    onCheckedChange={(c) => setSaveShared(c === true)}
+                  />
+                  Share with everyone
+                </label>
+                <button
+                  type='button'
+                  disabled={!saveName.trim() || saveViewMut.isPending}
+                  onClick={() => saveViewMut.mutate()}
+                  className='w-full rounded-md bg-nvr-cyan px-2 py-1.5 text-[12px] font-semibold text-white hover:bg-nvr-cyan/90 disabled:opacity-50'
                 >
-                  <SortableContext
-                    items={orderedToggleableKeys}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    <div className='space-y-1.5'>
-                      {orderedToggleableKeys.map((key) => {
-                        const col = allToggleable.find((c) => c.key === key)
-                        return (
-                          <SortableColumnToggle
-                            key={key}
-                            id={key}
-                            label={typeof col?.header === 'string' ? col.header : key}
-                            checked={effectiveVisible.has(key)}
-                            onCheckedChange={() => handleToggleColumn(key)}
-                          />
-                        )
-                      })}
-                    </div>
-                  </SortableContext>
-                </DndContext>
+                  Save current view
+                </button>
               </PopoverContent>
             </Popover>
-          )}
-          {view === 'table' && workNextEnabled && visibleRows.length > 0 && (
-            <button
-              type='button'
-              onClick={() => startWorkNext()}
-              className='flex items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm hover:bg-nvr-cyan/90'
-            >
-              <Play className='h-3 w-3 fill-current' />
-              Work Next
-            </button>
-          )}
+            {view === 'table' && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type='button'
+                    className='flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                  >
+                    <SlidersHorizontal className='h-3.5 w-3.5' />
+                    Columns
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className='w-[220px] p-2' align='end'>
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleDragEnd}
+                  >
+                    <SortableContext
+                      items={orderedToggleableKeys}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <div className='space-y-1.5'>
+                        {orderedToggleableKeys.map((key) => {
+                          const col = allToggleable.find((c) => c.key === key)
+                          return (
+                            <SortableColumnToggle
+                              key={key}
+                              id={key}
+                              label={typeof col?.header === 'string' ? col.header : key}
+                              checked={effectiveVisible.has(key)}
+                              onCheckedChange={() => handleToggleColumn(key)}
+                            />
+                          )
+                        })}
+                      </div>
+                    </SortableContext>
+                  </DndContext>
+                </PopoverContent>
+              </Popover>
+            )}
+            {view === 'table' && workNextEnabled && visibleRows.length > 0 && (
+              <button
+                type='button'
+                onClick={() => startWorkNext()}
+                className='flex items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm hover:bg-nvr-cyan/90'
+              >
+                <Play className='h-3 w-3 fill-current' />
+                Work Next
+              </button>
+            )}
+          </div>
         </div>
 
         {view === 'table' ? (
@@ -2010,6 +2039,7 @@ export function QueueDetailPage() {
                   onSelectionChange={bulkActionsEnabled ? setSelectedIds : undefined}
                   hideFilterRow
                   nowrapCells
+                  pinFirstColumn
                 />
               </div>
             </div>
