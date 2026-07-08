@@ -468,7 +468,7 @@ export function DataTable<T = Record<string, unknown>>({
       >
         {onSelectionChange && (
           <TableCell
-            className={cn('w-9 px-3 py-2', pinFirstColumn && 'sticky left-0 z-[1] bg-inherit')}
+            className={cn('w-9 px-3 py-2', pinFirstColumn && 'sticky left-0 z-[1] min-w-[40px] bg-inherit')}
             onClick={(e) => {
               e.stopPropagation()
               if (isSelected) {
@@ -491,7 +491,7 @@ export function DataTable<T = Record<string, unknown>>({
                 colIdx === 0 &&
                 cn(
                   'sticky z-[1] border-r border-slate-100 bg-inherit dark:border-border',
-                  onSelectionChange ? 'left-[27px]' : 'left-0'
+                  onSelectionChange ? 'left-[39px]' : 'left-0'
                 ),
               col.className
             )}
@@ -570,7 +570,7 @@ export function DataTable<T = Record<string, unknown>>({
                     <TableHead
                       className={cn(
                         'h-9 w-9 bg-slate-50 px-3 py-0',
-                        pinFirstColumn && 'sticky left-0 z-[2]'
+                        pinFirstColumn && 'sticky left-0 z-[2] min-w-[40px]'
                       )}
                     >
                       <Checkbox
@@ -606,7 +606,7 @@ export function DataTable<T = Record<string, unknown>>({
                           colIdx === 0 &&
                           cn(
                             'sticky z-[2] border-r border-slate-200 dark:border-border',
-                            onSelectionChange ? 'left-[27px]' : 'left-0'
+                            onSelectionChange ? 'left-[39px]' : 'left-0'
                           ),
                         col.headerClassName
                       )}
