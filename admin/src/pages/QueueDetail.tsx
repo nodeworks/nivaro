@@ -725,6 +725,10 @@ export function QueueDetailPage() {
     trend?: number[]
     delta?: number | null
   } {
+    // Snapshots are whole-queue (daily cron, no per-user history), so trends
+    // are only truthful against the All Items scope — a scoped tab's tile
+    // counts would be compared to queue-wide history and read as fake drops.
+    if (scope !== 'all') return {}
     const rows = trends?.data ?? []
     if (rows.length === 0) return {}
     const series = rows.map((r) => r[metric])
