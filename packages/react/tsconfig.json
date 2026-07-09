@@ -12,8 +12,8 @@
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": false,
     "paths": {
-      "@nivaro/shared": ["../shared/src/index.ts"],
-      "@nivaro/shared/*": ["../shared/src/*"]
+      "@nivaro/shared": ["../shared/dist/index.d.ts"],
+      "@nivaro/shared/*": ["../shared/dist/*"]
     }
   },
   "include": ["src"],

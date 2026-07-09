@@ -17,3 +17,11 @@ CLAUDE.md
 test-results/*
 tests/e2e/reports/*api/cloud-extensions/
 .superpowers/
+packages/shared/src/**/*.js
+packages/shared/src/**/*.js.map
+packages/shared/src/**/*.d.ts
+packages/shared/src/**/*.d.ts.map
+packages/react/src/**/*.js
+packages/react/src/**/*.js.map
+packages/react/src/**/*.d.ts
+packages/react/src/**/*.d.ts.map

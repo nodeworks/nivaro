@@ -10,6 +10,7 @@ export {
   ItemEditAuthContext,
   ItemEditForm,
   ItemLockBanner,
+  NavigationContext,
   OwnerAvatars,
   PipelinePanel,
   PipelineTransitionButtons,
@@ -24,6 +25,7 @@ export {
   useGridFlush,
   useItemEditAuth,
   useItemLock,
+  useNavigation,
   WorkflowPanel
 } from '@nivaro/shared'
 export { BooleanField } from './components/fields/BooleanField'
