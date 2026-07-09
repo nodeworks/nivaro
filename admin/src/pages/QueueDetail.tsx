@@ -1568,662 +1568,674 @@ export function QueueDetailPage() {
     setVisibleColumns([...current])
   }
 
+  // Host provider trio for the shared queue components (QueueItemSheet,
+  // QueueWorkloadView, RecordDrilldownSheet all consume useNivaroClient /
+  // navigation / auth from context) — mirrors ItemEdit's provider tree.
   return (
-    <div className='flex flex-1 min-h-0 flex-col'>
-      <div className='sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-3 dark:border-border dark:bg-card'>
-        <div className='flex min-w-0 items-baseline gap-2.5'>
-          <h1 className='shrink-0 truncate text-[16px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-            {queue?.name ?? 'Queue'}
-          </h1>
-          {queue?.description && (
-            <p className='hidden truncate text-[12px] text-slate-500 sm:block dark:text-muted-foreground'>
-              {queue.description}
-            </p>
-          )}
-        </div>
-        {mySub ? (
-          <button
-            type='button'
-            onClick={() => unsubscribeMut.mutate(mySub.id)}
-            className='shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
-          >
-            Subscribed ({mySub.digest_frequency}) · Unsubscribe
-          </button>
-        ) : (
-          <button
-            type='button'
-            onClick={() => subscribeMut.mutate('daily')}
-            className='shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
-          >
-            Get daily digest
-          </button>
-        )}
-      </div>
-
-      <div className='flex-1 overflow-y-auto p-6'>
-        {data?.truncated && (
-          <div className='mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'>
-            <AlertTriangle className='h-4 w-4 shrink-0' />
-            <span>
-              This view hit the row safety limit — the table below may not include every matching
-              item, but the totals above are exact. Narrow the filters (or clear the priority sort
-              on a large queue) to browse everything.
-            </span>
-          </div>
-        )}
-        {/* One insight band: compact stat segments + state chips share a wrapping
-            row — half the height of the old five-tile grid + separate chip row. */}
-        <div className='mb-3 flex flex-wrap items-center gap-x-4 gap-y-2'>
-          <div className='flex divide-x divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
-            <StatTile
-              label='Total'
-              count={stats?.total ?? 0}
-              filteredCount={filteredStats ? filteredStats.total : null}
-              active={Object.values(filterValues).every(isFilterEmpty) && scope === 'all'}
-              isLoading={showLoading}
-              {...trendFor('total')}
-              onClick={clearAllTileFilters}
-            />
-            <StatTile
-              label='Warning'
-              count={stats?.sla_warning ?? 0}
-              filteredCount={filteredStats ? filteredStats.sla_warning : null}
-              tone='amber'
-              active={filterValues.sla_status === 'warning'}
-              isLoading={showLoading}
-              deltaBadIsUp
-              {...trendFor('sla_warning')}
-              onClick={() => toggleTileFilter('sla_status', 'warning')}
-            />
-            <StatTile
-              label='Breached'
-              count={stats?.sla_breached ?? 0}
-              filteredCount={filteredStats ? filteredStats.sla_breached : null}
-              tone='red'
-              active={filterValues.sla_status === 'breached'}
-              isLoading={showLoading}
-              deltaBadIsUp
-              {...trendFor('sla_breached')}
-              onClick={() => toggleTileFilter('sla_status', 'breached')}
-            />
-            <StatTile
-              label='At Risk'
-              count={stats?.at_risk ?? 0}
-              filteredCount={filteredStats ? filteredStats.at_risk : null}
-              tone='red'
-              active={filterValues.at_risk === 'yes'}
-              isLoading={showLoading}
-              deltaBadIsUp
-              {...trendFor('at_risk')}
-              onClick={() => toggleTileFilter('at_risk', 'yes')}
-            />
-            <StatTile
-              label='Unowned'
-              count={stats?.unowned ?? 0}
-              filteredCount={filteredStats ? filteredStats.unowned : null}
-              active={scope === 'unowned'}
-              isLoading={showLoading}
-              deltaBadIsUp
-              {...trendFor('unowned')}
-              onClick={() => {
-                setScope(scope === 'unowned' ? 'all' : 'unowned')
-                setPage(1)
-              }}
-            />
-          </div>
-
-          {stateEntries.length > 0 && (
-            <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
-              {stateEntries.map(([state, count]) => (
-                <StateChip
-                  key={state}
-                  label={stateLabel(state)}
-                  count={count}
-                  filteredCount={filteredStats ? (filteredStats.by_state[state] ?? 0) : null}
-                  color={stateMetaByKey[state]?.color ?? null}
-                  active={stateFilterList.includes(state)}
-                  onClick={() => toggleStateChip(state)}
-                />
-              ))}
+    <NivaroProvider client={client}>
+      <NavigationContext.Provider value={{ navigate }}>
+        <ItemEditAuthContext.Provider
+          value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}
+        >
+          <div className='flex flex-1 min-h-0 flex-col'>
+            <div className='sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-3 dark:border-border dark:bg-card'>
+              <div className='flex min-w-0 items-baseline gap-2.5'>
+                <h1 className='shrink-0 truncate text-[16px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+                  {queue?.name ?? 'Queue'}
+                </h1>
+                {queue?.description && (
+                  <p className='hidden truncate text-[12px] text-slate-500 sm:block dark:text-muted-foreground'>
+                    {queue.description}
+                  </p>
+                )}
+              </div>
+              {mySub ? (
+                <button
+                  type='button'
+                  onClick={() => unsubscribeMut.mutate(mySub.id)}
+                  className='shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                >
+                  Subscribed ({mySub.digest_frequency}) · Unsubscribe
+                </button>
+              ) : (
+                <button
+                  type='button'
+                  onClick={() => subscribeMut.mutate('daily')}
+                  className='shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
+                >
+                  Get daily digest
+                </button>
+              )}
             </div>
-          )}
-        </div>
 
-        <div className='mb-4 flex flex-wrap items-center gap-2'>
-          {/* Scope control waits for display_config so the configured default
-              scope is active on first paint instead of flashing in. */}
-          {!displayReady ? (
-            <div className='h-[30px] w-64 animate-pulse rounded-md bg-slate-100 dark:bg-muted' />
-          ) : (
-            <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
-              {SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map(
-                (tab, i) => (
-                  <button
-                    key={tab.value}
-                    type='button'
+            <div className='flex-1 overflow-y-auto p-6'>
+              {data?.truncated && (
+                <div className='mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'>
+                  <AlertTriangle className='h-4 w-4 shrink-0' />
+                  <span>
+                    This view hit the row safety limit — the table below may not include every
+                    matching item, but the totals above are exact. Narrow the filters (or clear the
+                    priority sort on a large queue) to browse everything.
+                  </span>
+                </div>
+              )}
+              {/* One insight band: compact stat segments + state chips share a wrapping
+            row — half the height of the old five-tile grid + separate chip row. */}
+              <div className='mb-3 flex flex-wrap items-center gap-x-4 gap-y-2'>
+                <div className='flex divide-x divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
+                  <StatTile
+                    label='Total'
+                    count={stats?.total ?? 0}
+                    filteredCount={filteredStats ? filteredStats.total : null}
+                    active={Object.values(filterValues).every(isFilterEmpty) && scope === 'all'}
+                    isLoading={showLoading}
+                    {...trendFor('total')}
+                    onClick={clearAllTileFilters}
+                  />
+                  <StatTile
+                    label='Warning'
+                    count={stats?.sla_warning ?? 0}
+                    filteredCount={filteredStats ? filteredStats.sla_warning : null}
+                    tone='amber'
+                    active={filterValues.sla_status === 'warning'}
+                    isLoading={showLoading}
+                    deltaBadIsUp
+                    {...trendFor('sla_warning')}
+                    onClick={() => toggleTileFilter('sla_status', 'warning')}
+                  />
+                  <StatTile
+                    label='Breached'
+                    count={stats?.sla_breached ?? 0}
+                    filteredCount={filteredStats ? filteredStats.sla_breached : null}
+                    tone='red'
+                    active={filterValues.sla_status === 'breached'}
+                    isLoading={showLoading}
+                    deltaBadIsUp
+                    {...trendFor('sla_breached')}
+                    onClick={() => toggleTileFilter('sla_status', 'breached')}
+                  />
+                  <StatTile
+                    label='At Risk'
+                    count={stats?.at_risk ?? 0}
+                    filteredCount={filteredStats ? filteredStats.at_risk : null}
+                    tone='red'
+                    active={filterValues.at_risk === 'yes'}
+                    isLoading={showLoading}
+                    deltaBadIsUp
+                    {...trendFor('at_risk')}
+                    onClick={() => toggleTileFilter('at_risk', 'yes')}
+                  />
+                  <StatTile
+                    label='Unowned'
+                    count={stats?.unowned ?? 0}
+                    filteredCount={filteredStats ? filteredStats.unowned : null}
+                    active={scope === 'unowned'}
+                    isLoading={showLoading}
+                    deltaBadIsUp
+                    {...trendFor('unowned')}
                     onClick={() => {
-                      setScope(tab.value)
+                      setScope(scope === 'unowned' ? 'all' : 'unowned')
                       setPage(1)
                     }}
-                    className={cn(
-                      'px-3 py-1.5 text-[12px] font-medium transition-colors',
-                      i > 0 && 'border-l border-slate-200 dark:border-border',
-                      scope === tab.value
-                        ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                        : 'bg-white text-slate-500 hover:text-slate-700 dark:bg-card dark:hover:text-foreground'
-                    )}
-                  >
-                    {tab.label}
-                  </button>
-                )
-              )}
-            </div>
-          )}
-          {/* Filters toggle sits by the scope control — the rail it opens is on
-              the left, so the control lives where its effect appears. */}
-          {view === 'table' && (
-            <button
-              type='button'
-              onClick={() => setFiltersOpen((o) => !o)}
-              aria-expanded={filtersOpen}
-              className={cn(
-                'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
-                filtersOpen || activeFilterCount > 0
-                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                  : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
-              )}
-            >
-              <Filter className='h-3.5 w-3.5' />
-              Filters
-              {activeFilterCount > 0 && (
-                <span className='rounded-full bg-nvr-cyan px-1.5 text-[10px] font-semibold leading-4 text-white'>
-                  {activeFilterCount}
-                </span>
-              )}
-            </button>
-          )}
-          {/* Hold the switcher until display_config applies — otherwise all
-              three views flash before hidden ones disappear. */}
-          {!displayReady ? (
-            <div className='h-[30px] w-40 animate-pulse rounded-md bg-slate-100 dark:bg-muted' />
-          ) : (
-            <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
-              {(
-                [
-                  { value: 'table', label: 'Table' },
-                  { value: 'kanban', label: 'Kanban' },
-                  { value: 'workload', label: 'Workload' }
-                ] as const
-              )
-                .filter((v) => allowedViews.includes(v.value))
-                .map((v, i) => (
-                  <button
-                    key={v.value}
-                    type='button'
-                    onClick={() => setView(v.value)}
-                    className={cn(
-                      'px-3 py-1.5 text-[12px] font-medium transition-colors',
-                      i > 0 && 'border-l border-slate-200 dark:border-border',
-                      view === v.value
-                        ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                        : 'bg-white text-slate-500 hover:text-slate-700 dark:bg-card dark:hover:text-foreground'
-                    )}
-                  >
-                    {v.label}
-                  </button>
-                ))}
-            </div>
-          )}
-          {view === 'table' && (
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type='button'
-                  className={cn(
-                    'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
-                    groupBy
-                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
-                  )}
-                >
-                  <Rows3 className='h-3.5 w-3.5' />
-                  {groupBy
-                    ? `Group: ${groupOptions.find((o) => o.value === groupBy)?.label ?? groupBy}`
-                    : 'Group'}
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className='w-[200px] p-0' align='start'>
-                <Command>
-                  <CommandInput placeholder='Group by…' className='h-8 text-[12px]' />
-                  <CommandList>
-                    <CommandEmpty>No attribute found.</CommandEmpty>
-                    <CommandItem value='__none__' onSelect={() => setGroupBy(null)}>
-                      None
-                    </CommandItem>
-                    {groupOptions.map((opt) => (
-                      <CommandItem
-                        key={opt.value}
-                        value={opt.label}
-                        onSelect={() => setGroupBy(opt.value)}
-                      >
-                        {opt.label}
-                      </CommandItem>
-                    ))}
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-          )}
-          {view === 'table' && (
-            <button
-              type='button'
-              onClick={() => {
-                setSort(sort === '-priority' ? '' : '-priority')
-                setPage(1)
-              }}
-              className={cn(
-                'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
-                sort === '-priority'
-                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                  : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
-              )}
-            >
-              <Flame className='h-3.5 w-3.5' />
-              Priority
-            </button>
-          )}
-          {view === 'table' && groupBy && groups && (
-            <button
-              type='button'
-              onClick={() =>
-                setCollapsedGroups(
-                  collapsedGroups.size > 0 ? new Set() : new Set(groups.map((g) => g.key))
-                )
-              }
-              className='rounded-md px-2 py-1.5 text-[12px] text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
-            >
-              {collapsedGroups.size > 0 ? 'Expand all' : 'Collapse all'}
-            </button>
-          )}
-          {view === 'kanban' && (
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type='button'
-                  className={cn(
-                    'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
-                    swimlaneBy
-                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
-                  )}
-                >
-                  <Rows3 className='h-3.5 w-3.5' />
-                  {swimlaneBy
-                    ? `Lanes: ${swimlaneBy === 'collection' ? 'Collection' : 'Owner'}`
-                    : 'Lanes'}
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className='w-[180px] p-0' align='start'>
-                <Command>
-                  <CommandList>
-                    <CommandItem value='none' onSelect={() => setSwimlaneBy(null)}>
-                      None
-                    </CommandItem>
-                    <CommandItem value='collection' onSelect={() => setSwimlaneBy('collection')}>
-                      Collection
-                    </CommandItem>
-                    <CommandItem value='owner' onSelect={() => setSwimlaneBy('owners')}>
-                      Owner
-                    </CommandItem>
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-          )}
-          {pendingUpdates > 0 && (
-            <button
-              type='button'
-              onClick={refreshPendingUpdates}
-              className='flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-3 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
-            >
-              <RefreshCw className='h-3 w-3' />
-              {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
-            </button>
-          )}
-          <div className='ml-auto flex flex-wrap items-center gap-1.5'>
-            {(views?.data ?? []).map((v) => (
-              <span
-                key={v.id}
-                className={cn(
-                  'group flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium',
-                  activeViewId === v.id
-                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
-                )}
-              >
-                <button
-                  type='button'
-                  title={
-                    defaultViewId === v.id
-                      ? 'Your default view — click to revert to the general default'
-                      : 'Set as your default view'
-                  }
-                  onClick={() => setDefaultViewMut.mutate(defaultViewId === v.id ? null : v.id)}
-                  className={cn(
-                    'shrink-0',
-                    defaultViewId === v.id
-                      ? 'text-amber-400'
-                      : 'text-slate-300 hover:text-amber-400 dark:text-slate-600'
-                  )}
-                >
-                  <Star
-                    className={cn('h-3 w-3', defaultViewId === v.id && 'fill-current')}
-                    aria-label={defaultViewId === v.id ? 'Default view' : 'Set as default'}
                   />
-                </button>
-                <button type='button' onClick={() => applyView(v)}>
-                  {v.name}
-                  {v.is_shared && <span className='ml-1 text-slate-400'>· shared</span>}
-                </button>
-                {v.user === user?.id && activeViewId === v.id && (
-                  <button
-                    type='button'
-                    onClick={() => updateViewMut.mutate(v)}
-                    disabled={updateViewMut.isPending}
-                    title='Update this view with the current filters, scope and sort'
-                    className='shrink-0 text-slate-400 hover:text-nvr-navy disabled:opacity-50 dark:hover:text-nvr-cyan'
-                    aria-label={`Update view ${v.name}`}
-                  >
-                    <Save className='h-3 w-3' />
-                  </button>
-                )}
-                {v.user === user?.id && (
-                  <button
-                    type='button'
-                    onClick={() => deleteViewMut.mutate(v.id)}
-                    className='hidden text-slate-400 hover:text-red-500 group-hover:inline'
-                    aria-label={`Delete view ${v.name}`}
-                  >
-                    ×
-                  </button>
-                )}
-              </span>
-            ))}
-            <Popover open={saveOpen} onOpenChange={setSaveOpen}>
-              <PopoverTrigger asChild>
-                <button
-                  type='button'
-                  className='rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-400 dark:hover:text-nvr-cyan'
-                >
-                  + Save view
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className='w-[240px] p-3' align='end'>
-                <input
-                  value={saveName}
-                  onChange={(e) => setSaveName(e.target.value)}
-                  placeholder='View name'
-                  className='mb-2 w-full rounded-md border border-slate-200 px-2 py-1.5 text-[12px] focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
-                />
-                <label className='mb-2 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
-                  <Checkbox
-                    checked={saveShared}
-                    onCheckedChange={(c) => setSaveShared(c === true)}
-                  />
-                  Share with everyone
-                </label>
-                <button
-                  type='button'
-                  disabled={!saveName.trim() || saveViewMut.isPending}
-                  onClick={() => saveViewMut.mutate()}
-                  className='w-full rounded-md bg-nvr-cyan px-2 py-1.5 text-[12px] font-semibold text-white hover:bg-nvr-cyan/90 disabled:opacity-50'
-                >
-                  Save current view
-                </button>
-              </PopoverContent>
-            </Popover>
-            {view === 'table' && (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button
-                    type='button'
-                    className='flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
-                  >
-                    <SlidersHorizontal className='h-3.5 w-3.5' />
-                    Columns
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className='w-[220px] p-2' align='end'>
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={handleDragEnd}
-                  >
-                    <SortableContext
-                      items={orderedToggleableKeys}
-                      strategy={verticalListSortingStrategy}
-                    >
-                      <div className='space-y-1.5'>
-                        {orderedToggleableKeys.map((key) => {
-                          const col = allToggleable.find((c) => c.key === key)
-                          return (
-                            <SortableColumnToggle
-                              key={key}
-                              id={key}
-                              label={typeof col?.header === 'string' ? col.header : key}
-                              checked={effectiveVisible.has(key)}
-                              onCheckedChange={() => handleToggleColumn(key)}
-                            />
-                          )
-                        })}
-                      </div>
-                    </SortableContext>
-                  </DndContext>
-                </PopoverContent>
-              </Popover>
-            )}
-            {view === 'table' && workNextEnabled && visibleRows.length > 0 && (
-              <button
-                type='button'
-                onClick={() => startWorkNext()}
-                className='flex items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm hover:bg-nvr-cyan/90'
-              >
-                <Play className='h-3 w-3 fill-current' />
-                Work Next
-              </button>
-            )}
-          </div>
-        </div>
+                </div>
 
-        {view === 'table' ? (
-          <>
-            {!filtersOpen && activeFilterCount > 0 && (
-              <div className='mb-3 flex flex-wrap items-center gap-1.5'>
-                {filterDefs
-                  .filter((def) => !isFilterEmpty(filterValues[def.key]))
-                  .map((def) => (
-                    <span
-                      key={def.key}
-                      className='flex items-center overflow-hidden rounded-md border border-slate-200 bg-white text-[12px] dark:border-border dark:bg-card'
-                    >
-                      <button
-                        type='button'
-                        onClick={() => setFiltersOpen(true)}
-                        title='Edit filters'
-                        className='flex items-center gap-1 py-1 pl-2 pr-1 hover:bg-slate-50 dark:hover:bg-muted/50'
-                      >
-                        <span className='text-slate-500 dark:text-muted-foreground'>
-                          {filterDefLabel(def)}:
-                        </span>
-                        <span className='max-w-[180px] truncate font-medium text-slate-700 dark:text-slate-200'>
-                          {filterValueDisplay(def, filterValues[def.key] ?? '')}
-                        </span>
-                      </button>
-                      <button
-                        type='button'
-                        aria-label={`Clear ${filterDefLabel(def)} filter`}
-                        onClick={() => {
-                          setFilterValues((prev) => ({
-                            ...prev,
-                            [def.key]: Array.isArray(prev[def.key]) ? [] : ''
-                          }))
-                          setPage(1)
-                        }}
-                        className='self-stretch px-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-foreground'
-                      >
-                        <X className='h-3 w-3' />
-                      </button>
-                    </span>
-                  ))}
-                <button
-                  type='button'
-                  onClick={() => {
-                    setFilterValues({})
-                    setPage(1)
-                  }}
-                  className='px-1.5 py-1 text-[11px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
-                >
-                  Clear all
-                </button>
-              </div>
-            )}
-            <div className='flex items-start gap-4'>
-              {filtersOpen && (
-                <aside className='w-[240px] shrink-0 self-start overflow-hidden rounded-lg border border-slate-200 bg-white motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-left-1 motion-safe:duration-200 dark:border-border dark:bg-card'>
-                  <div className='flex h-10 items-center justify-between border-b border-slate-100 px-3 dark:border-border'>
-                    <span className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
-                      Filters
-                    </span>
-                    <span className='flex items-center gap-2'>
-                      {activeFilterCount > 0 && (
-                        <button
-                          type='button'
-                          onClick={() => {
-                            setFilterValues({})
-                            setPage(1)
-                          }}
-                          className='text-[11px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
-                        >
-                          Clear all
-                        </button>
-                      )}
-                      <button
-                        type='button'
-                        onClick={() => setFiltersOpen(false)}
-                        aria-label='Collapse filters'
-                        className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-foreground'
-                      >
-                        <PanelLeftClose className='h-3.5 w-3.5' />
-                      </button>
-                    </span>
-                  </div>
-                  <div className='max-h-[calc(100vh-360px)] space-y-3 overflow-y-auto p-3'>
-                    {filterDefs.map((def) => (
-                      <FilterControl
-                        key={def.key}
-                        def={def}
-                        layout='stacked'
-                        value={filterValues[def.key] ?? ''}
-                        onChange={(value) => {
-                          setFilterValues((prev) => ({ ...prev, [def.key]: value }))
-                          setPage(1)
-                        }}
+                {stateEntries.length > 0 && (
+                  <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+                    {stateEntries.map(([state, count]) => (
+                      <StateChip
+                        key={state}
+                        label={stateLabel(state)}
+                        count={count}
+                        filteredCount={filteredStats ? (filteredStats.by_state[state] ?? 0) : null}
+                        color={stateMetaByKey[state]?.color ?? null}
+                        active={stateFilterList.includes(state)}
+                        onClick={() => toggleStateChip(state)}
                       />
                     ))}
                   </div>
-                </aside>
-              )}
-              <div className='min-w-0 flex-1'>
-                <DataTable<QueueItemRow>
-                  columns={columns}
-                  rows={items}
-                  rowKey={(row) => `${row.collection}:${row.item_id}`}
-                  total={data?.total ?? 0}
-                  page={page}
-                  limit={limit}
-                  isLoading={showLoading}
-                  onPageChange={setPage}
-                  onRowClick={(row) => openItem(row)}
-                  rowClassName={(row) =>
-                    highlightedId === rowId(row) ? 'bg-nvr-cyan/5 dark:bg-nvr-cyan/10' : undefined
-                  }
-                  emptyMessage='Nothing in this queue.'
-                  sort={sort}
-                  onSortChange={(next) => {
-                    setSort(next)
-                    setPage(1)
-                  }}
-                  filterDefs={filterDefs}
-                  filterValues={filterValues}
-                  onFilterChange={(key, value) => {
-                    setFilterValues((prev) => ({ ...prev, [key]: value }))
-                    setPage(1)
-                  }}
-                  rowGroups={rowGroups ?? undefined}
-                  collapsedGroups={collapsedGroups}
-                  onToggleGroup={toggleGroup}
-                  selectedIds={bulkActionsEnabled ? selectedIds : undefined}
-                  onSelectionChange={bulkActionsEnabled ? setSelectedIds : undefined}
-                  hideFilterRow
-                  nowrapCells
-                  pinFirstColumn
-                />
+                )}
               </div>
+
+              <div className='mb-4 flex flex-wrap items-center gap-2'>
+                {/* Scope control waits for display_config so the configured default
+              scope is active on first paint instead of flashing in. */}
+                {!displayReady ? (
+                  <div className='h-[30px] w-64 animate-pulse rounded-md bg-slate-100 dark:bg-muted' />
+                ) : (
+                  <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+                    {SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map(
+                      (tab, i) => (
+                        <button
+                          key={tab.value}
+                          type='button'
+                          onClick={() => {
+                            setScope(tab.value)
+                            setPage(1)
+                          }}
+                          className={cn(
+                            'px-3 py-1.5 text-[12px] font-medium transition-colors',
+                            i > 0 && 'border-l border-slate-200 dark:border-border',
+                            scope === tab.value
+                              ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                              : 'bg-white text-slate-500 hover:text-slate-700 dark:bg-card dark:hover:text-foreground'
+                          )}
+                        >
+                          {tab.label}
+                        </button>
+                      )
+                    )}
+                  </div>
+                )}
+                {/* Filters toggle sits by the scope control — the rail it opens is on
+              the left, so the control lives where its effect appears. */}
+                {view === 'table' && (
+                  <button
+                    type='button'
+                    onClick={() => setFiltersOpen((o) => !o)}
+                    aria-expanded={filtersOpen}
+                    className={cn(
+                      'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
+                      filtersOpen || activeFilterCount > 0
+                        ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                    )}
+                  >
+                    <Filter className='h-3.5 w-3.5' />
+                    Filters
+                    {activeFilterCount > 0 && (
+                      <span className='rounded-full bg-nvr-cyan px-1.5 text-[10px] font-semibold leading-4 text-white'>
+                        {activeFilterCount}
+                      </span>
+                    )}
+                  </button>
+                )}
+                {/* Hold the switcher until display_config applies — otherwise all
+              three views flash before hidden ones disappear. */}
+                {!displayReady ? (
+                  <div className='h-[30px] w-40 animate-pulse rounded-md bg-slate-100 dark:bg-muted' />
+                ) : (
+                  <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+                    {(
+                      [
+                        { value: 'table', label: 'Table' },
+                        { value: 'kanban', label: 'Kanban' },
+                        { value: 'workload', label: 'Workload' }
+                      ] as const
+                    )
+                      .filter((v) => allowedViews.includes(v.value))
+                      .map((v, i) => (
+                        <button
+                          key={v.value}
+                          type='button'
+                          onClick={() => setView(v.value)}
+                          className={cn(
+                            'px-3 py-1.5 text-[12px] font-medium transition-colors',
+                            i > 0 && 'border-l border-slate-200 dark:border-border',
+                            view === v.value
+                              ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                              : 'bg-white text-slate-500 hover:text-slate-700 dark:bg-card dark:hover:text-foreground'
+                          )}
+                        >
+                          {v.label}
+                        </button>
+                      ))}
+                  </div>
+                )}
+                {view === 'table' && (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type='button'
+                        className={cn(
+                          'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
+                          groupBy
+                            ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                            : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                        )}
+                      >
+                        <Rows3 className='h-3.5 w-3.5' />
+                        {groupBy
+                          ? `Group: ${groupOptions.find((o) => o.value === groupBy)?.label ?? groupBy}`
+                          : 'Group'}
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className='w-[200px] p-0' align='start'>
+                      <Command>
+                        <CommandInput placeholder='Group by…' className='h-8 text-[12px]' />
+                        <CommandList>
+                          <CommandEmpty>No attribute found.</CommandEmpty>
+                          <CommandItem value='__none__' onSelect={() => setGroupBy(null)}>
+                            None
+                          </CommandItem>
+                          {groupOptions.map((opt) => (
+                            <CommandItem
+                              key={opt.value}
+                              value={opt.label}
+                              onSelect={() => setGroupBy(opt.value)}
+                            >
+                              {opt.label}
+                            </CommandItem>
+                          ))}
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                )}
+                {view === 'table' && (
+                  <button
+                    type='button'
+                    onClick={() => {
+                      setSort(sort === '-priority' ? '' : '-priority')
+                      setPage(1)
+                    }}
+                    className={cn(
+                      'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
+                      sort === '-priority'
+                        ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                    )}
+                  >
+                    <Flame className='h-3.5 w-3.5' />
+                    Priority
+                  </button>
+                )}
+                {view === 'table' && groupBy && groups && (
+                  <button
+                    type='button'
+                    onClick={() =>
+                      setCollapsedGroups(
+                        collapsedGroups.size > 0 ? new Set() : new Set(groups.map((g) => g.key))
+                      )
+                    }
+                    className='rounded-md px-2 py-1.5 text-[12px] text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                  >
+                    {collapsedGroups.size > 0 ? 'Expand all' : 'Collapse all'}
+                  </button>
+                )}
+                {view === 'kanban' && (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type='button'
+                        className={cn(
+                          'flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium',
+                          swimlaneBy
+                            ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                            : 'text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                        )}
+                      >
+                        <Rows3 className='h-3.5 w-3.5' />
+                        {swimlaneBy
+                          ? `Lanes: ${swimlaneBy === 'collection' ? 'Collection' : 'Owner'}`
+                          : 'Lanes'}
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className='w-[180px] p-0' align='start'>
+                      <Command>
+                        <CommandList>
+                          <CommandItem value='none' onSelect={() => setSwimlaneBy(null)}>
+                            None
+                          </CommandItem>
+                          <CommandItem
+                            value='collection'
+                            onSelect={() => setSwimlaneBy('collection')}
+                          >
+                            Collection
+                          </CommandItem>
+                          <CommandItem value='owner' onSelect={() => setSwimlaneBy('owners')}>
+                            Owner
+                          </CommandItem>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                )}
+                {pendingUpdates > 0 && (
+                  <button
+                    type='button'
+                    onClick={refreshPendingUpdates}
+                    className='flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-3 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
+                  >
+                    <RefreshCw className='h-3 w-3' />
+                    {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
+                  </button>
+                )}
+                <div className='ml-auto flex flex-wrap items-center gap-1.5'>
+                  {(views?.data ?? []).map((v) => (
+                    <span
+                      key={v.id}
+                      className={cn(
+                        'group flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium',
+                        activeViewId === v.id
+                          ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
+                      )}
+                    >
+                      <button
+                        type='button'
+                        title={
+                          defaultViewId === v.id
+                            ? 'Your default view — click to revert to the general default'
+                            : 'Set as your default view'
+                        }
+                        onClick={() =>
+                          setDefaultViewMut.mutate(defaultViewId === v.id ? null : v.id)
+                        }
+                        className={cn(
+                          'shrink-0',
+                          defaultViewId === v.id
+                            ? 'text-amber-400'
+                            : 'text-slate-300 hover:text-amber-400 dark:text-slate-600'
+                        )}
+                      >
+                        <Star
+                          className={cn('h-3 w-3', defaultViewId === v.id && 'fill-current')}
+                          aria-label={defaultViewId === v.id ? 'Default view' : 'Set as default'}
+                        />
+                      </button>
+                      <button type='button' onClick={() => applyView(v)}>
+                        {v.name}
+                        {v.is_shared && <span className='ml-1 text-slate-400'>· shared</span>}
+                      </button>
+                      {v.user === user?.id && activeViewId === v.id && (
+                        <button
+                          type='button'
+                          onClick={() => updateViewMut.mutate(v)}
+                          disabled={updateViewMut.isPending}
+                          title='Update this view with the current filters, scope and sort'
+                          className='shrink-0 text-slate-400 hover:text-nvr-navy disabled:opacity-50 dark:hover:text-nvr-cyan'
+                          aria-label={`Update view ${v.name}`}
+                        >
+                          <Save className='h-3 w-3' />
+                        </button>
+                      )}
+                      {v.user === user?.id && (
+                        <button
+                          type='button'
+                          onClick={() => deleteViewMut.mutate(v.id)}
+                          className='hidden text-slate-400 hover:text-red-500 group-hover:inline'
+                          aria-label={`Delete view ${v.name}`}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                  <Popover open={saveOpen} onOpenChange={setSaveOpen}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type='button'
+                        className='rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-400 dark:hover:text-nvr-cyan'
+                      >
+                        + Save view
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className='w-[240px] p-3' align='end'>
+                      <input
+                        value={saveName}
+                        onChange={(e) => setSaveName(e.target.value)}
+                        placeholder='View name'
+                        className='mb-2 w-full rounded-md border border-slate-200 px-2 py-1.5 text-[12px] focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
+                      />
+                      <label className='mb-2 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+                        <Checkbox
+                          checked={saveShared}
+                          onCheckedChange={(c) => setSaveShared(c === true)}
+                        />
+                        Share with everyone
+                      </label>
+                      <button
+                        type='button'
+                        disabled={!saveName.trim() || saveViewMut.isPending}
+                        onClick={() => saveViewMut.mutate()}
+                        className='w-full rounded-md bg-nvr-cyan px-2 py-1.5 text-[12px] font-semibold text-white hover:bg-nvr-cyan/90 disabled:opacity-50'
+                      >
+                        Save current view
+                      </button>
+                    </PopoverContent>
+                  </Popover>
+                  {view === 'table' && (
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type='button'
+                          className='flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-foreground'
+                        >
+                          <SlidersHorizontal className='h-3.5 w-3.5' />
+                          Columns
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent className='w-[220px] p-2' align='end'>
+                        <DndContext
+                          sensors={sensors}
+                          collisionDetection={closestCenter}
+                          onDragEnd={handleDragEnd}
+                        >
+                          <SortableContext
+                            items={orderedToggleableKeys}
+                            strategy={verticalListSortingStrategy}
+                          >
+                            <div className='space-y-1.5'>
+                              {orderedToggleableKeys.map((key) => {
+                                const col = allToggleable.find((c) => c.key === key)
+                                return (
+                                  <SortableColumnToggle
+                                    key={key}
+                                    id={key}
+                                    label={typeof col?.header === 'string' ? col.header : key}
+                                    checked={effectiveVisible.has(key)}
+                                    onCheckedChange={() => handleToggleColumn(key)}
+                                  />
+                                )
+                              })}
+                            </div>
+                          </SortableContext>
+                        </DndContext>
+                      </PopoverContent>
+                    </Popover>
+                  )}
+                  {view === 'table' && workNextEnabled && visibleRows.length > 0 && (
+                    <button
+                      type='button'
+                      onClick={() => startWorkNext()}
+                      className='flex items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-sm hover:bg-nvr-cyan/90'
+                    >
+                      <Play className='h-3 w-3 fill-current' />
+                      Work Next
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {view === 'table' ? (
+                <>
+                  {!filtersOpen && activeFilterCount > 0 && (
+                    <div className='mb-3 flex flex-wrap items-center gap-1.5'>
+                      {filterDefs
+                        .filter((def) => !isFilterEmpty(filterValues[def.key]))
+                        .map((def) => (
+                          <span
+                            key={def.key}
+                            className='flex items-center overflow-hidden rounded-md border border-slate-200 bg-white text-[12px] dark:border-border dark:bg-card'
+                          >
+                            <button
+                              type='button'
+                              onClick={() => setFiltersOpen(true)}
+                              title='Edit filters'
+                              className='flex items-center gap-1 py-1 pl-2 pr-1 hover:bg-slate-50 dark:hover:bg-muted/50'
+                            >
+                              <span className='text-slate-500 dark:text-muted-foreground'>
+                                {filterDefLabel(def)}:
+                              </span>
+                              <span className='max-w-[180px] truncate font-medium text-slate-700 dark:text-slate-200'>
+                                {filterValueDisplay(def, filterValues[def.key] ?? '')}
+                              </span>
+                            </button>
+                            <button
+                              type='button'
+                              aria-label={`Clear ${filterDefLabel(def)} filter`}
+                              onClick={() => {
+                                setFilterValues((prev) => ({
+                                  ...prev,
+                                  [def.key]: Array.isArray(prev[def.key]) ? [] : ''
+                                }))
+                                setPage(1)
+                              }}
+                              className='self-stretch px-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-foreground'
+                            >
+                              <X className='h-3 w-3' />
+                            </button>
+                          </span>
+                        ))}
+                      <button
+                        type='button'
+                        onClick={() => {
+                          setFilterValues({})
+                          setPage(1)
+                        }}
+                        className='px-1.5 py-1 text-[11px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                  )}
+                  <div className='flex items-start gap-4'>
+                    {filtersOpen && (
+                      <aside className='w-[240px] shrink-0 self-start overflow-hidden rounded-lg border border-slate-200 bg-white motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-left-1 motion-safe:duration-200 dark:border-border dark:bg-card'>
+                        <div className='flex h-10 items-center justify-between border-b border-slate-100 px-3 dark:border-border'>
+                          <span className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+                            Filters
+                          </span>
+                          <span className='flex items-center gap-2'>
+                            {activeFilterCount > 0 && (
+                              <button
+                                type='button'
+                                onClick={() => {
+                                  setFilterValues({})
+                                  setPage(1)
+                                }}
+                                className='text-[11px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                              >
+                                Clear all
+                              </button>
+                            )}
+                            <button
+                              type='button'
+                              onClick={() => setFiltersOpen(false)}
+                              aria-label='Collapse filters'
+                              className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-foreground'
+                            >
+                              <PanelLeftClose className='h-3.5 w-3.5' />
+                            </button>
+                          </span>
+                        </div>
+                        <div className='max-h-[calc(100vh-360px)] space-y-3 overflow-y-auto p-3'>
+                          {filterDefs.map((def) => (
+                            <FilterControl
+                              key={def.key}
+                              def={def}
+                              layout='stacked'
+                              value={filterValues[def.key] ?? ''}
+                              onChange={(value) => {
+                                setFilterValues((prev) => ({ ...prev, [def.key]: value }))
+                                setPage(1)
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </aside>
+                    )}
+                    <div className='min-w-0 flex-1'>
+                      <DataTable<QueueItemRow>
+                        columns={columns}
+                        rows={items}
+                        rowKey={(row) => `${row.collection}:${row.item_id}`}
+                        total={data?.total ?? 0}
+                        page={page}
+                        limit={limit}
+                        isLoading={showLoading}
+                        onPageChange={setPage}
+                        onRowClick={(row) => openItem(row)}
+                        rowClassName={(row) =>
+                          highlightedId === rowId(row)
+                            ? 'bg-nvr-cyan/5 dark:bg-nvr-cyan/10'
+                            : undefined
+                        }
+                        emptyMessage='Nothing in this queue.'
+                        sort={sort}
+                        onSortChange={(next) => {
+                          setSort(next)
+                          setPage(1)
+                        }}
+                        filterDefs={filterDefs}
+                        filterValues={filterValues}
+                        onFilterChange={(key, value) => {
+                          setFilterValues((prev) => ({ ...prev, [key]: value }))
+                          setPage(1)
+                        }}
+                        rowGroups={rowGroups ?? undefined}
+                        collapsedGroups={collapsedGroups}
+                        onToggleGroup={toggleGroup}
+                        selectedIds={bulkActionsEnabled ? selectedIds : undefined}
+                        onSelectionChange={bulkActionsEnabled ? setSelectedIds : undefined}
+                        hideFilterRow
+                        nowrapCells
+                        pinFirstColumn
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : view === 'kanban' ? (
+                <QueueKanbanBoard
+                  items={items}
+                  onCardClick={(row) => openItem(row)}
+                  onDrop={(item, targetState) => transitionMut.mutate({ item, targetState })}
+                  onClaim={(row) => claimMut.mutate(row)}
+                  onRelease={(row) => releaseMut.mutate(row)}
+                  swimlaneBy={swimlaneBy}
+                  stateLabels={stateLabelByKey}
+                  laneLabel={swimlaneBy === 'collection' ? collectionLabel : undefined}
+                  claimsEnabled={claimsEnabled}
+                />
+              ) : (
+                <QueueWorkloadView queueId={id!} />
+              )}
             </div>
-          </>
-        ) : view === 'kanban' ? (
-          <QueueKanbanBoard
-            items={items}
-            onCardClick={(row) => openItem(row)}
-            onDrop={(item, targetState) => transitionMut.mutate({ item, targetState })}
-            onClaim={(row) => claimMut.mutate(row)}
-            onRelease={(row) => releaseMut.mutate(row)}
-            swimlaneBy={swimlaneBy}
-            stateLabels={stateLabelByKey}
-            laneLabel={swimlaneBy === 'collection' ? collectionLabel : undefined}
-            claimsEnabled={claimsEnabled}
-          />
-        ) : (
-          <QueueWorkloadView queueId={id!} />
-        )}
-      </div>
 
-      {bulkActionsEnabled && (
-        <QueueBulkBar
-          count={selectedIds.length}
-          claimsEnabled={claimsEnabled}
-          states={(data?.available_values.state ?? []).map((s) => ({
-            value: s,
-            label: stateLabel(s)
-          }))}
-          busy={bulkBusy}
-          onClaim={() =>
-            runBulk('Claim', (row) =>
-              api.post(`/queues/${id}/claim`, {
-                source_collection: row.collection,
-                item_id: row.item_id
-              })
-            )
-          }
-          onRelease={() =>
-            runBulk('Release', (row) =>
-              api.post(`/queues/${id}/release`, {
-                source_collection: row.collection,
-                item_id: row.item_id
-              })
-            )
-          }
-          onTransition={(state) => runBulk('Transition', (row) => performTransition(row, state))}
-          onClear={() => setSelectedIds([])}
-        />
-      )}
+            {bulkActionsEnabled && (
+              <QueueBulkBar
+                count={selectedIds.length}
+                claimsEnabled={claimsEnabled}
+                states={(data?.available_values.state ?? []).map((s) => ({
+                  value: s,
+                  label: stateLabel(s)
+                }))}
+                busy={bulkBusy}
+                onClaim={() =>
+                  runBulk('Claim', (row) =>
+                    api.post(`/queues/${id}/claim`, {
+                      source_collection: row.collection,
+                      item_id: row.item_id
+                    })
+                  )
+                }
+                onRelease={() =>
+                  runBulk('Release', (row) =>
+                    api.post(`/queues/${id}/release`, {
+                      source_collection: row.collection,
+                      item_id: row.item_id
+                    })
+                  )
+                }
+                onTransition={(state) =>
+                  runBulk('Transition', (row) => performTransition(row, state))
+                }
+                onClear={() => setSelectedIds([])}
+              />
+            )}
 
-      {drilldown && (
-        <NivaroProvider client={client}>
-          <NavigationContext.Provider value={{ navigate }}>
-            <ItemEditAuthContext.Provider
-              value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}
-            >
+            {drilldown && (
               <RecordDrilldownSheet
                 collection={drilldown.collection}
                 itemId={drilldown.itemId}
@@ -2233,31 +2245,31 @@ export function QueueDetailPage() {
                 title={drilldown.title}
                 onClose={() => setDrilldown(null)}
               />
-            </ItemEditAuthContext.Provider>
-          </NavigationContext.Provider>
-        </NivaroProvider>
-      )}
+            )}
 
-      <QueueItemSheet
-        item={sheetItem}
-        stateLabels={stateLabelByKey}
-        collectionLabel={collectionLabel}
-        claimsEnabled={claimsEnabled}
-        columnFormats={mergedColumnFormats}
-        width={displayConfig?.sheet_width}
-        itemLayout={displayConfig?.item_layout}
-        onOpenChange={(open) => {
-          if (!open) {
-            setSheetItem(null)
-            setWorkNext(false)
-          }
-        }}
-        onClaim={(row) => claimMut.mutate(row as QueueItemRow)}
-        onRelease={(row) => releaseMut.mutate(row as QueueItemRow)}
-        workNextActive={workNext}
-        onNext={() => sheetItem && startWorkNext(sheetItem)}
-        refetchItems={() => qc.invalidateQueries({ queryKey: ['queue-items', id] })}
-      />
-    </div>
+            <QueueItemSheet
+              item={sheetItem}
+              stateLabels={stateLabelByKey}
+              collectionLabel={collectionLabel}
+              claimsEnabled={claimsEnabled}
+              columnFormats={mergedColumnFormats}
+              width={displayConfig?.sheet_width}
+              itemLayout={displayConfig?.item_layout}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setSheetItem(null)
+                  setWorkNext(false)
+                }
+              }}
+              onClaim={(row) => claimMut.mutate(row as QueueItemRow)}
+              onRelease={(row) => releaseMut.mutate(row as QueueItemRow)}
+              workNextActive={workNext}
+              onNext={() => sheetItem && startWorkNext(sheetItem)}
+              refetchItems={() => qc.invalidateQueries({ queryKey: ['queue-items', id] })}
+            />
+          </div>
+        </ItemEditAuthContext.Provider>
+      </NavigationContext.Provider>
+    </NivaroProvider>
   )
 }
