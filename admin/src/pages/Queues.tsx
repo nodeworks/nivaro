@@ -48,6 +48,7 @@ interface QueueSource {
     { enabled?: boolean; layout_id?: number | null; width?: number | string | null }
   > | null
   column_formats?: Record<string, ColumnFormatConfig> | null
+  aggregates?: Record<string, 'sum' | 'avg' | 'min' | 'max' | 'count'> | null
   sla_filter: string | null
   extra_fields: string[] | null
   sort: number
@@ -107,6 +108,7 @@ interface QueueDetailData extends Queue {
     path: string
     kind: 'relation' | 'plain'
     target_collection?: string
+    aggregate?: string
   }>
 }
 
@@ -463,19 +465,23 @@ function ColumnChipConfig({
   targetCollection,
   cfg,
   format,
+  aggregate,
   onChange,
-  onFormatChange
+  onFormatChange,
+  onAggregateChange
 }: {
   path: string
   targetCollection: string | null
   cfg: { enabled?: boolean; layout_id?: number | null; width?: number | string | null } | undefined
   format: ColumnFormatConfig | undefined
+  aggregate: string | undefined
   onChange: (next: {
     enabled: boolean
     layout_id: number | null
     width: number | string | null
   }) => void
   onFormatChange: (next: ColumnFormatConfig | null) => void
+  onAggregateChange: (next: string | null) => void
 }) {
   const presetValues = new Set(DRILLDOWN_WIDTHS.map((w) => w.value))
   const isCustom = cfg?.width != null && !presetValues.has(cfg.width as number)
@@ -517,99 +523,130 @@ function ColumnChipConfig({
       <PopoverContent className='w-[240px] space-y-2 p-3' align='start'>
         {targetCollection && (
           <>
-            <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
-              Drill-down · {path}
-            </p>
-            <label className='flex cursor-pointer items-center justify-between'>
-              <span className='text-[11px] text-slate-500 dark:text-slate-400'>
-                Click value opens detail panel
-              </span>
-              <input
-                type='checkbox'
-                checked={enabled}
-                onChange={(e) =>
-                  onChange({
-                    enabled: e.target.checked,
-                    layout_id: cfg?.layout_id ?? null,
-                    width: cfg?.width ?? null
-                  })
-                }
-                className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+            <div className='space-y-1'>
+              <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                Aggregate
+              </Label>
+              <FieldCombobox
+                value={aggregate ?? ''}
+                onChange={(v) => onAggregateChange(v === '' ? null : v)}
+                options={[
+                  { value: '', label: 'None (list values)' },
+                  { value: 'sum', label: 'Sum' },
+                  { value: 'avg', label: 'Average' },
+                  { value: 'min', label: 'Min' },
+                  { value: 'max', label: 'Max' },
+                  { value: 'count', label: 'Count' }
+                ]}
+                placeholder='None (list values)'
               />
-            </label>
-            {enabled && (
-              <div className='space-y-1'>
-                <span className='text-[10px] text-slate-400'>Detail layout</span>
-                <select
-                  value={cfg?.layout_id ?? ''}
-                  onChange={(e) =>
-                    onChange({
-                      enabled: true,
-                      layout_id: e.target.value ? Number(e.target.value) : null,
-                      width: cfg?.width ?? null
-                    })
-                  }
-                  className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
-                >
-                  <option value=''>Default (active detail layout)</option>
-                  {detailLayouts.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.name}
-                    </option>
-                  ))}
-                </select>
-                {detailLayouts.length === 0 && (
-                  <p className='text-[10px] text-slate-400'>
-                    No detail layouts on {targetCollection} yet — the panel falls back to a
-                    read-only view. Create one in Data Model → Layout.
-                  </p>
-                )}
-                <span className='text-[10px] text-slate-400'>Panel width</span>
-                <select
-                  value={customMode ? '__custom__' : String(cfg?.width ?? 640)}
-                  onChange={(e) => {
-                    if (e.target.value === '__custom__') {
-                      setCustomMode(true)
-                      setCustomDraft(cfg?.width != null ? String(cfg.width) : '')
-                      return
+              {aggregate && (
+                <p className='text-[10px] text-slate-400'>
+                  One value per row — drill-down is disabled for aggregated columns.
+                </p>
+              )}
+            </div>
+            {!aggregate && (
+              <>
+                <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                  Drill-down · {path}
+                </p>
+                <label className='flex cursor-pointer items-center justify-between'>
+                  <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                    Click value opens detail panel
+                  </span>
+                  <input
+                    type='checkbox'
+                    checked={enabled}
+                    onChange={(e) =>
+                      onChange({
+                        enabled: e.target.checked,
+                        layout_id: cfg?.layout_id ?? null,
+                        width: cfg?.width ?? null
+                      })
                     }
-                    setCustomMode(false)
-                    const n = Number(e.target.value)
-                    onChange({
-                      enabled: true,
-                      layout_id: cfg?.layout_id ?? null,
-                      width: n === 640 ? null : n
-                    })
-                  }}
-                  className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
-                >
-                  {DRILLDOWN_WIDTHS.map((w) => (
-                    <option key={w.value} value={String(w.value)}>
-                      {w.label}
-                    </option>
-                  ))}
-                  <option value='__custom__'>Custom…</option>
-                </select>
-                {customMode && (
-                  <div className='space-y-0.5'>
-                    <Input
-                      value={customDraft}
+                    className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                  />
+                </label>
+                {enabled && (
+                  <div className='space-y-1'>
+                    <span className='text-[10px] text-slate-400'>Detail layout</span>
+                    <select
+                      value={cfg?.layout_id ?? ''}
+                      onChange={(e) =>
+                        onChange({
+                          enabled: true,
+                          layout_id: e.target.value ? Number(e.target.value) : null,
+                          width: cfg?.width ?? null
+                        })
+                      }
+                      className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                    >
+                      <option value=''>Default (active detail layout)</option>
+                      {detailLayouts.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name}
+                        </option>
+                      ))}
+                    </select>
+                    {detailLayouts.length === 0 && (
+                      <p className='text-[10px] text-slate-400'>
+                        No detail layouts on {targetCollection} yet — the panel falls back to a
+                        read-only view. Create one in Data Model → Layout.
+                      </p>
+                    )}
+                    <span className='text-[10px] text-slate-400'>Panel width</span>
+                    <select
+                      value={customMode ? '__custom__' : String(cfg?.width ?? 640)}
                       onChange={(e) => {
-                        setCustomDraft(e.target.value)
-                        const w = normalizeDrilldownWidth(e.target.value)
-                        if (w != null) {
-                          onChange({ enabled: true, layout_id: cfg?.layout_id ?? null, width: w })
+                        if (e.target.value === '__custom__') {
+                          setCustomMode(true)
+                          setCustomDraft(cfg?.width != null ? String(cfg.width) : '')
+                          return
                         }
+                        setCustomMode(false)
+                        const n = Number(e.target.value)
+                        onChange({
+                          enabled: true,
+                          layout_id: cfg?.layout_id ?? null,
+                          width: n === 640 ? null : n
+                        })
                       }}
-                      placeholder='e.g. 800px or 75%'
-                      className='h-7 text-[11px]'
-                    />
-                    <p className='text-[10px] text-slate-400'>
-                      Pixels (320–2000) or viewport percentage (10–96%).
-                    </p>
+                      className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                    >
+                      {DRILLDOWN_WIDTHS.map((w) => (
+                        <option key={w.value} value={String(w.value)}>
+                          {w.label}
+                        </option>
+                      ))}
+                      <option value='__custom__'>Custom…</option>
+                    </select>
+                    {customMode && (
+                      <div className='space-y-0.5'>
+                        <Input
+                          value={customDraft}
+                          onChange={(e) => {
+                            setCustomDraft(e.target.value)
+                            const w = normalizeDrilldownWidth(e.target.value)
+                            if (w != null) {
+                              onChange({
+                                enabled: true,
+                                layout_id: cfg?.layout_id ?? null,
+                                width: w
+                              })
+                            }
+                          }}
+                          placeholder='e.g. 800px or 75%'
+                          className='h-7 text-[11px]'
+                        />
+                        <p className='text-[10px] text-slate-400'>
+                          Pixels (320–2000) or viewport percentage (10–96%).
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
+              </>
             )}
           </>
         )}
@@ -961,6 +998,7 @@ function SourceRow({
                             }
                             cfg={source.drilldown?.[f]}
                             format={source.column_formats?.[f]}
+                            aggregate={source.aggregates?.[f]}
                             onChange={(next) =>
                               onChange({
                                 ...source,
@@ -979,6 +1017,17 @@ function SourceRow({
                                 current[f] = next
                               }
                               onChange({ ...source, column_formats: current })
+                            }}
+                            onAggregateChange={(next) => {
+                              const current = { ...(source.aggregates ?? {}) }
+                              const drill = { ...(source.drilldown ?? {}) }
+                              if (next === null) {
+                                delete current[f]
+                              } else {
+                                current[f] = next as 'sum' | 'avg' | 'min' | 'max' | 'count'
+                                delete drill[f]
+                              }
+                              onChange({ ...source, aggregates: current, drilldown: drill })
                             }}
                           />
                         )}
@@ -1174,6 +1223,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
               return true
             })
           ),
+          // Server strips empties via displayJson — pass through unchanged.
+          aggregates: s.aggregates ?? {},
           sort: i
         }))
       }),

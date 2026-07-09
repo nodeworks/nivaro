@@ -114,6 +114,7 @@ interface ExtraFieldMeta {
   relation_type?: 'm2o' | 'm2m' | 'o2m'
   target_collection?: string
   display_field?: string
+  aggregate?: string
 }
 
 interface QueueMeta {
@@ -1251,7 +1252,8 @@ export function QueueDetailPage() {
         meta?.kind === 'relation' &&
         meta.target_collection &&
         targetIds.length > 0 &&
-        cfg.enabled
+        cfg.enabled &&
+        !meta.aggregate
       ) {
         return (
           <button
