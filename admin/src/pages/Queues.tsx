@@ -19,7 +19,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { type ColumnFormatConfig, formatValue } from '@/lib/format-value'
@@ -69,13 +68,26 @@ const FILTER_OPS: { value: string; label: string }[] = [
 type QueueViewKind = 'table' | 'kanban' | 'workload'
 type QueueDefaultScope = 'mine' | 'unowned' | 'all'
 
+type QueueRowClickMode = 'preview' | 'full'
+
 interface QueueDisplayConfig {
   views: QueueViewKind[]
   default_view: QueueViewKind
   default_scope: QueueDefaultScope
   work_next: boolean
   bulk_actions: boolean
+  row_click: QueueRowClickMode
+  item_layout: string | null
+  sheet_width: number | string | null
 }
+
+// Preview sidebar width presets — mirror the drill-down sheet's options.
+const SHEET_WIDTHS: { value: number; label: string }[] = [
+  { value: 400, label: 'Narrow (400px)' },
+  { value: 480, label: 'Default (480px)' },
+  { value: 640, label: 'Wide (640px)' },
+  { value: 800, label: 'Extra wide (800px)' }
+]
 
 const VIEW_LABELS: Record<QueueViewKind, string> = {
   table: 'Table',
@@ -1166,7 +1178,10 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     default_view: 'table',
     default_scope: 'all',
     work_next: true,
-    bulk_actions: true
+    bulk_actions: true,
+    row_click: 'preview',
+    item_layout: null,
+    sheet_width: null
   })
   const [sources, setSources] = useState<QueueSource[]>([])
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
@@ -1193,6 +1208,28 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
       c.plural ||
       c.collection.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase())
   }))
+
+  // Item-layout choices come from the first collection source (multi-collection
+  // queues use that collection's slugs; a non-matching collection simply falls
+  // back to its default layout server-side). Only grouped layouts open items.
+  const layoutSourceCollection = sources.find((s) => s.type === 'collection')?.collection ?? null
+  const { data: itemLayouts = [] } = useQuery<
+    Array<{ slug: string; name: string; layout_type?: string }>
+  >({
+    queryKey: ['queue-item-layouts', layoutSourceCollection],
+    enabled: !!layoutSourceCollection,
+    queryFn: () =>
+      api.get(`/collection-layouts?collection=${layoutSourceCollection}`).then((r) => r.data.data)
+  })
+  const groupedLayoutOptions = [
+    { value: '', label: 'Default (active layout)' },
+    ...itemLayouts
+      .filter((l) => (l.layout_type ?? 'grouped') === 'grouped')
+      .map((l) => ({ value: l.slug, label: l.name }))
+  ]
+
+  const sheetWidthIsPreset = SHEET_WIDTHS.some((w) => w.value === displayConfig.sheet_width)
+  const sheetWidthCustom = displayConfig.sheet_width != null && !sheetWidthIsPreset
 
   const saveMetaMut = useMutation({
     mutationFn: () =>
@@ -1639,6 +1676,92 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                   </span>
                 </span>
               </label>
+
+              <div className='mt-1 border-t border-slate-100 pt-4 dark:border-border'>
+                <span className='mb-2 block text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                  Opening items
+                </span>
+                <div className='space-y-3'>
+                  <div className='flex items-center gap-3'>
+                    <span className='w-40 shrink-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+                      On row click
+                    </span>
+                    <SimpleCombobox
+                      value={displayConfig.row_click}
+                      options={[
+                        { value: 'preview', label: 'Open preview sidebar' },
+                        { value: 'full', label: 'Open full item layout' }
+                      ]}
+                      disabled={!canEdit}
+                      onChange={(v) =>
+                        setDisplayConfig((prev) => ({
+                          ...prev,
+                          row_click: v as QueueRowClickMode
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className='flex items-center gap-3'>
+                    <span className='w-40 shrink-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+                      Item layout
+                    </span>
+                    <SimpleCombobox
+                      value={displayConfig.item_layout ?? ''}
+                      options={groupedLayoutOptions}
+                      disabled={!canEdit || !layoutSourceCollection}
+                      onChange={(v) =>
+                        setDisplayConfig((prev) => ({ ...prev, item_layout: v || null }))
+                      }
+                    />
+                  </div>
+                  <p className='text-[11px] text-slate-400'>
+                    Which layout the full item opens with — applies to the sidebar's Open button
+                    too. "Default" uses the collection's active layout.
+                  </p>
+
+                  <div className='flex items-start gap-3'>
+                    <span className='w-40 shrink-0 pt-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+                      Sidebar width
+                    </span>
+                    <div className='flex-1 space-y-1.5'>
+                      <SimpleCombobox
+                        value={
+                          sheetWidthCustom ? '__custom__' : String(displayConfig.sheet_width ?? 480)
+                        }
+                        options={[
+                          ...SHEET_WIDTHS.map((w) => ({ value: String(w.value), label: w.label })),
+                          { value: '__custom__', label: 'Custom…' }
+                        ]}
+                        disabled={!canEdit}
+                        onChange={(v) =>
+                          setDisplayConfig((prev) => ({
+                            ...prev,
+                            sheet_width:
+                              v === '__custom__' ? (prev.sheet_width ?? '55%') : Number(v)
+                          }))
+                        }
+                      />
+                      {sheetWidthCustom && (
+                        <Input
+                          value={String(displayConfig.sheet_width ?? '')}
+                          disabled={!canEdit}
+                          placeholder='e.g. 800px or 55%'
+                          className='h-8 text-[12px]'
+                          onChange={(e) =>
+                            setDisplayConfig((prev) => ({
+                              ...prev,
+                              sheet_width: normalizeDrilldownWidth(e.target.value)
+                            }))
+                          }
+                        />
+                      )}
+                      {displayConfig.row_click === 'full' && (
+                        <p className='text-[11px] text-slate-400'>Only applies in preview mode.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {canEdit && (

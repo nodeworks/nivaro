@@ -925,13 +925,7 @@ describe('applyColumnFilters — label arrays', () => {
 describe('normalizeDisplayConfig', () => {
   it('returns full defaults for null/undefined/non-object', () => {
     for (const raw of [null, undefined, 'junk', 42]) {
-      expect(normalizeDisplayConfig(raw)).toEqual({
-        views: ['table', 'kanban', 'workload'],
-        default_view: 'table',
-        default_scope: 'all',
-        work_next: true,
-        bulk_actions: true
-      })
+      expect(normalizeDisplayConfig(raw)).toEqual(DEFAULT_DISPLAY_CONFIG)
     }
   })
 
@@ -975,6 +969,32 @@ describe('normalizeDisplayConfig', () => {
   it('drops unknown keys', () => {
     const dc = normalizeDisplayConfig({ extra_key: 1 }) as unknown as Record<string, unknown>
     expect(dc.extra_key).toBeUndefined()
+  })
+
+  it('coerces row_click ("full" only, else preview)', () => {
+    expect(normalizeDisplayConfig({ row_click: 'full' }).row_click).toBe('full')
+    expect(normalizeDisplayConfig({ row_click: 'sidebar' }).row_click).toBe('preview')
+    expect(normalizeDisplayConfig({}).row_click).toBe('preview')
+  })
+
+  it('trims item_layout, empty/non-string → null', () => {
+    expect(normalizeDisplayConfig({ item_layout: ' invoice-view ' }).item_layout).toBe(
+      'invoice-view'
+    )
+    expect(normalizeDisplayConfig({ item_layout: '' }).item_layout).toBeNull()
+    expect(normalizeDisplayConfig({ item_layout: 42 }).item_layout).toBeNull()
+    expect(normalizeDisplayConfig({}).item_layout).toBeNull()
+  })
+
+  it('normalizes sheet_width: px clamps, percent clamps, garbage → null', () => {
+    expect(normalizeDisplayConfig({ sheet_width: 640 }).sheet_width).toBe(640)
+    expect(normalizeDisplayConfig({ sheet_width: 100 }).sheet_width).toBe(280)
+    expect(normalizeDisplayConfig({ sheet_width: 5000 }).sheet_width).toBe(2000)
+    expect(normalizeDisplayConfig({ sheet_width: '800px' }).sheet_width).toBe(800)
+    expect(normalizeDisplayConfig({ sheet_width: '55%' }).sheet_width).toBe('55%')
+    expect(normalizeDisplayConfig({ sheet_width: '200%' }).sheet_width).toBe('96%')
+    expect(normalizeDisplayConfig({ sheet_width: 'wide' }).sheet_width).toBeNull()
+    expect(normalizeDisplayConfig({}).sheet_width).toBeNull()
   })
 })
 

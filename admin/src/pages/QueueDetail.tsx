@@ -133,6 +133,9 @@ interface QueueMeta {
     default_scope: 'mine' | 'unowned' | 'all'
     work_next: boolean
     bulk_actions: boolean
+    row_click: 'preview' | 'full'
+    item_layout: string | null
+    sheet_width: number | string | null
   }
 }
 
@@ -901,6 +904,23 @@ export function QueueDetailPage() {
   const [workNext, setWorkNext] = useState(false)
   const [highlightedId, setHighlightedId] = useState<string | null>(null)
 
+  // Item URL with the queue's configured layout pinned (?layout=slug), else raw.
+  const itemUrlWithLayout = (row: QueueItemRow) => {
+    const slug = displayConfig?.item_layout
+    return slug ? `${row.url}?layout=${encodeURIComponent(slug)}` : row.url
+  }
+
+  // Open an item per the queue's row_click mode: 'full' navigates straight to
+  // the (layout-pinned) item page; 'preview' opens the side sheet.
+  const openItem = (row: QueueItemRow) => {
+    setHighlightedId(rowId(row))
+    if (displayConfig?.row_click === 'full') {
+      navigate(itemUrlWithLayout(row))
+      return
+    }
+    setSheetItem(row)
+  }
+
   // Keep the open sheet's item fresh across refetches (claim/transition update it).
   useEffect(() => {
     if (!sheetItem) return
@@ -920,9 +940,14 @@ export function QueueDetailPage() {
       toast.info('Nothing left to work on — queue clear!')
       return
     }
-    setWorkNext(true)
     setHighlightedId(rowId(next))
     if (claimsEnabled && !next.claimed_by) claimMut.mutate(next)
+    // 'full' mode: claim then navigate to the item page (no sheet loop).
+    if (displayConfig?.row_click === 'full') {
+      navigate(itemUrlWithLayout(next))
+      return
+    }
+    setWorkNext(true)
     setSheetItem(next)
   }
 
@@ -950,14 +975,14 @@ export function QueueDetailPage() {
         if (prev) setHighlightedId(rowId(prev))
       } else if (e.key === 'Enter' && idx >= 0 && !sheetItem) {
         e.preventDefault()
-        setSheetItem(visibleRows[idx])
+        openItem(visibleRows[idx])
       } else if (e.key === 'c' && idx >= 0 && claimsEnabled) {
         e.preventDefault()
         const row = visibleRows[idx]
         row.claimed_by?.id === user?.id ? releaseMut.mutate(row) : claimMut.mutate(row)
       } else if (e.key === 'o' && idx >= 0) {
         e.preventDefault()
-        navigate(visibleRows[idx].url)
+        navigate(itemUrlWithLayout(visibleRows[idx]))
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -2015,10 +2040,7 @@ export function QueueDetailPage() {
                   limit={limit}
                   isLoading={showLoading}
                   onPageChange={setPage}
-                  onRowClick={(row) => {
-                    setHighlightedId(rowId(row))
-                    setSheetItem(row)
-                  }}
+                  onRowClick={(row) => openItem(row)}
                   rowClassName={(row) =>
                     highlightedId === rowId(row) ? 'bg-nvr-cyan/5 dark:bg-nvr-cyan/10' : undefined
                   }
@@ -2049,7 +2071,7 @@ export function QueueDetailPage() {
         ) : view === 'kanban' ? (
           <QueueKanbanBoard
             items={items}
-            onCardClick={(row) => setSheetItem(row)}
+            onCardClick={(row) => openItem(row)}
             onDrop={(item, targetState) => transitionMut.mutate({ item, targetState })}
             onClaim={(row) => claimMut.mutate(row)}
             onRelease={(row) => releaseMut.mutate(row)}
@@ -2110,6 +2132,8 @@ export function QueueDetailPage() {
         collectionLabel={collectionLabel}
         claimsEnabled={claimsEnabled}
         columnFormats={mergedColumnFormats}
+        width={displayConfig?.sheet_width}
+        itemLayout={displayConfig?.item_layout}
         onOpenChange={(open) => {
           if (!open) {
             setSheetItem(null)

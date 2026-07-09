@@ -94,7 +94,9 @@ export function QueueItemSheet({
   stateLabels,
   collectionLabel,
   claimsEnabled = true,
-  columnFormats
+  columnFormats,
+  width,
+  itemLayout
 }: {
   item: SheetItem | null
   onOpenChange: (open: boolean) => void
@@ -111,6 +113,10 @@ export function QueueItemSheet({
   claimsEnabled?: boolean
   /** Extra-field path → display format config (display-only). */
   columnFormats?: Record<string, ColumnFormatConfig>
+  /** Sidebar width: px number or 'NN%' of viewport; default 480. */
+  width?: number | string | null
+  /** Layout slug the Open button pins on the full item; null = default. */
+  itemLayout?: string | null
 }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -121,8 +127,7 @@ export function QueueItemSheet({
 
   const { data: instance } = useQuery<InstanceData | null>({
     queryKey: ['queue-sheet-instance', collection, itemId],
-    queryFn: () =>
-      api.get(`/pipelines/instance/${collection}/${itemId}`).then((r) => r.data.data),
+    queryFn: () => api.get(`/pipelines/instance/${collection}/${itemId}`).then((r) => r.data.data),
     enabled: !!collection && !!itemId
   })
 
@@ -166,7 +171,11 @@ export function QueueItemSheet({
 
   return (
     <Sheet open={!!item} onOpenChange={onOpenChange}>
-      <SheetContent side='right' className='flex w-[480px] max-w-full flex-col gap-0 p-0 sm:max-w-[480px]'>
+      <SheetContent
+        side='right'
+        className='flex max-w-full flex-col gap-0 p-0'
+        style={{ width: width ?? 480, maxWidth: '96vw' }}
+      >
         {item && (
           <>
             <SheetHeader className='shrink-0 border-b border-slate-200 px-5 py-4 dark:border-border'>
@@ -194,7 +203,11 @@ export function QueueItemSheet({
                 </div>
                 <button
                   type='button'
-                  onClick={() => navigate(item.url)}
+                  onClick={() =>
+                    navigate(
+                      itemLayout ? `${item.url}?layout=${encodeURIComponent(itemLayout)}` : item.url
+                    )
+                  }
                   className='flex shrink-0 items-center gap-1 text-[12px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
                 >
                   Open <ExternalLink className='h-3 w-3' />

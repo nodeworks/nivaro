@@ -172,12 +172,23 @@ export type QueueViewKind = (typeof QUEUE_VIEWS)[number]
 const DEFAULTABLE_SCOPES = ['mine', 'unowned', 'all'] as const
 export type QueueDefaultScope = (typeof DEFAULTABLE_SCOPES)[number]
 
+export const ROW_CLICK_MODES = ['preview', 'full'] as const
+export type QueueRowClickMode = (typeof ROW_CLICK_MODES)[number]
+
 export interface QueueDisplayConfig {
   views: QueueViewKind[]
   default_view: QueueViewKind
   default_scope: QueueDefaultScope
   work_next: boolean
   bulk_actions: boolean
+  /** 'preview' opens the item sidebar; 'full' navigates straight to the item
+   *  layout on every open path (row click, Work Next, Enter). */
+  row_click: QueueRowClickMode
+  /** Slug of a grouped layout to open the full item with; null = default active
+   *  layout resolution. Applies to the sidebar's Open button too. */
+  item_layout: string | null
+  /** Preview sidebar width: px number, 'NN%' of viewport, or null = 480 default. */
+  sheet_width: number | string | null
 }
 
 export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
@@ -185,7 +196,26 @@ export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
   default_view: 'table',
   default_scope: 'all',
   work_next: true,
-  bulk_actions: true
+  bulk_actions: true,
+  row_click: 'preview',
+  item_layout: null,
+  sheet_width: null
+}
+
+/** Normalize a display_config sheet width: finite px in [280, 2000], or an
+ *  'NN%' string with 10–96, else null (default). Mirrors the drill-down sheet's
+ *  width clamps so the two width controls behave identically. */
+export function normalizeSheetWidth(raw: unknown): number | string | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return Math.min(2000, Math.max(280, Math.round(raw)))
+  }
+  if (typeof raw === 'string') {
+    const pct = raw.trim().match(/^(\d{1,3})%$/)
+    if (pct) return `${Math.min(96, Math.max(10, Number(pct[1])))}%`
+    const px = raw.trim().match(/^(\d{2,4})(?:px)?$/)
+    if (px) return Math.min(2000, Math.max(280, Number(px[1])))
+  }
+  return null
 }
 
 /**
@@ -206,12 +236,20 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
   const default_scope = DEFAULTABLE_SCOPES.includes(src.default_scope as QueueDefaultScope)
     ? (src.default_scope as QueueDefaultScope)
     : 'all'
+  const row_click = src.row_click === 'full' ? 'full' : 'preview'
+  const item_layout =
+    typeof src.item_layout === 'string' && src.item_layout.trim() !== ''
+      ? src.item_layout.trim()
+      : null
   return {
     views,
     default_view,
     default_scope,
     work_next: src.work_next !== false,
-    bulk_actions: src.bulk_actions !== false
+    bulk_actions: src.bulk_actions !== false,
+    row_click,
+    item_layout,
+    sheet_width: normalizeSheetWidth(src.sheet_width)
   }
 }
 
