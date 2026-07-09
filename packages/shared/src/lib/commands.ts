@@ -12,6 +12,10 @@ export function patch<T>(path: string, body?: unknown): Command<T> {
   return { _method: 'PATCH', _path: path, _body: body } as Command<T>
 }
 
+export function put<T>(path: string, body?: unknown): Command<T> {
+  return { _method: 'PUT', _path: path, _body: body } as Command<T>
+}
+
 export function del<T>(path: string): Command<T> {
   return { _method: 'DELETE', _path: path } as Command<T>
 }
