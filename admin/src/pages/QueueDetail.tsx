@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Rows3,
   SlidersHorizontal,
+  Star,
   X
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -433,12 +434,8 @@ export function QueueDetailPage() {
   // defaults never flash-in over the hard-coded initial state (and the items
   // query never fires once with the wrong scope only to refire).
   const [displayReady, setDisplayReady] = useState(false)
-  useEffect(() => {
-    if (!queue?.display_config || displayReady) return
-    setView(queue.display_config.default_view)
-    setScope(queue.display_config.default_scope)
-    setDisplayReady(true)
-  }, [queue, displayReady])
+  // The load gate that applies the viewer's default saved view (or the queue's
+  // general default) is defined below, after `views`/`applyView` are declared.
 
   // If the current view was removed from the queue's allowed views, snap back.
   useEffect(() => {
@@ -689,7 +686,9 @@ export function QueueDetailPage() {
     onError: () => toast.error('Failed to unsubscribe')
   })
 
-  const { data: columnPrefs } = useQuery<{ data: { visible_columns: string[] | null } }>({
+  const { data: columnPrefs } = useQuery<{
+    data: { visible_columns: string[] | null; default_view_id: number | null }
+  }>({
     queryKey: ['queue-column-prefs', id],
     queryFn: () => api.get(`/queues/${id}/column-prefs`).then((r) => r.data),
     enabled: !!id
@@ -710,6 +709,10 @@ export function QueueDetailPage() {
   // Only arm the guard when there's a non-null loaded value to protect.
   const skipNextSaveRef = useRef(false)
 
+  // The viewer's default saved view id (null = general default). Synced from
+  // server prefs, updated optimistically on toggle.
+  const [defaultViewId, setDefaultViewId] = useState<number | null>(null)
+
   useEffect(() => {
     if (!columnPrefs) return
     loadedFromServerRef.current = true
@@ -717,6 +720,7 @@ export function QueueDetailPage() {
       skipNextSaveRef.current = true
     }
     setVisibleColumns(columnPrefs.data.visible_columns)
+    setDefaultViewId(columnPrefs.data.default_view_id)
   }, [columnPrefs])
 
   const saveColumnPrefsMut = useMutation({
@@ -1033,6 +1037,25 @@ export function QueueDetailPage() {
     setActiveViewId(v.id)
   }
 
+  // Load gate: wait for display_config AND the viewer's prefs + saved views, then
+  // apply the viewer's default saved view (if set and still present), else the
+  // queue's general default scope/view. Firing once with the right state avoids a
+  // flash + a double items fetch. Placed here so `views`/`applyView` are in scope.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: applyView reads state once at ready-time; deps intentionally minimal
+  useEffect(() => {
+    if (displayReady || !queue?.display_config) return
+    if (columnPrefs === undefined || views === undefined) return
+    const defId = columnPrefs.data.default_view_id
+    const defView = defId != null ? views.data.find((v) => v.id === defId) : undefined
+    if (defView) {
+      applyView(defView)
+    } else {
+      setView(queue.display_config.default_view)
+      setScope(queue.display_config.default_scope)
+    }
+    setDisplayReady(true)
+  }, [queue, columnPrefs, views, displayReady])
+
   const saveViewMut = useMutation({
     mutationFn: () =>
       api.post(`/queues/${id}/views`, {
@@ -1053,11 +1076,29 @@ export function QueueDetailPage() {
 
   const deleteViewMut = useMutation({
     mutationFn: (viewId: number) => api.delete(`/queues/views/${viewId}`),
-    onSuccess: () => {
+    onSuccess: (_res, viewId) => {
       qc.invalidateQueries({ queryKey: ['queue-views', id] })
       setActiveViewId(null)
+      if (defaultViewId === viewId) setDefaultViewId(null)
     },
     onError: () => toast.error('Failed to delete view')
+  })
+
+  // Set (or clear, viewId=null) the viewer's default saved view for this queue.
+  const setDefaultViewMut = useMutation({
+    mutationFn: (viewId: number | null) =>
+      api.put(`/queues/${id}/default-view`, { view_id: viewId }),
+    onMutate: (viewId) => setDefaultViewId(viewId),
+    onSuccess: (_res, viewId) => {
+      qc.invalidateQueries({ queryKey: ['queue-column-prefs', id] })
+      toast.success(
+        viewId === null ? 'Reverted to the general default' : 'Set as your default view'
+      )
+    },
+    onError: () => {
+      qc.invalidateQueries({ queryKey: ['queue-column-prefs', id] })
+      toast.error('Failed to update default view')
+    }
   })
 
   // ── Bulk actions ──
@@ -1843,6 +1884,26 @@ export function QueueDetailPage() {
                     : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
                 )}
               >
+                <button
+                  type='button'
+                  title={
+                    defaultViewId === v.id
+                      ? 'Your default view — click to revert to the general default'
+                      : 'Set as your default view'
+                  }
+                  onClick={() => setDefaultViewMut.mutate(defaultViewId === v.id ? null : v.id)}
+                  className={cn(
+                    'shrink-0',
+                    defaultViewId === v.id
+                      ? 'text-amber-400'
+                      : 'text-slate-300 hover:text-amber-400 dark:text-slate-600'
+                  )}
+                >
+                  <Star
+                    className={cn('h-3 w-3', defaultViewId === v.id && 'fill-current')}
+                    aria-label={defaultViewId === v.id ? 'Default view' : 'Set as default'}
+                  />
+                </button>
                 <button type='button' onClick={() => applyView(v)}>
                   {v.name}
                   {v.is_shared && <span className='ml-1 text-slate-400'>· shared</span>}

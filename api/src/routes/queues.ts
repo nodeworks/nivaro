@@ -616,6 +616,11 @@ export async function queuesRoutes(app: FastifyInstance) {
     await db('nivaro_queue_views')
       .where({ id: Number(viewId) })
       .delete()
+    // Clear any viewers' default-view pref pointing at the deleted view (no FK,
+    // so this is a manual cleanup — a stale id would otherwise just never apply).
+    await db('nivaro_queue_column_prefs')
+      .where({ default_view_id: Number(viewId) })
+      .update({ default_view_id: null })
     await logActivity({
       action: 'delete',
       user: req.user?.id,
@@ -658,8 +663,64 @@ export async function queuesRoutes(app: FastifyInstance) {
       .first()
 
     return reply.send({
-      data: { visible_columns: pref ? (parseJson(pref.visible_columns) as string[]) : null }
+      data: {
+        visible_columns: pref ? (parseJson(pref.visible_columns) as string[]) : null,
+        default_view_id: pref?.default_view_id ?? null
+      }
     })
+  })
+
+  // PUT /:id/default-view — set (or clear, view_id=null) the current user's
+  // default saved view for this queue. Applied on load; null = general default.
+  app.put('/:id/default-view', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+
+    const body = req.body as { view_id?: unknown }
+    let viewId: number | null = null
+    if (body.view_id != null) {
+      if (typeof body.view_id !== 'number' || !Number.isInteger(body.view_id)) {
+        return reply.code(400).send({ error: 'view_id must be an integer or null' })
+      }
+      // The view must exist, belong to this queue, and be readable by the user
+      // (own, or shared to everyone / their role) — same visibility as the list.
+      const userRole = req.user!.role ?? null
+      const view = (await db('nivaro_queue_views')
+        .where({ id: body.view_id, queue_id: id })
+        .andWhere((qb) => {
+          qb.where({ user: req.user!.id }).orWhere((shared) => {
+            shared.where('is_shared', true).andWhere((roleQb) => {
+              roleQb.whereNull('role')
+              if (userRole) roleQb.orWhere('role', userRole)
+            })
+          })
+        })
+        .first('id')) as { id: number } | undefined
+      if (!view) return reply.code(404).send({ error: 'View not found' })
+      viewId = body.view_id
+    }
+
+    const existing = await db('nivaro_queue_column_prefs')
+      .where({ queue_id: id, user: req.user!.id })
+      .first('id')
+    if (existing) {
+      await db('nivaro_queue_column_prefs')
+        .where({ id: existing.id })
+        .update({ default_view_id: viewId })
+    } else {
+      await db('nivaro_queue_column_prefs').insert({
+        queue_id: id,
+        user: req.user!.id,
+        visible_columns: toJsonStr(null),
+        default_view_id: viewId
+      })
+    }
+
+    return reply.send({ data: { default_view_id: viewId } })
   })
 
   // PUT /:id/column-prefs — upsert current user's visible-columns for this queue
