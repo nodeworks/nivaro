@@ -2,15 +2,23 @@
 
 // SDK re-exports (types useful in form consumers)
 export type { CascadeFilterRule, FieldDependencyConfig } from '@nivaro/sdk'
-export type { ItemEditFormProps } from '@nivaro/shared'
+export type { ItemEditFormProps, QueueRealtimeAdapter, QueueWorklistProps } from '@nivaro/shared'
 export {
   CommentPanel,
+  DataTable,
   GridFlushContext,
   ItemEditAuthContext,
   ItemEditForm,
   ItemLockBanner,
+  OwnerAvatars,
   PipelinePanel,
   PipelineTransitionButtons,
+  QueueBulkBar,
+  QueueItemSheet,
+  QueueKanbanBoard,
+  QueueWorklist,
+  QueueWorkloadView,
+  RecordDrilldownSheet,
   RevisionsPanel,
   TaskPanel,
   useGridFlush,

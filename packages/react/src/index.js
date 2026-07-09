@@ -1,5 +1,5 @@
 // Full styled form from @nivaro/shared
-export { CommentPanel, GridFlushContext, ItemEditAuthContext, ItemEditForm, ItemLockBanner, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useGridFlush, useItemEditAuth, useItemLock, WorkflowPanel } from '@nivaro/shared';
+export { CommentPanel, DataTable, GridFlushContext, ItemEditAuthContext, ItemEditForm, ItemLockBanner, OwnerAvatars, PipelinePanel, PipelineTransitionButtons, QueueBulkBar, QueueItemSheet, QueueKanbanBoard, QueueWorklist, QueueWorkloadView, RecordDrilldownSheet, RevisionsPanel, TaskPanel, useGridFlush, useItemEditAuth, useItemLock, WorkflowPanel } from '@nivaro/shared';
 export { BooleanField } from './components/fields/BooleanField';
 export { DateField } from './components/fields/DateField';
 export { FileField } from './components/fields/FileField';

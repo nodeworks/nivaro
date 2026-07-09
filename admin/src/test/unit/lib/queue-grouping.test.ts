@@ -1,8 +1,20 @@
+import type { QueueGroupingRow } from '@nivaro/shared'
 import { describe, expect, it } from 'vitest'
 import { agingBucket, buildGroups, deriveGroupKey } from '@/lib/queue-grouping'
-import type { QueueItemRow } from '@/pages/QueueDetail'
 
-function row(overrides: Partial<QueueItemRow> = {}): QueueItemRow {
+// buildGroups/deriveGroupKey only need the QueueGroupingRow shape — extend it
+// with a few realistic display-only fields for readable test fixtures rather
+// than depending on any page-specific QueueItemRow type.
+interface TestRow extends QueueGroupingRow {
+  item_id: string
+  label: string
+  state_color: string | null
+  owners: { id: string; name: string }[]
+  claimed_by: { id: string; name: string } | null
+  url: string
+}
+
+function row(overrides: Partial<TestRow> = {}): TestRow {
   return {
     collection: 'articles',
     item_id: '1',
