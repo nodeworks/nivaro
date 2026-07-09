@@ -924,8 +924,14 @@ export async function resolvePathValues(
   const classified = classifyRelationSegment(collection, head, relations)
 
   if (!classified) {
+    // head === 'id' (paths like funding_years.id when the target has no display
+    // columns) must not select [id, id]: tedious collapses duplicate column
+    // names into an ARRAY value, so String(row.id) becomes "2022,2022" and
+    // every map lookup downstream misses — the whole path resolved empty.
     const rows = await selectInChunks(ids, 2000, (chunk) =>
-      db(collection).whereIn('id', chunk).select(['id', head])
+      db(collection)
+        .whereIn('id', chunk)
+        .select(head === 'id' ? ['id'] : ['id', head])
     )
     const out = new Map<string, PathValue>()
     for (const row of rows as Array<Record<string, unknown>>) {
