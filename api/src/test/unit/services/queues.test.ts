@@ -8,6 +8,7 @@ import {
   classifyRelationSegment,
   computeAvailableExtraFields,
   computeAvailableValues,
+  computeExtraFieldMeta,
   computePriorityScore,
   computeStats,
   computeStatsFromIdMeta,
@@ -1234,5 +1235,56 @@ describe('isDisplayOnlySourceChange', () => {
     expect(isDisplayOnlySourceChange([existingSource({ filters: null })], [incomingSource()])).toBe(
       false
     )
+  })
+})
+
+describe('computeExtraFieldMeta aggregates', () => {
+  it('marks aggregated paths with the configured function', async () => {
+    const relations = [
+      {
+        id: 1,
+        many_collection: 'wpo_junction',
+        many_field: 'workflow_id',
+        one_collection: 'workflows',
+        one_field: 'purchase_orders',
+        junction_field: 'po_id'
+      },
+      {
+        id: 2,
+        many_collection: 'wpo_junction',
+        many_field: 'po_id',
+        one_collection: 'purchase_orders',
+        one_field: null,
+        junction_field: 'workflow_id'
+      }
+    ]
+    const fakeDb = (() => Promise.resolve(relations)) as never
+    const meta = await computeExtraFieldMeta(
+      [
+        {
+          id: 1,
+          queue_id: 'q',
+          type: 'collection',
+          collection: 'workflows',
+          filters: null,
+          state_values: null,
+          sla_filter: null,
+          extra_fields: '["purchase_orders.amount"]',
+          aggregates: '{"purchase_orders.amount":"sum"}',
+          sort: 0
+        } as never
+      ],
+      fakeDb
+    )
+    expect(meta).toEqual([
+      {
+        path: 'purchase_orders.amount',
+        kind: 'relation',
+        relation_type: 'm2m',
+        target_collection: 'purchase_orders',
+        display_field: 'amount',
+        aggregate: 'sum'
+      }
+    ])
   })
 })

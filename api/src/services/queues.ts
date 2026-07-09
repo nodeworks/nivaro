@@ -580,6 +580,7 @@ export interface ExtraFieldMeta {
   relation_type?: 'm2o' | 'm2m' | 'o2m'
   target_collection?: string
   display_field?: string
+  aggregate?: QueueAggregateFn
 }
 
 /** Classify each configured extra-field path so the admin can render the right
@@ -600,6 +601,14 @@ export async function computeExtraFieldMeta(
     if (source.type !== 'collection' || !source.collection) continue
     const fields = (parseJson(source.extra_fields) as string[] | null) ?? []
     for (const f of fields) if (!paths.has(f)) paths.set(f, source.collection)
+  }
+
+  const aggByPath = new Map<string, QueueAggregateFn>()
+  for (const source of sources) {
+    if (source.type !== 'collection' || !source.collection) continue
+    const aggs =
+      (parseJson(source.aggregates ?? null) as Record<string, QueueAggregateFn> | null) ?? {}
+    for (const [p, fn] of Object.entries(aggs)) if (!aggByPath.has(p)) aggByPath.set(p, fn)
   }
 
   for (const [path, baseCollection] of paths) {
@@ -624,7 +633,8 @@ export async function computeExtraFieldMeta(
         kind: 'relation',
         relation_type: lastRelation.type,
         target_collection: lastRelation.relatedCollection,
-        display_field: segments[segments.length - 1]
+        display_field: segments[segments.length - 1],
+        ...(aggByPath.has(path) ? { aggregate: aggByPath.get(path) } : {})
       })
     }
   }
@@ -1120,6 +1130,93 @@ export async function resolvePathValues(
   return out
 }
 
+// Aggregate a relation path's numeric leaf per parent row — one set-based
+// GROUP BY per column instead of listing related values. Only m2m/o2m heads
+// aggregate; m2o/plain paths fall back to normal resolution (one value —
+// nothing to aggregate). count ignores the leaf field.
+export async function resolveAggregateValues(
+  collection: string,
+  ids: string[],
+  segments: string[],
+  fn: QueueAggregateFn,
+  relationsCache: Map<string, CMSRelation[]>
+): Promise<Map<string, PathValue>> {
+  if (ids.length === 0 || segments.length === 0) return new Map()
+
+  let relations = relationsCache.get(collection)
+  if (!relations) {
+    relations = await getRelations(collection)
+    relationsCache.set(collection, relations)
+  }
+
+  const [head, leaf] = segments
+  const classified = classifyRelationSegment(collection, head, relations)
+  if (!classified || classified.type === 'm2o') {
+    return resolvePathValues(collection, ids, segments, relationsCache)
+  }
+
+  // Aggregate expression: function fixed by validated enum switch, leaf column
+  // identifier bound with ?? — never interpolate user input.
+  const aggExpr = (col: string) => {
+    switch (fn) {
+      case 'sum':
+        return db.raw('SUM(??) as v', [col])
+      case 'avg':
+        return db.raw('AVG(CAST(?? AS float)) as v', [col])
+      case 'min':
+        return db.raw('MIN(??) as v', [col])
+      case 'max':
+        return db.raw('MAX(??) as v', [col])
+      case 'count':
+        return db.raw('COUNT(*) as v')
+    }
+  }
+
+  let rows: Array<{ pid: unknown; v: unknown }>
+  if (classified.type === 'm2m') {
+    const junction = classified.junction as string
+    const fkToParent = classified.junctionFkToParent as string
+    const fkToOther = classified.junctionFkToOther as string
+    rows = (await selectInChunks(ids, 2000, (chunk) =>
+      db(`${junction} as _j`)
+        .join(`${classified.relatedCollection} as _rel`, '_rel.id', `_j.${fkToOther}`)
+        .whereIn(`_j.${fkToParent}`, chunk)
+        .groupBy(`_j.${fkToParent}`)
+        .select(db.raw('?? as pid', [`_j.${fkToParent}`]), aggExpr(`_rel.${leaf ?? 'id'}`))
+    )) as Array<{ pid: unknown; v: unknown }>
+  } else {
+    const manyField = classified.manyField as string
+    rows = (await selectInChunks(ids, 2000, (chunk) =>
+      db(classified.relatedCollection)
+        .whereIn(manyField, chunk)
+        .groupBy(manyField)
+        .select(db.raw('?? as pid', [manyField]), aggExpr(leaf ?? 'id'))
+    )) as Array<{ pid: unknown; v: unknown }>
+  }
+
+  const out = new Map<string, PathValue>()
+  for (const r of rows) {
+    if (r.v == null) continue
+    out.set(String(r.pid), { value: String(r.v), ids: [] })
+  }
+  return out
+}
+
+/** Single entry point for extra-column resolution: dispatches a path to its
+ *  configured aggregate or to normal path resolution. */
+export async function resolveExtraPathValues(
+  collection: string,
+  ids: string[],
+  path: string,
+  relationsCache: Map<string, CMSRelation[]>,
+  aggregates: Record<string, QueueAggregateFn> | null
+): Promise<Map<string, PathValue>> {
+  const segments = path.split('.')
+  const fn = aggregates?.[path]
+  if (fn) return resolveAggregateValues(collection, ids, segments, fn, relationsCache)
+  return resolvePathValues(collection, ids, segments, relationsCache)
+}
+
 // Join a multi-valued hop's children through the resolved remainder of the
 // path: per parent, collect each related row's resolved value, dedupe, and
 // render up to 3 + "+N more"; ids = the FINAL entities' ids from the remainder.
@@ -1326,6 +1423,8 @@ export async function resolveCollectionSource(
       const extraIdsById = new Map<string, Record<string, string[]>>()
       if (!extraFieldPaths.length || !ids.length) return { extraById, extraIdsById }
       const relationsCache = new Map<string, CMSRelation[]>()
+      const aggregates =
+        (parseJson(source.aggregates ?? null) as Record<string, QueueAggregateFn> | null) ?? null
       // Parallelized across paths. relationsCache is a shared Map populated via a
       // check-then-fetch-then-set pattern — concurrent calls for the same collection may
       // each miss the cache and independently re-fetch getRelations() (redundant work,
@@ -1334,12 +1433,12 @@ export async function resolveCollectionSource(
       await Promise.all(
         extraFieldPaths.map(async (path) => {
           try {
-            const segments = path.split('.')
-            const valuesByRowId = await resolvePathValues(
+            const valuesByRowId = await resolveExtraPathValues(
               source.collection as string,
               ids,
-              segments,
-              relationsCache
+              path,
+              relationsCache,
+              aggregates
             )
             for (const [rowId, pv] of valuesByRowId) {
               const extra = extraById.get(rowId) ?? {}

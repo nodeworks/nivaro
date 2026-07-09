@@ -13,10 +13,11 @@ import {
   type ConditionBuilder,
   filterBySlaStatus,
   getLabels,
-  renderTemplateLabels,
+  type QueueAggregateFn,
   type QueueCondition,
   type QueueSourceRow,
-  resolvePathValues,
+  renderTemplateLabels,
+  resolveExtraPathValues,
   stateFilterKeep
 } from './queues.js'
 
@@ -215,13 +216,16 @@ async function buildMaterializedRow(
   const extraIds: Record<string, string[]> = {}
   if (extraFieldPaths.length) {
     const relationsCache = new Map<string, CMSRelation[]>()
+    const aggregates =
+      (parseJson(source.aggregates ?? null) as Record<string, QueueAggregateFn> | null) ?? null
     for (const path of extraFieldPaths) {
       try {
-        const valuesByRowId = await resolvePathValues(
+        const valuesByRowId = await resolveExtraPathValues(
           collection,
           [itemId],
-          path.split('.'),
-          relationsCache
+          path,
+          relationsCache,
+          aggregates
         )
         const value = valuesByRowId.get(itemId)
         if (value !== undefined) {
