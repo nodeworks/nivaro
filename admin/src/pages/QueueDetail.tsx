@@ -23,6 +23,7 @@ import {
   Play,
   RefreshCw,
   Rows3,
+  Save,
   SlidersHorizontal,
   Star,
   X
@@ -1074,6 +1075,19 @@ export function QueueDetailPage() {
     onError: () => toast.error('Failed to save view')
   })
 
+  // Overwrite an existing saved view with the current scope/filters/sort/etc.
+  const updateViewMut = useMutation({
+    mutationFn: (v: QueueView) =>
+      api.patch(`/queues/views/${v.id}`, {
+        state: { scope, filters: filterValues, sort, group_by: groupBy, view }
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['queue-views', id] })
+      toast.success('View updated')
+    },
+    onError: () => toast.error('Failed to update view')
+  })
+
   const deleteViewMut = useMutation({
     mutationFn: (viewId: number) => api.delete(`/queues/views/${viewId}`),
     onSuccess: (_res, viewId) => {
@@ -1908,6 +1922,18 @@ export function QueueDetailPage() {
                   {v.name}
                   {v.is_shared && <span className='ml-1 text-slate-400'>· shared</span>}
                 </button>
+                {v.user === user?.id && activeViewId === v.id && (
+                  <button
+                    type='button'
+                    onClick={() => updateViewMut.mutate(v)}
+                    disabled={updateViewMut.isPending}
+                    title='Update this view with the current filters, scope and sort'
+                    className='shrink-0 text-slate-400 hover:text-nvr-navy disabled:opacity-50 dark:hover:text-nvr-cyan'
+                    aria-label={`Update view ${v.name}`}
+                  >
+                    <Save className='h-3 w-3' />
+                  </button>
+                )}
                 {v.user === user?.id && (
                   <button
                     type='button'

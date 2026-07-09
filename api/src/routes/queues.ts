@@ -603,6 +603,49 @@ export async function queuesRoutes(app: FastifyInstance) {
       .send({ data: { ...row, is_shared: !!row.is_shared, state: parseJson(row.state as string) } })
   })
 
+  // PATCH /views/:viewId — overwrite a view's state/name/sharing (owner or admin).
+  // Lets a viewer save current filters/sort back onto their existing view.
+  app.patch('/views/:viewId', async (req, reply) => {
+    const { viewId } = req.params as { viewId: string }
+    const view = (await db('nivaro_queue_views')
+      .where({ id: Number(viewId) })
+      .first()) as { id: number; user: string } | undefined
+    if (!view) return reply.code(404).send({ error: 'Not found' })
+    if (!req.isAdmin && view.user !== req.user!.id) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+
+    const body = req.body as { name?: string; is_shared?: boolean; state?: unknown }
+    const patch: Record<string, unknown> = {}
+    if (body.name !== undefined) {
+      if (!body.name.trim()) return reply.code(400).send({ error: 'name cannot be empty' })
+      patch.name = body.name.trim()
+    }
+    if (body.is_shared !== undefined) patch.is_shared = !!body.is_shared
+    if (body.state !== undefined) patch.state = toJsonStr(body.state)
+    if (Object.keys(patch).length === 0) {
+      return reply.code(400).send({ error: 'nothing to update' })
+    }
+
+    await db('nivaro_queue_views')
+      .where({ id: Number(viewId) })
+      .update(patch)
+    await logActivity({
+      action: 'update',
+      user: req.user?.id,
+      collection: 'nivaro_queue_views',
+      item: String(viewId),
+      req
+    })
+
+    const updated = (await db('nivaro_queue_views')
+      .where({ id: Number(viewId) })
+      .first()) as { id: number; name: string; is_shared: boolean; state: string | null }
+    return reply.send({
+      data: { ...updated, is_shared: !!updated.is_shared, state: parseJson(updated.state) }
+    })
+  })
+
   // DELETE /views/:viewId — owner or admin
   app.delete('/views/:viewId', async (req, reply) => {
     const { viewId } = req.params as { viewId: string }
