@@ -13,6 +13,8 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { createNivaro } from '@nivaro/sdk'
+import { ItemEditAuthContext, NavigationContext, NivaroProvider } from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -411,6 +413,7 @@ export function QueueDetailPage() {
 
   const { user } = useAuth()
   const socketRef = useRef<Socket | null>(null)
+  const client = useMemo(() => createNivaro(window.location.origin), [])
 
   // Every queue defaults to priority order — the table's default order IS the
   // triage order. Materialized queues serve priority sorts from a narrow scan
@@ -2216,15 +2219,23 @@ export function QueueDetailPage() {
       )}
 
       {drilldown && (
-        <RecordDrilldownSheet
-          collection={drilldown.collection}
-          itemId={drilldown.itemId}
-          layoutId={drilldown.layoutId}
-          rootLayoutSlug={drilldown.rootLayoutSlug}
-          width={drilldown.width}
-          title={drilldown.title}
-          onClose={() => setDrilldown(null)}
-        />
+        <NivaroProvider client={client}>
+          <NavigationContext.Provider value={{ navigate }}>
+            <ItemEditAuthContext.Provider
+              value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}
+            >
+              <RecordDrilldownSheet
+                collection={drilldown.collection}
+                itemId={drilldown.itemId}
+                layoutId={drilldown.layoutId}
+                rootLayoutSlug={drilldown.rootLayoutSlug}
+                width={drilldown.width}
+                title={drilldown.title}
+                onClose={() => setDrilldown(null)}
+              />
+            </ItemEditAuthContext.Provider>
+          </NavigationContext.Provider>
+        </NivaroProvider>
       )}
 
       <QueueItemSheet
