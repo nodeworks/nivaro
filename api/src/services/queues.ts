@@ -767,8 +767,9 @@ export function validateAggregates(input: unknown): string | null {
     if (typeof fn !== 'string' || !QUEUE_AGGREGATE_FNS.includes(fn as QueueAggregateFn)) {
       return `aggregates.${path}: function must be one of sum, avg, min, max, count`
     }
-    if (fn !== 'count' && path.split('.').length < 2) {
-      return `aggregates.${path}: ${fn} needs a relation path with a leaf field (e.g. purchase_orders.amount)`
+    const segs = path.split('.').length
+    if (fn === 'count' ? segs > 2 : segs !== 2) {
+      return `aggregates.${path}: ${fn} needs exactly one relation hop${fn === 'count' ? '' : ' plus a leaf field'} (e.g. purchase_orders.amount) — multi-hop paths cannot be aggregated`
     }
   }
   return null
@@ -1152,6 +1153,13 @@ export async function resolveAggregateValues(
   const [head, leaf] = segments
   const classified = classifyRelationSegment(collection, head, relations)
   if (!classified || classified.type === 'm2o') {
+    return resolvePathValues(collection, ids, segments, relationsCache)
+  }
+
+  // Exactly one relation hop + leaf (validated at write time) — anything else
+  // (legacy configs, hand-crafted payloads) falls back to plain resolution
+  // rather than silently aggregating the wrong segment of a multi-hop path.
+  if (segments.length > 2) {
     return resolvePathValues(collection, ids, segments, relationsCache)
   }
 

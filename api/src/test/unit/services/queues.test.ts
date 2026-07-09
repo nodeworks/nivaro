@@ -1108,8 +1108,13 @@ describe('validateAggregates', () => {
   })
 
   it('rejects single-segment paths except for count', () => {
-    expect(validateAggregates({ amount: 'sum' })).toMatch(/relation path/)
+    expect(validateAggregates({ amount: 'sum' })).toMatch(/one relation hop/)
     expect(validateAggregates({ purchase_orders: 'count' })).toBeNull()
+  })
+
+  it('rejects multi-hop paths — aggregates support exactly one relation hop', () => {
+    expect(validateAggregates({ 'line_items.category.amount': 'sum' })).toMatch(/one relation hop/)
+    expect(validateAggregates({ 'a.b.c': 'count' })).toMatch(/one relation hop/)
   })
 })
 
