@@ -172,7 +172,7 @@ export type QueueViewKind = (typeof QUEUE_VIEWS)[number]
 const DEFAULTABLE_SCOPES = ['mine', 'unowned', 'all'] as const
 export type QueueDefaultScope = (typeof DEFAULTABLE_SCOPES)[number]
 
-export const ROW_CLICK_MODES = ['preview', 'full'] as const
+export const ROW_CLICK_MODES = ['preview', 'layout', 'full'] as const
 export type QueueRowClickMode = (typeof ROW_CLICK_MODES)[number]
 
 export interface QueueDisplayConfig {
@@ -181,8 +181,9 @@ export interface QueueDisplayConfig {
   default_scope: QueueDefaultScope
   work_next: boolean
   bulk_actions: boolean
-  /** 'preview' opens the item sidebar; 'full' navigates straight to the item
-   *  layout on every open path (row click, Work Next, Enter). */
+  /** 'preview' opens the triage sidebar; 'layout' opens the item's layout in a
+   *  sidebar (item_layout); 'full' navigates straight to the item page on every
+   *  open path (row click, Work Next, Enter). */
   row_click: QueueRowClickMode
   /** Slug of a grouped layout to open the full item with; null = default active
    *  layout resolution. Applies to the sidebar's Open button too. */
@@ -236,7 +237,9 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
   const default_scope = DEFAULTABLE_SCOPES.includes(src.default_scope as QueueDefaultScope)
     ? (src.default_scope as QueueDefaultScope)
     : 'all'
-  const row_click = src.row_click === 'full' ? 'full' : 'preview'
+  const row_click = ROW_CLICK_MODES.includes(src.row_click as QueueRowClickMode)
+    ? (src.row_click as QueueRowClickMode)
+    : 'preview'
   const item_layout =
     typeof src.item_layout === 'string' && src.item_layout.trim() !== ''
       ? src.item_layout.trim()

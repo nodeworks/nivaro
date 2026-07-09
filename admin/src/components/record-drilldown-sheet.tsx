@@ -36,6 +36,7 @@ export function RecordDrilldownSheet({
   collection,
   itemId,
   layoutId,
+  rootLayoutSlug,
   width,
   title,
   onClose
@@ -43,6 +44,10 @@ export function RecordDrilldownSheet({
   collection: string
   itemId: string
   layoutId?: number | null
+  /** Render the ROOT record with this exact layout slug (a queue's configured
+   *  grouped item_layout), bypassing detail-layout resolution. Nested drills
+   *  still use detail layouts. */
+  rootLayoutSlug?: string | null
   /** Panel width per config: px number or 'NN%' of the viewport; default 640. */
   width?: number | string | null
   title?: string
@@ -64,8 +69,13 @@ export function RecordDrilldownSheet({
     []
   )
 
+  // The root record can render a pinned grouped layout (rootLayoutSlug) instead
+  // of a resolved detail layout; nested drills always resolve detail layouts.
+  const useRootSlug = stack.length === 1 && !!rootLayoutSlug
+
   const { data: detailLayout, isLoading: layoutLoading } = useQuery<DetailLayoutResponse | null>({
     queryKey: ['drilldown-layout', current.collection, current.layoutId ?? null],
+    enabled: !useRootSlug,
     queryFn: () =>
       api
         .get(`/collection-layouts/detail/${current.collection}`, {
@@ -73,6 +83,10 @@ export function RecordDrilldownSheet({
         })
         .then((r) => r.data.data ?? null)
   })
+
+  const effectiveSlug = useRootSlug
+    ? (rootLayoutSlug ?? undefined)
+    : (detailLayout?.layout.slug ?? undefined)
 
   return (
     <Sheet open onOpenChange={(open) => !open && onClose()}>
@@ -111,7 +125,7 @@ export function RecordDrilldownSheet({
         </SheetHeader>
 
         <div className='min-h-0 flex-1 overflow-y-auto'>
-          {layoutLoading ? (
+          {layoutLoading && !useRootSlug ? (
             <div className='space-y-2 px-4 py-3'>
               {[0, 1, 2, 3, 4, 5].map((i) => (
                 <div key={i} className='h-8 animate-pulse rounded bg-slate-100 dark:bg-muted' />
@@ -125,10 +139,10 @@ export function RecordDrilldownSheet({
                 >
                   <DrilldownContext.Provider value={drillCtx}>
                     <ItemEditForm
-                      key={`${current.collection}:${current.itemId}:${detailLayout?.layout.slug ?? 'default'}`}
+                      key={`${current.collection}:${current.itemId}:${effectiveSlug ?? 'default'}`}
                       collection={current.collection}
                       itemId={current.itemId}
-                      layoutSlug={detailLayout?.layout.slug ?? undefined}
+                      layoutSlug={effectiveSlug}
                       showHeader={false}
                       showRevisions={false}
                       showClone={false}

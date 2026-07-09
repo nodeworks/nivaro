@@ -133,7 +133,7 @@ interface QueueMeta {
     default_scope: 'mine' | 'unowned' | 'all'
     work_next: boolean
     bulk_actions: boolean
-    row_click: 'preview' | 'full'
+    row_click: 'preview' | 'layout' | 'full'
     item_layout: string | null
     sheet_width: number | string | null
   }
@@ -910,12 +910,24 @@ export function QueueDetailPage() {
     return slug ? `${row.url}?layout=${encodeURIComponent(slug)}` : row.url
   }
 
-  // Open an item per the queue's row_click mode: 'full' navigates straight to
-  // the (layout-pinned) item page; 'preview' opens the side sheet.
+  // Open an item per the queue's row_click mode: 'full' navigates to the
+  // (layout-pinned) item page; 'layout' opens the item's layout in a sidebar;
+  // 'preview' opens the triage side sheet.
   const openItem = (row: QueueItemRow) => {
     setHighlightedId(rowId(row))
-    if (displayConfig?.row_click === 'full') {
+    const mode = displayConfig?.row_click ?? 'preview'
+    if (mode === 'full') {
       navigate(itemUrlWithLayout(row))
+      return
+    }
+    if (mode === 'layout') {
+      setDrilldown({
+        collection: row.collection,
+        itemId: row.item_id,
+        rootLayoutSlug: displayConfig?.item_layout ?? null,
+        width: displayConfig?.sheet_width,
+        title: row.label
+      })
       return
     }
     setSheetItem(row)
@@ -1213,6 +1225,7 @@ export function QueueDetailPage() {
     collection: string
     itemId: string
     layoutId?: number | null
+    rootLayoutSlug?: string | null
     width?: number | string | null
     title?: string
   } | null>(null)
@@ -2120,6 +2133,7 @@ export function QueueDetailPage() {
           collection={drilldown.collection}
           itemId={drilldown.itemId}
           layoutId={drilldown.layoutId}
+          rootLayoutSlug={drilldown.rootLayoutSlug}
           width={drilldown.width}
           title={drilldown.title}
           onClose={() => setDrilldown(null)}

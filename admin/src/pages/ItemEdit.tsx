@@ -21,7 +21,7 @@ import {
   Sparkles
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { ApprovalPanel } from '@/components/approval-panel'
 import { ErpStatusBadge } from '@/components/erp-status-badge'
@@ -344,6 +344,15 @@ export function ItemEditPage() {
   // configured to open items with a chosen layout). Absent → default active
   // layout resolution, exactly as before.
   const layoutSlug = searchParams.get('layout') || undefined
+  const location = useLocation()
+
+  // Back returns to wherever the user came from (queue worklist, browser, etc).
+  // location.key === 'default' means this was a fresh load / direct URL with no
+  // in-app history to pop — then fall back to the collection listing.
+  const goBack = () => {
+    if (location.key !== 'default') navigate(-1)
+    else navigate(`/collections/${collection}`)
+  }
   const client = useMemo(() => createNivaro(window.location.origin), [])
   const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
   const drillCtx = useMemo(() => ({ open: (t: DrilldownTarget) => setDrilldown(t) }), [])
@@ -675,11 +684,7 @@ export function ItemEditPage() {
               {/* Admin sticky header */}
               <div className='sticky top-0 z-20 shrink-0 border-b border-slate-200 bg-white px-8 py-4 dark:border-border dark:bg-background'>
                 <div className='flex items-center gap-4'>
-                  <Button
-                    variant='ghost'
-                    size='icon'
-                    onClick={() => navigate(`/collections/${collection}`)}
-                  >
+                  <Button variant='ghost' size='icon' onClick={goBack}>
                     <ArrowLeft className='h-4 w-4' />
                   </Button>
                   <div className='flex-1'>

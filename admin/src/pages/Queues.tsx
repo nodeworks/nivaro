@@ -68,7 +68,7 @@ const FILTER_OPS: { value: string; label: string }[] = [
 type QueueViewKind = 'table' | 'kanban' | 'workload'
 type QueueDefaultScope = 'mine' | 'unowned' | 'all'
 
-type QueueRowClickMode = 'preview' | 'full'
+type QueueRowClickMode = 'preview' | 'layout' | 'full'
 
 interface QueueDisplayConfig {
   views: QueueViewKind[]
@@ -1690,7 +1690,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                       value={displayConfig.row_click}
                       options={[
                         { value: 'preview', label: 'Open preview sidebar' },
-                        { value: 'full', label: 'Open full item layout' }
+                        { value: 'layout', label: 'Open layout in sidebar' },
+                        { value: 'full', label: 'Open full item page' }
                       ]}
                       disabled={!canEdit}
                       onChange={(v) =>
@@ -1756,7 +1757,9 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                         />
                       )}
                       {displayConfig.row_click === 'full' && (
-                        <p className='text-[11px] text-slate-400'>Only applies in preview mode.</p>
+                        <p className='text-[11px] text-slate-400'>
+                          Only applies to the sidebar modes.
+                        </p>
                       )}
                     </div>
                   </div>

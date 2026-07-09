@@ -971,8 +971,10 @@ describe('normalizeDisplayConfig', () => {
     expect(dc.extra_key).toBeUndefined()
   })
 
-  it('coerces row_click ("full" only, else preview)', () => {
+  it('coerces row_click (preview/layout/full, else preview)', () => {
     expect(normalizeDisplayConfig({ row_click: 'full' }).row_click).toBe('full')
+    expect(normalizeDisplayConfig({ row_click: 'layout' }).row_click).toBe('layout')
+    expect(normalizeDisplayConfig({ row_click: 'preview' }).row_click).toBe('preview')
     expect(normalizeDisplayConfig({ row_click: 'sidebar' }).row_click).toBe('preview')
     expect(normalizeDisplayConfig({}).row_click).toBe('preview')
   })
