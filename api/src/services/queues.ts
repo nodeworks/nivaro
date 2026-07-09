@@ -102,6 +102,14 @@ export function isDisplayOnlySourceChange(
     const parsed = typeof v === 'string' ? parseJson(v) : v
     return JSON.stringify(parsed ?? null)
   }
+  // `aggregates` round-trips through the UI as `{}` for a queue with none
+  // configured, while the DB stores that same "none configured" state as
+  // null — normalize both to null so the comparison doesn't treat every
+  // aggregate-less queue's format/drilldown-only save as cache-affecting.
+  const emptyObjToNull = (v: unknown): unknown => {
+    const p = typeof v === 'string' ? parseJson(v) : v
+    return p && typeof p === 'object' && Object.keys(p as object).length > 0 ? p : null
+  }
   const ordered = incoming
     .map((raw, i) => ({ raw, sort: raw.sort ?? i }))
     .sort((a, b) => a.sort - b.sort)
@@ -117,7 +125,7 @@ export function isDisplayOnlySourceChange(
       (e.label_template ?? null) === (s.label_template?.trim().slice(0, 500) || null) &&
       (e.sla_filter ?? null) === (s.sla_filter ?? null) &&
       canon(e.extra_fields ?? []) === canon(s.extra_fields ?? []) &&
-      canon(e.aggregates ?? null) === canon(s.aggregates ?? null) &&
+      canon(emptyObjToNull(e.aggregates ?? null)) === canon(emptyObjToNull(s.aggregates ?? null)) &&
       Number(e.sort) === ordered[i].sort
     )
   })
@@ -603,6 +611,9 @@ export async function computeExtraFieldMeta(
     for (const f of fields) if (!paths.has(f)) paths.set(f, source.collection)
   }
 
+  // First-wins across sources, same as `paths` above: if two sources configure
+  // the same extra-field path with different aggregate fns, the first source's
+  // fn labels the merged column.
   const aggByPath = new Map<string, QueueAggregateFn>()
   for (const source of sources) {
     if (source.type !== 'collection' || !source.collection) continue
@@ -756,8 +767,9 @@ export function validateColumnFormats(input: unknown): string | null {
 export type QueueAggregateFn = 'sum' | 'avg' | 'min' | 'max' | 'count'
 export const QUEUE_AGGREGATE_FNS: QueueAggregateFn[] = ['sum', 'avg', 'min', 'max', 'count']
 
-/** Null = valid. Paths must be relation paths (≥2 segments) — except count,
- *  which ignores the leaf and accepts a bare relation segment. */
+/** Null = valid. Paths must be exactly one relation hop plus a leaf field
+ *  (2 segments) — except count, which also accepts a bare relation hop
+ *  (1 segment) since it ignores the leaf. Multi-hop paths are rejected. */
 export function validateAggregates(input: unknown): string | null {
   if (input === undefined || input === null) return null
   if (typeof input !== 'object' || Array.isArray(input)) {

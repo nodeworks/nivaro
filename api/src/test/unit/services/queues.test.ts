@@ -1231,6 +1231,20 @@ describe('isDisplayOnlySourceChange', () => {
     ).toBe(true)
   })
 
+  it('empty aggregates object from the UI matches stored null (fast path preserved)', () => {
+    expect(
+      isDisplayOnlySourceChange(
+        [existingSource({ aggregates: null })],
+        [
+          incomingSource({
+            aggregates: {},
+            column_formats: { created: { type: 'datetime', template: 'MM/DD/YY' } }
+          })
+        ]
+      )
+    ).toBe(true)
+  })
+
   it('false for an empty existing set (nothing to preserve)', () => {
     expect(isDisplayOnlySourceChange([], [])).toBe(false)
   })
