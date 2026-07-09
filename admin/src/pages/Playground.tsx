@@ -1,4 +1,10 @@
-import { ItemEditAuthContext, ItemEditForm, NivaroProvider } from '@nivaro/react'
+import {
+  ItemEditAuthContext,
+  ItemEditForm,
+  NavigationContext,
+  NivaroProvider,
+  QueueWorklist
+} from '@nivaro/react'
 import { createNivaro } from '@nivaro/sdk'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
@@ -10,13 +16,14 @@ import {
   Code2,
   Copy,
   Layers,
+  ListChecks,
   Loader2,
   Play,
   Terminal,
   X
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -34,6 +41,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
 
@@ -2381,8 +2389,202 @@ export function MyForm() {
   )
 }
 
+function LiveQueueTab() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  const [queueId, setQueueId] = useState(searchParams.get('lq_id') ?? '')
+  const [queueOpen, setQueueOpen] = useState(false)
+  const [queueSearch, setQueueSearch] = useState('')
+  const [previewWidth, setPreviewWidth] = useState<number | null>(null)
+  const previewContainerRef = useRef<HTMLDivElement>(null)
+  const dragStateRef = useRef<{ startX: number; startW: number } | null>(null)
+  const [active, setActive] = useState<string | null>(searchParams.get('lq_id'))
+  const [showCode, setShowCode] = useState(false)
+
+  const client = useMemo(() => createNivaro(window.location.origin), [])
+
+  function startResize(e: React.MouseEvent) {
+    e.preventDefault()
+    const startW = previewContainerRef.current?.offsetWidth ?? previewWidth ?? 800
+    dragStateRef.current = { startX: e.clientX, startW }
+    function onMove(ev: MouseEvent) {
+      if (!dragStateRef.current) return
+      const delta = ev.clientX - dragStateRef.current.startX
+      setPreviewWidth(Math.max(360, dragStateRef.current.startW + delta))
+    }
+    function onUp() {
+      dragStateRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  const { data: queues = [] } = useQuery({
+    queryKey: ['queues'],
+    queryFn: () => api.get<{ data: Array<{ id: string; name: string; description: string | null }> }>('/queues').then((r) => r.data.data ?? []),
+    staleTime: 30_000
+  })
+
+  const sortedQueues = useMemo(() => {
+    const list = [...queues].sort((a, b) => a.name.localeCompare(b.name))
+    if (!queueSearch) return list
+    const q = queueSearch.toLowerCase()
+    return list.filter((x) => x.name.toLowerCase().includes(q))
+  }, [queues, queueSearch])
+
+  const selectedQueue = queues.find((q) => q.id === queueId)
+
+  function load() {
+    if (!queueId) return
+    setActive(queueId)
+    setSearchParams((p) => { p.set('lq_id', queueId); return p }, { replace: true })
+  }
+
+  return (
+    <div className='flex flex-1 min-h-0 flex-col'>
+      {/* Picker toolbar */}
+      <div className='shrink-0 border-b border-slate-200 bg-slate-50 px-6 py-3 dark:border-border dark:bg-muted/30'>
+        <div className='flex flex-wrap items-end gap-3'>
+          <div className='flex flex-col gap-1'>
+            <label className='text-[11px] text-slate-500'>Queue</label>
+            <Popover open={queueOpen} onOpenChange={setQueueOpen}>
+              <PopoverTrigger asChild>
+                <button type='button' className='flex h-8 w-64 items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-left outline-none focus:border-nvr-cyan dark:border-border dark:bg-muted'>
+                  <span className={selectedQueue ? 'text-slate-900 dark:text-foreground truncate' : 'text-slate-400'}>
+                    {selectedQueue?.name ?? 'Select queue…'}
+                  </span>
+                  <ChevronsUpDown className='h-3 w-3 text-slate-400 shrink-0' />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-64 p-0' align='start'>
+                <Command>
+                  <CommandInput placeholder='Search…' value={queueSearch} onValueChange={setQueueSearch} className='text-[13px]' />
+                  <CommandList>
+                    <CommandEmpty>No queues found</CommandEmpty>
+                    <CommandGroup>
+                      {sortedQueues.map((q) => (
+                        <CommandItem key={q.id} value={`${q.name} ${q.id}`} onSelect={() => { setQueueId(q.id); setQueueSearch(''); setQueueOpen(false) }}>
+                          <div className='flex flex-col min-w-0'>
+                            <span className='text-[12px] font-medium truncate'>{q.name}</span>
+                            {q.description && <span className='text-[10px] text-slate-400 truncate'>{q.description}</span>}
+                          </div>
+                          {queueId === q.id && <Check className='ml-auto h-3 w-3 text-nvr-cyan shrink-0' />}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
+          <button type='button' onClick={load} className='h-8 rounded-md bg-nvr-cyan px-4 text-[13px] font-semibold text-white hover:brightness-110'>
+            Load
+          </button>
+          <div className='ml-auto flex items-center gap-1.5'>
+            {previewWidth && (
+              <span className='font-mono text-[11px] text-slate-400'>{previewWidth}px</span>
+            )}
+            {(['375', '768'] as const).map((w) => (
+              <button key={w} type='button' onClick={() => setPreviewWidth(Number(w))}
+                className={cn('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                  previewWidth === Number(w)
+                    ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-cyan'
+                    : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground')}>
+                {w === '375' ? 'Mobile' : 'Tablet'}
+              </button>
+            ))}
+            {previewWidth && (
+              <button type='button' onClick={() => setPreviewWidth(null)}
+                className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] font-medium text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'>
+                Full
+              </button>
+            )}
+          </div>
+          <button
+            type='button'
+            onClick={() => setShowCode(c => !c)}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+              showCode
+                ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-cyan'
+                : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'
+            )}
+          >
+            <Code className='h-3.5 w-3.5' />
+            {showCode ? 'Hide Code' : 'View Code'}
+          </button>
+        </div>
+      </div>
+
+      {/* React code panel */}
+      {showCode && (
+        <div className='shrink-0 border-b border-slate-200 bg-slate-950 dark:border-border'>
+          <div className='flex items-center justify-between px-4 py-2 border-b border-slate-800'>
+            <span className='text-[11px] font-semibold text-slate-400 uppercase tracking-wider'>React usage</span>
+          </div>
+          <pre className='overflow-x-auto px-4 py-3 text-[12px] leading-relaxed text-slate-200'><code dangerouslySetInnerHTML={{ __html: highlightTs(`import {
+  ItemEditAuthContext,
+  NavigationContext,
+  NivaroProvider,
+  QueueWorklist
+} from '@nivaro/react'
+import { createNivaro } from '@nivaro/sdk'
+
+const client = createNivaro('https://your-api-url.com')
+
+export function MyQueue() {
+  return (
+    <NivaroProvider client={client}>
+      <NavigationContext.Provider value={{ navigate: (to) => { window.location.href = to } }}>
+        <ItemEditAuthContext.Provider value={{ isAdmin: false, userId: 'current-user-id' }}>
+          <QueueWorklist queueId="${active || 'your-queue-id'}" />
+        </ItemEditAuthContext.Provider>
+      </NavigationContext.Provider>
+    </NivaroProvider>
+  )
+}`) }} /></pre>
+        </div>
+      )}
+
+      {/* Queue preview — resizable */}
+      {active ? (
+        <div className='flex flex-1 min-h-0 overflow-auto' style={{ backgroundColor: '#f8fafc' }}>
+          <div
+            ref={previewContainerRef}
+            className='relative flex flex-col min-h-0'
+            style={{ width: previewWidth ? `${previewWidth}px` : '100%', minWidth: 360, flexShrink: 0 }}
+          >
+            <NivaroProvider client={client}>
+              <NavigationContext.Provider value={{ navigate }}>
+                <ItemEditAuthContext.Provider value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}>
+                  <QueueWorklist key={active} queueId={active} />
+                </ItemEditAuthContext.Provider>
+              </NavigationContext.Provider>
+            </NivaroProvider>
+            {/* Drag handle */}
+            <div
+              onMouseDown={startResize}
+              className='group absolute right-0 top-0 bottom-0 w-3 cursor-col-resize select-none flex items-center justify-center'
+              title='Drag to resize'
+            >
+              <div className='w-0.5 h-10 rounded-full bg-slate-300 opacity-0 group-hover:opacity-100 transition-opacity dark:bg-slate-600' />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className='flex flex-1 items-center justify-center text-sm text-slate-400'>
+          Select a queue and click Load to preview the worklist
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function PlaygroundPage() {
-  const [activeTab, setActiveTab] = usePersistedTab<'sdk' | 'react' | 'live'>('nvr_playground_tab', 'sdk')
+  const [activeTab, setActiveTab] = usePersistedTab<'sdk' | 'react' | 'live' | 'queue'>('nvr_playground_tab', 'sdk')
   const [selectedName, setSelectedName] = useState<string>(COMMANDS[0].name)
   const [values, setValues] = useState<Record<string, string>>({})
   const [result, setResult] = useState<RunResult | null>(null)
@@ -2499,12 +2701,26 @@ export function PlaygroundPage() {
               <Play className='h-3.5 w-3.5' />
               Live Form
             </button>
+            <button
+              type='button'
+              onClick={() => setActiveTab('queue')}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors',
+                activeTab === 'queue'
+                  ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                  : 'text-slate-500 hover:text-slate-700 dark:text-muted-foreground dark:hover:text-foreground'
+              )}
+            >
+              <ListChecks className='h-3.5 w-3.5' />
+              Live Queue
+            </button>
           </div>
         </div>
       </div>
 
       {activeTab === 'react' ? <ReactReferenceTab /> : null}
       {activeTab === 'live' ? <LiveFormTab /> : null}
+      {activeTab === 'queue' ? <LiveQueueTab /> : null}
 
       <div className={cn('flex flex-1 min-h-0 overflow-hidden', activeTab !== 'sdk' && 'hidden')}>
         {/* Left: searchable command list */}
