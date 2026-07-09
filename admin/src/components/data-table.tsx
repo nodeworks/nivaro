@@ -462,7 +462,11 @@ export function DataTable<T = Record<string, unknown>>({
               ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted'
               : 'cursor-pointer hover:bg-slate-50/80'),
           rowClassName?.(row),
-          isSelected && 'bg-nvr-cyan/5'
+          // Pinned sticky cells use bg-inherit, so a selected row's bg must be
+          // OPAQUE or horizontally-scrolled content bleeds through the pinned
+          // column. bg-nvr-cyan/5 is semi-transparent — use an opaque equivalent
+          // (5% nvr-cyan #00ceff over white / card) when pinning.
+          isSelected && (pinFirstColumn ? 'bg-[#f2fdff] dark:bg-[#20303a]' : 'bg-nvr-cyan/5')
         )}
         onClick={() => onRowClick?.(row)}
       >
