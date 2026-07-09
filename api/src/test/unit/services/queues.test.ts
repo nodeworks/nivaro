@@ -25,6 +25,7 @@ import {
   type QueueSourceRow,
   sortItems,
   stateFilterKeep,
+  validateAggregates,
   validateColumnFormats
 } from '../../../services/queues.js'
 import type { CMSRelation } from '../../../types.js'
@@ -1087,6 +1088,30 @@ describe('validateColumnFormats', () => {
   })
 })
 
+describe('validateAggregates', () => {
+  it('accepts null/undefined and valid maps', () => {
+    expect(validateAggregates(null)).toBeNull()
+    expect(validateAggregates(undefined)).toBeNull()
+    expect(validateAggregates({ 'purchase_orders.amount': 'sum' })).toBeNull()
+    expect(
+      validateAggregates({ 'purchase_orders.amount': 'avg', 'funding_years.id': 'count' })
+    ).toBeNull()
+  })
+
+  it('rejects non-objects and unknown functions', () => {
+    expect(validateAggregates([])).toMatch(/object/)
+    expect(validateAggregates('sum')).toMatch(/object/)
+    expect(validateAggregates({ 'purchase_orders.amount': 'total' })).toMatch(
+      /sum, avg, min, max, count/
+    )
+  })
+
+  it('rejects single-segment paths except for count', () => {
+    expect(validateAggregates({ amount: 'sum' })).toMatch(/relation path/)
+    expect(validateAggregates({ purchase_orders: 'count' })).toBeNull()
+  })
+})
+
 describe('isDisplayOnlySourceChange', () => {
   const existingSource = (over: Partial<QueueSourceRow> = {}): QueueSourceRow =>
     ({
@@ -1102,6 +1127,7 @@ describe('isDisplayOnlySourceChange', () => {
       extra_fields: '["project.name"]',
       drilldown: null,
       column_formats: null,
+      aggregates: null,
       sort: 0,
       ...over
     }) as QueueSourceRow
@@ -1174,6 +1200,29 @@ describe('isDisplayOnlySourceChange', () => {
     expect(
       isDisplayOnlySourceChange([existingSource()], [incomingSource(), incomingSource({ sort: 1 })])
     ).toBe(false)
+  })
+
+  it('false when aggregates changed (cache stores aggregated values)', () => {
+    expect(
+      isDisplayOnlySourceChange(
+        [existingSource()],
+        [incomingSource({ aggregates: { 'purchase_orders.amount': 'sum' } })]
+      )
+    ).toBe(false)
+  })
+
+  it('true when identical aggregates ride along a format-only change', () => {
+    expect(
+      isDisplayOnlySourceChange(
+        [existingSource({ aggregates: '{"purchase_orders.amount":"sum"}' })],
+        [
+          incomingSource({
+            aggregates: { 'purchase_orders.amount': 'sum' },
+            column_formats: { created: { type: 'datetime', template: 'MM/DD/YY' } }
+          })
+        ]
+      )
+    ).toBe(true)
   })
 
   it('false for an empty existing set (nothing to preserve)', () => {

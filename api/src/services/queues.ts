@@ -52,6 +52,9 @@ export interface QueueSourceRow {
   drilldown?: string | null
   /** JSON: Record<extraFieldPath, ColumnFormatConfig> — per-column display format, applied client-side. */
   column_formats?: string | null
+  /** JSON: Record<extraFieldPath, QueueAggregateFn> — aggregate the relation's
+   *  numeric leaf per row instead of listing values. CACHE-AFFECTING. */
+  aggregates?: string | null
   sort: number
 }
 
@@ -76,6 +79,7 @@ export interface IncomingQueueSource {
   extra_fields?: unknown
   drilldown?: unknown
   column_formats?: unknown
+  aggregates?: unknown
   sort?: number
 }
 
@@ -113,6 +117,7 @@ export function isDisplayOnlySourceChange(
       (e.label_template ?? null) === (s.label_template?.trim().slice(0, 500) || null) &&
       (e.sla_filter ?? null) === (s.sla_filter ?? null) &&
       canon(e.extra_fields ?? []) === canon(s.extra_fields ?? []) &&
+      canon(e.aggregates ?? null) === canon(s.aggregates ?? null) &&
       Number(e.sort) === ordered[i].sort
     )
   })
@@ -733,6 +738,27 @@ export function validateColumnFormats(input: unknown): string | null {
       }
     } else {
       return `column_formats.${path}: invalid format type: ${String(c.type)}`
+    }
+  }
+  return null
+}
+
+export type QueueAggregateFn = 'sum' | 'avg' | 'min' | 'max' | 'count'
+export const QUEUE_AGGREGATE_FNS: QueueAggregateFn[] = ['sum', 'avg', 'min', 'max', 'count']
+
+/** Null = valid. Paths must be relation paths (≥2 segments) — except count,
+ *  which ignores the leaf and accepts a bare relation segment. */
+export function validateAggregates(input: unknown): string | null {
+  if (input === undefined || input === null) return null
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    return 'aggregates must be an object keyed by extra-field path'
+  }
+  for (const [path, fn] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof fn !== 'string' || !QUEUE_AGGREGATE_FNS.includes(fn as QueueAggregateFn)) {
+      return `aggregates.${path}: function must be one of sum, avg, min, max, count`
+    }
+    if (fn !== 'count' && path.split('.').length < 2) {
+      return `aggregates.${path}: ${fn} needs a relation path with a leaf field (e.g. purchase_orders.amount)`
     }
   }
   return null

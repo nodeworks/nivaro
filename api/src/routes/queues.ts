@@ -13,6 +13,7 @@ import {
   isDisplayOnlySourceChange,
   normalizeDisplayConfig,
   parsePaginationParams,
+  validateAggregates,
   validateColumnFormats
 } from '../services/queues.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
@@ -43,7 +44,8 @@ function formatSource(row: QueueSourceRow) {
     state_values: parseJson(row.state_values),
     extra_fields: parseJson(row.extra_fields),
     drilldown: parseJson(row.drilldown) ?? {},
-    column_formats: parseJson(row.column_formats) ?? {}
+    column_formats: parseJson(row.column_formats) ?? {},
+    aggregates: parseJson(row.aggregates) ?? {}
   }
 }
 
@@ -271,6 +273,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         extra_fields?: unknown
         drilldown?: unknown
         column_formats?: unknown
+        aggregates?: unknown
         sort?: number
       }>
     }
@@ -324,6 +327,10 @@ export async function queuesRoutes(app: FastifyInstance) {
       if (cfError) {
         return reply.code(400).send({ error: cfError })
       }
+      const aggError = validateAggregates(s.aggregates)
+      if (aggError) {
+        return reply.code(400).send({ error: aggError })
+      }
     }
 
     // Display-only edits (drilldown, column_formats — both applied client-side
@@ -373,6 +380,7 @@ export async function queuesRoutes(app: FastifyInstance) {
             extra_fields: toJsonStr(s.extra_fields ?? []),
             drilldown: displayJson(s.drilldown),
             column_formats: displayJson(s.column_formats),
+            aggregates: displayJson(s.aggregates),
             sort: s.sort ?? i
           }))
         )
