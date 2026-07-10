@@ -12,7 +12,8 @@
       "types": "./dist/index.d.ts"
     },
     "./tailwind-preset": "./tailwind-preset.cjs",
-    "./styles.css": "./styles.css"
+    "./styles.css": "./styles.css",
+    "./full.css": "./dist/full.css"
   },
   "sideEffects": false,
   "files": [
@@ -35,7 +36,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && pnpm build:css",
+    "build:css": "tailwindcss -c tailwind-build.config.cjs -i full.src.css -o dist/_tw.css --minify && cat styles.css dist/_tw.css > dist/full.css && rm dist/_tw.css",
     "dev": "tsc --watch"
   },
   "peerDependencies": {
@@ -76,6 +78,7 @@
   },
   "devDependencies": {
     "@microsoft/api-extractor": "^7.58.9",
+    "tailwindcss": "^3.4.17",
     "@nivaro/sdk": "workspace:*",
     "@nivaro/shared": "workspace:*",
     "@types/react": "^19.0.0",

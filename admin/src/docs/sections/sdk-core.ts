@@ -621,10 +621,23 @@ export const sdkReact: DocSection = {
       type: 'pre',
       code: `pnpm add @nivaro/react @nivaro/sdk react react-dom @tanstack/react-query sonner`
     },
-    { type: 'h3', text: 'Styling (Tailwind preset)' },
+    { type: 'h3', text: 'Styling' },
     {
       type: 'p',
-      text: 'The styled components (`ItemEditForm`, `QueueWorklist`, panels, sheets) are built with Tailwind but the package ships no compiled CSS. The package bundles a Tailwind preset and a base stylesheet — wire both up once:'
+      text: 'The styled components (`ItemEditForm`, `QueueWorklist`, panels, sheets) are built with Tailwind. Two ways to get their styles — pick one:'
+    },
+    {
+      type: 'p',
+      text: '**Option A — precompiled CSS (simplest, no Tailwind required).** One import, works in any app:'
+    },
+    {
+      type: 'pre',
+      code: `// app entry
+import '@nivaro/react/full.css'`
+    },
+    {
+      type: 'p',
+      text: '**Option B — Tailwind v3 preset.** If your app already runs Tailwind 3 and you want one utility pipeline (no duplicated classes):'
     },
     {
       type: 'pre',
@@ -642,7 +655,7 @@ import '@nivaro/react/styles.css'`
     },
     {
       type: 'p',
-      text: 'The preset supplies the theme tokens (`nvr-cyan`, semantic color vars, radius, type scale) and the animate plugin; `styles.css` supplies the CSS variables plus class-based dark-mode overrides (`dark` class on `<html>`). The headless `useNivaroForm` API needs neither.'
+      text: 'The preset supplies the theme tokens (`nvr-cyan`, semantic color vars, radius, type scale) and the animate plugin; `styles.css` supplies the CSS variables plus class-based dark-mode overrides. Tailwind v4 configs ignore `tailwind.config.js` presets — use Option A there. Dark mode in both options: `dark` class on `<html>`. The headless `useNivaroForm` API needs neither.'
     },
     { type: 'h3', text: 'Setup' },
     {
