@@ -136,9 +136,6 @@ export function RecordDrilldownSheet({
                 collection={current.collection}
                 itemId={current.itemId}
                 layoutSlug={effectiveSlug}
-                showHeader={false}
-                showRevisions={false}
-                showClone={false}
                 onSaved={() => {
                   qc.invalidateQueries({ queryKey: ['queue-items'] })
                 }}
