@@ -91,8 +91,10 @@ export function RecordDrilldownSheet({
         className='flex flex-col gap-0 overflow-hidden p-0'
         style={{ width: current.width ?? width ?? 640, maxWidth: '96vw' }}
       >
-        <SheetHeader className='shrink-0 border-b border-slate-200 px-4 py-3 dark:border-border'>
-          <SheetTitle className='flex items-center justify-between gap-2 pr-6 text-[14px]'>
+        {/* Slim breadcrumb strip — the record title itself renders in
+            ItemEditForm's own header below, so repeating it here is noise. */}
+        <SheetHeader className='shrink-0 border-b border-slate-200 bg-slate-50 px-4 py-2 dark:border-border dark:bg-muted/30'>
+          <SheetTitle className='flex items-center justify-between gap-2 pr-6 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
             <span className='flex min-w-0 items-center gap-1.5'>
               {stack.length > 1 && (
                 <button
@@ -105,7 +107,8 @@ export function RecordDrilldownSheet({
                 </button>
               )}
               <span className='truncate'>
-                {current.title || `${titleCase(current.collection)} · ${current.itemId}`}
+                {titleCase(current.collection)}
+                {!useRootSlug && detailLayout ? ` · ${detailLayout.layout.name}` : ''}
               </span>
             </span>
             <button
@@ -116,10 +119,6 @@ export function RecordDrilldownSheet({
               Open record <ExternalLink className='h-3 w-3' />
             </button>
           </SheetTitle>
-          <p className='text-left text-[11px] text-slate-400'>
-            {titleCase(current.collection)}
-            {detailLayout ? ` · ${detailLayout.layout.name}` : ''}
-          </p>
         </SheetHeader>
 
         <div className='min-h-0 flex-1 overflow-y-auto'>
