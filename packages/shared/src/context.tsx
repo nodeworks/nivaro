@@ -1,6 +1,7 @@
 import type { NivaroClient } from '@nivaro/sdk'
+import { QueryClient, QueryClientContext, QueryClientProvider } from '@tanstack/react-query'
 import type React from 'react'
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useState } from 'react'
 
 // ─── Grid flush registry ───────────────────────────────────────────────────
 
@@ -30,7 +31,20 @@ export function NivaroProvider({
   client: NivaroClient
   children: React.ReactNode
 }) {
-  return <NivaroFormContext.Provider value={{ client }}>{children}</NivaroFormContext.Provider>
+  // Components consume TanStack Query throughout. Hosts that already run a
+  // QueryClientProvider (the admin) keep theirs; standalone consumers get one
+  // for free instead of "No QueryClient set" at first render.
+  const ambientQueryClient = useContext(QueryClientContext)
+  const [ownQueryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } }
+      })
+  )
+
+  const inner = <NivaroFormContext.Provider value={{ client }}>{children}</NivaroFormContext.Provider>
+  if (ambientQueryClient) return inner
+  return <QueryClientProvider client={ownQueryClient}>{inner}</QueryClientProvider>
 }
 
 export function useNivaroClient(): NivaroClient {

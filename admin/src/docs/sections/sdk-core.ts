@@ -647,7 +647,7 @@ import '@nivaro/react/styles.css'`
     { type: 'h3', text: 'Setup' },
     {
       type: 'p',
-      text: 'Wrap your app in `<NivaroProvider>` with a configured SDK client:'
+      text: 'Wrap your app in `<NivaroProvider>` with a configured SDK client. It provides a TanStack Query `QueryClient` automatically when your app does not already run a `QueryClientProvider` — if you do, yours wins.'
     },
     {
       type: 'pre',
