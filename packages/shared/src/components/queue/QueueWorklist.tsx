@@ -141,6 +141,7 @@ interface QueueMeta {
     row_click: 'preview' | 'layout' | 'full'
     item_layout: string | null
     sheet_width: number | string | null
+    default_columns?: string[] | null
   }
 }
 
@@ -1360,7 +1361,13 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     ...extraFieldKeys.slice(0, 2).map((f) => `extra.${f}`)
   ]
 
-  const effectiveVisible = new Set(visibleColumns ?? DEFAULT_VISIBLE_COLUMNS)
+  // Column resolution: the viewer's saved prefs win; a queue-level
+  // display_config.default_columns (builder-defined visibility AND order)
+  // seeds viewers who never customized; else the computed default.
+  const queueDefaultColumns = displayConfig?.default_columns ?? null
+  const effectiveColumns = visibleColumns ?? queueDefaultColumns
+
+  const effectiveVisible = new Set(effectiveColumns ?? DEFAULT_VISIBLE_COLUMNS)
 
   // Render order of the middle (toggleable) columns follows visible_columns'
   // actual array order (the viewer's saved drag-reorder), falling back to
@@ -1368,8 +1375,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // Customize Columns popover shows a stable, sensible position for a column
   // before it's ever been visible.
   const orderedToggleableKeys = [
-    ...(visibleColumns ?? []).filter((k) => TOGGLEABLE_KEYS.includes(k)),
-    ...TOGGLEABLE_KEYS.filter((k) => !(visibleColumns ?? []).includes(k))
+    ...(effectiveColumns ?? []).filter((k) => TOGGLEABLE_KEYS.includes(k)),
+    ...TOGGLEABLE_KEYS.filter((k) => !(effectiveColumns ?? []).includes(k))
   ]
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))

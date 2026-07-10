@@ -190,6 +190,10 @@ export interface QueueDisplayConfig {
   item_layout: string | null
   /** Preview sidebar width: px number, 'NN%' of viewport, or null = 480 default. */
   sheet_width: number | string | null
+  /** Ordered column keys ('label', 'state', …, 'extra.<path>') shown by default
+   *  for viewers with no saved column prefs; null = the computed default
+   *  (base columns + first two extra fields). Array order IS the column order. */
+  default_columns: string[] | null
 }
 
 export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
@@ -200,7 +204,8 @@ export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
   bulk_actions: true,
   row_click: 'preview',
   item_layout: null,
-  sheet_width: null
+  sheet_width: null,
+  default_columns: null
 }
 
 /** Normalize a display_config sheet width: finite px in [280, 2000], or an
@@ -244,6 +249,15 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
     typeof src.item_layout === 'string' && src.item_layout.trim() !== ''
       ? src.item_layout.trim()
       : null
+  const default_columns = Array.isArray(src.default_columns)
+    ? [
+        ...new Set(
+          src.default_columns.filter(
+            (c): c is string => typeof c === 'string' && c.trim() !== ''
+          )
+        )
+      ]
+    : null
   return {
     views,
     default_view,
@@ -252,7 +266,8 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
     bulk_actions: src.bulk_actions !== false,
     row_click,
     item_layout,
-    sheet_width: normalizeSheetWidth(src.sheet_width)
+    sheet_width: normalizeSheetWidth(src.sheet_width),
+    default_columns: default_columns && default_columns.length > 0 ? default_columns : null
   }
 }
 

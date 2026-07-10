@@ -1,5 +1,29 @@
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  useSensor,
+  useSensors
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronsUpDown, Inbox, Plus, Settings2, Trash2, X } from 'lucide-react'
+import {
+  Check,
+  ChevronsUpDown,
+  GripVertical,
+  Inbox,
+  Plus,
+  Settings2,
+  Trash2,
+  X
+} from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
@@ -79,6 +103,9 @@ interface QueueDisplayConfig {
   row_click: QueueRowClickMode
   item_layout: string | null
   sheet_width: number | string | null
+  /** Ordered column keys shown by default for viewers without saved column
+   *  prefs; null = automatic (standard columns + first two extra fields). */
+  default_columns: string[] | null
 }
 
 // Preview sidebar width presets — mirror the drill-down sheet's options.
@@ -88,6 +115,55 @@ const SHEET_WIDTHS: { value: number; label: string }[] = [
   { value: 640, label: 'Wide (640px)' },
   { value: 800, label: 'Extra wide (800px)' }
 ]
+
+// Draggable checked row in the builder's Default-columns editor. Grip drags
+// to reorder; unchecking drops the column back to the unchecked pool below.
+function SortableDefaultColumnRow({
+  id,
+  label,
+  index,
+  disabled,
+  onToggle
+}: {
+  id: string
+  label: string
+  index: number
+  disabled: boolean
+  onToggle: () => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    disabled
+  })
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn(
+        'flex items-center gap-3 bg-white px-3 py-1.5 dark:bg-card',
+        isDragging && 'relative z-10 shadow-md'
+      )}
+    >
+      <button
+        type='button'
+        {...attributes}
+        {...listeners}
+        disabled={disabled}
+        className='cursor-grab touch-none rounded p-0.5 text-slate-300 transition-colors hover:text-slate-500 disabled:opacity-30'
+      >
+        <GripVertical className='h-3.5 w-3.5' />
+      </button>
+      <Checkbox id={`dc-${id}`} checked disabled={disabled} onCheckedChange={onToggle} />
+      <label
+        htmlFor={`dc-${id}`}
+        className='flex-1 cursor-pointer truncate text-[12px] font-medium text-slate-800 dark:text-slate-100'
+      >
+        {label}
+      </label>
+      <span className='text-[10px] tabular-nums text-slate-400'>{index + 1}</span>
+    </div>
+  )
+}
 
 const VIEW_LABELS: Record<QueueViewKind, string> = {
   table: 'Table',
@@ -1181,12 +1257,16 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     bulk_actions: true,
     row_click: 'preview',
     item_layout: null,
-    sheet_width: null
+    sheet_width: null,
+    default_columns: null
   })
   const [sources, setSources] = useState<QueueSource[]>([])
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
   const [tab, setTab] = useState<BuilderTab>('sources')
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const defaultColsSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } })
+  )
 
   if (queue && loadedFor !== queue.id) {
     setName(queue.name)
@@ -1339,6 +1419,42 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
         .join(' → ')
     })
   )
+
+  // ── Default columns (visibility + order) ──────────────────────────────────
+  // Mirrors QueueWorklist's TOGGLEABLE_KEYS: 'label' is pinned and never part
+  // of the set; 'collection' only renders on multi-collection queues (a stale
+  // entry is harmless — the worklist ignores unknown keys).
+  const toggleableColumnOptions = [
+    ...aliasColumns.filter((c) => c.key !== 'label'),
+    ...extraAliasColumns
+  ]
+  const defaultColumns = displayConfig.default_columns
+  const setDefaultColumns = (cols: string[] | null) =>
+    setDisplayConfig((prev) => ({ ...prev, default_columns: cols }))
+  // The "automatic" default the worklist computes when nothing is configured —
+  // used to seed Custom mode so switching starts from what viewers see today.
+  const automaticColumns = [
+    'state',
+    'owners',
+    'aging_hours',
+    'sla_status',
+    'at_risk',
+    ...extraAliasColumns.slice(0, 2).map((c) => c.key)
+  ]
+  const checkedColumnOptions = (defaultColumns ?? [])
+    .map((k) => toggleableColumnOptions.find((c) => c.key === k))
+    .filter((c): c is { key: string; label: string } => !!c)
+  const uncheckedColumnOptions = toggleableColumnOptions.filter(
+    (c) => !(defaultColumns ?? []).includes(c.key)
+  )
+  const handleDefaultColsDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id || !defaultColumns) return
+    const oldIdx = defaultColumns.indexOf(String(active.id))
+    const newIdx = defaultColumns.indexOf(String(over.id))
+    if (oldIdx === -1 || newIdx === -1) return
+    setDefaultColumns(arrayMove(defaultColumns, oldIdx, newIdx))
+  }
 
   const aliasRow = (col: { key: string; label: string }) => (
     <div key={col.key} className='flex items-center gap-3'>
@@ -1502,6 +1618,100 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
 
         {tab === 'columns' && (
           <div className='mx-auto max-w-3xl space-y-6'>
+            <div>
+              <h3 className='mb-1 text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                Default columns
+              </h3>
+              <p className='mb-3 text-[12px] text-slate-500 dark:text-muted-foreground'>
+                Which columns viewers see by default, and in what order. Viewers who customize their
+                own columns keep their choice.
+              </p>
+              <div className='mb-3 flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40 w-fit'>
+                {(
+                  [
+                    { v: null, label: 'Automatic' },
+                    { v: 'custom', label: 'Custom' }
+                  ] as const
+                ).map((opt) => {
+                  const active = opt.v === null ? defaultColumns === null : defaultColumns !== null
+                  return (
+                    <button
+                      key={opt.label}
+                      type='button'
+                      disabled={!canEdit}
+                      onClick={() =>
+                        setDefaultColumns(
+                          opt.v === null
+                            ? null
+                            : (defaultColumns ??
+                                automaticColumns.filter((k) =>
+                                  toggleableColumnOptions.some((c) => c.key === k)
+                                ))
+                        )
+                      }
+                      className={cn(
+                        'rounded-md px-3 py-1 text-[12px] font-medium transition-colors',
+                        active
+                          ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                          : 'text-slate-500 hover:text-slate-700 dark:text-muted-foreground'
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  )
+                })}
+              </div>
+              {defaultColumns === null ? (
+                <p className='text-[11px] text-slate-400'>
+                  Standard columns plus the first two source columns.
+                </p>
+              ) : (
+                <div className='divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 dark:divide-border/60 dark:border-border'>
+                  <DndContext
+                    sensors={defaultColsSensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleDefaultColsDragEnd}
+                  >
+                    <SortableContext items={defaultColumns} strategy={verticalListSortingStrategy}>
+                      {checkedColumnOptions.map((col, idx) => (
+                        <SortableDefaultColumnRow
+                          key={col.key}
+                          id={col.key}
+                          label={columnAliases[col.key] || col.label}
+                          index={idx}
+                          disabled={!canEdit}
+                          onToggle={() =>
+                            setDefaultColumns(defaultColumns.filter((k) => k !== col.key))
+                          }
+                        />
+                      ))}
+                    </SortableContext>
+                  </DndContext>
+                  {uncheckedColumnOptions.map((col) => (
+                    <div
+                      key={col.key}
+                      className='flex items-center gap-3 bg-white px-3 py-1.5 dark:bg-card'
+                    >
+                      <span className='w-[18px]' />
+                      <Checkbox
+                        id={`dc-${col.key}`}
+                        checked={false}
+                        disabled={!canEdit}
+                        onCheckedChange={() => setDefaultColumns([...defaultColumns, col.key])}
+                      />
+                      <label
+                        htmlFor={`dc-${col.key}`}
+                        className='flex-1 cursor-pointer truncate text-[12px] text-slate-400'
+                      >
+                        {columnAliases[col.key] || col.label}
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className='border-t border-slate-100 pt-5 dark:border-border' />
             <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
               Rename worklist table columns for everyone viewing this queue. Leave blank to keep the
               default label.
