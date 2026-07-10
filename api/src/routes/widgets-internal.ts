@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
 import type { User } from '../types.js'
 import { emitTrigger } from '../flows/registry.js'
@@ -302,6 +303,14 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       created_by: req.user?.id ?? null
     })
     const row = await db('nivaro_widgets').orderBy('id', 'desc').first()
+    await logActivity({
+      action: 'create',
+      user: req.user?.id,
+      collection: 'nivaro_widgets',
+      item: String(row.id),
+      comment: String(body.name ?? ''),
+      req
+    })
     return reply.code(201).send({ data: { ...row, inputs: parseJson(row.inputs), config: parseJson(row.config) } })
   })
 
@@ -320,12 +329,29 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     await db('nivaro_widgets').where({ id: Number(id) }).update(p)
     const row = await db('nivaro_widgets').where({ id: Number(id) }).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
+    await logActivity({
+      action: 'update',
+      user: req.user?.id,
+      collection: 'nivaro_widgets',
+      item: id,
+      comment: Object.keys(p).join(', '),
+      req
+    })
     return reply.send({ data: { ...row, inputs: parseJson(row.inputs), config: parseJson(row.config) } })
   })
 
   app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    await db('nivaro_widgets').where({ id: Number(id) }).delete()
+    const removed = await db('nivaro_widgets').where({ id: Number(id) }).delete()
+    if (removed > 0) {
+      await logActivity({
+        action: 'delete',
+        user: req.user?.id,
+        collection: 'nivaro_widgets',
+        item: id,
+        req
+      })
+    }
     return reply.send({ data: { success: true } })
   })
 
@@ -435,6 +461,15 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       let updQ = db(collection).where('id', itemId)
       if (wsScoped) updQ = updQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
       await updQ.update(fieldUpdates)
+      // Raw update bypasses the items service, so log directly.
+      await logActivity({
+        action: 'update',
+        user: req.user?.id,
+        collection,
+        item: String(itemId),
+        comment: `widget field-update: ${Object.keys(fieldUpdates).join(', ')}`,
+        req
+      })
       return reply.send({ data: { success: true } })
     }
 
@@ -488,6 +523,15 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       let updQ = db(collection).where('id', itemId)
       if (wsScoped) updQ = updQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
       await updQ.update({ [field]: newValue })
+      // Raw update bypasses the items service, so log directly.
+      await logActivity({
+        action: 'update',
+        user: req.user?.id,
+        collection,
+        item: String(itemId),
+        comment: `widget toggle: ${field} → ${newValue}`,
+        req
+      })
       return reply.send({ data: { success: true, new_value: newValue } })
     }
 

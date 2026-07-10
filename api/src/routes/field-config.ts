@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 
 function parseJsonSafe(val: unknown): unknown {
   if (val === null || val === undefined) return val
@@ -473,6 +474,15 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         'is_translatable'
       )
       .first()) as FieldRow
+
+    await logActivity({
+      action: 'schema-field-update',
+      user: req.user?.id,
+      collection,
+      item: field,
+      comment: 'field-config',
+      req
+    })
 
     return reply.send({ data: formatFieldConfig(updated) })
   })

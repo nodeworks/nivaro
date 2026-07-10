@@ -316,7 +316,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
   // ─── POST /sync-field-types — re-sync nivaro_fields.type from MSSQL column types ──
 
-  app.post('/sync-field-types', { preHandler: requireAdmin }, async (_req, reply) => {
+  app.post('/sync-field-types', { preHandler: requireAdmin }, async (req, reply) => {
     const SQL_TO_ABSTRACT: Record<string, (l: number | null) => string> = {
       nvarchar: (l) => (l === -1 ? 'text' : 'string'),
       varchar: (l) => (l === -1 ? 'text' : 'string'),
@@ -361,6 +361,16 @@ export async function dataModelRoutes(app: FastifyInstance) {
         changes.push({ collection: f.collection, field: f.field, from: f.type, to: abstractType })
         updated++
       }
+    }
+
+    if (updated > 0) {
+      await logActivity({
+        action: 'schema-field-sync',
+        user: req.user?.id,
+        collection: 'nivaro_fields',
+        comment: `sync-field-types: ${updated} field type(s) updated`,
+        req
+      })
     }
 
     return reply.send({ updated, total: fields.length, changes })

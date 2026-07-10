@@ -488,6 +488,14 @@ export async function importsRoutes(app: FastifyInstance) {
     }
 
     await db('nivaro_import_jobs').where({ id }).delete()
+    await logActivity({
+      action: 'delete',
+      user: req.user?.id,
+      collection: 'nivaro_import_jobs',
+      item: id,
+      comment: `${job.collection} (${job.status})`,
+      req
+    })
     return reply.code(204).send()
   })
 }

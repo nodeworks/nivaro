@@ -414,6 +414,15 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       }
     })
 
+    await logActivity({
+      action: 'update',
+      user: req.user?.id,
+      collection: 'nivaro_collection_layouts',
+      item: id,
+      comment: `assignments: ${body.assignments.length} field(s)`,
+      req
+    })
+
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
       .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'col_span', 'overrides', 'show_row_revisions', 'allow_revision_restore', 'lock_conditions', 'input_bindings', 'widget_id', 'show_approval_chain')

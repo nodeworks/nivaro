@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 import { DEFAULT_REDACT_FIELDS, executeRetentionPolicy } from '../services/retention.js'
 
 function parseJson<T>(val: unknown): T {
@@ -56,6 +57,14 @@ export async function retentionRoutes(app: FastifyInstance) {
       created_by: req.user?.id ?? null
     })
     const row = await db('nivaro_retention_policies').where({ id }).first()
+    await logActivity({
+      action: 'create',
+      user: req.user?.id,
+      collection: 'nivaro_retention_policies',
+      item: String(id),
+      comment: String(b.name ?? ''),
+      req
+    })
     return reply.code(201).send({ data: format(row) })
   })
 
@@ -68,7 +77,17 @@ export async function retentionRoutes(app: FastifyInstance) {
     str('name'); str('inactivity_threshold_months'); str('action')
     str('redact_value_template'); str('cron_schedule'); str('is_active'); str('dry_run_mode')
     json('redact_fields'); json('exclusion_emails'); json('exclusion_roles')
-    if (Object.keys(u).length) await db('nivaro_retention_policies').where({ id }).update(u)
+    if (Object.keys(u).length) {
+      await db('nivaro_retention_policies').where({ id }).update(u)
+      await logActivity({
+        action: 'update',
+        user: req.user?.id,
+        collection: 'nivaro_retention_policies',
+        item: id,
+        comment: Object.keys(u).join(', '),
+        req
+      })
+    }
     const row = await db('nivaro_retention_policies').where({ id }).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
     return reply.send({ data: format(row) })
@@ -76,7 +95,16 @@ export async function retentionRoutes(app: FastifyInstance) {
 
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    await db('nivaro_retention_policies').where({ id }).delete()
+    const removed = await db('nivaro_retention_policies').where({ id }).delete()
+    if (removed > 0) {
+      await logActivity({
+        action: 'delete',
+        user: req.user?.id,
+        collection: 'nivaro_retention_policies',
+        item: id,
+        req
+      })
+    }
     return reply.code(204).send()
   })
 
@@ -88,6 +116,15 @@ export async function retentionRoutes(app: FastifyInstance) {
 
     const started = new Date()
     const result = await executeRetentionPolicy(format(row) as Parameters<typeof executeRetentionPolicy>[0], req.user?.id, isDryRun)
+
+    await logActivity({
+      action: 'retention-run',
+      user: req.user?.id,
+      collection: 'nivaro_retention_policies',
+      item: id,
+      comment: `${isDryRun ? 'dry run' : 'live run'}: ${result.affectedCount} affected`,
+      req
+    })
 
     await db('nivaro_retention_runs').insert({
       policy_id: Number(id),

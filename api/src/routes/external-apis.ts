@@ -1205,6 +1205,14 @@ export async function externalApisRoutes(app: FastifyInstance) {
         .where({ id: sid, external_api_id: apiId })
         .delete()
       if (!deleted) return reply.code(404).send({ error: 'Not found' })
+      await logActivity({
+        action: 'delete',
+        user: req.user?.id,
+        collection: 'nivaro_external_api_schemas',
+        item: String(sid),
+        comment: `api ${apiId}`,
+        req
+      })
       return { data: { success: true } }
     }
   )

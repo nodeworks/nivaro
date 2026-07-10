@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { itemActionRegistry } from '../extensions/item-actions.js'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 
 export async function itemActionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
@@ -33,6 +34,15 @@ export async function itemActionsRoutes(app: FastifyInstance) {
         itemId,
         payload,
         userId: req.user?.id
+      })
+      // The mutation itself lives in extension code — log the invocation.
+      await logActivity({
+        action: 'item-action-execute',
+        user: req.user?.id,
+        collection,
+        item: String(itemId),
+        comment: req.params.id,
+        req
       })
       return { data: result }
     } catch (err) {

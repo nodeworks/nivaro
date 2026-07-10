@@ -124,6 +124,14 @@ export async function apiKeysRoutes(app: FastifyInstance) {
 
     if (Object.keys(updates).length > 0) {
       await db('nivaro_api_keys').where({ id }).update(updates)
+      await logActivity({
+        action: 'update',
+        user: req.user?.id,
+        collection: 'nivaro_api_keys',
+        item: id,
+        comment: Object.keys(updates).join(', '),
+        req
+      })
     }
 
     const row = await db('nivaro_api_keys').where({ id }).first()

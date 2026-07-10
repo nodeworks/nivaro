@@ -379,6 +379,17 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       created_at: new Date()
     })
 
+    // Public insert bypasses the items service, so log the create directly —
+    // otherwise records created through public forms leave no audit trail.
+    await logActivity({
+      action: 'create',
+      user: null,
+      collection: form.collection,
+      item: collectionId,
+      comment: `public submission via form "${form.name}"`,
+      req
+    })
+
     return reply.code(201).send({
       data: {
         id: submissionId,

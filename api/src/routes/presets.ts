@@ -112,6 +112,14 @@ export async function presetsRoutes(app: FastifyInstance) {
         const row = (await db('nivaro_collection_presets')
           .where({ id: existing.id })
           .first()) as PresetRow
+        await logActivity({
+          action: 'update',
+          user: req.user?.id,
+          collection: 'nivaro_collection_presets',
+          item: String(existing.id),
+          comment: `system default for ${collection}`,
+          req
+        })
         return { data: parsePreset(row) }
       }
 
@@ -127,6 +135,14 @@ export async function presetsRoutes(app: FastifyInstance) {
       })
 
       const row = (await db('nivaro_collection_presets').where({ id }).first()) as PresetRow
+      await logActivity({
+        action: 'create',
+        user: req.user?.id,
+        collection: 'nivaro_collection_presets',
+        item: id,
+        comment: `system default for ${collection}`,
+        req
+      })
       return reply.code(201).send({ data: parsePreset(row) })
     }
   )

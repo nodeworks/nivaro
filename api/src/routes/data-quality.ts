@@ -376,6 +376,15 @@ export async function dataQualityRoutes(app: FastifyInstance) {
 
     const insertedId = typeof row === 'object' ? row.id : row
 
+    await logActivity({
+      action: 'dq-run',
+      user: req.user?.id,
+      collection,
+      item: String(insertedId),
+      comment: `${rules.length} rule(s), ${failedRecords}/${totalRecords} failing`,
+      req
+    })
+
     return reply.code(201).send({
       data: {
         id: insertedId,

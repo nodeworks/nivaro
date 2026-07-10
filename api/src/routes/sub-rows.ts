@@ -76,6 +76,15 @@ export async function subRowsRoutes(app: FastifyInstance) {
       .where({ id: insertedId })
       .first()) as Record<string, unknown>
 
+    await logActivity({
+      action: 'create',
+      user: req.user?.id,
+      collection: 'nivaro_sub_row_templates',
+      item: String(insertedId),
+      comment: body.name,
+      req
+    })
+
     return reply.code(201).send({
       data: { ...created, items: parseJsonSafe(created.items) }
     })
@@ -94,6 +103,14 @@ export async function subRowsRoutes(app: FastifyInstance) {
     }
 
     await db('nivaro_sub_row_templates').where({ id }).delete()
+    await logActivity({
+      action: 'delete',
+      user: req.user?.id,
+      collection: 'nivaro_sub_row_templates',
+      item: id,
+      comment: String(existing.name ?? ''),
+      req
+    })
     return reply.code(204).send()
   })
 
@@ -272,6 +289,15 @@ export async function subRowsRoutes(app: FastifyInstance) {
       inserted.push(formatSubRow(created))
     }
 
+    await logActivity({
+      action: 'update',
+      user: req.user?.id,
+      collection,
+      item: itemId,
+      comment: `sub-rows(${field}): replaced with ${body.items.length} row(s)`,
+      req
+    })
+
     return reply.send({ data: inserted })
   })
 
@@ -297,6 +323,15 @@ export async function subRowsRoutes(app: FastifyInstance) {
       if (!existing) return reply.code(404).send({ error: 'Not found' })
 
       await db('nivaro_sub_rows').where({ id: subRowId }).delete()
+
+      await logActivity({
+        action: 'update',
+        user: req.user?.id,
+        collection,
+        item: itemId,
+        comment: `sub-rows(${field}): deleted row ${subRowId}`,
+        req
+      })
 
       return reply.code(204).send()
     }

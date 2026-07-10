@@ -317,6 +317,15 @@ export async function itemsRoutes(app: FastifyInstance) {
           }
         }
 
+        await logActivity({
+          action: 'pipeline-transition',
+          collection,
+          item: String(item),
+          user: req.user?.id,
+          req,
+          comment: `bulk: ${transition.label} → ${newStateObj?.label ?? newStateId}`
+        })
+
         succeeded++
       } catch {
         failed++

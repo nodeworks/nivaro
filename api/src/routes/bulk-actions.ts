@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { bulkActionRegistry } from '../extensions/bulk-actions.js'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 
 export async function bulkActionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
@@ -33,6 +34,14 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
         ids,
         payload,
         userId: req.user?.id
+      })
+      // The mutation itself lives in extension code — log the invocation.
+      await logActivity({
+        action: 'bulk-action-execute',
+        user: req.user?.id,
+        collection,
+        comment: `${req.params.id} on ${ids.length} item(s)`,
+        req
       })
       return { data: result }
     } catch (err) {

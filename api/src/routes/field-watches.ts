@@ -268,6 +268,14 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
         watch: Number(id),
         user: userId
       })
+      await logActivity({
+        action: 'subscribe',
+        user: userId,
+        collection: 'nivaro_field_watches',
+        item: id,
+        comment: watch.name,
+        req
+      })
     }
 
     return reply.code(201).send({ data: { watch: Number(id), user: userId } })
@@ -278,9 +286,19 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
     const { id } = req.params
     const userId = req.user!.id
 
-    await db('nivaro_field_watch_subscribers')
+    const removed = await db('nivaro_field_watch_subscribers')
       .where({ watch: Number(id), user: userId })
       .delete()
+
+    if (removed > 0) {
+      await logActivity({
+        action: 'unsubscribe',
+        user: userId,
+        collection: 'nivaro_field_watches',
+        item: id,
+        req
+      })
+    }
 
     return reply.code(204).send()
   })

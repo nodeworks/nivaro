@@ -115,6 +115,14 @@ export async function rolesRoutes(app: FastifyInstance) {
       updated_at: new Date()
     })
     const role = await db<Role>('nivaro_roles').where({ id }).first()
+    await logActivity({
+      action: 'update',
+      user: req.user?.id,
+      collection: 'nivaro_roles',
+      item: id,
+      comment: `ui-permissions: ${body.disabled.length} route(s) disabled`,
+      req
+    })
     return reply.send({ data: formatRole(role!) })
   })
 

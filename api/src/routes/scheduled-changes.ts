@@ -108,6 +108,14 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       .returning('id')
 
     const insertedId = typeof row === 'object' ? row.id : row
+    await logActivity({
+      action: 'schedule-change-create',
+      user: req.user?.id,
+      collection: body.collection,
+      item: body.item_id,
+      comment: `${body.change_type} scheduled for ${scheduledAt.toISOString()}`,
+      req
+    })
     const created = (await db('nivaro_scheduled_changes')
       .where({ id: insertedId })
       .first()) as Record<string, unknown>
@@ -135,6 +143,15 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     await db('nivaro_scheduled_changes')
       .where({ id })
       .update({ status: 'cancelled', updated_at: new Date() })
+
+    await logActivity({
+      action: 'schedule-change-cancel',
+      user: req.user?.id,
+      collection: existing.collection,
+      item: existing.item_id,
+      comment: existing.change_type,
+      req
+    })
 
     return reply.code(204).send()
   })

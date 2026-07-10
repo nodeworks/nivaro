@@ -689,6 +689,14 @@ export async function queuesRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     await enqueueQueueMaterializationBackfill(id)
+    await logActivity({
+      action: 'update',
+      user: req.user?.id,
+      collection: 'nivaro_queues',
+      item: String(id),
+      comment: 'rematerialize',
+      req
+    })
     return reply.send({ data: { enqueued: true } })
   })
 

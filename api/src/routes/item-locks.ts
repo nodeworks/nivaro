@@ -100,6 +100,15 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       app.io?.to(`collection:${collection}`).emit('item-lock-disabled', { collection })
     }
 
+    await logActivity({
+      action: 'update',
+      user: req.user?.id,
+      collection: 'nivaro_collections',
+      item: collection,
+      comment: `item_locking_enabled: ${item_locking_enabled}`,
+      req
+    })
+
     return reply.send({ data: { collection, item_locking_enabled } })
   })
 

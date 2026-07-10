@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 import {
   embedText,
   getEmbeddableFields,
@@ -93,6 +94,14 @@ export async function semanticSearchRoutes(app: FastifyInstance) {
       offset += rows.length
       if (rows.length < BATCH) break
     }
+
+    await logActivity({
+      action: 'semantic-reindex',
+      user: req.user?.id,
+      collection,
+      comment: `${indexed} embedding(s) written`,
+      req
+    })
 
     return reply.send({ indexed })
   })

@@ -851,6 +851,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const updated = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ id: bindingId })
       .first()
+    await logActivity({
+      action: 'update',
+      collection: 'nivaro_workflow_bindings',
+      item: bindingId,
+      user: req.user?.id,
+      req
+    })
     return reply.send({ data: { ...updated, auto_start: coerceBool(updated?.auto_start) } })
   })
 
