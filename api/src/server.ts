@@ -62,9 +62,21 @@ export async function buildServer() {
   })
 
   // ─── CORS ──────────────────────────────────────────────────────────────────
-  // Open to all origins, no credentials — tracker runs on external sites.
-  // Admin UI is same-origin in prod; Vite proxy makes it same-origin in dev.
-  await app.register(fastifyCors, { origin: '*', credentials: false })
+  // Default: open to all origins, no credentials — tracker runs on external
+  // sites, token (Bearer) clients work cross-origin, and the admin UI is
+  // same-origin in prod (Vite proxy makes it same-origin in dev).
+  // CORS_ORIGINS (comma-separated) switches to an explicit allowlist WITH
+  // credentials, for external frontends that need cookie-session auth.
+  const corsOrigins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean)
+  await app.register(
+    fastifyCors,
+    corsOrigins.length > 0
+      ? { origin: corsOrigins, credentials: true }
+      : { origin: '*', credentials: false }
+  )
 
   // ─── Multipart (file uploads) ──────────────────────────────────────────────
   // In cloud mode skip the startup DB query (no default tenant) and use 50 MB.

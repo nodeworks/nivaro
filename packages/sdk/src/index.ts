@@ -1591,6 +1591,13 @@ export function listActivePresence(): Command<{ data: PresenceSessionInfo[]; tot
 export interface NivaroClientOptions {
   token?: string
   fetch?: typeof fetch
+  /**
+   * Fetch credentials mode. Defaults to 'include' for cookie-session auth
+   * (same-origin admin/playground) and 'omit' when a token is set — browsers
+   * reject credentialed cross-origin requests against the API's wildcard
+   * CORS, and Bearer auth needs no cookies.
+   */
+  credentials?: RequestCredentials
 }
 
 export interface FileUploadResult {
@@ -1646,6 +1653,10 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     return h
   }
 
+  function credentialsMode(): RequestCredentials {
+    return options.credentials ?? (currentToken ? 'omit' : 'include')
+  }
+
   async function request<T>(command: Command<T>): Promise<T> {
     const qs = command._params
       ? '?' +
@@ -1661,7 +1672,7 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     const res = await fetcher(`${baseUrl}/api${command._path}${qs}`, {
       method: command._method,
       headers: authHeaders(),
-      credentials: 'include',
+      credentials: credentialsMode(),
       body: command._body != null ? JSON.stringify(command._body) : undefined
     })
 
@@ -1706,7 +1717,7 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     const res = await fetcher(`${baseUrl}/api/files/upload`, {
       method: 'POST',
       headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : {},
-      credentials: 'include',
+      credentials: credentialsMode(),
       body: fd
     })
 
@@ -1733,7 +1744,7 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     const res = await fetcher(`${baseUrl}/api/graphql`, {
       method: 'POST',
       headers: authHeaders(),
-      credentials: 'include',
+      credentials: credentialsMode(),
       body: JSON.stringify({ query, variables, operationName })
     })
 
