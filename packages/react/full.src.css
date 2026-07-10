@@ -1,6 +1,12 @@
 /* Source for dist/full.css — the zero-Tailwind consumer bundle.
    Built by: tailwindcss -c tailwind-build.config.cjs (see package build script). */
 
+/* Preflight is disabled in the build config, so `base` emits ONLY Tailwind's
+   universal custom-property defaults (--tw-ring-*, --tw-shadow, --tw-transform
+   etc.) that ring/shadow/transform utilities depend on — without it those
+   utilities reference undefined variables. */
+@tailwind base;
+
 /* Mini-reset: the preflight rules the components actually rely on, without
    shipping Tailwind's full preflight into a host app that has its own reset.
    border-style/width here is what makes `border-t`/`border-b` utilities work. */
