@@ -20,6 +20,7 @@
     "@nivaro/sdk": "workspace:*",
     "@tanstack/react-query": "^5",
     "react": "^18 || ^19",
+    "react-dom": "^18 || ^19",
     "sonner": "^1"
   },
   "peerDependenciesMeta": {
@@ -55,6 +56,8 @@
   },
   "devDependencies": {
     "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "react-dom": "^19",
     "typescript": "^5.7.2"
   }
 }
