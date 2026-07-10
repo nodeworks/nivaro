@@ -121,7 +121,10 @@ export function RecordDrilldownSheet({
           </SheetTitle>
         </SheetHeader>
 
-        <div className='min-h-0 flex-1 overflow-y-auto'>
+        {/* overflow-hidden (not auto): ItemEditForm owns its scrolling — its body
+            and summary rail each get an independent scrollbar, which only works
+            when this parent constrains height instead of growing unbounded. */}
+        <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
           {layoutLoading && !useRootSlug ? (
             <div className='space-y-2 px-4 py-3'>
               {[0, 1, 2, 3, 4, 5].map((i) => (

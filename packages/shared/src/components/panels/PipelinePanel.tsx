@@ -71,6 +71,7 @@ interface PipelineInstance {
 }
 interface PipelineInstanceOwner {
   id: number
+  user: string
   first_name: string | null
   last_name: string | null
   email: string
@@ -466,11 +467,13 @@ function AsyncUserPicker({ value, onChange }: { value: string; onChange: (v: str
 function OwnersSection({
   collection,
   item,
-  states
+  states,
+  currentStateId
 }: {
   collection: string
   item: string
   states: PipelineState[]
+  currentStateId?: string | null
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
@@ -489,6 +492,27 @@ function OwnersSection({
         )
         .then((r) => r.data)
   })
+
+  // Resolved owners per state (owner-group derived) — same key/data as the
+  // Approval Chain popover, so the cache is shared between the two.
+  const { data: allOwners } = useQuery<Record<string, AllOwnersEntry> | null>({
+    queryKey: ['pipeline-all-owners', collection, item],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, AllOwnersEntry> | null }>(
+          get(`/pipelines/instance/${collection}/${item}/owners/all`)
+        )
+        .then((r) => r.data ?? null),
+    enabled: !!currentStateId,
+    staleTime: 30_000
+  })
+
+  // Group-derived owners for the CURRENT state, minus anyone already listed as
+  // a manual assignment — manual rows carry the state chip + remove button.
+  const manualUserIds = new Set((owners ?? []).map((o) => o.user))
+  const groupOwners = currentStateId
+    ? (allOwners?.[currentStateId]?.owners ?? []).filter((o) => !manualUserIds.has(o.id))
+    : []
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ownersKey })
@@ -541,7 +565,7 @@ function OwnersSection({
           {ownersLoading ? (
             <span className='inline-block h-3 w-4 animate-pulse rounded bg-slate-200' />
           ) : (
-            <span className='text-slate-300'>({owners?.length ?? 0})</span>
+            <span className='text-slate-300'>({groupOwners.length + (owners?.length ?? 0)})</span>
           )}
         </span>
         {!adding && (
@@ -560,11 +584,38 @@ function OwnersSection({
           <Skeleton className='h-8 w-full rounded-md' />
           <Skeleton className='h-8 w-3/4 rounded-md' />
         </div>
-      ) : !owners || owners.length === 0 ? (
+      ) : groupOwners.length === 0 && (!owners || owners.length === 0) ? (
         <p className='text-[12px] text-slate-400'>No owners assigned.</p>
       ) : (
         <div className='space-y-px'>
-          {owners.map((o) => (
+          {groupOwners.map((o) => {
+            const name = [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
+            const initials = (
+              `${o.first_name?.[0] ?? ''}${o.last_name?.[0] ?? ''}`.trim() ||
+              o.email[0] ||
+              '?'
+            ).toUpperCase()
+            return (
+              <div
+                key={`group-${o.id}`}
+                className='-mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50'
+              >
+                <span className='flex h-6 w-6 shrink-0 select-none items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy/80'>
+                  {initials}
+                </span>
+                <div className='min-w-0 flex-1'>
+                  <span className='block truncate text-[12px] font-medium text-slate-700'>
+                    {name}
+                  </span>
+                  <span className='block truncate text-[11px] text-slate-400'>{o.email}</span>
+                </div>
+                <span className='shrink-0 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy/70 dark:text-nvr-cyan'>
+                  owner group
+                </span>
+              </div>
+            )
+          })}
+          {(owners ?? []).map((o) => (
             <div
               key={o.id}
               className='group -mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50'
@@ -578,6 +629,9 @@ function OwnersSection({
                 </span>
                 <span className='block truncate text-[11px] text-slate-400'>{o.email}</span>
               </div>
+              <span className='shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'>
+                manual
+              </span>
               <span className='shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500'>
                 {o.state ? stateLabelFor(o.state) : 'all states'}
               </span>
@@ -1124,7 +1178,12 @@ function PipelinePanelInner({
                 </div>
               )}
               <div className='px-5 py-4'>
-                <OwnersSection collection={collection} item={item} states={states ?? []} />
+                <OwnersSection
+                  collection={collection}
+                  item={item}
+                  states={states ?? []}
+                  currentStateId={data?.instance?.current_state ?? null}
+                />
               </div>
               {hasTransitions && (
                 <div className='space-y-3 px-5 py-4'>
