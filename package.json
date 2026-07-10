@@ -12,7 +12,7 @@
     "dev:docker:down": "docker compose down",
     "dev:www": "npx browser-sync start --server www --files 'www/**/*' --port 3057 --open --extensions html",
     "build": "pnpm --filter @nivaro/api build && pnpm --filter @nivaro/admin build",
-    "build:shared": "pnpm --filter @nivaro/shared build",
+    "build:shared": "pnpm --filter @nivaro/shared build && pnpm --filter @nivaro/react build",
     "build:react": "pnpm --filter @nivaro/react build",
     "release": "./api/node_modules/.bin/tsx scripts/sync-docs.ts && node scripts/release.mjs",
     "sdk:release": "./api/node_modules/.bin/tsx scripts/sync-docs.ts && node scripts/release-sdk.mjs",
