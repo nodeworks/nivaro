@@ -14,6 +14,7 @@
     "build": "pnpm --filter @nivaro/api build && pnpm --filter @nivaro/admin build",
     "build:shared": "pnpm --filter @nivaro/shared build && pnpm --filter @nivaro/react build",
     "build:react": "pnpm --filter @nivaro/react build",
+    "pack:react": "pnpm build:shared && pnpm --filter @nivaro/sdk build && pnpm --filter @nivaro/sdk exec pnpm pack --pack-destination ~/Desktop/nivaro-packs && pnpm --filter @nivaro/react exec pnpm pack --pack-destination ~/Desktop/nivaro-packs",
     "release": "./api/node_modules/.bin/tsx scripts/sync-docs.ts && node scripts/release.mjs",
     "sdk:release": "./api/node_modules/.bin/tsx scripts/sync-docs.ts && node scripts/release-sdk.mjs",
     "react:release": "node scripts/release-react.mjs",
