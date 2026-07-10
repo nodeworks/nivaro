@@ -158,6 +158,8 @@ interface QueueView {
     sort?: string
     group_by?: string | null
     view?: 'table' | 'kanban' | 'workload'
+    /** Ordered visible columns; null/absent = follow the queue's default columns. */
+    columns?: string[] | null
   } | null
 }
 
@@ -648,20 +650,11 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     enabled: !!queueId
   })
 
+  // Ephemeral column customization (visibility + order). Deliberately NOT
+  // persisted per viewer: columns come from the queue's configured
+  // default_columns, or from a saved view's snapshot — local tweaks last for
+  // the session until saved into a view (same lifecycle as filters/sort).
   const [visibleColumns, setVisibleColumns] = useState<string[] | null>(null)
-  const loadedFromServerRef = useRef(false)
-  // Consumed by the debounced-save effect below: setVisibleColumns() in the load
-  // effect causes visibleColumns to change on the NEXT render, which would
-  // otherwise make the save effect's dependency-changed check pass immediately
-  // (loadedFromServerRef is already true by then) and re-PUT the data we just
-  // loaded. This flag makes the save effect skip exactly that one transition —
-  // but only when there's a real previously-saved value to redundantly resave.
-  // When visible_columns is null (user has never customized this queue),
-  // setVisibleColumns(null) is a no-op against the initial `useState(null)`, so
-  // no render/effect re-run ever happens to consume the flag — leaving it
-  // `true` for the user's actual first toggle and silently dropping that save.
-  // Only arm the guard when there's a non-null loaded value to protect.
-  const skipNextSaveRef = useRef(false)
 
   // The viewer's default saved view id (null = general default). Synced from
   // server prefs, updated optimistically on toggle.
@@ -669,31 +662,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
 
   useEffect(() => {
     if (!columnPrefs) return
-    loadedFromServerRef.current = true
-    if (columnPrefs.data.visible_columns !== null) {
-      skipNextSaveRef.current = true
-    }
-    setVisibleColumns(columnPrefs.data.visible_columns)
     setDefaultViewId(columnPrefs.data.default_view_id)
   }, [columnPrefs])
-
-  const saveColumnPrefsMut = useMutation({
-    mutationFn: (cols: string[]) =>
-      client.request(put(`/queues/${queueId}/column-prefs`, { visible_columns: cols }))
-  })
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only re-run on visibleColumns change; saveColumnPrefsMut is stable per mount and including it would refire on every render
-  useEffect(() => {
-    if (!loadedFromServerRef.current || visibleColumns === null) return
-    if (skipNextSaveRef.current) {
-      skipNextSaveRef.current = false
-      return
-    }
-    const timer = setTimeout(() => {
-      saveColumnPrefsMut.mutate(visibleColumns)
-    }, 400)
-    return () => clearTimeout(timer)
-  }, [visibleColumns])
 
   const items = data?.data ?? []
   const stats = data?.stats
@@ -994,6 +964,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     setFilterValues(s.filters ?? {})
     setSort(s.sort ?? '')
     setGroupBy(s.group_by ?? null)
+    // Full snapshot: a view without saved columns resets to the queue default.
+    setVisibleColumns(s.columns ?? null)
     if (s.view) setView(allowedViews.includes(s.view) ? s.view : allowedViews[0])
     setPage(1)
     setActiveViewId(v.id)
@@ -1024,7 +996,14 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         post(`/queues/${queueId}/views`, {
           name: saveName.trim(),
           is_shared: saveShared,
-          state: { scope, filters: filterValues, sort, group_by: groupBy, view }
+          state: {
+            scope,
+            filters: filterValues,
+            sort,
+            group_by: groupBy,
+            view,
+            columns: visibleColumns
+          }
         })
       ),
     onSuccess: (res) => {
@@ -1043,7 +1022,14 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     mutationFn: (v: QueueView) =>
       client.request(
         patch(`/queues/views/${v.id}`, {
-          state: { scope, filters: filterValues, sort, group_by: groupBy, view }
+          state: {
+            scope,
+            filters: filterValues,
+            sort,
+            group_by: groupBy,
+            view,
+            columns: visibleColumns
+          }
         })
       ),
     onSuccess: () => {
