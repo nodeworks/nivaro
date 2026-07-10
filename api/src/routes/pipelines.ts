@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { resolveStateOwners } from '../services/pipeline-engine.js'
 import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -289,137 +290,6 @@ function evalFilterOp(op: SkipOp, recordVal: unknown, value: unknown): boolean {
     default:
       return false
   }
-}
-
-async function resolveInstanceOwners(
-  stateId: string,
-  instanceId: string | null,
-  database: typeof db
-): Promise<ResolvedOwner[]> {
-  if (!instanceId) return []
-  const rows = await database('nivaro_pipeline_instance_owners as io')
-    .join('nivaro_users as u', 'io.user', 'u.id')
-    .where('io.instance', instanceId)
-    .andWhere((qb) => qb.where('io.state', stateId).orWhereNull('io.state'))
-    .select('u.id', 'u.email', 'u.first_name', 'u.last_name')
-  return rows as ResolvedOwner[]
-}
-
-async function resolveStateOwners(
-  stateId: string,
-  instanceId: string | null,
-  collection: string,
-  itemId: string,
-  database: typeof db
-): Promise<ResolvedOwner[]> {
-  // 1. Load all owner groups for this state, non-default first.
-  const groups = await database<OwnerGroup>('nivaro_pipeline_owner_groups')
-    .where({ state: stateId })
-    .orderBy('sort')
-    .orderBy('is_default')
-
-  if (!groups.length) {
-    // No configured groups — fall through to instance owners only.
-    return dedupeOwners(await resolveInstanceOwners(stateId, instanceId, database))
-  }
-
-  // 2. Fetch the record once for filter evaluation.
-  let record: Record<string, unknown> = {}
-  try {
-    const row = (await database(collection).where({ id: itemId }).select('*').first()) as
-      | Record<string, unknown>
-      | undefined
-    if (row) record = row
-  } catch {
-    // Table may not exist in dev; safe fallback.
-  }
-
-  const nonDefault = groups.filter((g) => !coerceBool(g.is_default))
-  const defaults = groups.filter((g) => coerceBool(g.is_default))
-
-  // 3. Pre-fetch relations for this collection once (used for dotted-path id_value resolution).
-  let relations: Array<{
-    many_collection: string
-    many_field: string
-    one_collection: string | null
-  }> = []
-  try {
-    relations = await database('nivaro_relations')
-      .where({ many_collection: collection })
-      .select('many_collection', 'many_field', 'one_collection')
-  } catch {
-    // Non-fatal: relations table may not be populated
-  }
-
-  // Helper: evaluate a single RecordFilter against the fetched record.
-  // Uses id_value + relation FK lookup when available; falls back to text comparison.
-  function evalFilter(f: RecordFilter): boolean {
-    if (f.id_value != null && f.field.includes('.')) {
-      // New format: resolve via M2O FK — find relation where many_field = dotted path prefix.
-      const prefix = f.field.split('.')[0]
-      const m2oRel = relations.find((r) => r.many_field === prefix)
-      const fkValue = m2oRel ? record[m2oRel.many_field] : null
-      return evalFilterOp(f.op, fkValue, f.id_value)
-    }
-    if (f.id_value != null && !f.field.includes('.')) {
-      // Top-level field with id_value — compare directly.
-      return evalFilterOp(f.op, record[f.field], f.id_value)
-    }
-    // Old format: text comparison (backward compat).
-    return evalFilterOp(f.op, record[f.field], f.value)
-  }
-
-  // 4. Collect all matching non-default groups, then pick the most specific.
-  //    Specificity: filter count DESC (more filters = more specific), then priority ASC (lower = higher priority).
-  //    This mirrors getCellResult() in pipeline-owner-matrix.tsx.
-  const matched: Array<{ group: OwnerGroup; filterCount: number }> = []
-  for (const group of nonDefault) {
-    const filters = parseJson(group.filters) as RecordFilter[] | null
-    if (!filters || filters.length === 0) continue // no filters = universal = default-level
-    if (filters.every((f) => evalFilter(f))) {
-      matched.push({ group, filterCount: filters.length })
-    }
-  }
-
-  let winningGroups: OwnerGroup[] = []
-  if (matched.length > 0) {
-    matched.sort((a, b) =>
-      b.filterCount !== a.filterCount
-        ? b.filterCount - a.filterCount
-        : (a.group.priority ?? 0) - (b.group.priority ?? 0)
-    )
-    winningGroups = [matched[0].group]
-  }
-
-  // 5. Fall back to default groups if no specific match.
-  if (winningGroups.length === 0) {
-    winningGroups = defaults
-  }
-
-  // 6. Collect users from winning groups.
-  const groupIds = winningGroups.map((g) => g.id)
-  let baseOwners: ResolvedOwner[] = []
-  if (groupIds.length > 0) {
-    baseOwners = (await database('nivaro_pipeline_owner_group_users as ogu')
-      .join('nivaro_users as u', 'ogu.user', 'u.id')
-      .whereIn('ogu.group', groupIds)
-      .select('u.id', 'u.email', 'u.first_name', 'u.last_name')) as ResolvedOwner[]
-  }
-
-  // 6. Merge with instance-level manual owners.
-  const instanceOwners = await resolveInstanceOwners(stateId, instanceId, database)
-  return dedupeOwners([...baseOwners, ...instanceOwners])
-}
-
-function dedupeOwners(owners: ResolvedOwner[]): ResolvedOwner[] {
-  const seen = new Set<string>()
-  const out: ResolvedOwner[] = []
-  for (const o of owners) {
-    if (seen.has(o.id)) continue
-    seen.add(o.id)
-    out.push(o)
-  }
-  return out
 }
 
 async function evaluateSkipCriteria(
