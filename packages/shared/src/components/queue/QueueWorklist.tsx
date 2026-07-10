@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
+import { useItemEditAuth, useItemNavigation, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
@@ -395,7 +395,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const qc = useQueryClient()
   const client = useNivaroClient()
   const { userId } = useItemEditAuth()
-  const { navigate } = useNavigation()
+  const itemNav = useItemNavigation()
   const [scope, setScope] = useState<Scope>('all')
   const [page, setPage] = useState(1)
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
@@ -839,11 +839,15 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const [workNext, setWorkNext] = useState(false)
   const [highlightedId, setHighlightedId] = useState<string | null>(null)
 
-  // Item URL with the queue's configured layout pinned (?layout=slug), else raw.
-  const itemUrlWithLayout = (row: QueueItemRow) => {
-    const slug = displayConfig?.item_layout
-    return slug ? `${row.url}?layout=${encodeURIComponent(slug)}` : row.url
-  }
+  // Item edit-page opener with the queue's configured layout pinned. Goes
+  // through useItemNavigation so an embedding host's itemUrl/openItem
+  // overrides apply (the admin default is the /collections/:col/:id shape).
+  const openItemPage = (row: QueueItemRow) =>
+    itemNav.open({
+      collection: row.collection,
+      itemId: row.item_id,
+      layoutSlug: displayConfig?.item_layout ?? null
+    })
 
   // Open an item per the queue's row_click mode: 'full' navigates to the
   // (layout-pinned) item page; 'layout' opens the item's layout in a sidebar;
@@ -852,7 +856,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     setHighlightedId(rowId(row))
     const mode = displayConfig?.row_click ?? 'preview'
     if (mode === 'full') {
-      navigate(itemUrlWithLayout(row))
+      openItemPage(row)
       return
     }
     if (mode === 'layout') {
@@ -891,7 +895,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     if (claimsEnabled && !next.claimed_by) claimMut.mutate(next)
     // 'full' mode: claim then navigate to the item page (no sheet loop).
     if (displayConfig?.row_click === 'full') {
-      navigate(itemUrlWithLayout(next))
+      openItemPage(next)
       return
     }
     setWorkNext(true)
@@ -930,22 +934,12 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         row.claimed_by?.id === userId ? releaseMut.mutate(row) : claimMut.mutate(row)
       } else if (e.key === 'o' && idx >= 0) {
         e.preventDefault()
-        navigate(itemUrlWithLayout(visibleRows[idx]))
+        openItemPage(visibleRows[idx])
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [
-    view,
-    visibleRows,
-    highlightedId,
-    sheetItem,
-    userId,
-    claimMut,
-    releaseMut,
-    navigate,
-    claimsEnabled
-  ])
+  }, [view, visibleRows, highlightedId, sheetItem, userId, claimMut, releaseMut, claimsEnabled])
 
   // ── Saved views ──
   const { data: views } = useQuery<{ data: QueueView[] }>({

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { useNavigation, useNivaroClient } from '../../context'
+import { useItemNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
 import { cn, formatRelative } from '../../lib/utils'
@@ -120,7 +120,7 @@ export function QueueItemSheet({
 }) {
   const qc = useQueryClient()
   const client = useNivaroClient()
-  const { navigate } = useNavigation()
+  const { open: openItemPage } = useItemNavigation()
   const [commentText, setCommentText] = useState('')
 
   const collection = item?.collection
@@ -209,9 +209,11 @@ export function QueueItemSheet({
                 <button
                   type='button'
                   onClick={() =>
-                    navigate(
-                      itemLayout ? `${item.url}?layout=${encodeURIComponent(itemLayout)}` : item.url
-                    )
+                    openItemPage({
+                      collection: item.collection,
+                      itemId: item.item_id,
+                      layoutSlug: itemLayout ?? null
+                    })
                   }
                   className='flex shrink-0 items-center gap-1 text-[12px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
                 >

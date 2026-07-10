@@ -1,7 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { DrilldownContext, type DrilldownTarget, useNavigation, useNivaroClient } from '../context'
+import {
+  DrilldownContext,
+  type DrilldownTarget,
+  useItemNavigation,
+  useNivaroClient
+} from '../context'
 import { get } from '../lib/commands'
 import { titleCase } from '../lib/utils'
 import { ItemEditForm } from './ItemEditForm'
@@ -50,7 +55,7 @@ export function RecordDrilldownSheet({
 }) {
   const qc = useQueryClient()
   const client = useNivaroClient()
-  const { navigate } = useNavigation()
+  const { open: openItemPage } = useItemNavigation()
 
   // Nested drilling: relation fields inside the sheet push onto this stack;
   // Back pops. The initial target comes from the props.
@@ -113,7 +118,9 @@ export function RecordDrilldownSheet({
             </span>
             <button
               type='button'
-              onClick={() => navigate(`/collections/${current.collection}/${current.itemId}`)}
+              onClick={() =>
+                openItemPage({ collection: current.collection, itemId: current.itemId })
+              }
               className='flex shrink-0 items-center gap-1 text-[11px] font-normal text-nvr-navy hover:underline dark:text-nvr-cyan'
             >
               Open record <ExternalLink className='h-3 w-3' />

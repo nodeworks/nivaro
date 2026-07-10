@@ -42,7 +42,9 @@ export function NivaroProvider({
       })
   )
 
-  const inner = <NivaroFormContext.Provider value={{ client }}>{children}</NivaroFormContext.Provider>
+  const inner = (
+    <NivaroFormContext.Provider value={{ client }}>{children}</NivaroFormContext.Provider>
+  )
   if (ambientQueryClient) return inner
   return <QueryClientProvider client={ownQueryClient}>{inner}</QueryClientProvider>
 }
@@ -97,16 +99,54 @@ export function useItemEditAuth(): ItemEditAuthContextValue {
 
 // ─── Navigation context (injected by consumers; no-op default) ────────────
 
+/** A record the UI wants to link to / open the edit page for. */
+export type ItemLinkTarget = {
+  collection: string
+  itemId: string
+  /** Grouped-layout slug to pin (queue item_layout etc.); null/absent = default. */
+  layoutSlug?: string | null
+}
+
 export type NavigationContextValue = {
   navigate: (path: string) => void
+  /** Map item links onto the host app's own routes. Components fall back to
+   *  the admin shape (/collections/:collection/:id?layout=…) when absent —
+   *  external embeds supply one function and every open path follows. */
+  itemUrl?: (target: ItemLinkTarget) => string
+  /** Full interception of item-opening: return true = handled (components
+   *  skip navigation entirely — open your own modal/drawer instead). Checked
+   *  before itemUrl/navigate. */
+  openItem?: (target: ItemLinkTarget) => boolean | undefined
 }
 
 export const NavigationContext = createContext<NavigationContextValue>({
-  navigate: (path) => { window.location.href = path },
+  navigate: (path) => {
+    window.location.href = path
+  }
 })
 
 export function useNavigation(): NavigationContextValue {
   return useContext(NavigationContext)
+}
+
+/** The admin's route shape — the default when the host supplies no itemUrl. */
+export function defaultItemUrl(t: ItemLinkTarget): string {
+  const base = `/collections/${t.collection}/${t.itemId}`
+  return t.layoutSlug ? `${base}?layout=${encodeURIComponent(t.layoutSlug)}` : base
+}
+
+/** Resolved item-link helpers honoring the host's itemUrl/openItem overrides. */
+export function useItemNavigation(): {
+  urlFor: (target: ItemLinkTarget) => string
+  open: (target: ItemLinkTarget) => void
+} {
+  const ctx = useNavigation()
+  const urlFor = (t: ItemLinkTarget) => (ctx.itemUrl ?? defaultItemUrl)(t)
+  const open = (t: ItemLinkTarget) => {
+    if (ctx.openItem?.(t) === true) return
+    ctx.navigate(urlFor(t))
+  }
+  return { urlFor, open }
 }
 
 // ─── Parent draft context (parent form values for cascade filters) ─────────

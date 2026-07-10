@@ -662,6 +662,33 @@ import '@nivaro/react/styles.css'`
       type: 'p',
       text: 'Wrap your app in `<NivaroProvider>` with a configured SDK client. It provides a TanStack Query `QueryClient` automatically when your app does not already run a `QueryClientProvider` — if you do, yours wins.'
     },
+    { type: 'h3', text: 'Item links in embedded apps' },
+    {
+      type: 'p',
+      text: 'Components like `QueueWorklist` open records at the admin route shape (`/collections/:collection/:id`) by default. When embedding in your own app, override link handling on `NavigationContext`:'
+    },
+    {
+      type: 'pre',
+      code: `import { NavigationContext } from '@nivaro/react'
+
+<NavigationContext.Provider
+  value={{
+    navigate: (to) => router.push(to),
+    // Map record links onto YOUR routes (row clicks, Open buttons, Work Next):
+    itemUrl: ({ collection, itemId, layoutSlug }) =>
+      \`/records/\${collection}/\${itemId}\${layoutSlug ? \`?layout=\${layoutSlug}\` : ''}\`,
+    // Or intercept opening entirely (return true = handled — e.g. open your own drawer):
+    openItem: ({ collection, itemId }) => {
+      openMyDetailDrawer(collection, itemId)
+      return true
+    }
+  }}
+>`
+    },
+    {
+      type: 'p',
+      text: '`openItem` is checked first; returning `true` skips navigation. Otherwise the component navigates to `itemUrl(target)`, falling back to the admin shape when neither is provided.'
+    },
     {
       type: 'pre',
       code: `import { createNivaro } from '@nivaro/sdk'
