@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { cn, formatRelative } from '../../lib/utils'
+import { OwnerAvatars } from '../queue/OwnerAvatars'
 import { Button } from '../ui/button'
 import {
   DropdownMenu,
@@ -602,21 +603,30 @@ function OwnersSection({
                 className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-left text-[13px] text-slate-700 transition-colors hover:border-slate-300 dark:border-border dark:bg-transparent dark:text-slate-300'
               >
                 <span className='truncate'>
-                  {stateScope ? (states.find((s) => s.id === stateScope)?.label ?? stateScope) : 'All states'}
+                  {stateScope
+                    ? (states.find((s) => s.id === stateScope)?.label ?? stateScope)
+                    : 'All states'}
                 </span>
                 <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
               </button>
             </PopoverTrigger>
             <PopoverContent align='start' sideOffset={4} className='w-52 p-1'>
               {(['', ...states.map((s) => s.id)] as string[]).map((id) => {
-                const label = id === '' ? 'All states' : (states.find((s) => s.id === id)?.label ?? id)
+                const label =
+                  id === '' ? 'All states' : (states.find((s) => s.id === id)?.label ?? id)
                 const active = stateScope === id
                 return (
                   <button
                     key={id}
                     type='button'
-                    className={cn('flex w-full rounded px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-slate-50 dark:hover:bg-white/5', active && 'font-medium text-slate-800 dark:text-slate-200')}
-                    onClick={() => { setStateScope(id); setScopeOpen(false) }}
+                    className={cn(
+                      'flex w-full rounded px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-slate-50 dark:hover:bg-white/5',
+                      active && 'font-medium text-slate-800 dark:text-slate-200'
+                    )}
+                    onClick={() => {
+                      setStateScope(id)
+                      setScopeOpen(false)
+                    }}
                   >
                     {label}
                   </button>
@@ -681,7 +691,7 @@ function ApprovalChainView({
         )
         .then((r) => r.data ?? null),
     enabled: open,
-    staleTime: 30_000,
+    staleTime: 30_000
   })
 
   const sorted = [...states].sort((a, b) => a.sort - b.sort)
@@ -698,12 +708,12 @@ function ApprovalChainView({
           <Users className='h-3.5 w-3.5' />
         </button>
       </PopoverTrigger>
-      <PopoverContent align='end' sideOffset={6} className='w-72 p-0 overflow-hidden'>
+      <PopoverContent align='end' sideOffset={6} className='w-[576px] p-0 overflow-hidden'>
         <div className='border-b border-slate-100 px-4 py-3'>
           <p className='text-[12px] font-semibold text-slate-700'>Approval Chain</p>
           <p className='text-[11px] text-slate-400 mt-0.5'>Owners per pipeline state</p>
         </div>
-        <div className='max-h-72 overflow-y-auto'>
+        <div className='max-h-[504px] overflow-y-auto'>
           {isLoading ? (
             <div className='space-y-px p-3'>
               {[1, 2, 3].map((i) => (
@@ -715,38 +725,15 @@ function ApprovalChainView({
           ) : (
             <div className='divide-y divide-slate-100 dark:divide-border/60'>
               {sorted.map((s) => {
-                const owners = data[s.id]?.owners ?? []
+                const owners = (data[s.id]?.owners ?? []).map((o) => ({
+                  id: o.id,
+                  name: [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
+                }))
                 return (
                   <div key={s.id} className='flex items-center gap-3 px-4 py-2.5'>
                     <StateBadge label={s.label} color={s.color} small />
                     <div className='flex flex-1 flex-wrap items-center gap-1'>
-                      {owners.length === 0 ? (
-                        <span className='text-[11px] text-slate-300'>—</span>
-                      ) : (
-                        <TooltipProvider delayDuration={200}>
-                          {owners.map((o) => {
-                            const name =
-                              [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
-                            const initials = name
-                              .split(' ')
-                              .map((p) => p[0])
-                              .filter(Boolean)
-                              .slice(0, 2)
-                              .join('')
-                              .toUpperCase()
-                            return (
-                              <Tooltip key={o.id}>
-                                <TooltipTrigger asChild>
-                                  <span className='flex h-6 w-6 shrink-0 cursor-default items-center justify-center rounded-full bg-nvr-cyan/15 text-[9px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
-                                    {initials}
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent side='top'>{name}</TooltipContent>
-                              </Tooltip>
-                            )
-                          })}
-                        </TooltipProvider>
-                      )}
+                      <OwnerAvatars owners={owners} max={10} emptyLabel='—' />
                     </div>
                   </div>
                 )
@@ -768,7 +755,7 @@ export function PipelinePanel({
   title,
   showApprovalChain,
   onBeforeTransition,
-  addendumPending,
+  addendumPending
 }: {
   collection: string
   item: string
@@ -799,7 +786,7 @@ function PipelinePanelInner({
   title,
   showApprovalChain,
   onBeforeTransition,
-  addendumPending,
+  addendumPending
 }: {
   collection: string
   item: string
@@ -1065,7 +1052,10 @@ function PipelinePanelInner({
               size='sm'
               variant='outline'
               className='h-7 gap-1.5 text-[11px]'
-              onClick={(e) => { e.stopPropagation(); startPipeline.mutate() }}
+              onClick={(e) => {
+                e.stopPropagation()
+                startPipeline.mutate()
+              }}
               disabled={startPipeline.isPending}
             >
               {startPipeline.isPending ? (
@@ -1088,14 +1078,18 @@ function PipelinePanelInner({
         />
       </div>
       {!expanded && pendingTransition && (
-        <div className='border-t border-slate-100 dark:border-border/60 px-4 py-3'>{confirmForm}</div>
+        <div className='border-t border-slate-100 dark:border-border/60 px-4 py-3'>
+          {confirmForm}
+        </div>
       )}
       {expanded && (
         <div className='border-t border-slate-100 dark:border-border/60'>
           {addendumPending && (
             <div className='flex items-center gap-2 border-b border-amber-100 bg-amber-50 px-5 py-2.5 dark:border-amber-500/20 dark:bg-amber-500/10'>
               <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />
-              <p className='text-[12px] text-amber-700 dark:text-amber-400'>An addendum is in review — coordinate transitions carefully.</p>
+              <p className='text-[12px] text-amber-700 dark:text-amber-400'>
+                An addendum is in review — coordinate transitions carefully.
+              </p>
             </div>
           )}
           {!instance ? (
@@ -1134,7 +1128,9 @@ function PipelinePanelInner({
               </div>
               {hasTransitions && (
                 <div className='space-y-3 px-5 py-4'>
-                  <div className='flex flex-wrap justify-end gap-2'>{renderTransitionButtons(transitions)}</div>
+                  <div className='flex flex-wrap justify-end gap-2'>
+                    {renderTransitionButtons(transitions)}
+                  </div>
                   {pendingTransition && confirmForm}
                 </div>
               )}
@@ -1144,7 +1140,12 @@ function PipelinePanelInner({
                   className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-slate-600'
                   onClick={() => setShowHistory((v) => !v)}
                 >
-                  <ChevronDown className={cn('h-3.5 w-3.5 transition-transform duration-200', showHistory && 'rotate-180')} />
+                  <ChevronDown
+                    className={cn(
+                      'h-3.5 w-3.5 transition-transform duration-200',
+                      showHistory && 'rotate-180'
+                    )}
+                  />
                   Transition history <span className='tabular-nums'>({history?.length ?? 0})</span>
                 </button>
                 {showHistory && (
