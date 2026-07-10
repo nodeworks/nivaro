@@ -5,8 +5,7 @@ import {
   ItemEditAuthContext,
   ItemEditForm,
   NavigationContext,
-  NivaroProvider,
-  WidgetSlot
+  NivaroProvider
 } from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -361,48 +360,6 @@ export function ItemEditPage() {
   const [summarizing, setSummarizing] = useState(false)
   const [summary, setSummary] = useState<string | null>(null)
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
-
-  const { data: headerLayoutData } = useQuery({
-    queryKey: ['header-widgets', collection, layoutSlug ?? null],
-    queryFn: () =>
-      api
-        .get<{
-          data: {
-            layout: Record<string, unknown> | null
-            assignments: Array<{
-              field: string
-              group_key: string | null
-              widget_id: number | null
-              label_override: string | null
-              input_bindings: string | null
-            }>
-          } | null
-        }>('/collection-layouts/active', {
-          params: { collection, ...(layoutSlug ? { slug: layoutSlug } : {}) }
-        })
-        .then((r) => r.data.data ?? null)
-        .catch(() => null),
-    enabled: !!collection,
-    staleTime: 30_000
-  })
-
-  const headerWidgets = useMemo(() => {
-    if (!headerLayoutData?.assignments) return []
-    return headerLayoutData.assignments
-      .filter(
-        (a) =>
-          a.field.startsWith('__widget_') &&
-          a.field.endsWith('__') &&
-          a.widget_id != null &&
-          a.group_key === '__header__'
-      )
-      .map((a) => ({
-        field: a.field,
-        widgetId: a.widget_id!,
-        label: a.label_override ?? null,
-        inputBindings: typeof a.input_bindings === 'string' ? JSON.parse(a.input_bindings) : []
-      }))
-  }, [headerLayoutData])
 
   // ── Admin-specific queries ────────────────────────────────────────────────
   const { data: colMeta } = useQuery({
@@ -821,19 +778,7 @@ export function ItemEditPage() {
                     </Button>
                   ))}
 
-                  {/* Header widgets — compact inline renders from layout __header__ zone */}
-                  {headerWidgets.length > 0 &&
-                    headerWidgets.map((w) => (
-                      <WidgetSlot
-                        key={w.field}
-                        widgetId={w.widgetId}
-                        inputBindings={w.inputBindings}
-                        itemCollection={collection}
-                        label={w.label ?? undefined}
-                        compact={true}
-                        apiBase='/api'
-                      />
-                    ))}
+                  {/* Header widgets render in ItemEditForm's own header strip — not here. */}
 
                   {/* Admin tool buttons */}
                   <div className='flex overflow-hidden rounded-md'>
@@ -844,7 +789,7 @@ export function ItemEditPage() {
                         disabled={toggleExclusion.isPending}
                         title={isExcluded ? 'Re-enable in pickers' : 'Disable in pickers'}
                         className={cn(
-                          'inline-flex items-center gap-1.5 rounded-none border px-2.5 py-1.5 text-[12px] font-medium transition-colors border-r-0',
+                          'inline-flex items-center gap-1.5 rounded-none border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                           isExcluded
                             ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800'
                             : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'
@@ -859,7 +804,7 @@ export function ItemEditPage() {
                         collection={collection!}
                         itemId={id}
                         fields={allFields}
-                        triggerClassName='rounded-none border-r-0'
+                        triggerClassName='rounded-none -ml-px first:ml-0'
                       />
                     )}
                     {user?.is_admin && layoutAiEnabled && id && !isNew && (
@@ -868,7 +813,7 @@ export function ItemEditPage() {
                         size='sm'
                         onClick={handleSummarize}
                         disabled={summarizing}
-                        className='rounded-none border-r-0'
+                        className='rounded-none -ml-px first:ml-0'
                       >
                         {summarizing ? (
                           <Loader2 className='h-3.5 w-3.5 animate-spin' />

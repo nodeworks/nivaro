@@ -495,7 +495,10 @@ function OwnersSection({
 
   // Resolved owners per state (owner-group derived) — same key/data as the
   // Approval Chain popover, so the cache is shared between the two.
-  const { data: allOwners } = useQuery<Record<string, AllOwnersEntry> | null>({
+  const { data: allOwners, isLoading: groupOwnersLoading } = useQuery<Record<
+    string,
+    AllOwnersEntry
+  > | null>({
     queryKey: ['pipeline-all-owners', collection, item],
     queryFn: () =>
       client
@@ -562,7 +565,7 @@ function OwnersSection({
         <span className='flex items-center gap-1.5 text-[11px] font-medium text-slate-400'>
           <Users className='h-3.5 w-3.5' />
           Owners
-          {ownersLoading ? (
+          {ownersLoading || groupOwnersLoading ? (
             <span className='inline-block h-3 w-4 animate-pulse rounded bg-slate-200' />
           ) : (
             <span className='text-slate-300'>({groupOwners.length + (owners?.length ?? 0)})</span>
@@ -579,10 +582,10 @@ function OwnersSection({
           </button>
         )}
       </div>
-      {ownersLoading ? (
-        <div className='space-y-2'>
-          <Skeleton className='h-8 w-full rounded-md' />
-          <Skeleton className='h-8 w-3/4 rounded-md' />
+      {ownersLoading || groupOwnersLoading ? (
+        <div className='flex items-center gap-2 py-1.5 text-[12px] text-slate-400'>
+          <Loader2 className='h-3.5 w-3.5 animate-spin' />
+          Resolving owners…
         </div>
       ) : groupOwners.length === 0 && (!owners || owners.length === 0) ? (
         <p className='text-[12px] text-slate-400'>No owners assigned.</p>
