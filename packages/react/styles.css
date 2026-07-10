@@ -1,0 +1,106 @@
+/**
+ * @nivaro/react base styles — CSS variables + dark-mode overrides the
+ * components resolve against. Import once, alongside the Tailwind preset:
+ *
+ *   import '@nivaro/react/styles.css'
+ *
+ * Dark mode is class-based: add `dark` to <html> (matches the preset's
+ * darkMode: ['class']).
+ */
+
+:root {
+  --nvr-cyan: #00ceff;
+  --nvr-cyan-dark: #00b8e6;
+  --background: 0 0% 100%;
+  --foreground: 220 45% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 220 45% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 220 45% 11%;
+  --primary: 200 75% 47%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 14% 96%;
+  --secondary-foreground: 220 28% 16%;
+  --muted: 210 14% 96%;
+  --muted-foreground: 215 15% 44%;
+  --accent: 200 60% 93%;
+  --accent-foreground: 200 75% 22%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 210 18% 90%;
+  --input: 210 18% 90%;
+  --ring: 200 75% 47%;
+  --radius: 0.375rem;
+
+  /* Easing used by component transitions */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dark {
+  --background: 224 15% 8%;
+  --foreground: 210 15% 94%;
+  --card: 220 12% 17%;
+  --card-foreground: 210 15% 94%;
+  --popover: 220 12% 17%;
+  --popover-foreground: 210 15% 94%;
+  --primary: 200 75% 57%;
+  --primary-foreground: 220 45% 11%;
+  --secondary: 224 15% 8%;
+  --secondary-foreground: 210 10% 85%;
+  --muted: 220 10% 22%;
+  --muted-foreground: 214 10% 62%;
+  --accent: 200 22% 20%;
+  --accent-foreground: 200 65% 78%;
+  --destructive: 0 60% 48%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 222 9% 26%;
+  --input: 222 9% 26%;
+  --ring: 200 75% 57%;
+}
+
+/* Tabular figures in data tables — numbers align in columns */
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Skeleton shimmer used by loading states */
+@keyframes nvr-shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, hsl(210 14% 90%) 25%, hsl(210 10% 94%) 50%, hsl(210 14% 90%) 75%);
+  background-size: 200% 100%;
+  animation: nvr-shimmer 1.4s ease infinite;
+  border-radius: 4px;
+}
+
+/* ─── Dark-mode cascade overrides ────────────────────────────────────────────
+   Components use hardcoded light-neutral utilities (bg-white, text-slate-*)
+   with these class-based remaps in dark mode. Semantic colors (emerald,
+   amber, red, violet) are intentionally untouched. */
+
+.dark .bg-white { background-color: hsl(var(--card)) !important; }
+.dark .bg-slate-50 { background-color: hsl(220 12% 17%) !important; }
+.dark .bg-slate-100 { background-color: hsl(220 10% 22%) !important; }
+.dark .hover\:bg-slate-50:hover { background-color: hsl(220 12% 17%) !important; }
+.dark .hover\:bg-slate-50\/70:hover { background-color: hsl(220 12% 17% / 0.7) !important; }
+.dark .hover\:bg-slate-100:hover { background-color: hsl(220 10% 22%) !important; }
+.dark .border-slate-100 { border-color: hsl(222 9% 24%) !important; }
+.dark .border-slate-200 { border-color: hsl(var(--border)) !important; }
+.dark .divide-slate-100 > * + * { border-color: hsl(222 9% 24%) !important; }
+.dark .text-slate-900 { color: hsl(var(--foreground)) !important; }
+.dark .text-slate-800 { color: hsl(210 10% 88%) !important; }
+.dark .text-slate-700 { color: hsl(210 8% 76%) !important; }
+.dark .text-slate-600 { color: hsl(214 8% 64%) !important; }
+.dark .text-slate-500 { color: hsl(var(--muted-foreground)) !important; }
+.dark .text-muted-foreground { color: hsl(var(--muted-foreground)) !important; }
+.dark .bg-slate-900 { background-color: hsl(210 12% 91%) !important; }
+.dark .text-white { color: hsl(0 0% 95%) !important; }
+.dark .skeleton {
+  background: linear-gradient(90deg, hsl(220 10% 16%) 25%, hsl(220 8% 21%) 50%, hsl(220 10% 16%) 75%);
+  background-size: 200% 100%;
+}

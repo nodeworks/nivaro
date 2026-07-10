@@ -10,11 +10,15 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    }
+    },
+    "./tailwind-preset": "./tailwind-preset.cjs",
+    "./styles.css": "./styles.css"
   },
   "sideEffects": false,
   "files": [
     "dist",
+    "tailwind-preset.cjs",
+    "styles.css",
     "README.md"
   ],
   "keywords": [
@@ -67,7 +71,8 @@
     "clsx": "^2.0.0",
     "cmdk": "^1.0.0",
     "lucide-react": "^0.460.0",
-    "tailwind-merge": "^2.0.0"
+    "tailwind-merge": "^2.0.0",
+    "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
     "@microsoft/api-extractor": "^7.58.9",

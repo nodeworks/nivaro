@@ -619,7 +619,30 @@ export const sdkReact: DocSection = {
     { type: 'h3', text: 'Installation' },
     {
       type: 'pre',
-      code: `pnpm add @nivaro/react @nivaro/sdk react react-dom`
+      code: `pnpm add @nivaro/react @nivaro/sdk react react-dom @tanstack/react-query sonner`
+    },
+    { type: 'h3', text: 'Styling (Tailwind preset)' },
+    {
+      type: 'p',
+      text: 'The styled components (`ItemEditForm`, `QueueWorklist`, panels, sheets) are built with Tailwind but the package ships no compiled CSS. The package bundles a Tailwind preset and a base stylesheet — wire both up once:'
+    },
+    {
+      type: 'pre',
+      code: `// tailwind.config.js
+module.exports = {
+  presets: [require('@nivaro/react/tailwind-preset')],
+  content: [
+    './src/**/*.{ts,tsx}',
+    './node_modules/@nivaro/react/dist/**/*.js'
+  ]
+}
+
+// app entry
+import '@nivaro/react/styles.css'`
+    },
+    {
+      type: 'p',
+      text: 'The preset supplies the theme tokens (`nvr-cyan`, semantic color vars, radius, type scale) and the animate plugin; `styles.css` supplies the CSS variables plus class-based dark-mode overrides (`dark` class on `<html>`). The headless `useNivaroForm` API needs neither.'
     },
     { type: 'h3', text: 'Setup' },
     {
