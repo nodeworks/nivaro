@@ -2730,7 +2730,6 @@ export function ItemEditForm({
                         label={w.label ?? undefined}
                         compact={true}
                         strip={true}
-                        apiBase='/api'
                         onWidgetType={(t) => setHeaderWidgetTypes(prev => ({ ...prev, [w.field]: t }))}
                       />
                       {!isBtnGroup && (copiedHeaderField === w.field

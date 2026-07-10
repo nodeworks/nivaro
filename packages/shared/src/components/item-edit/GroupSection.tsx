@@ -884,7 +884,7 @@ export function GroupSection({
   layoutId,
   hideEmptySummary,
   widgetAssignments,
-  widgetApiBase = '/api',
+  widgetApiBase,
   fieldInlineDisplay,
   swapConfig,
   swapped,
