@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useApiFetchConfig } from '../context'
 import { Button } from './ui/button'
 import {
   DropdownMenu,
@@ -337,6 +338,7 @@ function ActionButtonsDisplay({ data, widgetId, inputs, apiBase, onAction }: {
 }) {
   const buttons = (data.buttons ?? []) as Array<Record<string, unknown>>
   const [loading, setLoading] = useState<number | null>(null)
+  const fetchCfg = useApiFetchConfig()
 
   const handleClick = async (idx: number) => {
     setLoading(idx)
@@ -346,9 +348,10 @@ function ActionButtonsDisplay({ data, widgetId, inputs, apiBase, onAction }: {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...fetchCfg.authHeaders,
           ...(workspace ? { 'x-workspace': workspace } : {})
         },
-        credentials: 'include',
+        credentials: fetchCfg.credentials,
         body: JSON.stringify({ button_index: idx, inputs })
       })
       const json = await res.json() as { data: unknown }
@@ -449,6 +452,7 @@ function ButtonGroupDisplay({
   const [serverLoading, setServerLoading] = useState<string | null>(null)
   const [toggleOverrides, setToggleOverrides] = useState<Record<string, boolean>>({})
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fetchCfg = useApiFetchConfig()
 
   function normBit(v: unknown): string {
     if (v === true || v === 1) return '1'
@@ -491,9 +495,10 @@ function ButtonGroupDisplay({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...fetchCfg.authHeaders,
           ...(workspace ? { 'x-workspace': workspace } : {})
         },
-        credentials: 'include',
+        credentials: fetchCfg.credentials,
         body: JSON.stringify({ button_index: idx, inputs })
       })
       const json = await res.json() as { data: unknown }
@@ -712,12 +717,14 @@ export function WidgetSlot({
   ready = true,
   label,
   defaultExpanded = true,
-  apiBase = '/api',
+  apiBase: apiBaseProp,
   compact = false,
   strip = false,
   onClientAction,
   onWidgetType
 }: WidgetSlotProps) {
+  const fetchCfg = useApiFetchConfig()
+  const apiBase = apiBaseProp ?? fetchCfg.apiBase
   const [open, setOpen] = useState(defaultExpanded)
   const [widget, setWidget] = useState<WidgetDef | null>(null)
   const [renderData, setRenderData] = useState<Record<string, unknown> | null>(null)
@@ -740,6 +747,7 @@ export function WidgetSlot({
     const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...fetchCfg.authHeaders,
       ...(workspace ? { 'x-workspace': workspace } : {})
     }
 
@@ -751,7 +759,7 @@ export function WidgetSlot({
       setLoading(true)
       setError(null)
       try {
-        const defRes = await fetch(`${apiBase}/widgets-internal/${widgetId}`, { credentials: 'include', headers })
+        const defRes = await fetch(`${apiBase}/widgets-internal/${widgetId}`, { credentials: fetchCfg.credentials, headers })
         if (cancelled) return
         if (!defRes.ok) throw new Error('Widget not found')
         const defJson = await defRes.json() as { data: WidgetDef }
@@ -759,7 +767,7 @@ export function WidgetSlot({
 
         const renderRes = await fetch(`${apiBase}/widgets-internal/${widgetId}/render`, {
           method: 'POST',
-          credentials: 'include',
+          credentials: fetchCfg.credentials,
           headers,
           body: JSON.stringify({ inputs, draft: itemDraft, bindings: inputBindings, item_collection: itemCollection })
         })

@@ -11,7 +11,7 @@ import {
   useState
 } from 'react'
 import { toast } from 'sonner'
-import { ItemEditAuthContext, ParentDraftContext, useNivaroClient, RelationPathDataContext } from '../context'
+import { ItemEditAuthContext, ParentDraftContext, useApiFetchConfig, useNivaroClient, RelationPathDataContext } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { FieldRow } from './item-edit/FieldRow'
@@ -277,6 +277,7 @@ export function ItemEditForm({
   onHeaderWidgets
 }: ItemEditFormProps) {
   const client = useNivaroClient()
+  const fetchCfg = useApiFetchConfig()
   const { isAdmin } = useContext(ItemEditAuthContext)
   const qc = useQueryClient()
   const itemId = itemIdProp ?? 'new'
@@ -354,13 +355,14 @@ export function ItemEditForm({
     setShowPdfDropdown(false)
     try {
       const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
-      const resp = await fetch(`/api/collection-layouts/${layoutId}/generate-pdf`, {
+      const resp = await fetch(`${fetchCfg.apiBase}/collection-layouts/${layoutId}/generate-pdf`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...fetchCfg.authHeaders,
           ...(workspace ? { 'x-workspace': workspace } : {}),
         },
-        credentials: 'include',
+        credentials: fetchCfg.credentials,
         body: JSON.stringify({ collection, item_id: itemId }),
       })
       if (!resp.ok) throw new Error(await resp.text())
@@ -1185,13 +1187,14 @@ export function ItemEditForm({
     setPdfAttaching(true)
     try {
       const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
-      const resp = await fetch(`/api/collection-layouts/${layoutId}/generate-and-attach`, {
+      const resp = await fetch(`${fetchCfg.apiBase}/collection-layouts/${layoutId}/generate-and-attach`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...fetchCfg.authHeaders,
           ...(workspace ? { 'x-workspace': workspace } : {}),
         },
-        credentials: 'include',
+        credentials: fetchCfg.credentials,
         body: JSON.stringify({ collection, item_id: itemId, attach_field: pdfAttachField, filename_template: pdfFilenameTemplate }),
       })
       if (!resp.ok) throw new Error(await resp.text())

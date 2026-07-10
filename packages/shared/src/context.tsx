@@ -58,6 +58,27 @@ export function useOptionalNivaroClient(): NivaroClient | null {
   return ctx?.client ?? null
 }
 
+/**
+ * Base URL + auth for the few raw `fetch` calls (widgets, PDF blobs) that
+ * can't go through `client.request`. Derives everything from the ambient
+ * Nivaro client so external hosts (different origin, token auth) work the
+ * same as the same-origin admin; falls back to relative '/api' + cookies
+ * when no provider is mounted.
+ */
+export function useApiFetchConfig(): {
+  apiBase: string
+  authHeaders: Record<string, string>
+  credentials: RequestCredentials
+} {
+  const client = useOptionalNivaroClient()
+  const token = client?.getToken()
+  return {
+    apiBase: client ? `${client.url}/api` : '/api',
+    authHeaders: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: token ? 'omit' : 'include'
+  }
+}
+
 // ─── Auth context (injected by consumers; defaults to non-admin) ───────────
 
 export type ItemEditAuthContextValue = {
