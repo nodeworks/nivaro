@@ -1,14 +1,33 @@
-import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
+import { randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { verify as verifyTotp } from 'otplib'
 import { buildLoginUrl, generateCodeVerifier, generateState, handleCallback } from '../auth/oidc.js'
 import { extractSamlIdentity, getSaml, samlEnabled } from '../auth/saml.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
-import { authenticate } from '../middleware/authenticate.js'
+import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
 import type { User } from '../types.js'
+
+// Validate returnTo against all configured allowed origins (admin + any APP_URLS).
+// Relative paths are resolved against ADMIN_URL so a bare "/" is always safe.
+function resolveReturnTo(rawReturnTo: string | undefined): string {
+  const allowedOrigins = new Set([
+    new URL(config.ADMIN_URL).origin,
+    ...config.APP_URLS.split(',')
+      .map((u) => u.trim())
+      .filter(Boolean)
+      .map((u) => new URL(u).origin)
+  ])
+  if (!rawReturnTo) return `${config.ADMIN_URL}/`
+  try {
+    const parsed = new URL(rawReturnTo, config.ADMIN_URL)
+    return allowedOrigins.has(parsed.origin) ? parsed.href : `${config.ADMIN_URL}/`
+  } catch {
+    return `${config.ADMIN_URL}/`
+  }
+}
 
 async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16).toString('hex')
@@ -70,20 +89,8 @@ export async function authRoutes(app: FastifyInstance) {
     req.session.oidcState = state
     req.session.codeVerifier = codeVerifier
 
-    // Only allow returnTo values that stay within the configured admin origin
-    // to prevent open-redirect attacks.
     const rawReturnTo = (req.query as Record<string, string>).returnTo
-    const safeReturnTo = (() => {
-      if (!rawReturnTo) return `${config.ADMIN_URL}/`
-      try {
-        const parsed = new URL(rawReturnTo, config.ADMIN_URL)
-        const adminOrigin = new URL(config.ADMIN_URL).origin
-        return parsed.origin === adminOrigin ? parsed.href : `${config.ADMIN_URL}/`
-      } catch {
-        return `${config.ADMIN_URL}/`
-      }
-    })()
-    req.session.returnTo = safeReturnTo
+    req.session.returnTo = resolveReturnTo(rawReturnTo)
 
     const url = await buildLoginUrl(state, codeVerifier)
     return reply.redirect(url.href)
@@ -171,17 +178,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (!samlEnabled()) return reply.code(404).send({ error: 'SAML is not configured' })
     try {
       const rawReturnTo = (req.query as Record<string, string>).returnTo
-      const safeReturnTo = (() => {
-        if (!rawReturnTo) return `${config.ADMIN_URL}/`
-        try {
-          const parsed = new URL(rawReturnTo, config.ADMIN_URL)
-          const adminOrigin = new URL(config.ADMIN_URL).origin
-          return parsed.origin === adminOrigin ? parsed.href : `${config.ADMIN_URL}/`
-        } catch {
-          return `${config.ADMIN_URL}/`
-        }
-      })()
-      req.session.returnTo = safeReturnTo
+      req.session.returnTo = resolveReturnTo(rawReturnTo)
       const url = await getSaml().getAuthorizeUrlAsync('', undefined, {})
       return reply.redirect(url)
     } catch (err) {
@@ -296,11 +293,48 @@ export async function authRoutes(app: FastifyInstance) {
 
   // ─── Session / user ─────────────────────────────────────────────────────────
 
-  // Logout
+  // Logout (current session only)
   app.post('/logout', { preHandler: authenticate }, async (req, reply) => {
     await logActivity({ action: 'logout', user: req.user?.id, req })
     await req.session.destroy()
     return reply.send({ ok: true })
+  })
+
+  // Short-lived Socket.IO auth token for session-cookie users. The WS
+  // connection itself can't carry the session cookie cross-origin (Socket.IO
+  // hits the API directly under wildcard CORS), so the client fetches this
+  // one-time token same-origin and passes it in the socket `auth` payload.
+  // 2-minute TTL, deleted on first use by the socket auth handler.
+  app.get('/ws-token', { preHandler: requireAuth }, async (req, reply) => {
+    const token = randomUUID()
+    await app.redis.setex(`ws:token:${token}`, 120, req.user!.id)
+    return reply.send({ token })
+  })
+
+  // Logout all sessions for this user across all apps/tabs
+  app.post('/logout-all', { preHandler: authenticate }, async (req, reply) => {
+    const userId = req.user?.id
+    await logActivity({ action: 'logout', user: userId, req })
+
+    // Scan Redis for all sess:* keys belonging to this user and delete them
+    const redis = app.redis
+    const toDelete: string[] = []
+    const stream = redis.scanStream({ match: 'sess:*', count: 100 })
+    for await (const keys of stream as AsyncIterable<string[]>) {
+      if (!keys.length) continue
+      const values = await redis.mget(...keys)
+      for (let i = 0; i < keys.length; i++) {
+        const raw = values[i]
+        if (!raw) continue
+        try {
+          const sess = JSON.parse(raw) as { userId?: string }
+          if (sess.userId === userId) toDelete.push(keys[i])
+        } catch {}
+      }
+    }
+    if (toDelete.length) await redis.del(...toDelete)
+
+    return reply.send({ ok: true, destroyed: toDelete.length })
   })
 
   // Current user

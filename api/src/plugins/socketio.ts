@@ -39,12 +39,28 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // (e.g. collection:join) for the lifetime of this socket connection.
     let authenticatedUser: User | null = null
 
-    // Authenticate the socket via the user's static token and join their
+    // Authenticate the socket via the user's static token, or a short-lived
+    // one-time WS token minted by GET /api/auth/ws-token (session-cookie users
+    // whose cookie can't ride the cross-origin WS connection). Joins their
     // personal room so real-time notifications can be targeted to them.
     socket.on('auth', async (payload: { token?: string }) => {
       const token = payload?.token?.trim()
       if (!token) return
       try {
+        const wsUserId = await app.redis.get(`ws:token:${token}`)
+        if (wsUserId) {
+          await app.redis.del(`ws:token:${token}`) // one-time use
+          const user = await db<User>('nivaro_users')
+            .where({ id: wsUserId, status: 'active' })
+            .first()
+          if (user) {
+            authenticatedUser = user
+            socket.join(`user:${user.id}`)
+            socket.emit('auth:ok', { userId: user.id })
+          }
+          return
+        }
+
         const user = await db<User>('nivaro_users')
           .where({ static_token: token, status: 'active' })
           .first()
