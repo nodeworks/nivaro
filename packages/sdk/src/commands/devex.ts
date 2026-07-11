@@ -470,9 +470,7 @@ export function isPageSlot(
 }
 
 /** List all layouts for a collection. */
-export function readCollectionLayouts(
-  collection: string
-): Command<{ data: CollectionLayout[] }> {
+export function readCollectionLayouts(collection: string): Command<{ data: CollectionLayout[] }> {
   return cmd('GET', '/collection-layouts', { collection })
 }
 
@@ -553,4 +551,99 @@ export function updateLayoutAssignments(
   }>
 ): Command<{ data: LayoutAssignment[] }> {
   return cmd('PUT', `/collection-layouts/${layoutId}/assignments`, undefined, { assignments })
+}
+
+// ─── Internal dashboard widgets ───────────────────────────────────────────────
+
+export interface InternalWidget {
+  id: number
+  name: string
+  description: string | null
+  icon: string | null
+  widget_type: string
+  inputs: unknown
+  config: unknown
+  is_active: boolean
+}
+
+export function listInternalWidgets(): Command<{ data: InternalWidget[] }> {
+  return cmd('GET', '/widgets-internal')
+}
+
+export function readInternalWidget(id: number): Command<{ data: InternalWidget }> {
+  return cmd('GET', `/widgets-internal/${id}`)
+}
+
+export function createInternalWidget(
+  data: Partial<Omit<InternalWidget, 'id'>> & { name: string; widget_type: string }
+): Command<{ data: InternalWidget }> {
+  return cmd('POST', '/widgets-internal', undefined, data)
+}
+
+export function updateInternalWidget(
+  id: number,
+  data: Partial<Omit<InternalWidget, 'id'>>
+): Command<{ data: InternalWidget }> {
+  return cmd('PATCH', `/widgets-internal/${id}`, undefined, data)
+}
+
+export function deleteInternalWidget(id: number): Command<{ data: { success: boolean } }> {
+  return cmd('DELETE', `/widgets-internal/${id}`)
+}
+
+/** Resolve a widget's display data for a set of input values. */
+export function renderInternalWidget(
+  id: number,
+  data: {
+    inputs?: Record<string, unknown>
+    draft?: Record<string, unknown>
+    bindings?: unknown[]
+    item_collection?: string
+  } = {}
+): Command<{ data: Record<string, unknown> }> {
+  return cmd('POST', `/widgets-internal/${id}/render`, undefined, data)
+}
+
+/** Invoke a widget button action (field-update / toggle / flow / navigate). */
+export function invokeInternalWidgetAction(
+  id: number,
+  data: { button_index: number; inputs?: Record<string, unknown> }
+): Command<{ data: Record<string, unknown> }> {
+  return cmd('POST', `/widgets-internal/${id}/action`, undefined, data)
+}
+
+// ─── Extension-registered item & bulk actions ─────────────────────────────────
+
+export interface RegisteredAction {
+  id: string
+  label: string
+  collection?: string | null
+  description?: string | null
+  [key: string]: unknown
+}
+
+/** Item actions registered by extensions (optionally scoped to a collection). */
+export function listItemActions(collection?: string): Command<{ data: RegisteredAction[] }> {
+  return cmd('GET', '/item-actions/registered', collection ? { collection } : undefined)
+}
+
+/** Execute an extension-registered item action against one record. */
+export function executeItemAction(
+  actionId: string,
+  data: { collection: string; itemId: string | number; payload?: Record<string, unknown> }
+): Command<{ data: unknown }> {
+  return cmd('POST', `/item-actions/${actionId}/execute`, undefined, data)
+}
+
+/** Bulk actions registered by extensions (optionally scoped to a collection). */
+export function listBulkActions(collection?: string): Command<{ data: RegisteredAction[] }> {
+  return cmd('GET', '/bulk-actions/registered', collection ? { collection } : undefined)
+}
+
+/** Execute an extension-registered bulk action against many records. */
+export function executeBulkAction(
+  actionId: string,
+  data: { collection: string; ids: Array<string | number>; payload?: Record<string, unknown> }
+): Command<{ data: unknown }> {
+  return cmd('POST', `/bulk-actions/${actionId}/execute`, undefined, data)
 }

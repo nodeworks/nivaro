@@ -315,7 +315,11 @@ await nivaro.request(deleteRule(rule.id))`
         ['notify', 'recipient_user_id, subject, body', 'Send in-app notification.'],
         ['set_field', 'field, value', 'Auto-set a field (no auth bypass — must be writable).'],
         ['reject', 'error_message', 'Block the save and return an error to the user.'],
-        ['trigger_external', 'external_api_id, path, method, body', 'Call an external API (credentials stay server-side).']
+        [
+          'trigger_external',
+          'external_api_id, path, method, body',
+          'Call an external API (credentials stay server-side).'
+        ]
       ]
     },
     {
@@ -493,7 +497,11 @@ const { data: fields } = await nivaro.request(readFields('orders'))
         ['icon', 'string', 'Icon class name.'],
         ['primary_key_field', 'string', 'Usually "id".'],
         ['sort_field', 'string | null', 'Default sort column.'],
-        ['display_template', 'string | null', 'Handlebars for rendering rows (e.g., "{{ name }} ({{ status }})").']
+        [
+          'display_template',
+          'string | null',
+          'Handlebars for rendering rows (e.g., "{{ name }} ({{ status }})").'
+        ]
       ]
     },
     { type: 'h3', text: 'Field metadata' },
@@ -568,7 +576,14 @@ await nivaro.request(deleteBlackoutDate(bd.id))`
       type: 'p',
       text: 'When SLA rules, scheduled flows, or other time-tracking systems are active:'
     },
-    { type: 'ul', items: ['Time during blackout windows is not counted.', 'Timers pause on the first second of a blackout and resume on the first second after.', 'Business hours SLA settings (e.g., "Mon-Fri 09:00-17:00") are multiplied by the business hours factor within a blackout window.'] },
+    {
+      type: 'ul',
+      items: [
+        'Time during blackout windows is not counted.',
+        'Timers pause on the first second of a blackout and resume on the first second after.',
+        'Business hours SLA settings (e.g., "Mon-Fri 09:00-17:00") are multiplied by the business hours factor within a blackout window.'
+      ]
+    },
     {
       type: 'table',
       head: ['Function', 'Route', 'Auth'],
@@ -611,9 +626,26 @@ const { data: snap } = await nivaro.request(
 await nivaro.request(restoreSchemaSnapshot(snap.id))`
     },
     { type: 'h3', text: 'What gets snapshotted' },
-    { type: 'ul', items: ['All collections (metadata, settings, display templates)', 'All fields (types, interfaces, validation rules, computed formulas)', 'All relations (M2O, O2M, M2M, M2A)', 'Field groups, layouts, and assignments', 'Collection-level settings (draft/publish, item locking, etc.)'] },
+    {
+      type: 'ul',
+      items: [
+        'All collections (metadata, settings, display templates)',
+        'All fields (types, interfaces, validation rules, computed formulas)',
+        'All relations (M2O, O2M, M2M, M2A)',
+        'Field groups, layouts, and assignments',
+        'Collection-level settings (draft/publish, item locking, etc.)'
+      ]
+    },
     { type: 'h3', text: 'What does NOT get snapshotted' },
-    { type: 'ul', items: ['Item data (rows) — only schema', 'Workflows, pipelines, rules, or other business logic', 'User permissions or role assignments', 'Custom queries, external APIs, or webhooks'] },
+    {
+      type: 'ul',
+      items: [
+        'Item data (rows) — only schema',
+        'Workflows, pipelines, rules, or other business logic',
+        'User permissions or role assignments',
+        'Custom queries, external APIs, or webhooks'
+      ]
+    },
     {
       type: 'table',
       head: ['Function', 'Route', 'Auth'],
@@ -659,7 +691,7 @@ export const customQueriesGuide: DocSection = {
     { type: 'h3', text: 'Defining parameters' },
     {
       type: 'p',
-      text: 'For each @paramName in your SQL, define its type and whether it\'s required:'
+      text: "For each @paramName in your SQL, define its type and whether it's required:"
     },
     {
       type: 'table',
@@ -928,12 +960,28 @@ await nivaro.request(
       type: 'table',
       head: ['Command', 'Route', 'Auth'],
       rows: [
-        ['readAttributeDefinitions(collection)', 'GET /attributes/definitions/:collection', 'Authenticated'],
-        ['createAttributeDefinition(collection, body)', 'POST /attributes/definitions/:collection', 'Admin'],
+        [
+          'readAttributeDefinitions(collection)',
+          'GET /attributes/definitions/:collection',
+          'Authenticated'
+        ],
+        [
+          'createAttributeDefinition(collection, body)',
+          'POST /attributes/definitions/:collection',
+          'Admin'
+        ],
         ['updateAttributeDefinition(id, body)', 'PATCH /attributes/definitions/:id', 'Admin'],
         ['deleteAttributeDefinition(id)', 'DELETE /attributes/definitions/:id', 'Admin'],
-        ['readAttributes(collection, itemId)', 'GET /attributes/:collection/:itemId', 'Authenticated'],
-        ['updateAttributes(collection, itemId, body)', 'PATCH /attributes/:collection/:itemId', 'Authenticated']
+        [
+          'readAttributes(collection, itemId)',
+          'GET /attributes/:collection/:itemId',
+          'Authenticated'
+        ],
+        [
+          'updateAttributes(collection, itemId, body)',
+          'PATCH /attributes/:collection/:itemId',
+          'Authenticated'
+        ]
       ]
     },
     {
@@ -1006,8 +1054,16 @@ await nivaro.request(deleteNotificationSubscription(sub.id))`
       type: 'table',
       head: ['No Filter', 'With Filter', 'Result'],
       rows: [
-        ['collection: "orders"', 'filter_field: "priority", filter_value: "urgent"', 'Only notify on urgent orders'],
-        ['collection: "deals"', 'filter_field: "amount", filter_value: "100000"', 'Only notify on deals >= 100k'],
+        [
+          'collection: "orders"',
+          'filter_field: "priority", filter_value: "urgent"',
+          'Only notify on urgent orders'
+        ],
+        [
+          'collection: "deals"',
+          'filter_field: "amount", filter_value: "100000"',
+          'Only notify on deals >= 100k'
+        ],
         ['collection: "projects"', '(no filter)', 'Notify on ALL project changes']
       ]
     },
@@ -1016,7 +1072,11 @@ await nivaro.request(deleteNotificationSubscription(sub.id))`
       type: 'table',
       head: ['Mode', 'Delivery', 'Best For'],
       rows: [
-        ['instant', 'Real-time in-app bell notification', 'Critical events that need immediate action'],
+        [
+          'instant',
+          'Real-time in-app bell notification',
+          'Critical events that need immediate action'
+        ],
         ['daily', 'Email digest at 08:00 daily', 'Summary of events from the last 24 hours'],
         ['weekly', 'Email digest on Monday 08:00', 'Lower-priority notifications, trending events']
       ]
@@ -1026,9 +1086,21 @@ await nivaro.request(deleteNotificationSubscription(sub.id))`
       head: ['Command', 'Route', 'Auth'],
       rows: [
         ['readNotificationSubscriptions()', 'GET /notification-subscriptions', 'Authenticated'],
-        ['createNotificationSubscription(body)', 'POST /notification-subscriptions', 'Authenticated'],
-        ['updateNotificationSubscription(id, body)', 'PATCH /notification-subscriptions/:id', 'Authenticated'],
-        ['deleteNotificationSubscription(id)', 'DELETE /notification-subscriptions/:id', 'Authenticated']
+        [
+          'createNotificationSubscription(body)',
+          'POST /notification-subscriptions',
+          'Authenticated'
+        ],
+        [
+          'updateNotificationSubscription(id, body)',
+          'PATCH /notification-subscriptions/:id',
+          'Authenticated'
+        ],
+        [
+          'deleteNotificationSubscription(id)',
+          'DELETE /notification-subscriptions/:id',
+          'Authenticated'
+        ]
       ]
     },
     {
@@ -1116,7 +1188,11 @@ const { data: batch } = await nivaro.request(
       head: ['Scenario', 'Time Counting', 'Example'],
       rows: [
         ['Mon 10:00 - Mon 18:00', '8 business hours counted', '8h of an 8h SLA'],
-        ['Fri 16:00 - Fri 17:00 + Mon 09:00 - 10:00', '2 business hours counted', '1h Friday + 1h Monday'],
+        [
+          'Fri 16:00 - Fri 17:00 + Mon 09:00 - 10:00',
+          '2 business hours counted',
+          '1h Friday + 1h Monday'
+        ],
         ['During blackout date', 'Timer paused', 'Winter shutdown 12/20-1/2 → no time counted'],
         ['24/7 mode (business_hours_only: false)', 'All hours counted', 'Calendar hours only']
       ]
@@ -1239,6 +1315,94 @@ await nivaro.request(releaseItemLock(collection, itemId))`
     {
       type: 'note',
       text: 'Presence data is ephemeral — it lives only in Redis and is lost on server restart. Perfect for collaboration cues but not for audit/compliance tracking. The admin UI emits heartbeats automatically; custom clients should emit `presence:heartbeat` every 30 seconds to stay visible.'
+    }
+  ]
+}
+
+export const sdkQueues: DocSection = {
+  id: 'sdk-queues',
+  label: 'Queues',
+  content: [
+    { type: 'h1', id: 'sdk-queues', text: 'SDK — Queues' },
+    {
+      type: 'p',
+      text: 'Full command coverage for cross-collection worklists: queue CRUD and source configuration, item resolution with scopes/filters/sorting/pagination, claims, saved views (including column snapshots), per-viewer default views, stat trends, per-owner workload, and materialized-cache rebuilds.'
+    },
+    {
+      type: 'pre',
+      code: `import {
+  createNivaro, listQueues, readQueueItems, claimQueueItem,
+  listQueueViews, createQueueView, setQueueDefaultView, readQueueTrends
+} from '@nivaro/sdk'
+
+const nivaro = createNivaro('https://nivaro.example.com', { token: 'nvk_…' })
+
+const { data: queues } = await nivaro.request(listQueues())
+
+// Table-style page 1 with per-column filters (omit page/limit for the full set)
+const result = await nivaro.request(
+  readQueueItems(queues[0].id, {
+    scope: 'mine',
+    sort: '-priority',
+    filters: { state: 'Waiting on Manager Approval' },
+    page: 1,
+    limit: 25
+  })
+)
+console.log(result.stats.total, result.data.length)
+
+// Claim the first unclaimed item
+const next = result.data.find((i) => !i.claimed_by)
+if (next) await nivaro.request(claimQueueItem(queues[0].id, next))
+
+// Save the current table state as a shared view and star it as my default
+const view = await nivaro.request(
+  createQueueView(queues[0].id, {
+    name: 'My triage',
+    is_shared: true,
+    state: { scope: 'mine', sort: '-priority', view: 'table', columns: null }
+  })
+)
+await nivaro.request(setQueueDefaultView(queues[0].id, view.data.id))`
+    },
+    {
+      type: 'table',
+      head: ['Command', 'Purpose'],
+      rows: [
+        [
+          'listQueues / readQueue',
+          'Queues visible to the caller; one queue with sources + extra-field metadata'
+        ],
+        [
+          'createQueue / updateQueue / deleteQueue',
+          'Queue CRUD incl. display_config (views, row_click, default_columns…)'
+        ],
+        [
+          'updateQueueSources',
+          'Replace sources wholesale (max 10); cache-affecting edits rebuild materialized queues'
+        ],
+        [
+          'readQueueItems',
+          'Resolve items: scope mine/unowned/all/claimed, column filters, sort, optional pagination'
+        ],
+        ['readQueueWorkload', 'Items grouped per owner with WIP limits'],
+        ['readQueueTrends', 'Daily stat snapshots for sparklines (scope "mine" = caller series)'],
+        ['claimQueueItem / releaseQueueItem', 'Claims with pipeline instance-owner write-through'],
+        [
+          'listQueueViews / createQueueView / updateQueueView / deleteQueueView',
+          'Saved views — state snapshots incl. visible columns'
+        ],
+        ['readQueueColumnPrefs / setQueueDefaultView', 'Per-viewer starred default view'],
+        ['rematerializeQueue', 'Force a materialized-cache rebuild'],
+        [
+          'readQueueCollectionStates / suggestQueueLabels',
+          'Builder helpers: state pickers, label-template previews'
+        ]
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Queue reads respect queue-level visibility (owner, shared, role-scoped). Claims return 403 when the queue has claims disabled.'
     }
   ]
 }

@@ -361,7 +361,11 @@ export const roleUiPermissions: DocSection = {
       type: 'table',
       head: ['Method', 'Path', 'Description'],
       rows: [
-        ['PATCH', '/api/roles/:id/ui-permissions', 'Update UI permissions. Body: { disabled: string[] } — array of route paths to block, e.g. ["/erp-submissions", "/workspaces"].']
+        [
+          'PATCH',
+          '/api/roles/:id/ui-permissions',
+          'Update UI permissions. Body: { disabled: string[] } — array of route paths to block, e.g. ["/erp-submissions", "/workspaces"].'
+        ]
       ]
     }
   ]
@@ -577,10 +581,10 @@ export const sdkCoverage: DocSection = {
   id: 'sdk-coverage',
   label: 'Full API Coverage',
   content: [
-    { type: 'h1', id: 'sdk-coverage', text: 'SDK Coverage: ~175 Typed Commands' },
+    { type: 'h1', id: 'sdk-coverage', text: 'SDK Coverage: 300+ Typed Commands' },
     {
       type: 'p',
-      text: 'The @nivaro/sdk command surface now covers every feature area — roughly 175 typed `Command<T>` factories spanning items, files, workflows, pipelines, flows, comments, webhooks, rules, custom queries, trees and hierarchies, submission forms, field watches, notification subscriptions, imports, SLA, alerts, AI endpoints (generate, summarize, validate, check-duplicates), translations, drafts, scheduled changes, record templates, saved views, API keys, widget feeds, sync jobs, ERP submissions, PDF templates, pages, and more. If a REST route exists, there is a typed command for it.'
+      text: 'The @nivaro/sdk command surface now covers every feature area — roughly 175 typed `Command<T>` factories spanning items, files, workflows, pipelines, flows, comments, webhooks, rules, custom queries, trees and hierarchies, submission forms, field watches, notification subscriptions, imports, SLA, alerts, AI endpoints (generate, summarize, validate, check-duplicates), translations, drafts, scheduled changes, record templates, saved views, API keys, widget feeds, sync jobs, ERP submissions, PDF templates, pages, queues (worklists, items, claims, saved views, trends, workload), roles & policies (RBAC/RLS), user management + out-of-office delegation, file management (list/meta/presign/transform URLs), dashboard widgets, extension item/bulk actions, throughput reporting, and more. If a REST route exists, there is a typed command for it.'
     },
     { type: 'h3', text: 'Discovering commands' },
     {
@@ -672,8 +676,14 @@ export const layoutStepsMode: DocSection = {
       type: 'table',
       head: ['Option', 'Effect'],
       rows: [
-        ['tab_mode: steps', 'Tab-type groups render as an ordered stepper strip with Back / Next navigation.'],
-        ['validate_before_next', 'Blocks advancing to the next step until all required fields on the current step are filled.']
+        [
+          'tab_mode: steps',
+          'Tab-type groups render as an ordered stepper strip with Back / Next navigation.'
+        ],
+        [
+          'validate_before_next',
+          'Blocks advancing to the next step until all required fields on the current step are filled.'
+        ]
       ]
     },
     {
@@ -697,13 +707,19 @@ export const layoutSummaryPanel: DocSection = {
       type: 'table',
       head: ['Option', 'Effect'],
       rows: [
-        ['summary_enabled', 'Enables the summary sidebar for the layout and shows the Summary button on ItemEdit.'],
-        ['summary_show_all', 'Includes fields with empty values in the summary; off by default (only populated fields are listed).']
+        [
+          'summary_enabled',
+          'Enables the summary sidebar for the layout and shows the Summary button on ItemEdit.'
+        ],
+        [
+          'summary_show_all',
+          'Includes fields with empty values in the summary; off by default (only populated fields are listed).'
+        ]
       ]
     },
     {
       type: 'note',
-      text: 'Clicking a field row in the summary navigates the editor to that field\'s tab or step, making the panel a fast jump-to index for long forms.'
+      text: "Clicking a field row in the summary navigates the editor to that field's tab or step, making the panel a fast jump-to index for long forms."
     }
   ]
 }

@@ -683,3 +683,39 @@ export function rollbackRevision(
 ): Command<{ data: { success: boolean; collection: string; item: string } }> {
   return cmd('POST', `/revisions/${revisionId}/rollback`)
 }
+
+// ─── Additions: record templates per collection, layout lookups ──────────────
+
+/** Record templates available for one collection (personal + shared + role). */
+export function listCollectionRecordTemplates(collection: string): Command<{ data: unknown[] }> {
+  return cmd('GET', `/record-templates/${collection}`)
+}
+
+/** One layout by id (any type). */
+export function readCollectionLayout(id: number): Command<{ data: Record<string, unknown> }> {
+  return cmd('GET', `/collection-layouts/${id}`)
+}
+
+/** Resolve the detail (drill-down) layout for a collection: explicit
+ *  layout_id > active detail layout > null (callers fall back to the active
+ *  grouped layout read-only). */
+export function readDetailLayout(
+  collection: string,
+  layoutId?: number
+): Command<{ data: Record<string, unknown> | null }> {
+  return cmd(
+    'GET',
+    `/collection-layouts/detail/${collection}`,
+    layoutId ? { layout_id: layoutId } : undefined
+  )
+}
+
+/** Move the Ungrouped section's position within a layout's group order. */
+export function updateLayoutUngroupedSort(
+  id: number,
+  ungroupedSort: number
+): Command<{ data: { ungrouped_sort: number } }> {
+  return cmd('PATCH', `/collection-layouts/${id}/ungrouped-sort`, undefined, {
+    ungrouped_sort: ungroupedSort
+  })
+}

@@ -87,11 +87,11 @@ import {
   devexMarketplace,
   devexOpenApi,
   devexPersistedQueries,
+  devexPlayground,
   devexRateLimits,
   devexRequestSigning,
   devexRevisionDiff,
   devexSchemaMigrations,
-  devexPlayground,
   devexWebhookDeliveries,
   devexWebhookSigning
 } from './sections/devex.js'
@@ -266,6 +266,7 @@ import {
   sdkFlowRuns,
   sdkNotificationSubscriptions,
   sdkPresence,
+  sdkQueues,
   sdkRules,
   sdkSchemaSnapshot,
   sdkSlaRules,
@@ -451,6 +452,7 @@ export const navSections: NavGroup[] = [
       sdkAttributes,
       sdkNotificationSubscriptions,
       sdkSlaRules,
+      sdkQueues,
       sdkPresence,
       sdkTreeHierarchy,
       sdkCoverage

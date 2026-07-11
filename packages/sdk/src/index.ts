@@ -38,12 +38,15 @@
  *   const unsub = nivaro.realtime.subscribe('projects', { event: 'update' }, (data) => console.log(data))
  */
 
+// Feature-area command modules (flat public API — import everything from '@nivaro/sdk')
+export * from './commands/admin.js'
 export * from './commands/ai.js'
 export * from './commands/collab.js'
-// Feature-area command modules (flat public API — import everything from '@nivaro/sdk')
 export * from './commands/content.js'
 export * from './commands/devex.js'
+export * from './commands/files.js'
 export * from './commands/infra.js'
+export * from './commands/queues.js'
 export type { PresenceClient, PresenceOptions, PresenceSession } from './presence.js'
 export { createPresence } from './presence.js'
 export type { NivaroRealtime, RealtimeEvent } from './realtime.js'

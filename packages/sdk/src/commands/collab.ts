@@ -431,3 +431,94 @@ export function updateIssue(
 export function deleteIssue(id: number): Command<void> {
   return cmd('DELETE', `/issues/${id}`)
 }
+
+// ─── Notifications: state changes ────────────────────────────────────────────
+
+/** Total notification count for the current user. */
+export function readNotificationCount(): Command<{ count: number }> {
+  return cmd('GET', '/notifications/count')
+}
+
+/** Mark one notification read. */
+export function markNotificationRead(id: number): Command<void> {
+  return cmd('POST', `/notifications/${id}/read`)
+}
+
+/** Mark every inbox notification read. */
+export function markAllNotificationsRead(): Command<{ data: { updated: number } }> {
+  return cmd('POST', '/notifications/mark-all-read')
+}
+
+export function deleteNotification(id: number): Command<void> {
+  return cmd('DELETE', `/notifications/${id}`)
+}
+
+// ─── Item locking config (admin) ─────────────────────────────────────────────
+
+/** Whether soft edit-locking is enabled for a collection. */
+export function readItemLockConfig(
+  collection: string
+): Command<{ data: { collection: string; item_locking_enabled: boolean } }> {
+  return cmd('GET', `/item-locks/config/${collection}`)
+}
+
+/** Toggle per-collection edit locking. Disabling releases all active locks. */
+export function updateItemLockConfig(
+  collection: string,
+  enabled: boolean
+): Command<{ data: { collection: string; item_locking_enabled: boolean } }> {
+  return cmd('PATCH', `/item-locks/config/${collection}`, undefined, {
+    item_locking_enabled: enabled
+  })
+}
+
+// ─── Field watches ────────────────────────────────────────────────────────────
+
+export interface FieldWatch {
+  id: number
+  name: string
+  collection: string
+  field: string
+  is_active: boolean
+  created_by: UUID
+  subscriber_count?: number
+  subscribed?: boolean
+}
+
+export function listFieldWatches(): Command<{ data: FieldWatch[] }> {
+  return cmd('GET', '/field-watches')
+}
+
+export function readFieldWatch(id: number): Command<{ data: FieldWatch }> {
+  return cmd('GET', `/field-watches/${id}`)
+}
+
+export function createFieldWatch(data: {
+  name: string
+  collection: string
+  field: string
+  is_active?: boolean
+}): Command<{ data: FieldWatch }> {
+  return cmd('POST', '/field-watches', undefined, data)
+}
+
+export function updateFieldWatch(
+  id: number,
+  data: { name?: string; collection?: string; field?: string; is_active?: boolean }
+): Command<{ data: FieldWatch }> {
+  return cmd('PATCH', `/field-watches/${id}`, undefined, data)
+}
+
+export function deleteFieldWatch(id: number): Command<void> {
+  return cmd('DELETE', `/field-watches/${id}`)
+}
+
+/** Subscribe the current user to change notifications for a watch
+ *  (requires read access to the watched collection). */
+export function subscribeFieldWatch(id: number): Command<{ data: { watch: number; user: UUID } }> {
+  return cmd('POST', `/field-watches/${id}/subscribe`)
+}
+
+export function unsubscribeFieldWatch(id: number): Command<void> {
+  return cmd('DELETE', `/field-watches/${id}/subscribe`)
+}
