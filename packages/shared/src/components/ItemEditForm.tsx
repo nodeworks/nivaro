@@ -11,7 +11,7 @@ import {
   useState
 } from 'react'
 import { toast } from 'sonner'
-import { ItemEditAuthContext, ParentDraftContext, useApiFetchConfig, useNivaroClient, RelationPathDataContext } from '../context'
+import { GridFlushContext, type GridFlushContextValue, ItemEditAuthContext, ParentDraftContext, useApiFetchConfig, useNivaroClient, RelationPathDataContext } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { FieldRow } from './item-edit/FieldRow'
@@ -402,6 +402,26 @@ export function ItemEditForm({
 
   // ── Draft state ────────────────────────────────────────────────────────────
   const [draft, setDraft] = useState<Record<string, unknown>>({})
+  // Synchronous mirror of draft — the save payload reads from this so that
+  // grid-flush callbacks firing onChange mid-save still land in the PATCH.
+  const draftRef = useRef<Record<string, unknown>>({})
+
+  // ── Grid flush registry ────────────────────────────────────────────────────
+  // Field components (file pickers, inline grids) register async commit
+  // callbacks here; saveMut awaits them all before building the main payload.
+  // Provided only for existing items — new records keep the staging flow.
+  const gridFlushersRef = useRef<Map<string, () => Promise<void>>>(new Map())
+  const gridFlushCtx = useMemo<GridFlushContextValue>(
+    () => ({
+      register: (key, fn) => {
+        gridFlushersRef.current.set(key, fn)
+      },
+      unregister: (key) => {
+        gridFlushersRef.current.delete(key)
+      }
+    }),
+    []
+  )
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
   const [isDirty, setIsDirty] = useState(false)
 
@@ -575,6 +595,7 @@ export function ItemEditForm({
   useEffect(() => {
     if (itemData) {
       initialDataRef.current = itemData
+      draftRef.current = itemData
       setDraft(itemData)
       setIsDirty(false)
     }
@@ -621,34 +642,34 @@ export function ItemEditForm({
     for (const [path, pv] of Object.entries(resolvedPaths)) merged[path] = pv.value
     if (Object.keys(merged).length === 0) return
     initialDataRef.current = { ...initialDataRef.current, ...merged }
+    draftRef.current = { ...draftRef.current, ...merged }
     setDraft((prev) => ({ ...prev, ...merged }))
   }, [resolvedPaths])
 
   const handleFieldChange = useCallback(
     (field: string, value: unknown) => {
-      setDraft((prev) => {
-        const next = { ...prev, [field]: value }
-        for (const fc of fieldConfig ?? []) {
-          if (!fc.dependency_config) continue
-          try {
-            const cfg = (
-              typeof fc.dependency_config === 'string'
-                ? JSON.parse(fc.dependency_config)
-                : fc.dependency_config
-            ) as {
-              cascade_filters?: Array<{ parent_field: string; clear_on_parent_change?: boolean }>
-            }
-            for (const rule of cfg.cascade_filters ?? []) {
-              if (rule.parent_field === field && rule.clear_on_parent_change) {
-                next[fc.field] = null
-              }
-            }
-          } catch {
-            /* ignore malformed config */
+      const next = { ...draftRef.current, [field]: value }
+      for (const fc of fieldConfig ?? []) {
+        if (!fc.dependency_config) continue
+        try {
+          const cfg = (
+            typeof fc.dependency_config === 'string'
+              ? JSON.parse(fc.dependency_config)
+              : fc.dependency_config
+          ) as {
+            cascade_filters?: Array<{ parent_field: string; clear_on_parent_change?: boolean }>
           }
+          for (const rule of cfg.cascade_filters ?? []) {
+            if (rule.parent_field === field && rule.clear_on_parent_change) {
+              next[fc.field] = null
+            }
+          }
+        } catch {
+          /* ignore malformed config */
         }
-        return next
-      })
+      }
+      draftRef.current = next
+      setDraft(next)
       setIsDirty(true)
       const isEmpty = value === null || value === undefined || value === ''
       if (!isEmpty) touchedFields.current.add(field)
@@ -1448,7 +1469,9 @@ export function ItemEditForm({
         m2mRemoves > 0 ? `-${m2mRemoves} unlinked` : ''
       ].filter(Boolean).join(' · ')
 
+      const flushers = [...gridFlushersRef.current.entries()]
       const steps: SaveStepItem[] = [
+        ...(flushers.length > 0 ? [{ id: 'flush', label: 'Save attachments', status: 'pending' as SaveStepStatus, detail: `${flushers.length} field${flushers.length !== 1 ? 's' : ''} with pending changes` }] : []),
         { id: 'main', label: isNew ? `Create ${colMeta?.singular || titleCase(collection)}` : `Save ${colMeta?.singular || titleCase(collection)}`, status: 'pending', detail: mainDetail },
         ...(hasM2M ? [{ id: 'm2m', label: 'Update relationships', status: 'pending' as SaveStepStatus, detail: m2mDetail }] : []),
         ...newO2MKeys.map(k => {
@@ -1467,14 +1490,29 @@ export function ItemEditForm({
       setSaveSteps(steps)
       setSaveDialogOpen(true)
 
+      // ── Grid flushers (file pickers etc.) — run BEFORE the payload build so
+      // any onChange fired by a flush callback lands in draftRef and ships in
+      // the main PATCH. Junction commits (pending-save M2M) also happen here.
+      if (flushers.length > 0) {
+        updateStep('flush', { status: 'running' })
+        try {
+          for (const [, fn] of flushers) await fn()
+          updateStep('flush', { status: 'done' })
+        } catch (err) {
+          updateStep('flush', { status: 'error', error: errMsg(err) })
+          throw err
+        }
+      }
+
       // ── Main form ──────────────────────────────────────────────────────────
       updateStep('main', { status: 'running' })
       const payload: Record<string, unknown> = {}
       const initial = initialDataRef.current
+      const draftNow = draftRef.current
       for (const f of allFields) {
         if (SYSTEM_FIELDS.has(f.field) || f.readonly) continue
-        if (!(f.field in draft)) continue
-        const cur = draft[f.field]
+        if (!(f.field in draftNow)) continue
+        const cur = draftNow[f.field]
         const orig = initial[f.field]
         // Always include all fields for new records; for edits, only include changed values
         if (isNew || !valuesEqual(cur, orig)) {
@@ -2504,6 +2542,7 @@ export function ItemEditForm({
     <AddendumViewContext.Provider value={addendumViewId}>
     <AddendumFieldContext.Provider value={addendumFieldMap}>
     <ParentDraftContext.Provider value={{ draft, collection }}>
+    <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>
     <O2MStagingContext.Provider value={o2mStagingCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
       <SaveProgressDialog
@@ -2963,6 +3002,7 @@ export function ItemEditForm({
       </div>
     </M2MStagingContext.Provider>
     </O2MStagingContext.Provider>
+    </GridFlushContext.Provider>
     </ParentDraftContext.Provider>
     </AddendumFieldContext.Provider>
     </AddendumViewContext.Provider>
