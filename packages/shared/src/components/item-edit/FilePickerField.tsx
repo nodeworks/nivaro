@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clock, File, FileAudio, FileCode, FileSpreadsheet, FileText, FileVideo, Loader2, Plus, Upload, X } from 'lucide-react'
+import { Clock, Download, File, FileAudio, FileCode, FileSpreadsheet, FileText, FileVideo, Loader2, Plus, Upload, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useGridFlush, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
@@ -338,6 +338,15 @@ export function FilePickerField({
               )}
             </div>
           </div>
+          {!hasPending && fileId && (
+            <a
+              href={`${getUrl(fileId)}?download=1`}
+              title='Download'
+              className='shrink-0 text-slate-400 hover:text-[#00ceff] p-0.5'
+            >
+              <Download className='h-3.5 w-3.5' />
+            </a>
+          )}
           {!disabled && (
             <div className='flex items-center gap-1 shrink-0'>
               {allowPick && (
@@ -661,6 +670,13 @@ export function FileM2MField({
                     {f?.uploaded_by_name && <span className='text-[10px] text-slate-500'>by {f.uploaded_by_name}</span>}
                   </div>
                 </div>
+                <a
+                  href={`${getUrl(id)}?download=1`}
+                  title='Download'
+                  className='shrink-0 text-slate-400 hover:text-[#00ceff] p-0.5'
+                >
+                  <Download className='h-3.5 w-3.5' />
+                </a>
                 {!disabled && (
                   <button
                     type='button'

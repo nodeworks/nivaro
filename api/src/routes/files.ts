@@ -16,11 +16,11 @@ import {
 } from '../services/files.js'
 import { getStorage } from '../services/storage/index.js'
 
-function contentDisposition(filename: string): string {
+function contentDisposition(filename: string, mode: 'inline' | 'attachment' = 'inline'): string {
   const ascii = filename.replace(/[^\x20-\x7E]/g, '_')
   const encoded = encodeURIComponent(filename)
-  if (ascii === filename) return `inline; filename="${ascii}"`
-  return `inline; filename="${ascii}"; filename*=UTF-8''${encoded}`
+  if (ascii === filename) return `${mode}; filename="${ascii}"`
+  return `${mode}; filename="${ascii}"; filename*=UTF-8''${encoded}`
 }
 
 const MAX_DIMENSION = 4000
@@ -176,6 +176,7 @@ export async function filesRoutes(app: FastifyInstance) {
 
   app.get('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
+    const q = req.query as { download?: string }
     const file = await getFile(id)
     if (!file || !file.filename_disk) return reply.code(404).send({ error: 'Not found' })
     const contentType =
@@ -188,9 +189,10 @@ export async function filesRoutes(app: FastifyInstance) {
     }
     // Report bandwidth usage to gateway (fire-and-forget)
     reportFileBandwidth(file).catch(() => {})
+    const mode = q.download === '1' || q.download === 'true' ? 'attachment' : 'inline'
     reply
       .header('Content-Type', contentType)
-      .header('Content-Disposition', contentDisposition(file.filename_download ?? 'file'))
+      .header('Content-Disposition', contentDisposition(file.filename_download ?? 'file', mode))
     return reply.send(buffer)
   })
 
