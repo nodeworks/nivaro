@@ -731,11 +731,13 @@ interface AllOwnersEntry {
 function ApprovalChainView({
   collection,
   item,
-  states
+  states,
+  currentStateId
 }: {
   collection: string
   item: string
   states: PipelineState[]
+  currentStateId?: string | null
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -786,8 +788,18 @@ function ApprovalChainView({
                   id: o.id,
                   name: [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
                 }))
+                const isCurrent = s.id === currentStateId
                 return (
-                  <div key={s.id} className='flex items-center gap-3 px-4 py-2.5'>
+                  <div
+                    key={s.id}
+                    className={cn(
+                      'flex items-center gap-3 px-4 py-2.5',
+                      // bg-accent (hsl var) rather than bg-nvr-cyan/N — the
+                      // nvr-cyan token is an opaque var() so Tailwind silently
+                      // drops opacity modifiers on it.
+                      isCurrent && 'bg-accent'
+                    )}
+                  >
                     <StateBadge label={s.label} color={s.color} small />
                     <div className='flex flex-1 flex-wrap items-center gap-1'>
                       <OwnerAvatars owners={owners} max={10} emptyLabel='—' />
@@ -1124,7 +1136,12 @@ function PipelinePanelInner({
             </Button>
           )}
           {showApprovalChain && data?.binding && (
-            <ApprovalChainView collection={collection} item={item} states={states ?? []} />
+            <ApprovalChainView
+              collection={collection}
+              item={item}
+              states={states ?? []}
+              currentStateId={data?.instance?.current_state ?? null}
+            />
           )}
         </div>
         <ChevronDown
