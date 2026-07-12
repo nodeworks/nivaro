@@ -1,5 +1,71 @@
+import {
+  Activity,
+  AlertCircle,
+  AlertTriangle,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ArrowUpRight,
+  Bell,
+  Bookmark,
+  Calendar,
+  Check,
+  CheckCircle,
+  Clipboard,
+  Clock,
+  Copy,
+  Download,
+  Edit,
+  Edit2,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  File,
+  FileText,
+  Filter,
+  Flag,
+  Folder,
+  Heart,
+  HelpCircle,
+  Info,
+  Link,
+  Lock,
+  type LucideIcon,
+  Mail,
+  MessageSquare,
+  Minus,
+  MoreHorizontal,
+  MoreVertical,
+  Paperclip,
+  Pause,
+  Phone,
+  Play,
+  Plus,
+  Power,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  Search,
+  Send,
+  Settings,
+  Share2,
+  Sliders,
+  Star,
+  Trash2,
+  Unlock,
+  Upload,
+  User,
+  UserCheck,
+  UserPlus,
+  Users,
+  X,
+  XCircle,
+  Zap
+} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useApiFetchConfig } from '../context'
+import { useDebounced } from '../hooks/useDebounced'
 import { Button } from './ui/button'
 import {
   DropdownMenu,
@@ -7,43 +73,70 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from './ui/dropdown-menu'
-import {
-  ArrowRight, ArrowLeft, ArrowUp, ArrowDown, ArrowUpRight,
-  ExternalLink, Link, Share2,
-  Check, CheckCircle, X, XCircle,
-  Plus, Minus, Edit, Edit2, Trash2,
-  Save, Download, Upload, Send,
-  Eye, EyeOff, Lock, Unlock,
-  Star, Heart, Bookmark, Flag,
-  AlertCircle, AlertTriangle, Info, HelpCircle,
-  Play, Pause, RefreshCw, RotateCcw,
-  Settings, Sliders, Filter, Search,
-  Power, Zap, Activity,
-  User, Users, UserPlus, UserCheck,
-  Mail, MessageSquare, Phone, Bell,
-  FileText, File, Folder, Paperclip,
-  Calendar, Clock,
-  Copy, Clipboard, MoreHorizontal, MoreVertical,
-  type LucideIcon
-} from 'lucide-react'
 
 const ICON_MAP: Record<string, LucideIcon> = {
-  ArrowRight, ArrowLeft, ArrowUp, ArrowDown, ArrowUpRight,
-  ExternalLink, Link, Share2,
-  Check, CheckCircle, X, XCircle,
-  Plus, Minus, Edit, Edit2, Trash2,
-  Save, Download, Upload, Send,
-  Eye, EyeOff, Lock, Unlock,
-  Star, Heart, Bookmark, Flag,
-  AlertCircle, AlertTriangle, Info, HelpCircle,
-  Play, Pause, RefreshCw, RotateCcw,
-  Settings, Sliders, Filter, Search,
-  Power, Zap, Activity,
-  User, Users, UserPlus, UserCheck,
-  Mail, MessageSquare, Phone, Bell,
-  FileText, File, Folder, Paperclip,
-  Calendar, Clock,
-  Copy, Clipboard, MoreHorizontal, MoreVertical,
+  ArrowRight,
+  ArrowLeft,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpRight,
+  ExternalLink,
+  Link,
+  Share2,
+  Check,
+  CheckCircle,
+  X,
+  XCircle,
+  Plus,
+  Minus,
+  Edit,
+  Edit2,
+  Trash2,
+  Save,
+  Download,
+  Upload,
+  Send,
+  Eye,
+  EyeOff,
+  Lock,
+  Unlock,
+  Star,
+  Heart,
+  Bookmark,
+  Flag,
+  AlertCircle,
+  AlertTriangle,
+  Info,
+  HelpCircle,
+  Play,
+  Pause,
+  RefreshCw,
+  RotateCcw,
+  Settings,
+  Sliders,
+  Filter,
+  Search,
+  Power,
+  Zap,
+  Activity,
+  User,
+  Users,
+  UserPlus,
+  UserCheck,
+  Mail,
+  MessageSquare,
+  Phone,
+  Bell,
+  FileText,
+  File,
+  Folder,
+  Paperclip,
+  Calendar,
+  Clock,
+  Copy,
+  Clipboard,
+  MoreHorizontal,
+  MoreVertical
 }
 
 export interface InputBinding {
@@ -52,7 +145,12 @@ export interface InputBinding {
   binding_value: string
 }
 
-function StripCell({ label, value, display, loading }: {
+function StripCell({
+  label,
+  value,
+  display,
+  loading
+}: {
   label: string
   value?: unknown
   display: Record<string, unknown>
@@ -63,13 +161,17 @@ function StripCell({ label, value, display, loading }: {
   const formatted = loading ? null : formatStatValue(value, (display.format ?? '') as string)
   return (
     <div className='flex flex-col justify-start px-4 py-2 min-w-0'>
-      <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>{label}</span>
+      <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
+        {label}
+      </span>
       <span className='mt-1 leading-none truncate max-w-[220px]'>
         {loading ? (
           <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-slate-700' />
         ) : (
           <span className='text-[13px] font-semibold tabular-nums text-slate-900 dark:text-slate-100'>
-            {prefix}{formatted}{suffix}
+            {prefix}
+            {formatted}
+            {suffix}
           </span>
         )}
       </span>
@@ -77,7 +179,12 @@ function StripCell({ label, value, display, loading }: {
   )
 }
 
-function StripDisplay({ data, label, loading, widgetConfig }: {
+function StripDisplay({
+  data,
+  label,
+  loading,
+  widgetConfig
+}: {
   data: Record<string, unknown> | null
   label: string
   loading?: boolean
@@ -86,19 +193,32 @@ function StripDisplay({ data, label, loading, widgetConfig }: {
   const wrapper = 'h-full flex items-stretch divide-x divide-slate-200 dark:divide-border'
 
   if (data && 'values' in data) {
-    const values = (data.values ?? []) as Array<{ value: unknown; label: string; display: Record<string, unknown> }>
+    const values = (data.values ?? []) as Array<{
+      value: unknown
+      label: string
+      display: Record<string, unknown>
+    }>
     if (values.length === 0) return null
     return (
       <div className={wrapper}>
         {values.map((v, i) => (
-          <StripCell key={i} label={v.label} value={v.value} display={v.display ?? {}} loading={false} />
+          <StripCell
+            key={i}
+            label={v.label}
+            value={v.value}
+            display={v.display ?? {}}
+            loading={false}
+          />
         ))}
       </div>
     )
   }
 
   if (loading) {
-    const vf = (widgetConfig?.value_fields as Array<{ label?: string; prefix?: string; suffix?: string; format?: string }> | undefined) ?? []
+    const vf =
+      (widgetConfig?.value_fields as
+        | Array<{ label?: string; prefix?: string; suffix?: string; format?: string }>
+        | undefined) ?? []
     const sections = vf.length > 0 ? vf : [{ label }]
     return (
       <div className={wrapper}>
@@ -140,7 +260,7 @@ interface WidgetSlotProps {
 
 function resolveDraftPath(draft: Record<string, unknown>, path: string): unknown {
   // Try exact key first (simple field names with no dots)
-  if (Object.prototype.hasOwnProperty.call(draft, path)) return draft[path] ?? null
+  if (Object.hasOwn(draft, path)) return draft[path] ?? null
   // Walk dotted path — if we hit a scalar mid-path (M2O FK value), return it directly
   const parts = path.split('.')
   let val: unknown = draft
@@ -151,7 +271,10 @@ function resolveDraftPath(draft: Record<string, unknown>, path: string): unknown
   return val ?? null
 }
 
-function resolveInputs(bindings: InputBinding[], draft: Record<string, unknown>): Record<string, unknown> {
+function resolveInputs(
+  bindings: InputBinding[],
+  draft: Record<string, unknown>
+): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const b of bindings) {
     if (b.binding_type === 'item_field') {
@@ -190,7 +313,13 @@ function StatDisplay({ data }: { data: Record<string, unknown> }) {
   )
 }
 
-function PillSection({ label, value, display, dark, loading }: {
+function PillSection({
+  label,
+  value,
+  display,
+  dark,
+  loading
+}: {
   label: string
   value?: unknown
   display: Record<string, unknown>
@@ -202,15 +331,31 @@ function PillSection({ label, value, display, dark, loading }: {
   const formatted = loading ? null : formatStatValue(value, (display.format ?? '') as string)
   return (
     <div className='flex flex-col justify-center px-2.5 py-1 min-w-0 gap-0.5'>
-      <span className={`text-[9px] font-medium uppercase tracking-wider leading-none truncate ${dark ? 'text-slate-500' : 'text-slate-400'}`}>{label}</span>
-      <span className={`flex items-baseline gap-0.5 text-[13px] font-semibold tabular-nums leading-none ${dark ? 'text-slate-100' : 'text-slate-900'}`}>
+      <span
+        className={`text-[9px] font-medium uppercase tracking-wider leading-none truncate ${dark ? 'text-slate-500' : 'text-slate-400'}`}
+      >
+        {label}
+      </span>
+      <span
+        className={`flex items-baseline gap-0.5 text-[13px] font-semibold tabular-nums leading-none ${dark ? 'text-slate-100' : 'text-slate-900'}`}
+      >
         {loading ? (
-          <span className={`animate-pulse inline-block h-3 w-14 rounded ${dark ? 'bg-slate-600' : 'bg-slate-200'}`} />
+          <span
+            className={`animate-pulse inline-block h-3 w-14 rounded ${dark ? 'bg-slate-600' : 'bg-slate-200'}`}
+          />
         ) : (
           <>
-            {prefix && <span className={`text-[10px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>{prefix}</span>}
+            {prefix && (
+              <span className={`text-[10px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+                {prefix}
+              </span>
+            )}
             {formatted}
-            {suffix && <span className={`text-[10px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>{suffix}</span>}
+            {suffix && (
+              <span className={`text-[10px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+                {suffix}
+              </span>
+            )}
           </>
         )}
       </span>
@@ -218,7 +363,13 @@ function PillSection({ label, value, display, dark, loading }: {
   )
 }
 
-function PillDisplay({ data, label, style, loading, widgetConfig }: {
+function PillDisplay({
+  data,
+  label,
+  style,
+  loading,
+  widgetConfig
+}: {
   data: Record<string, unknown> | null
   label: string
   style: 'pill-dark' | 'pill-light'
@@ -232,12 +383,23 @@ function PillDisplay({ data, label, style, loading, widgetConfig }: {
 
   // Multi-value — use render data if available, else fall back to config value_fields for skeleton labels
   if (data && 'values' in data) {
-    const values = (data.values ?? []) as Array<{ value: unknown; label: string; display: Record<string, unknown> }>
+    const values = (data.values ?? []) as Array<{
+      value: unknown
+      label: string
+      display: Record<string, unknown>
+    }>
     if (values.length === 0) return null
     return (
       <div className={base}>
         {values.map((v, i) => (
-          <PillSection key={i} label={v.label} value={v.value} display={v.display ?? {}} dark={dark} loading={false} />
+          <PillSection
+            key={i}
+            label={v.label}
+            value={v.value}
+            display={v.display ?? {}}
+            dark={dark}
+            loading={false}
+          />
         ))}
       </div>
     )
@@ -245,7 +407,10 @@ function PillDisplay({ data, label, style, loading, widgetConfig }: {
 
   if (loading) {
     // Skeleton: derive sections from widget config value_fields
-    const vf = (widgetConfig?.value_fields as Array<{ label?: string; prefix?: string; suffix?: string; format?: string }> | undefined) ?? []
+    const vf =
+      (widgetConfig?.value_fields as
+        | Array<{ label?: string; prefix?: string; suffix?: string; format?: string }>
+        | undefined) ?? []
     const sections = vf.length > 0 ? vf : [{ label }]
     return (
       <div className={base}>
@@ -274,7 +439,11 @@ function PillDisplay({ data, label, style, loading, widgetConfig }: {
 function formatStatValue(value: unknown, format: string): string {
   if (value == null) return '—'
   if (typeof value === 'number') {
-    if (format === 'currency') return new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
+    if (format === 'currency')
+      return new Intl.NumberFormat(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }).format(value)
     if (format === 'integer') return new Intl.NumberFormat().format(Math.round(value))
     return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value)
   }
@@ -282,20 +451,31 @@ function formatStatValue(value: unknown, format: string): string {
 }
 
 function MultiStatDisplay({ data }: { data: Record<string, unknown> }) {
-  const values = (data.values ?? []) as Array<{ value: unknown; label: string; display: Record<string, unknown> }>
+  const values = (data.values ?? []) as Array<{
+    value: unknown
+    label: string
+    display: Record<string, unknown>
+  }>
   if (values.length === 0) return <p className='text-[12px] text-slate-400'>No values</p>
   return (
-    <div className='grid gap-3' style={{ gridTemplateColumns: `repeat(${Math.min(values.length, 3)}, minmax(0, 1fr))` }}>
+    <div
+      className='grid gap-3'
+      style={{ gridTemplateColumns: `repeat(${Math.min(values.length, 3)}, minmax(0, 1fr))` }}
+    >
       {values.map((v, i) => {
         const prefix = (v.display?.prefix ?? '') as string
         const suffix = (v.display?.suffix ?? '') as string
         const format = (v.display?.format ?? '') as string
         return (
           <div key={i} className='flex flex-col gap-0.5'>
-            {v.label && <span className='text-[11px] text-slate-400 dark:text-slate-500'>{v.label}</span>}
+            {v.label && (
+              <span className='text-[11px] text-slate-400 dark:text-slate-500'>{v.label}</span>
+            )}
             <div className='flex items-baseline gap-0.5'>
               {prefix && <span className='text-[12px] text-slate-500'>{prefix}</span>}
-              <span className='text-xl font-semibold text-slate-900 dark:text-slate-100'>{formatStatValue(v.value, format)}</span>
+              <span className='text-xl font-semibold text-slate-900 dark:text-slate-100'>
+                {formatStatValue(v.value, format)}
+              </span>
               {suffix && <span className='text-[12px] text-slate-500'>{suffix}</span>}
             </div>
           </div>
@@ -314,13 +494,21 @@ function ListDisplay({ data }: { data: Record<string, unknown> }) {
       <table className='w-full text-[12px]'>
         <thead>
           <tr className='border-b border-slate-100'>
-            {fields.map(f => <th key={f} className='py-1 pr-3 text-left font-medium text-slate-500'>{f}</th>)}
+            {fields.map((f) => (
+              <th key={f} className='py-1 pr-3 text-left font-medium text-slate-500'>
+                {f}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, i) => (
             <tr key={i} className='border-b border-slate-50'>
-              {fields.map(f => <td key={f} className='py-1 pr-3 text-slate-700'>{String(row[f] ?? '')}</td>)}
+              {fields.map((f) => (
+                <td key={f} className='py-1 pr-3 text-slate-700'>
+                  {String(row[f] ?? '')}
+                </td>
+              ))}
             </tr>
           ))}
         </tbody>
@@ -329,7 +517,13 @@ function ListDisplay({ data }: { data: Record<string, unknown> }) {
   )
 }
 
-function ActionButtonsDisplay({ data, widgetId, inputs, apiBase, onAction }: {
+function ActionButtonsDisplay({
+  data,
+  widgetId,
+  inputs,
+  apiBase,
+  onAction
+}: {
   data: Record<string, unknown>
   widgetId: number
   inputs: Record<string, unknown>
@@ -343,7 +537,8 @@ function ActionButtonsDisplay({ data, widgetId, inputs, apiBase, onAction }: {
   const handleClick = async (idx: number) => {
     setLoading(idx)
     try {
-      const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
+      const workspace =
+        typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
       const res = await fetch(`${apiBase}/widgets-internal/${widgetId}/action`, {
         method: 'POST',
         headers: {
@@ -354,13 +549,15 @@ function ActionButtonsDisplay({ data, widgetId, inputs, apiBase, onAction }: {
         credentials: fetchCfg.credentials,
         body: JSON.stringify({ button_index: idx, inputs })
       })
-      const json = await res.json() as { data: unknown }
+      const json = (await res.json()) as { data: unknown }
       const result = json.data as Record<string, unknown>
       if (result?.redirect_url) {
         try {
           const u = new URL(result.redirect_url as string, window.location.origin)
           if (u.origin === window.location.origin) window.location.href = u.toString()
-        } catch { /* invalid URL — ignore */ }
+        } catch {
+          /* invalid URL — ignore */
+        }
       }
       onAction?.(result)
     } finally {
@@ -372,12 +569,14 @@ function ActionButtonsDisplay({ data, widgetId, inputs, apiBase, onAction }: {
     <div className='flex flex-wrap gap-2'>
       {buttons.map((btn, i) => {
         const style = (btn.style ?? 'secondary') as string
-        const base = 'inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-[12px] font-medium transition-colors disabled:opacity-50'
-        const cls = style === 'primary'
-          ? `${base} bg-nvr-cyan text-white hover:bg-nvr-cyan/90`
-          : style === 'danger'
-          ? `${base} bg-red-500 text-white hover:bg-red-600`
-          : `${base} border border-slate-200 bg-white text-slate-700 hover:bg-slate-50`
+        const base =
+          'inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-[12px] font-medium transition-colors disabled:opacity-50'
+        const cls =
+          style === 'primary'
+            ? `${base} bg-nvr-cyan text-white hover:bg-nvr-cyan/90`
+            : style === 'danger'
+              ? `${base} bg-red-500 text-white hover:bg-red-600`
+              : `${base} border border-slate-200 bg-white text-slate-700 hover:bg-slate-50`
         return (
           <button
             key={i}
@@ -471,10 +670,16 @@ function ButtonGroupDisplay({
   function getToggleLabel(btn: BtnGroupButton, idx: number): string {
     if (btn.action !== 'toggle') return btn.label ?? `Action ${idx + 1}`
     const ac = btn.action_config as Record<string, unknown> | undefined
-    const effectiveToggleInput = btn.toggle_input || (ac?.toggle_input as string) || (ac?.field as string) || ''
-    const bWithInput = effectiveToggleInput && effectiveToggleInput !== btn.toggle_input ? { ...btn, toggle_input: effectiveToggleInput } : btn
+    const effectiveToggleInput =
+      btn.toggle_input || (ac?.toggle_input as string) || (ac?.field as string) || ''
+    const bWithInput =
+      effectiveToggleInput && effectiveToggleInput !== btn.toggle_input
+        ? { ...btn, toggle_input: effectiveToggleInput }
+        : btn
     const on = isToggleOn(bWithInput, idx)
-    return on ? (btn.label_on || btn.label || `Action ${idx + 1}`) : (btn.label_off || btn.label || `Action ${idx + 1}`)
+    return on
+      ? btn.label_on || btn.label || `Action ${idx + 1}`
+      : btn.label_off || btn.label || `Action ${idx + 1}`
   }
 
   function safeUrl(u: string): string | null {
@@ -483,14 +688,17 @@ function ButtonGroupDisplay({
       const parsed = new URL(u, window.location.origin)
       if (['http:', 'https:'].includes(parsed.protocol)) return parsed.toString()
       return null
-    } catch { return null }
+    } catch {
+      return null
+    }
   }
 
   async function handleServerAction(btn: BtnGroupButton, idx: number) {
     const btnId = btn.id ?? String(idx)
     setServerLoading(btnId)
     try {
-      const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
+      const workspace =
+        typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
       const res = await fetch(`${apiBase}/widgets-internal/${widgetId}/action`, {
         method: 'POST',
         headers: {
@@ -501,13 +709,15 @@ function ButtonGroupDisplay({
         credentials: fetchCfg.credentials,
         body: JSON.stringify({ button_index: idx, inputs })
       })
-      const json = await res.json() as { data: unknown }
+      const json = (await res.json()) as { data: unknown }
       const result = json.data as Record<string, unknown>
       if (result?.redirect_url) {
         try {
           const u = new URL(result.redirect_url as string, window.location.origin)
           if (u.origin === window.location.origin) window.location.href = u.toString()
-        } catch { /* invalid URL */ }
+        } catch {
+          /* invalid URL */
+        }
       }
     } finally {
       setServerLoading(null)
@@ -519,7 +729,7 @@ function ButtonGroupDisplay({
     if (SERVER_ACTIONS.has(action)) {
       if (action === 'toggle') {
         const btnId = btn.id ?? String(idx)
-        setToggleOverrides(prev => ({ ...prev, [btnId]: !isToggleOn(btn, idx) }))
+        setToggleOverrides((prev) => ({ ...prev, [btnId]: !isToggleOn(btn, idx) }))
       }
       handleServerAction(btn, idx)
       return
@@ -545,7 +755,11 @@ function ButtonGroupDisplay({
         copiedTimer.current = setTimeout(() => setCopied(null), 1800)
       })
     } else if (action === 'open-sidebar' && btn.sidebar_collection && btn.sidebar_id) {
-      onClientAction?.({ type: 'open-sidebar', collection: btn.sidebar_collection, itemId: btn.sidebar_id })
+      onClientAction?.({
+        type: 'open-sidebar',
+        collection: btn.sidebar_collection,
+        itemId: btn.sidebar_id
+      })
     }
   }
 
@@ -564,19 +778,34 @@ function ButtonGroupDisplay({
     const isLoading = serverLoading === btnId
 
     let label = btn.label ?? 'Button'
-    let v = (variant ?? btn.variant ?? 'secondary') as 'default' | 'secondary' | 'destructive' | 'outline' | 'ghost'
+    let v = (variant ?? btn.variant ?? 'secondary') as
+      | 'default'
+      | 'secondary'
+      | 'destructive'
+      | 'outline'
+      | 'ghost'
 
     const ac = btn.action_config as Record<string, unknown> | undefined
-    const effectiveToggleInput = btn.toggle_input || (ac?.toggle_input as string) || (ac?.field as string) || ''
+    const effectiveToggleInput =
+      btn.toggle_input || (ac?.toggle_input as string) || (ac?.field as string) || ''
     if (btn.action === 'toggle') {
-      const bWithInput = effectiveToggleInput && effectiveToggleInput !== btn.toggle_input ? { ...btn, toggle_input: effectiveToggleInput } : btn
+      const bWithInput =
+        effectiveToggleInput && effectiveToggleInput !== btn.toggle_input
+          ? { ...btn, toggle_input: effectiveToggleInput }
+          : btn
       const on = isToggleOn(bWithInput, idx)
-      label = on ? (btn.label_on || label) : (btn.label_off || label)
-      v = ((on ? (btn.variant_on ?? v) : (btn.variant_off ?? v)) as typeof v)
+      label = on ? btn.label_on || label : btn.label_off || label
+      v = (on ? (btn.variant_on ?? v) : (btn.variant_off ?? v)) as typeof v
     }
 
     const IconComp = btn.icon ? ICON_MAP[btn.icon] : null
-    const colorStyle = btn.color ? { backgroundColor: btn.color, borderColor: btn.color, color: isLightColor(btn.color) ? '#1e293b' : '#ffffff' } as React.CSSProperties : undefined
+    const colorStyle = btn.color
+      ? ({
+          backgroundColor: btn.color,
+          borderColor: btn.color,
+          color: isLightColor(btn.color) ? '#1e293b' : '#ffffff'
+        } as React.CSSProperties)
+      : undefined
 
     return (
       <Button
@@ -604,18 +833,38 @@ function ButtonGroupDisplay({
     const isLabelOnly = primary.action === 'none' || !primary.action
 
     let primaryLabel = primary.label ?? 'Button'
-    let primaryVariant = (primary.variant ?? 'default') as 'default' | 'secondary' | 'destructive' | 'outline' | 'ghost'
+    let primaryVariant = (primary.variant ?? 'default') as
+      | 'default'
+      | 'secondary'
+      | 'destructive'
+      | 'outline'
+      | 'ghost'
     const primaryAc = primary.action_config as Record<string, unknown> | undefined
-    const primaryToggleInput = primary.toggle_input || (primaryAc?.toggle_input as string) || (primaryAc?.field as string) || ''
+    const primaryToggleInput =
+      primary.toggle_input ||
+      (primaryAc?.toggle_input as string) ||
+      (primaryAc?.field as string) ||
+      ''
     if (primary.action === 'toggle' && primaryToggleInput) {
-      const pWithInput = primaryToggleInput !== primary.toggle_input ? { ...primary, toggle_input: primaryToggleInput } : primary
+      const pWithInput =
+        primaryToggleInput !== primary.toggle_input
+          ? { ...primary, toggle_input: primaryToggleInput }
+          : primary
       const on = isToggleOn(pWithInput, 0)
-      primaryLabel = on ? (primary.label_on || primaryLabel) : (primary.label_off || primaryLabel)
-      primaryVariant = ((on ? (primary.variant_on ?? primaryVariant) : (primary.variant_off ?? primaryVariant)) as typeof primaryVariant)
+      primaryLabel = on ? primary.label_on || primaryLabel : primary.label_off || primaryLabel
+      primaryVariant = (
+        on ? (primary.variant_on ?? primaryVariant) : (primary.variant_off ?? primaryVariant)
+      ) as typeof primaryVariant
     }
 
     const PrimaryIconComp = primary.icon ? ICON_MAP[primary.icon] : null
-    const primaryColorStyle = primary.color ? { backgroundColor: primary.color, borderColor: primary.color, color: isLightColor(primary.color) ? '#1e293b' : '#ffffff' } as React.CSSProperties : undefined
+    const primaryColorStyle = primary.color
+      ? ({
+          backgroundColor: primary.color,
+          borderColor: primary.color,
+          color: isLightColor(primary.color) ? '#1e293b' : '#ffffff'
+        } as React.CSSProperties)
+      : undefined
 
     // Label-only primary: single unified dropdown trigger (label + chevron in one button)
     if (isLabelOnly) {
@@ -634,7 +883,13 @@ function ButtonGroupDisplay({
                 {PrimaryIconComp && <PrimaryIconComp className='h-3.5 w-3.5 shrink-0' />}
                 {primaryLabel}
                 <svg width='12' height='12' viewBox='0 0 12 12' fill='none' aria-hidden='true'>
-                  <path d='M2 4L6 8L10 4' stroke='currentColor' strokeWidth='1.5' strokeLinecap='round' strokeLinejoin='round'/>
+                  <path
+                    d='M2 4L6 8L10 4'
+                    stroke='currentColor'
+                    strokeWidth='1.5'
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                  />
                 </svg>
               </Button>
             </DropdownMenuTrigger>
@@ -645,7 +900,12 @@ function ButtonGroupDisplay({
                   className='cursor-pointer text-[12px]'
                   onSelect={() => handleClick(btn, i + 1)}
                 >
-                  {btn.icon && ICON_MAP[btn.icon] && (() => { const IC = ICON_MAP[btn.icon!]; return <IC className='mr-1.5 h-3.5 w-3.5 shrink-0' /> })()}
+                  {btn.icon &&
+                    ICON_MAP[btn.icon] &&
+                    (() => {
+                      const IC = ICON_MAP[btn.icon!]
+                      return <IC className='mr-1.5 h-3.5 w-3.5 shrink-0' />
+                    })()}
                   {getToggleLabel(btn, i + 1)}
                 </DropdownMenuItem>
               ))}
@@ -681,7 +941,13 @@ function ButtonGroupDisplay({
               aria-label='More actions'
             >
               <svg width='12' height='12' viewBox='0 0 12 12' fill='none' aria-hidden='true'>
-                <path d='M2 4L6 8L10 4' stroke='currentColor' strokeWidth='1.5' strokeLinecap='round' strokeLinejoin='round'/>
+                <path
+                  d='M2 4L6 8L10 4'
+                  stroke='currentColor'
+                  strokeWidth='1.5'
+                  strokeLinecap='round'
+                  strokeLinejoin='round'
+                />
               </svg>
             </Button>
           </DropdownMenuTrigger>
@@ -692,7 +958,12 @@ function ButtonGroupDisplay({
                 className='text-[12px]'
                 onSelect={() => handleClick(btn, i + 1)}
               >
-                {btn.icon && ICON_MAP[btn.icon] && (() => { const IC = ICON_MAP[btn.icon!]; return <IC className='mr-1.5 h-3.5 w-3.5 shrink-0' /> })()}
+                {btn.icon &&
+                  ICON_MAP[btn.icon] &&
+                  (() => {
+                    const IC = ICON_MAP[btn.icon!]
+                    return <IC className='mr-1.5 h-3.5 w-3.5 shrink-0' />
+                  })()}
                 {getToggleLabel(btn, i + 1)}
               </DropdownMenuItem>
             ))}
@@ -732,6 +1003,9 @@ export function WidgetSlot({
   const [renderLoading, setRenderLoading] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // First-load marker: input-driven render refetches keep stale values on
+  // screen instead of flashing the skeleton.
+  const hasRenderDataRef = useRef(false)
 
   // Auto-include scalar item draft fields so toggle/field-update actions work
   // without requiring explicit input bindings for every field. Explicit bindings override.
@@ -741,53 +1015,93 @@ export function WidgetSlot({
   }
   const inputs = { ...draftScalars, ...resolveInputs(inputBindings, itemDraft) }
   const inputsKey = JSON.stringify(inputs) + (itemCollection ?? '')
+  // Every scalar draft field feeds inputs, so inputsKey changes per keystroke
+  // while editing the parent form — debounce so render refetches settle.
+  const debouncedInputsKey = useDebounced(inputsKey, 400)
 
-  useEffect(() => {
-    if (!ready) return
-    const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
-    const headers: Record<string, string> = {
+  function buildHeaders(): Record<string, string> {
+    const workspace =
+      typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
+    return {
       'Content-Type': 'application/json',
       ...fetchCfg.authHeaders,
       ...(workspace ? { 'x-workspace': workspace } : {})
     }
+  }
 
+  // Widget DEFINITION — depends only on the widget id. Kept separate from the
+  // render fetch so parent-form edits never re-load the definition (which is
+  // what used to flash the whole slot back to its skeleton).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fetchCfg/buildHeaders are recreated per render but stable in content; keying on them would refire every render
+  useEffect(() => {
+    if (!ready) return
     let cancelled = false
-
-    async function load() {
-      setDefLoading(true)
-      setRenderLoading(true)
-      setLoading(true)
-      setError(null)
+    setDefLoading(true)
+    setError(null)
+    ;(async () => {
       try {
-        const defRes = await fetch(`${apiBase}/widgets-internal/${widgetId}`, { credentials: fetchCfg.credentials, headers })
+        const defRes = await fetch(`${apiBase}/widgets-internal/${widgetId}`, {
+          credentials: fetchCfg.credentials,
+          headers: buildHeaders()
+        })
         if (cancelled) return
         if (!defRes.ok) throw new Error('Widget not found')
-        const defJson = await defRes.json() as { data: WidgetDef }
-        if (!cancelled) { setWidget(defJson.data); setDefLoading(false); onWidgetType?.(defJson.data.widget_type) }
+        const defJson = (await defRes.json()) as { data: WidgetDef }
+        if (!cancelled) {
+          setWidget(defJson.data)
+          setDefLoading(false)
+          onWidgetType?.(defJson.data.widget_type)
+        }
+      } catch (e) {
+        if (!cancelled) setError(String(e))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [widgetId, apiBase, ready])
 
+  // Render data — refetches when the (debounced) inputs change. Stale values
+  // stay on screen during a refetch; the skeleton only shows on first load.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: inputs/itemDraft/bindings are captured via debouncedInputsKey; fetchCfg/buildHeaders stable in content
+  useEffect(() => {
+    if (!ready) return
+    let cancelled = false
+    if (!hasRenderDataRef.current) {
+      setRenderLoading(true)
+      setLoading(true)
+    }
+    ;(async () => {
+      try {
         const renderRes = await fetch(`${apiBase}/widgets-internal/${widgetId}/render`, {
           method: 'POST',
           credentials: fetchCfg.credentials,
-          headers,
-          body: JSON.stringify({ inputs, draft: itemDraft, bindings: inputBindings, item_collection: itemCollection })
+          headers: buildHeaders(),
+          body: JSON.stringify({
+            inputs,
+            draft: itemDraft,
+            bindings: inputBindings,
+            item_collection: itemCollection
+          })
         })
         if (cancelled) return
         if (!renderRes.ok) throw new Error('Render failed')
-        const renderJson = await renderRes.json() as { data: Record<string, unknown> }
-        if (!cancelled) { setRenderData(renderJson.data); setRenderLoading(false) }
+        const renderJson = (await renderRes.json()) as { data: Record<string, unknown> }
+        if (!cancelled) {
+          hasRenderDataRef.current = true
+          setRenderData(renderJson.data)
+          setRenderLoading(false)
+        }
       } catch (e) {
         if (!cancelled) setError(String(e))
       } finally {
         if (!cancelled) setLoading(false)
       }
-    }
-
-    const timer = setTimeout(load, 30)
+    })()
     return () => {
       cancelled = true
-      clearTimeout(timer)
     }
-  }, [widgetId, apiBase, inputsKey, ready])
+  }, [widgetId, apiBase, debouncedInputsKey, ready])
 
   const title = label || widget?.name || `Widget ${widgetId}`
 
@@ -795,7 +1109,12 @@ export function WidgetSlot({
     const compactStyle = (widget?.config?.compact_style as string | undefined) ?? 'default'
     const isPill = compactStyle === 'pill-dark' || compactStyle === 'pill-light'
 
-    if (error) return <span className='text-[11px] text-red-400' title={error}>!</span>
+    if (error)
+      return (
+        <span className='text-[11px] text-red-400' title={error}>
+          !
+        </span>
+      )
 
     // Strip mode: dedicated band below header, full-height cells with dividers
     if (strip) {
@@ -813,15 +1132,17 @@ export function WidgetSlot({
           <div className='h-full flex items-center px-3'>
             {renderLoading ? (
               <div className='animate-pulse h-7 w-24 rounded bg-slate-200 dark:bg-slate-700' />
-            ) : renderData && (
-              <ButtonGroupDisplay
-                buttons={(renderData.buttons ?? []) as BtnGroupButton[]}
-                layout={(renderData.layout as string) ?? 'flat'}
-                widgetId={widgetId}
-                inputs={inputs}
-                apiBase={apiBase}
-                onClientAction={onClientAction}
-              />
+            ) : (
+              renderData && (
+                <ButtonGroupDisplay
+                  buttons={(renderData.buttons ?? []) as BtnGroupButton[]}
+                  layout={(renderData.layout as string) ?? 'flat'}
+                  widgetId={widgetId}
+                  inputs={inputs}
+                  apiBase={apiBase}
+                  onClientAction={onClientAction}
+                />
+              )
             )}
           </div>
         )
@@ -840,7 +1161,9 @@ export function WidgetSlot({
       // Skeleton until widget def loads
       if (defLoading) {
         return (
-          <div className={`animate-pulse h-8 w-36 rounded-md ${compactStyle === 'pill-dark' ? 'bg-slate-700 border border-slate-700' : 'bg-slate-100 border border-slate-200'}`} />
+          <div
+            className={`animate-pulse h-8 w-36 rounded-md ${compactStyle === 'pill-dark' ? 'bg-slate-700 border border-slate-700' : 'bg-slate-100 border border-slate-200'}`}
+          />
         )
       }
       return (
@@ -865,12 +1188,23 @@ export function WidgetSlot({
             <div className='animate-pulse h-5 w-20 rounded bg-slate-200' />
           </div>
         ) : (
-          renderData && widget && (
+          renderData &&
+          widget && (
             <>
-              {(widget.widget_type === 'stat' || (widget.widget_type === 'custom-query' && 'value' in renderData)) && <StatDisplay data={renderData} />}
-              {widget.widget_type === 'custom-query' && 'values' in renderData && <MultiStatDisplay data={renderData} />}
+              {(widget.widget_type === 'stat' ||
+                (widget.widget_type === 'custom-query' && 'value' in renderData)) && (
+                <StatDisplay data={renderData} />
+              )}
+              {widget.widget_type === 'custom-query' && 'values' in renderData && (
+                <MultiStatDisplay data={renderData} />
+              )}
               {widget.widget_type === 'action-buttons' && (
-                <ActionButtonsDisplay data={renderData} widgetId={widgetId} inputs={inputs} apiBase={apiBase} />
+                <ActionButtonsDisplay
+                  data={renderData}
+                  widgetId={widgetId}
+                  inputs={inputs}
+                  apiBase={apiBase}
+                />
               )}
               {widget.widget_type === 'button-group' && (
                 <ButtonGroupDisplay
@@ -894,7 +1228,7 @@ export function WidgetSlot({
       <button
         type='button'
         className='flex w-full items-center justify-between px-4 py-3 text-left'
-        onClick={() => setOpen(o => !o)}
+        onClick={() => setOpen((o) => !o)}
       >
         <span className='text-[13px] font-medium text-slate-700 dark:text-slate-200'>{title}</span>
         <span className={`text-slate-400 transition-transform ${open ? 'rotate-90' : ''}`}>›</span>
@@ -905,9 +1239,17 @@ export function WidgetSlot({
           {error && <p className='text-[12px] text-red-500'>{error}</p>}
           {!loading && !error && renderData && widget && (
             <>
-              {(widget.widget_type === 'stat' || (widget.widget_type === 'custom-query' && 'value' in renderData)) && <StatDisplay data={renderData} />}
-              {widget.widget_type === 'custom-query' && 'values' in renderData && <MultiStatDisplay data={renderData} />}
-              {(widget.widget_type === 'list' || (widget.widget_type === 'custom-query' && 'rows' in renderData)) && <ListDisplay data={renderData} />}
+              {(widget.widget_type === 'stat' ||
+                (widget.widget_type === 'custom-query' && 'value' in renderData)) && (
+                <StatDisplay data={renderData} />
+              )}
+              {widget.widget_type === 'custom-query' && 'values' in renderData && (
+                <MultiStatDisplay data={renderData} />
+              )}
+              {(widget.widget_type === 'list' ||
+                (widget.widget_type === 'custom-query' && 'rows' in renderData)) && (
+                <ListDisplay data={renderData} />
+              )}
               {widget.widget_type === 'action-buttons' && (
                 <ActionButtonsDisplay
                   data={renderData}
@@ -926,8 +1268,12 @@ export function WidgetSlot({
                   onClientAction={onClientAction}
                 />
               )}
-              {!['stat', 'list', 'action-buttons', 'custom-query', 'button-group'].includes(widget.widget_type) && (
-                <pre className='whitespace-pre-wrap text-[11px] text-slate-500'>{JSON.stringify(renderData, null, 2)}</pre>
+              {!['stat', 'list', 'action-buttons', 'custom-query', 'button-group'].includes(
+                widget.widget_type
+              ) && (
+                <pre className='whitespace-pre-wrap text-[11px] text-slate-500'>
+                  {JSON.stringify(renderData, null, 2)}
+                </pre>
               )}
             </>
           )}
