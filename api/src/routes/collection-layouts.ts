@@ -1,7 +1,13 @@
+import { randomUUID } from 'crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
+import { generatePdfFromLayout } from '../services/pdf-layout.js'
+import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layout-themes.js'
+import { can } from '../services/permissions.js'
+import { getStorage, getStorageProviderName } from '../services/storage/index.js'
 
 type LayoutConditions = { role_ids?: string[] } | null
 
@@ -272,6 +278,276 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
     await logActivity({ action: 'update', user: req.user?.id, collection: 'nivaro_collection_layouts', item: id, req })
     return reply.send({ data: updated })
+  })
+
+  app.get('/:id/preview-html', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const layout = await db('nivaro_collection_layouts').where({ id }).first()
+    if (!layout || layout.layout_type !== 'file') return reply.code(404).send({ error: 'Not found' })
+
+    const [groups, assignments, fieldMeta] = await Promise.all([
+      db('nivaro_field_groups').where({ layout_id: Number(id) }).select('id', 'key', 'label', 'sort').orderBy('sort', 'asc'),
+      db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'widget_id', 'input_bindings').orderBy('sort', 'asc'),
+      db('nivaro_fields').where({ collection: layout.collection }).select('field', 'label', 'type'),
+    ])
+
+    const fieldMetaMap = new Map((fieldMeta as Array<{ field: string; label: string | null; type: string }>).map(f => [f.field, f]))
+
+    const realSections = groups
+      .sort((a: { sort: number }, b: { sort: number }) => a.sort - b.sort)
+      .map((group: { id: number; key: string; label: string; sort: number }) => {
+        const groupFields = (assignments as Array<{ field: string; group_key: string | null; sort: number; label_override: string | null; is_visible: number | boolean | null }>)
+          .filter(a =>
+            (group.key ? a.group_key === group.key : a.group_key === String(group.id)) &&
+            a.is_visible !== 0 && a.is_visible !== false &&
+            !a.field.startsWith('__')
+          )
+          .sort((a, b) => a.sort - b.sort)
+          .map(a => {
+            const meta = fieldMetaMap.get(a.field)
+            return { label: a.label_override ?? meta?.label ?? a.field, value: `[${a.field}]` }
+          })
+        return { label: group.label, fields: groupFields }
+      })
+      .filter((s: { fields: unknown[] }) => s.fields.length > 0)
+
+    const sections = realSections.length > 0 ? realSections : [
+      { label: 'No fields configured', fields: [
+        { label: 'Groups in layout', value: String(groups.length) },
+        { label: 'Assignments in layout', value: String((assignments as unknown[]).length) },
+        { label: 'Fix', value: 'Drag fields into groups in the Layouts tab to populate this PDF.' },
+      ]},
+    ]
+
+    const previewData = {
+      coverTitle: layout.pdf_cover_title_field ? `[${layout.pdf_cover_title_field}]` : 'Document Title',
+      coverSubtitle: layout.pdf_cover_subtitle ?? 'Preview · Real Layout',
+      logoUrl: null as string | null,
+      collectionLabel: layout.collection ?? 'Collection',
+      generatedAt: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+      generatedBy: 'Preview',
+      coverEnabled: Boolean(layout.pdf_cover_enabled ?? true),
+      sections,
+    }
+
+    const theme = layout.pdf_theme ?? 'classic'
+    let html: string
+    if (theme === 'minimal') html = minimalTheme(previewData)
+    else if (theme === 'executive') html = executiveTheme(previewData)
+    else html = classicTheme(previewData)
+
+    return reply.header('Content-Type', 'text/html; charset=utf-8').send(html)
+  })
+
+  // POST /collection-layouts/:id/generate-pdf
+  app.post('/:id/generate-pdf', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { collection, item_id } = req.body as { collection: string; item_id: string | number }
+
+    if (!collection || item_id == null) {
+      return reply.code(400).send({ error: 'collection and item_id are required' })
+    }
+
+    const layout = await db('nivaro_collection_layouts').where({ id }).first()
+    if (!layout) return reply.code(404).send({ error: 'Layout not found' })
+    if (layout.layout_type !== 'file') return reply.code(400).send({ error: 'Layout is not a file layout' })
+
+    let item: Record<string, unknown>
+    try {
+      item = await readOne(req.user!, collection, String(item_id), req.workspaceId ?? undefined) as Record<string, unknown>
+    } catch (err) {
+      if (err instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
+      if (err instanceof ItemNotFoundError) return reply.code(404).send({ error: 'Item not found' })
+      throw err
+    }
+
+    const [groups, assignments, fieldMeta, colMeta, settings, directRelations] = await Promise.all([
+      db('nivaro_field_groups')
+        .where({ layout_id: Number(id) })
+        .select('id', 'key', 'label', 'sort')
+        .orderBy('sort', 'asc'),
+      db('nivaro_layout_field_assignments')
+        .where({ layout_id: Number(id) })
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'col_span', 'overrides')
+        .orderBy('sort', 'asc'),
+      db('nivaro_fields').where({ collection }).select('field', 'label', 'type', 'interface', 'options'),
+      db('nivaro_collections').where({ collection }).first('display_name'),
+      db('nivaro_settings').where({ id: 1 }).first('logo_url').catch(() => null),
+      db('nivaro_relations')
+        .where('many_collection', collection)
+        .orWhere('one_collection', collection)
+        .select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field'),
+    ])
+
+    // For M2M: also fetch the junction→other relations so we can resolve display values
+    const m2mJunctions = (directRelations as Array<{ many_collection: string; junction_field: string | null; one_collection: string | null }>)
+      .filter(r => r.one_collection === collection && r.junction_field != null)
+      .map(r => r.many_collection)
+    const junctionRelations = m2mJunctions.length > 0
+      ? await db('nivaro_relations')
+          .whereIn('many_collection', m2mJunctions)
+          .select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field')
+      : []
+    const relations = [...directRelations, ...junctionRelations] as Array<{ many_collection: string; many_field: string; one_collection: string | null; one_field: string | null; junction_field: string | null }>
+
+    const collectionLabel = (colMeta?.display_name as string | null) ?? collection
+    const logoUrl = (settings?.logo_url as string | null) ?? null
+    const generatedBy = req.user?.first_name
+      ? `${req.user.first_name} ${req.user.last_name ?? ''}`.trim()
+      : (req.user?.email ?? 'System')
+
+    const pdfBuffer = await generatePdfFromLayout({
+      layout,
+      collectionLabel,
+      collection,
+      item,
+      groups,
+      assignments,
+      fieldMeta,
+      relations,
+      logoUrl,
+      generatedBy,
+    })
+
+    await logActivity({
+      action: 'pdf-generate',
+      user: req.user?.id,
+      collection,
+      item: String(item_id),
+      req,
+    })
+
+    const safeFilename = `${collection}-${item_id}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+
+    return reply
+      .header('Content-Type', 'application/pdf')
+      .header('Content-Disposition', `attachment; filename="${safeFilename}.pdf"`)
+      .send(pdfBuffer)
+  })
+
+  // POST /collection-layouts/:id/generate-and-attach
+  // Generates PDF for an item and attaches it to a file M2M/O2M field on the item.
+  app.post('/:id/generate-and-attach', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { collection, item_id, attach_field, filename_template } = req.body as {
+      collection: string; item_id: string | number; attach_field: string; filename_template?: string | null
+    }
+
+    if (!collection || item_id == null || !attach_field) {
+      return reply.code(400).send({ error: 'collection, item_id, and attach_field are required' })
+    }
+
+    const layout = await db('nivaro_collection_layouts').where({ id }).first()
+    if (!layout) return reply.code(404).send({ error: 'Layout not found' })
+
+    // Check read AND update permission before generating/attaching
+    if (!req.isAdmin) {
+      const [canRead, canUpdate] = await Promise.all([
+        can(req.user!, 'read', collection),
+        can(req.user!, 'update', collection),
+      ])
+      if (!canRead || !canUpdate) return reply.code(403).send({ error: 'Forbidden' })
+    }
+
+    let item: Record<string, unknown>
+    try {
+      item = await readOne(req.user!, collection, String(item_id), req.workspaceId ?? undefined) as Record<string, unknown>
+    } catch (err) {
+      if (err instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
+      if (err instanceof ItemNotFoundError) return reply.code(404).send({ error: 'Item not found' })
+      throw err
+    }
+
+    const [groups, assignments, fieldMeta, colMeta, settings, directRelations] = await Promise.all([
+      db('nivaro_field_groups').where({ layout_id: Number(id) }).select('id','key','label','sort').orderBy('sort','asc'),
+      db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).select('field','group_key','sort','label_override','is_visible','col_span','overrides','widget_id','input_bindings').orderBy('sort','asc'),
+      db('nivaro_fields').where({ collection }).select('field','label','type','interface','options'),
+      db('nivaro_collections').where({ collection }).first('display_name'),
+      db('nivaro_settings').where({ id: 1 }).first('logo_url').catch(() => null),
+      db('nivaro_relations').where('many_collection', collection).orWhere('one_collection', collection)
+        .select('many_collection','many_field','one_collection','one_field','junction_field'),
+    ])
+
+    const m2mJunctions = (directRelations as Array<{ many_collection: string; junction_field: string | null; one_collection: string | null }>)
+      .filter(r => r.one_collection === collection && r.junction_field != null)
+      .map(r => r.many_collection)
+    const junctionRelations = m2mJunctions.length > 0
+      ? await db('nivaro_relations').whereIn('many_collection', m2mJunctions)
+          .select('many_collection','many_field','one_collection','one_field','junction_field')
+      : []
+    const relations = [...directRelations, ...junctionRelations] as Array<{
+      many_collection: string; many_field: string; one_collection: string | null; one_field: string | null; junction_field: string | null
+    }>
+
+    const collectionLabel = (colMeta?.display_name as string | null) ?? collection
+    const logoUrl = (settings?.logo_url as string | null) ?? null
+    const generatedBy = req.user?.first_name
+      ? `${req.user.first_name} ${req.user.last_name ?? ''}`.trim()
+      : (req.user?.email ?? 'System')
+
+    const pdfBuffer = await generatePdfFromLayout({
+      layout, collectionLabel, collection, item, groups, assignments, fieldMeta, relations, logoUrl, generatedBy,
+    })
+
+    // Save PDF to file storage
+    const fileId = randomUUID()
+    const resolvedName = filename_template
+      ? filename_template.replace(/\{\{(\w+)\}\}/g, (_: string, key: string) => {
+          const v = item[key]
+          return v != null && v !== '' ? String(v).replace(/[^a-zA-Z0-9_-]/g, '_') : key
+        })
+      : null
+    const safeBase = (resolvedName ?? `${collection}-${item_id}`).replace(/[^a-zA-Z0-9_-]/g, '_')
+    const diskName = `${fileId}.pdf`
+    const provider = getStorageProviderName()
+    await getStorage().put(diskName, pdfBuffer, 'application/pdf')
+    const fileRow = {
+      id: fileId,
+      storage: provider,
+      storage_provider: provider,
+      filename_disk: diskName,
+      filename_download: `${safeBase}.pdf`,
+      title: safeBase,
+      type: 'application/pdf',
+      folder: null,
+      uploaded_by: req.user!.id,
+      uploaded_on: new Date(),
+      filesize: pdfBuffer.length,
+    }
+    await db('nivaro_files').insert(fileRow)
+
+    // Attach file to the item via the relation for attach_field
+    // Require exact match using the same alias derivation as the config picker
+    const junctionRels = (directRelations as Array<{ many_collection: string; many_field: string; one_collection: string | null; one_field: string | null; junction_field: string | null }>)
+      .filter(r => r.one_collection === collection && r.junction_field != null)
+    const getFieldAlias = (jr: { one_field: string | null; many_collection: string }) => {
+      if (jr.one_field && jr.one_field !== 'id') return jr.one_field
+      return jr.many_collection
+        .replace(new RegExp(`^${collection}_?|_?${collection}$`, 'i'), '')
+        .replace(/^_|_$/g, '') || jr.many_collection
+    }
+    let attached = false
+    const targetJr = junctionRels.find(jr => getFieldAlias(jr) === attach_field)
+    if (!targetJr) {
+      return reply.code(400).send({ error: `No M2M relation found for field '${attach_field}' on collection '${collection}'` })
+    }
+    // targetJr encodes both FK columns:
+    //   many_field      = junction column pointing to the parent (item_id side)
+    //   junction_field  = junction column pointing to the related files record
+    if (!targetJr.junction_field) {
+      return reply.code(400).send({ error: `Relation '${attach_field}' does not link to nivaro_files` })
+    }
+    try {
+      await db(targetJr.many_collection).insert({
+        [targetJr.many_field]: item_id,
+        [targetJr.junction_field]: fileId,
+      })
+      attached = true
+    } catch { /* duplicate/constraint — file already attached */ }
+
+    await logActivity({ action: 'pdf-generate-attach', user: req.user?.id, collection, item: String(item_id), req })
+
+    return reply.send({ data: { file_id: fileId, attached } })
   })
 
   // POST /collection-layouts/:id/clone
