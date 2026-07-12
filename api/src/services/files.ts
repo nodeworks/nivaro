@@ -182,8 +182,10 @@ export async function readFileBuffer(file: StoredFile): Promise<Buffer> {
   return getStorage().get(file.filename_disk)
 }
 
-export async function listFiles(opts: { folder?: string; limit?: number; offset?: number; search?: string } = {}) {
-  const { folder, limit = 50, offset = 0, search } = opts
+export async function listFiles(
+  opts: { folder?: string; limit?: number; offset?: number; search?: string; ids?: string[] } = {}
+) {
+  const { folder, limit = 50, offset = 0, search, ids } = opts
   const q = db('nivaro_files as f')
     .select(
       'f.*',
@@ -194,6 +196,7 @@ export async function listFiles(opts: { folder?: string; limit?: number; offset?
     .offset(offset)
     .orderBy('f.uploaded_on', 'desc')
   if (folder) q.where('f.folder', folder)
+  if (ids && ids.length > 0) q.whereIn('f.id', ids)
   if (search) {
     const p = `%${search}%`
     q.where(function () {
@@ -202,6 +205,7 @@ export async function listFiles(opts: { folder?: string; limit?: number; offset?
   }
   const countQ = db('nivaro_files')
   if (folder) countQ.where({ folder })
+  if (ids && ids.length > 0) countQ.whereIn('id', ids)
   if (search) {
     const p = `%${search}%`
     countQ.where(function () {

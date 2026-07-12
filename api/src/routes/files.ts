@@ -31,12 +31,31 @@ export async function filesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
   app.get('/', async (req, reply) => {
-    const q = req.query as { folder?: string; limit?: string; offset?: string; search?: string }
+    const q = req.query as {
+      folder?: string
+      limit?: string
+      offset?: string
+      search?: string
+      filter?: string
+    }
+    // Support the items-style `filter={"id":{"_in":[...]}}` shape the shared
+    // file fields send to batch-resolve metadata for a known id set.
+    let ids: string[] | undefined
+    if (q.filter) {
+      try {
+        const parsed = JSON.parse(q.filter) as { id?: { _in?: unknown[]; _eq?: unknown } }
+        if (Array.isArray(parsed?.id?._in)) ids = parsed.id._in.map(String)
+        else if (parsed?.id?._eq != null) ids = [String(parsed.id._eq)]
+      } catch {
+        /* malformed filter — ignore */
+      }
+    }
     const result = await listFiles({
       folder: q.folder,
       limit: Number(q.limit ?? 50),
       offset: Number(q.offset ?? 0),
-      search: q.search
+      search: q.search,
+      ids
     })
     return reply.send(result)
   })
