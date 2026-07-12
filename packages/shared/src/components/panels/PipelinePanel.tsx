@@ -794,10 +794,11 @@ function ApprovalChainView({
                     key={s.id}
                     className={cn(
                       'flex items-center gap-3 px-4 py-2.5',
-                      // bg-accent (hsl var) rather than bg-nvr-cyan/N — the
+                      // Hex-with-alpha rather than bg-nvr-cyan/N — the
                       // nvr-cyan token is an opaque var() so Tailwind silently
-                      // drops opacity modifiers on it.
-                      isCurrent && 'bg-accent'
+                      // drops opacity modifiers on it. Kept very light so the
+                      // tint doesn't clash with the state badge's own color.
+                      isCurrent && 'bg-[#00ceff0f] dark:bg-[#00ceff1c]'
                     )}
                   >
                     <StateBadge label={s.label} color={s.color} small />
