@@ -80,7 +80,7 @@ const ProposedChangesForm = memo(function ProposedChangesForm({
     return (
       <div className='rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center dark:border-border dark:bg-muted/30'>
         <p className='text-[12px] text-slate-400 dark:text-slate-500'>
-          No fields configured for addenda. Set up the field list in Data Model → Layouts → Addendum Form.
+          No fields configured for addendum. Set up the field list in Data Model → Layouts → Addendum Form.
         </p>
       </div>
     )
@@ -449,7 +449,7 @@ function AddendumCreateSheet({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               className='h-8 text-[12px]'
-              placeholder='Brief description of this amendment'
+              placeholder='Brief description of this addendum'
               autoFocus
             />
           </div>
@@ -807,6 +807,12 @@ export function AddendumPanel({
     onActiveCountChangeRef.current?.(activeCount)
   }, [activeCount])
 
+  // Hide the slot entirely unless there is something to show or do: existing
+  // addendums, OR creation is allowed in the current state/role (canCreate is
+  // computed by the host from addendum_allowed_states/roles). Held null while
+  // loading so it can't flash in and then vanish.
+  if (!canCreate && (isLoading || addendums.length === 0)) return null
+
   return (
     <>
       <div className={cn(
@@ -821,7 +827,7 @@ export function AddendumPanel({
           onClick={() => setCollapsed(c => !c)}
         >
           <div className='flex items-center gap-2'>
-            <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Addenda & Amendments</h3>
+            <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Addendums</h3>
             {activeCount > 0 && (
               <span className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
                 <span className='h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse' />
@@ -861,9 +867,9 @@ export function AddendumPanel({
             </div>
           ) : addendums.length === 0 ? (
             <div className='px-4 py-8 text-center'>
-              <p className='text-[12px] text-slate-400 dark:text-slate-500'>No addenda attached to this record</p>
+              <p className='text-[12px] text-slate-400 dark:text-slate-500'>No addendum attached to this record</p>
               <p className='mt-0.5 text-[11px] text-slate-300 dark:text-slate-600'>
-                Addenda propose changes that go through a review process before being applied.
+                Addendums propose changes that go through a review process before being applied.
               </p>
             </div>
           ) : (
