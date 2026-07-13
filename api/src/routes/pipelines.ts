@@ -864,6 +864,46 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   // ─── Instance endpoints (authenticated, not admin-only) ───────────────────
 
+  // Flow map — transition volumes for a template over a period (Sankey).
+  app.get('/:id/flow-map', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const days = Math.min(730, Math.max(1, Number((req.query as { days?: string }).days) || 90))
+    const since = new Date(Date.now() - days * 86_400_000)
+
+    const states = (await db<WorkflowState>('nivaro_workflow_states')
+      .where({ template: id })
+      .orderBy('sort')) as WorkflowState[]
+    if (states.length === 0) return reply.send({ data: { states: [], flows: [] } })
+    const stateIds = states.map((s) => s.id)
+    const sortById = new Map(states.map((s, i) => [s.id, i]))
+
+    const rows = (await db('nivaro_workflow_history')
+      .whereIn('to_state', stateIds)
+      .where('timestamp', '>=', since)
+      .whereNotNull('from_state')
+      .groupBy('from_state', 'to_state')
+      .select('from_state', 'to_state')
+      .count({ n: '*' })) as Array<{ from_state: string; to_state: string; n: number | string }>
+
+    const flows = rows
+      .filter((r) => sortById.has(r.from_state) && sortById.has(r.to_state))
+      .map((r) => ({
+        from: r.from_state,
+        to: r.to_state,
+        count: Number(r.n),
+        back: (sortById.get(r.to_state) ?? 0) < (sortById.get(r.from_state) ?? 0)
+      }))
+      .sort((a, b) => b.count - a.count)
+
+    return reply.send({
+      data: {
+        states: states.map((s) => ({ id: s.id, label: s.label, color: s.color })),
+        flows,
+        days
+      }
+    })
+  })
+
   // Simulate — dry-run a record through its pipeline: every transition with
   // per-rule condition results and role checks, resolved owners for every
   // state, and the SLA rule that would arm in each. Read-only.

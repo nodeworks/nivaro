@@ -2745,6 +2745,9 @@ export function PipelineEditPage() {
 
         {/* Simulator */}
         <PipelineSimulatorCard bindings={bindings} />
+
+        {/* Flow map */}
+        <PipelineFlowMapCard templateId={id!} />
       </div>
     </>
   )
@@ -2958,6 +2961,210 @@ function PipelineSimulatorCard({ bindings }: { bindings: Array<{ collection: str
             </tbody>
           </table>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Flow map — Sankey of transition volumes ──────────────────────────────────
+
+interface FlowState {
+  id: string
+  label: string
+  color: string | null
+}
+
+interface Flow {
+  from: string
+  to: string
+  count: number
+  back: boolean
+}
+
+const FLOW_W = 900
+const FLOW_COL_W = 230
+
+function PipelineFlowMapCard({ templateId }: { templateId: string }) {
+  const [days, setDays] = useState(90)
+  const [hover, setHover] = useState<Flow | null>(null)
+
+  const { data } = useQuery({
+    queryKey: ['flow-map', templateId, days],
+    queryFn: () =>
+      api
+        .get<{ data: { states: FlowState[]; flows: Flow[] } }>(
+          `/pipelines/${templateId}/flow-map`,
+          { params: { days } }
+        )
+        .then((r) => r.data.data),
+    staleTime: 60_000
+  })
+
+  const states = data?.states ?? []
+  const flows = (data?.flows ?? []).slice(0, 40)
+  const total = flows.reduce((s, f) => s + f.count, 0)
+
+  // Bipartite layout: outflow column left, inflow column right.
+  const outTotals = new Map<string, number>()
+  const inTotals = new Map<string, number>()
+  for (const f of flows) {
+    outTotals.set(f.from, (outTotals.get(f.from) ?? 0) + f.count)
+    inTotals.set(f.to, (inTotals.get(f.to) ?? 0) + f.count)
+  }
+  const H_AVAIL = Math.max(360, states.length * 46)
+  const layout = (totals: Map<string, number>) => {
+    const activeStates = states.filter((st) => (totals.get(st.id) ?? 0) > 0)
+    const sum = [...totals.values()].reduce((a, b) => a + b, 0) || 1
+    const gaps = (activeStates.length + 1) * 8
+    let y = 20
+    const out = new Map<string, { y: number; h: number }>()
+    for (const st of activeStates) {
+      const h = Math.max(14, ((totals.get(st.id) ?? 0) / sum) * (H_AVAIL - gaps - 40))
+      out.set(st.id, { y, h })
+      y += h + 8
+    }
+    return { pos: out, height: y + 20 }
+  }
+  const left = layout(outTotals)
+  const right = layout(inTotals)
+  const H_TOTAL = Math.max(left.height, right.height, 380)
+
+  // Per-node running offsets so ribbons stack within their node
+  const leftOffset = new Map<string, number>()
+  const rightOffset = new Map<string, number>()
+  const ribbons = flows.map((f) => {
+    const lp = left.pos.get(f.from)
+    const rp = right.pos.get(f.to)
+    if (!lp || !rp) return null
+    const share = f.count / Math.max(1, outTotals.get(f.from) ?? 1)
+    const inShare = f.count / Math.max(1, inTotals.get(f.to) ?? 1)
+    const lh = Math.max(1.5, lp.h * share)
+    const rh = Math.max(1.5, rp.h * inShare)
+    const ly = lp.y + (leftOffset.get(f.from) ?? 0)
+    const ry = rp.y + (rightOffset.get(f.to) ?? 0)
+    leftOffset.set(f.from, (leftOffset.get(f.from) ?? 0) + lh)
+    rightOffset.set(f.to, (rightOffset.get(f.to) ?? 0) + rh)
+    const x1 = FLOW_COL_W + 8
+    const x2 = FLOW_W - FLOW_COL_W - 8
+    const mx = (x1 + x2) / 2
+    const path = `M ${x1} ${ly} C ${mx} ${ly}, ${mx} ${ry}, ${x2} ${ry} L ${x2} ${ry + rh} C ${mx} ${ry + rh}, ${mx} ${ly + lh}, ${x1} ${ly + lh} Z`
+    return { f, path }
+  })
+
+  const stateById = new Map(states.map((st) => [st.id, st]))
+
+  if (states.length === 0) return null
+
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4'>
+      <div className='flex items-center justify-between'>
+        <div>
+          <h2 className='text-[13px] font-semibold text-slate-800'>Flow Map</h2>
+          <p className='text-[12px] text-slate-400'>
+            {total.toLocaleString()} transitions in the last {days} days — red ribbons are
+            send-backs.
+          </p>
+        </div>
+        <div className='flex items-center rounded-lg border border-slate-200 p-0.5'>
+          {[30, 90, 365].map((d) => (
+            <button
+              key={d}
+              type='button'
+              onClick={() => setDays(d)}
+              className={cn(
+                'h-6 rounded-md px-2 text-[11px] font-medium',
+                days === d ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-700'
+              )}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <svg viewBox={`0 0 ${FLOW_W} ${H_TOTAL}`} className='w-full select-none'>
+        <title>Transition flow map</title>
+        {/* ribbons */}
+        {ribbons.map((r, i) =>
+          r ? (
+            <path
+              // biome-ignore lint/suspicious/noArrayIndexKey: derived list
+              key={i}
+              d={r.path}
+              fill={r.f.back ? '#ef4444' : '#00ceff'}
+              opacity={hover === null ? (r.f.back ? 0.45 : 0.3) : hover === r.f ? 0.75 : 0.08}
+              onMouseEnter={() => setHover(r.f)}
+              onMouseLeave={() => setHover(null)}
+            />
+          ) : null
+        )}
+        {/* left nodes (outflow) */}
+        {[...left.pos.entries()].map(([sid, p]) => (
+          <g key={`L-${sid}`}>
+            <rect
+              x={0}
+              y={p.y}
+              width={FLOW_COL_W}
+              height={p.h}
+              rx={4}
+              fill={stateById.get(sid)?.color ?? '#94a3b8'}
+              opacity={0.15}
+            />
+            <rect
+              x={FLOW_COL_W}
+              y={p.y}
+              width={6}
+              height={p.h}
+              rx={2}
+              fill={stateById.get(sid)?.color ?? '#94a3b8'}
+            />
+            <text
+              x={FLOW_COL_W - 8}
+              y={p.y + p.h / 2 + 3}
+              textAnchor='end'
+              className='fill-slate-700 text-[10.5px] font-medium'
+            >
+              {(stateById.get(sid)?.label ?? '').slice(0, 32)}
+            </text>
+          </g>
+        ))}
+        {/* right nodes (inflow) */}
+        {[...right.pos.entries()].map(([sid, p]) => (
+          <g key={`R-${sid}`}>
+            <rect
+              x={FLOW_W - FLOW_COL_W}
+              y={p.y}
+              width={FLOW_COL_W}
+              height={p.h}
+              rx={4}
+              fill={stateById.get(sid)?.color ?? '#94a3b8'}
+              opacity={0.15}
+            />
+            <rect
+              x={FLOW_W - FLOW_COL_W - 6}
+              y={p.y}
+              width={6}
+              height={p.h}
+              rx={2}
+              fill={stateById.get(sid)?.color ?? '#94a3b8'}
+            />
+            <text
+              x={FLOW_W - FLOW_COL_W + 8}
+              y={p.y + p.h / 2 + 3}
+              className='fill-slate-700 text-[10.5px] font-medium'
+            >
+              {(stateById.get(sid)?.label ?? '').slice(0, 32)}
+            </text>
+          </g>
+        ))}
+      </svg>
+      {hover && (
+        <p className='text-[12px] text-slate-600'>
+          <strong>{stateById.get(hover.from)?.label}</strong> →{' '}
+          <strong>{stateById.get(hover.to)?.label}</strong>: {hover.count.toLocaleString()}{' '}
+          transition{hover.count !== 1 ? 's' : ''}
+          {hover.back ? ' (send-back)' : ''}
+        </p>
       )}
     </div>
   )
