@@ -117,6 +117,12 @@ export async function buildServer() {
   // ─── Workspace context ────────────────────────────────────────────────────
   app.addHook('preHandler', resolveWorkspace)
 
+  // ─── Dev-only response convention checker ─────────────────────────────────
+  if (config.NODE_ENV === 'development') {
+    const { registerResponseConventions } = await import('./plugins/response-conventions.js')
+    registerResponseConventions(app)
+  }
+
   // ─── Routes ───────────────────────────────────────────────────────────────
   await app.register(presencePublicRoutes, { prefix: '/api/presence' })
   await app.register(registerRoutes, { prefix: '/api' })
