@@ -72,6 +72,7 @@ import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
 import { useT } from '@/lib/i18n'
+import { usePagePresence } from '@/lib/use-page-presence'
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
@@ -343,6 +344,7 @@ function PanelNavItem({ icon: Icon, label, to }: NavItem) {
 
 export function AppLayout() {
   const t = useT()
+  usePagePresence()
   const { user } = useAuth()
   const { data: settings } = useSettings()
   useQuery({

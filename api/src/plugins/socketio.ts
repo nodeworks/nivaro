@@ -33,6 +33,16 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   io.adapter(createAdapter(pubClient, subClient))
   // record room → socketId → viewer (presence v2)
   const recordViewers = new Map<string, Map<string, { id: string; name: string }>>()
+  // socketId → where in the admin that user is right now (presence map;
+  // per-node like recordViewers — same accepted Redis-adapter limitation)
+  const pagePresence = new Map<
+    string,
+    { user: { id: string; name: string }; path: string; since: number }
+  >()
+
+  function presenceSnapshot() {
+    return [...pagePresence.values()]
+  }
 
 
   io.on('connection', (socket) => {
@@ -176,6 +186,34 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
     socket.on('pulse:leave', () => socket.leave('pulse'))
 
+    // ── Presence map — who's on which admin page right now ──────────────────
+    socket.on('page:at', (payload: { path?: string }) => {
+      const user = authenticatedUser
+      if (!user || typeof payload?.path !== 'string') return
+      const path = payload.path.slice(0, 200)
+      const existing = pagePresence.get(socket.id)
+      pagePresence.set(socket.id, {
+        user: { id: user.id, name: displayName(user) },
+        path,
+        since: existing?.path === path ? existing.since : Date.now()
+      })
+      io.to('presence-map').emit('presence-map:update', presenceSnapshot())
+    })
+    socket.on('presence-map:join', async () => {
+      const user = authenticatedUser
+      if (!user?.role) return
+      try {
+        const role = await db('nivaro_roles').where({ id: user.role }).first()
+        if (role?.admin_access) {
+          socket.join('presence-map')
+          socket.emit('presence-map:update', presenceSnapshot())
+        }
+      } catch {
+        /* silent */
+      }
+    })
+    socket.on('presence-map:leave', () => socket.leave('presence-map'))
+
     // Field editing indicator — fan out inside the record room only.
     socket.on('field:focus', (payload: { field?: string }) => {
       const user = authenticatedUser
@@ -207,6 +245,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
     socket.on('disconnect', () => {
       leaveRecordRoom()
+      if (pagePresence.delete(socket.id)) {
+        io.to('presence-map').emit('presence-map:update', presenceSnapshot())
+      }
       app.log.debug({ socketId: socket.id }, 'Socket disconnected')
     })
   })

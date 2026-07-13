@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Monitor, RefreshCw, Smartphone, Tablet, Trash2, Users, Wifi, WifiOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { PresenceLiveMap } from '@/components/presence-live-map'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,7 +14,7 @@ import {
   TableRow
 } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api } from "@/lib/api"
+import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
 
 interface PresenceSession {
@@ -91,7 +92,7 @@ export function PresencePage() {
     import('socket.io-client')
       .then(({ io }) => {
         socket = io(window.location.origin, {
-          transports: ["websocket", "polling"],
+          transports: ['websocket', 'polling'],
           path: '/socket.io'
         }) as typeof socket
 
@@ -125,6 +126,9 @@ export function PresencePage() {
 
   return (
     <div className='flex flex-col gap-6 p-6'>
+      {/* Admin presence — who's where in this admin right now */}
+      <PresenceLiveMap />
+
       {/* Header */}
       <div className='flex items-center justify-between'>
         <div>
