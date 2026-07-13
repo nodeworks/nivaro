@@ -798,6 +798,7 @@ export async function aiRoutes(app: FastifyInstance) {
     )
     const settings = await getAiSettings()
     const trace: Array<{ tool: string; input: Record<string, unknown>; summary: string }> = []
+    const proposals: Array<Record<string, unknown>> = []
     const convo: Anthropic.MessageParam[] = history
 
     try {
@@ -821,7 +822,7 @@ export async function aiRoutes(app: FastifyInstance) {
             comment: `${trace.length} tool call(s)`,
             req
           })
-          return reply.send({ data: { reply: text, trace } })
+          return reply.send({ data: { reply: text, trace, proposals } })
         }
 
         convo.push({ role: 'assistant', content: response.content })
@@ -832,6 +833,9 @@ export async function aiRoutes(app: FastifyInstance) {
           try {
             const { result, summary } = await executeChatTool(req.user!, block.name, input)
             trace.push({ tool: block.name, input, summary })
+            if (block.name === 'propose_action' && result && typeof result === 'object') {
+              proposals.push(result as Record<string, unknown>)
+            }
             results.push({
               type: 'tool_result',
               tool_use_id: block.id,
@@ -853,7 +857,8 @@ export async function aiRoutes(app: FastifyInstance) {
       return reply.send({
         data: {
           reply: 'I hit the tool-call limit before finishing — try a more specific question.',
-          trace
+          trace,
+          proposals
         }
       })
     } catch (err) {
@@ -914,6 +919,37 @@ export async function aiRoutes(app: FastifyInstance) {
     } catch (err) {
       req.log.error({ err }, 'AI navigate failed')
       return reply.code(502).send({ error: 'AI request failed' })
+    }
+  })
+
+  // ─── AI action proposals — explicit user approval executes ────────────────
+  app.post('/proposals/:id/approve', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    try {
+      const { executeProposal } = await import('../services/ai-actions.js')
+      const out = await executeProposal(req.user!, id)
+      await logActivity({
+        action: 'ai-action-execute',
+        user: req.user?.id,
+        comment: `proposal ${id}: ${JSON.stringify(out.result).slice(0, 200)}`,
+        req
+      })
+      return reply.send({ data: out })
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode ?? 400
+      return reply.code(status).send({ error: err instanceof Error ? err.message : 'Failed' })
+    }
+  })
+
+  app.post('/proposals/:id/reject', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    try {
+      const { rejectProposal } = await import('../services/ai-actions.js')
+      await rejectProposal(req.user!, id)
+      return reply.code(204).send()
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode ?? 400
+      return reply.code(status).send({ error: err instanceof Error ? err.message : 'Failed' })
     }
   })
 }

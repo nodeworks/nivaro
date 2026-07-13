@@ -13,10 +13,20 @@ interface TraceEntry {
   summary: string
 }
 
+interface Proposal {
+  proposal_id: string
+  action_type: 'bulk_update' | 'create_record'
+  collection: string
+  count: number
+  changes: Record<string, unknown> | null
+  sample: Array<{ id: string; label: string }>
+}
+
 interface ChatTurn {
   role: 'user' | 'assistant'
   content: string
   trace?: TraceEntry[]
+  proposals?: Proposal[]
 }
 
 /** SimpleMarkdown plus pipe-table support — AI answers lean on tables. */
@@ -96,6 +106,93 @@ const SUGGESTIONS = [
   'Show the 5 most recent workflows and their states'
 ]
 
+function ProposalCard({ proposal }: { proposal: Proposal }) {
+  const [status, setStatus] = useState<'proposed' | 'working' | 'executed' | 'rejected' | 'error'>(
+    'proposed'
+  )
+  const [resultText, setResultText] = useState('')
+
+  async function decide(action: 'approve' | 'reject') {
+    setStatus('working')
+    try {
+      if (action === 'reject') {
+        await api.post(`/ai/proposals/${proposal.proposal_id}/reject`)
+        setStatus('rejected')
+        return
+      }
+      const r = await api.post<{ data: { result: Record<string, unknown> } }>(
+        `/ai/proposals/${proposal.proposal_id}/approve`
+      )
+      const res = r.data.data.result
+      setResultText(
+        proposal.action_type === 'create_record'
+          ? `Created record ${String(res.id ?? '')}`
+          : `Updated ${String(res.updated)} record(s)${Number(res.failed) > 0 ? `, ${String(res.failed)} failed` : ''}`
+      )
+      setStatus('executed')
+    } catch (err) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      setResultText(msg ?? 'Failed')
+      setStatus('error')
+    }
+  }
+
+  return (
+    <div className='mt-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-800 dark:bg-amber-900/10'>
+      <p className='text-[12px] font-semibold text-amber-800 dark:text-amber-300'>
+        {proposal.action_type === 'create_record'
+          ? `Proposed: create a ${proposal.collection} record`
+          : `Proposed: update ${proposal.count} ${proposal.collection} record${proposal.count !== 1 ? 's' : ''}`}
+      </p>
+      {proposal.changes && (
+        <div className='mt-1.5 space-y-0.5'>
+          {Object.entries(proposal.changes).map(([k, v]) => (
+            <p key={k} className='text-[11.5px] text-amber-900 dark:text-amber-200'>
+              <code className='font-mono'>{k}</code> → <strong>{String(v)}</strong>
+            </p>
+          ))}
+        </div>
+      )}
+      {proposal.sample.length > 0 && (
+        <p className='mt-1.5 truncate text-[11px] text-amber-700/80 dark:text-amber-400/80'>
+          e.g.{' '}
+          {proposal.sample
+            .slice(0, 4)
+            .map((sMpl) => sMpl.label)
+            .join(' · ')}
+          {proposal.count > 4 ? ` +${proposal.count - 4} more` : ''}
+        </p>
+      )}
+      <div className='mt-2 flex items-center gap-2'>
+        {status === 'proposed' && (
+          <>
+            <Button size='sm' className='h-7' onClick={() => decide('approve')}>
+              Approve & run
+            </Button>
+            <Button size='sm' variant='outline' className='h-7' onClick={() => decide('reject')}>
+              Reject
+            </Button>
+          </>
+        )}
+        {status === 'working' && (
+          <span className='flex items-center gap-1.5 text-[12px] text-amber-700'>
+            <Loader2 className='h-3 w-3 animate-spin' /> Executing…
+          </span>
+        )}
+        {status === 'executed' && (
+          <span className='text-[12px] font-medium text-green-700 dark:text-green-400'>
+            ✓ {resultText}
+          </span>
+        )}
+        {status === 'rejected' && (
+          <span className='text-[12px] text-slate-500'>Rejected — nothing changed.</span>
+        )}
+        {status === 'error' && <span className='text-[12px] text-red-600'>✗ {resultText}</span>}
+      </div>
+    </div>
+  )
+}
+
 export function AskPage() {
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [input, setInput] = useState('')
@@ -104,12 +201,18 @@ export function AskPage() {
   const send = useMutation({
     mutationFn: (history: ChatTurn[]) =>
       api
-        .post<{ data: { reply: string; trace: TraceEntry[] } }>('/ai/chat', {
-          messages: history.map((t) => ({ role: t.role, content: t.content }))
-        })
+        .post<{ data: { reply: string; trace: TraceEntry[]; proposals?: Proposal[] } }>(
+          '/ai/chat',
+          {
+            messages: history.map((t) => ({ role: t.role, content: t.content }))
+          }
+        )
         .then((r) => r.data.data),
     onSuccess: (data) => {
-      setTurns((prev) => [...prev, { role: 'assistant', content: data.reply, trace: data.trace }])
+      setTurns((prev) => [
+        ...prev,
+        { role: 'assistant', content: data.reply, trace: data.trace, proposals: data.proposals }
+      ])
     },
     onError: (err: unknown) => {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
@@ -200,6 +303,9 @@ export function AskPage() {
                 {t.role === 'assistant' ? (
                   <>
                     <ChatMarkdown content={t.content} />
+                    {t.proposals?.map((p) => (
+                      <ProposalCard key={p.proposal_id} proposal={p} />
+                    ))}
                     {t.trace && t.trace.length > 0 && (
                       <div className='mt-2 flex flex-wrap gap-1 border-t border-slate-100 pt-2 dark:border-border'>
                         {t.trace.map((tr, ti) => (

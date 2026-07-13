@@ -83,6 +83,22 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
     }
   },
   {
+    name: 'propose_action',
+    description:
+      'PROPOSE a mutation for the user to approve — never executes directly. bulk_update: filter (query_items shape) + changes (field:value). create_record: data (field:value). Returns a preview the user will approve or reject in the UI. After calling this, tell the user to review the proposal card; do NOT claim anything was changed.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action_type: { type: 'string', enum: ['bulk_update', 'create_record'] },
+        collection: { type: 'string' },
+        filter: { type: 'object', description: 'bulk_update: which records (query_items filter shape)' },
+        changes: { type: 'object', description: 'bulk_update: fields to set on every matched record' },
+        data: { type: 'object', description: 'create_record: fields for the new record' }
+      },
+      required: ['action_type', 'collection']
+    }
+  },
+  {
     name: 'semantic_search',
     description:
       'Fuzzy meaning-based search over a collection\'s indexed text (titles, descriptions, notes). Use when exact filters cannot express the question.',
@@ -291,6 +307,15 @@ export async function executeChatTool(
       }
     }
 
+    case 'propose_action': {
+      const { proposeAction } = await import('./ai-actions.js')
+      const preview = await proposeAction(user, input as Parameters<typeof proposeAction>[1])
+      return {
+        result: preview,
+        summary: `proposed ${preview.action_type} on ${preview.count} record(s) in ${preview.collection}`
+      }
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`)
   }
@@ -303,7 +328,7 @@ Rules:
 - Prefer aggregate for counts/totals/breakdowns; query_items for record lists; semantic_search when the question is fuzzy.
 - Call list_collections first when you are unsure of collection or field names.
 - Keep answers concise: lead with the answer, then a short table or list when it helps. Mention record ids so the user can look records up.
-- You can only read data. You cannot create, update, or delete anything.
+- You cannot change data directly. To change something, call propose_action — the user then approves or rejects the proposal card in the UI. Never claim a change happened; say the proposal is awaiting their approval.
 - All access is permission-checked as the requesting user; if something is forbidden, tell the user their role lacks access.`
 
 export { MAX_ROUNDS }
