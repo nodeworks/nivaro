@@ -91,6 +91,9 @@ const CustomQueryEditPage = lazy(() =>
   import('@/pages/CustomQueryEdit').then((m) => ({ default: m.CustomQueryEditPage }))
 )
 const AskPage = lazy(() => import('@/pages/Ask').then((m) => ({ default: m.AskPage })))
+const ScheduledReportsPage = lazy(() =>
+  import('@/pages/ScheduledReports').then((m) => ({ default: m.ScheduledReportsPage }))
+)
 const ErdViewPage = lazy(() => import('@/pages/ErdView').then((m) => ({ default: m.ErdViewPage })))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
@@ -348,6 +351,7 @@ export default function App() {
                 <Route path='custom-queries/:id' element={<CustomQueryEditPage />} />
                 <Route path='schema-snapshot' element={<SchemaSnapshotPage />} />
                 <Route path='content-promotion' element={<ContentPromotionPage />} />
+                <Route path='scheduled-reports' element={<ScheduledReportsPage />} />
                 <Route path='blackout-dates' element={<BlackoutDatesPage />} />
                 <Route path='rules' element={<RulesPage />} />
                 <Route path='rules/:id' element={<RuleEditPage />} />

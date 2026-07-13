@@ -667,16 +667,27 @@ export async function generatePdfFromLayout(params: {
     html = theme(data)
   }
 
+  return htmlToPdf(html, {
+    format: (['A4', 'Letter'].includes(layout.pdf_page_size ?? '')
+      ? layout.pdf_page_size
+      : 'A4') as 'A4' | 'Letter',
+    landscape: layout.pdf_orientation === 'landscape'
+  })
+}
+
+/** Render an HTML string to a PDF buffer (JS disabled, backgrounds on). */
+export async function htmlToPdf(
+  html: string,
+  opts: { format?: 'A4' | 'Letter'; landscape?: boolean } = {}
+): Promise<Buffer> {
   const b = await getBrowser()
   const page = await b.newPage()
   try {
     await page.setJavaScriptEnabled(false)
     await page.setContent(html, { waitUntil: 'domcontentloaded' })
     const pdfBuf = await page.pdf({
-      format: (['A4', 'Letter'].includes(layout.pdf_page_size ?? '')
-        ? layout.pdf_page_size
-        : 'A4') as 'A4' | 'Letter',
-      landscape: layout.pdf_orientation === 'landscape',
+      format: opts.format ?? 'A4',
+      landscape: !!opts.landscape,
       printBackground: true,
       margin: { top: '0', right: '0', bottom: '0', left: '0' }
     })

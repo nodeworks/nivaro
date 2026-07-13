@@ -94,6 +94,7 @@ export async function sendRawMail(opts: {
   subject: string
   html: string
   text?: string
+  attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>
 }): Promise<void> {
   const smtp = await getSmtpConfig()
   if (!smtp.host || smtp.host === 'localhost') {

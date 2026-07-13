@@ -268,6 +268,28 @@ export async function buildServer() {
       }
     }
     scheduleRetentionPolicies()
+
+    // ── Scheduled reports — email PDF snapshots on their cron ────────────────
+    async function scheduleReports() {
+      try {
+        const reports = await db('nivaro_scheduled_reports').where({ is_active: true })
+        for (const r of reports) {
+          app.cron.schedule(`scheduled-report-${r.id}`, r.cron_schedule, async () => {
+            try {
+              const fresh = await db('nivaro_scheduled_reports').where({ id: r.id }).first()
+              if (!fresh?.is_active) return
+              const { runScheduledReport } = await import('./services/scheduled-reports.js')
+              await runScheduledReport(fresh)
+            } catch (err) {
+              app.log.error({ err }, `[scheduled-reports] report ${r.id} cron failed`)
+            }
+          })
+        }
+      } catch (err) {
+        app.log.warn({ err }, '[scheduled-reports] failed to schedule crons')
+      }
+    }
+    scheduleReports()
   })
 
   return app

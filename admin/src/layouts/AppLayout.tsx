@@ -141,6 +141,7 @@ export const navCategories: NavCategory[] = [
     items: [
       { icon: Activity, label: 'Activity', to: '/activity' },
       { icon: FileBarChart, label: 'Reports', to: '/reports' },
+      { icon: FileBarChart, label: 'Scheduled Reports', to: '/scheduled-reports' },
       { icon: TrendingUp, label: 'Team Throughput', to: '/team-throughput' },
       { icon: BellDot, label: 'Alerts', to: '/alerts' },
       { icon: AlertTriangle, label: 'At-Risk Rules', to: '/at-risk' },
