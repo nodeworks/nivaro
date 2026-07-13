@@ -166,6 +166,7 @@ export const navCategories: NavCategory[] = [
     items: [
       { icon: Database, label: 'Virtual Collections', to: '/virtual-collections' },
       { icon: ArrowRightLeft, label: 'Content Promotion', to: '/content-promotion' },
+      { icon: Package, label: 'Blueprints', to: '/blueprints' },
       { icon: Link2, label: 'External APIs', to: '/external-apis' },
       { icon: Braces, label: 'GraphQL', to: '/graphql' },
       { icon: Code2, label: 'Custom Queries', to: '/custom-queries' },
