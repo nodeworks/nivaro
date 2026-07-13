@@ -3,7 +3,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { resolveStateOwners } from '../services/pipeline-engine.js'
+import { can } from '../services/permissions.js'
+import { resolveStateOwners, resolveStateOwnersBatch } from '../services/pipeline-engine.js'
 import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -862,6 +863,124 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   })
 
   // ─── Instance endpoints (authenticated, not admin-only) ───────────────────
+
+  // Simulate — dry-run a record through its pipeline: every transition with
+  // per-rule condition results and role checks, resolved owners for every
+  // state, and the SLA rule that would arm in each. Read-only.
+  app.post('/simulate', { preHandler: requireAuth }, async (req, reply) => {
+    const body = req.body as { collection?: string; item_id?: string | number }
+    if (!body.collection || body.item_id == null) {
+      return reply.code(400).send({ error: 'collection and item_id are required' })
+    }
+    const collection = body.collection
+    const item = String(body.item_id)
+    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+
+    const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
+      .where({ collection })
+      .first()
+    const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
+      .where({ collection, item })
+      .first()
+    if (!binding && !instance) {
+      return reply.send({ data: null })
+    }
+    const template = binding?.template ?? instance?.template
+    const states = await db<WorkflowState>('nivaro_workflow_states')
+      .where({ template })
+      .orderBy('sort')
+    const transitions = await db<WorkflowTransition>('nivaro_workflow_transitions')
+      .where({ template })
+      .orderBy('sort')
+
+    const record = await fetchRecordForConditions(collection, item)
+    const initialState = states.find((s) => coerceBool(s.is_initial)) ?? states[0]
+    const currentState = instance?.current_state ?? initialState?.id ?? null
+
+    // Owners for every state in one batched resolve
+    const ownerMap = await resolveStateOwnersBatch(
+      states.map((s) => ({
+        key: s.id,
+        stateId: s.id,
+        instanceId: instance?.id ?? null,
+        collection,
+        itemId: item
+      }))
+    )
+
+    // SLA rules by state key
+    const slaRules = template
+      ? await db('nivaro_sla_rules').where({ workflow_template: template, is_active: true })
+      : []
+    const slaByKey = new Map(slaRules.map((r) => [String(r.state_key), r]))
+
+    const userRole = req.user?.role ?? null
+    const isAdmin = req.isAdmin ?? false
+
+    const simTransitions = transitions.map((tx) => {
+      const fromOk = tx.from_state === null || tx.from_state === currentState
+      const rules = (parseJson(tx.condition_rules) as ConditionRule[] | null) ?? []
+      const ruleResults = rules
+        .filter((r) => r && typeof r === 'object' && typeof r.field === 'string' && r.field)
+        .map((r) => ({
+          field: r.field,
+          op: r.op,
+          value: r.value ?? null,
+          record_value: record[r.field] ?? null,
+          passed: evalConditionRule(r, record)
+        }))
+      const conditionsPass = ruleResults.every((r) => r.passed)
+      const roles = (parseJson(tx.required_roles) as string[] | null) ?? []
+      const rolePass =
+        isAdmin || roles.length === 0 || (userRole != null && roles.includes(userRole))
+      return {
+        id: tx.id,
+        label: tx.label,
+        from_state: tx.from_state,
+        to_state: tx.to_state,
+        from_ok: fromOk,
+        condition_rules: ruleResults,
+        conditions_pass: conditionsPass,
+        required_roles: roles,
+        role_pass: rolePass,
+        available: fromOk && conditionsPass && rolePass
+      }
+    })
+
+    const simStates = states.map((s) => {
+      const rule = slaByKey.get(String(s.key))
+      return {
+        id: s.id,
+        key: s.key,
+        label: s.label,
+        color: s.color,
+        is_initial: coerceBool(s.is_initial),
+        is_terminal: coerceBool(s.is_terminal),
+        is_current: s.id === currentState,
+        owners: ownerMap.get(s.id) ?? [],
+        sla_rule: rule
+          ? {
+              name: rule.name,
+              duration_hours: rule.duration_hours,
+              warning_threshold_pct: rule.warning_threshold_pct,
+              business_hours_only: !!rule.business_hours_only
+            }
+          : null
+      }
+    })
+
+    return reply.send({
+      data: {
+        template,
+        has_instance: !!instance,
+        current_state: currentState,
+        states: simStates,
+        transitions: simTransitions
+      }
+    })
+  })
 
   // Get pipeline state for a specific item
   app.get('/instance/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {

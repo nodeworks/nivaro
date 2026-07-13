@@ -36,7 +36,8 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
+import type React from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { FieldPicker, type PickedField } from '@/components/field-picker'
@@ -232,7 +233,10 @@ function MultiStateCombobox({
         {values.length > 0 && (
           <button
             type='button'
-            onClick={(e) => { e.stopPropagation(); onChange([]) }}
+            onClick={(e) => {
+              e.stopPropagation()
+              onChange([])
+            }}
             className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
           >
             <X className='h-3 w-3' />
@@ -683,12 +687,18 @@ type DragCtx = { listeners: any; attributes: any }
 const TransitionDragCtx = createContext<DragCtx | null>(null)
 
 function SortableTransitionItem({ id, children }: { id: string; children: React.ReactNode }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id
+  })
   return (
     <TransitionDragCtx.Provider value={{ listeners, attributes }}>
       <div
         ref={setNodeRef}
-        style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
+        style={{
+          transform: CSS.Transform.toString(transform),
+          transition,
+          opacity: isDragging ? 0.4 : 1
+        }}
       >
         {children}
       </div>
@@ -838,7 +848,10 @@ function RelationValueCombobox({
                       toggle(id)
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); toggle(id) }
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.stopPropagation()
+                        toggle(id)
+                      }
                     }}
                     className='cursor-pointer text-nvr-navy/50 hover:text-red-500'
                   >
@@ -1835,7 +1848,9 @@ export function PipelineEditPage() {
   useEffect(() => {
     const groups = groupByLabel(templateData?.transitions ?? [])
     setLocalGroupOrder(groups.map((g) => g.label))
-    setLocalRouteOrder(Object.fromEntries(groups.map((g) => [g.label, g.routes.map((r) => r.ids[0])])))
+    setLocalRouteOrder(
+      Object.fromEntries(groups.map((g) => [g.label, g.routes.map((r) => r.ids[0])]))
+    )
   }, [templateData?.transitions])
 
   const { data: collectionsData } = useQuery<Collection[]>({
@@ -2034,8 +2049,13 @@ export function PipelineEditPage() {
   })
 
   const updateBinding = useMutation({
-    mutationFn: ({ bindingId, body }: { bindingId: number; body: { auto_start?: boolean; auto_start_state?: string | null } }) =>
-      api.patch(`/pipelines/bindings/${bindingId}`, body).then((r) => r.data),
+    mutationFn: ({
+      bindingId,
+      body
+    }: {
+      bindingId: number
+      body: { auto_start?: boolean; auto_start_state?: string | null }
+    }) => api.patch(`/pipelines/bindings/${bindingId}`, body).then((r) => r.data),
     onSuccess: () => invalidate(),
     onError: () => toast.error('Failed to update binding')
   })
@@ -2078,7 +2098,7 @@ export function PipelineEditPage() {
     for (const label of groupOrder) {
       const grp = gMap.get(label)
       if (!grp) continue
-      for (const routeId of (routeOrder[label] ?? [])) {
+      for (const routeId of routeOrder[label] ?? []) {
         const route = grp.routes.find((r) => r.ids[0] === routeId)
         if (!route) continue
         for (const txId of route.ids) updates.push({ id: txId, sort: i })
@@ -2091,7 +2111,11 @@ export function PipelineEditPage() {
   function handleGroupDragEnd(event: DragEndEvent) {
     const { active, over } = event
     if (!over || active.id === over.id) return
-    const next = arrayMove(localGroupOrder, localGroupOrder.indexOf(active.id as string), localGroupOrder.indexOf(over.id as string))
+    const next = arrayMove(
+      localGroupOrder,
+      localGroupOrder.indexOf(active.id as string),
+      localGroupOrder.indexOf(over.id as string)
+    )
     setLocalGroupOrder(next)
     applySortUpdates(next, localRouteOrder, groupsMap)
   }
@@ -2344,177 +2368,201 @@ export function PipelineEditPage() {
             )}
 
             <div className='space-y-3'>
-              <DndContext sensors={stateSensors} collisionDetection={closestCenter} onDragEnd={handleGroupDragEnd}>
+              <DndContext
+                sensors={stateSensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleGroupDragEnd}
+              >
                 <SortableContext items={localGroupOrder} strategy={verticalListSortingStrategy}>
-              {displayGroups.map((grp) => {
-                const routeMap = new Map(grp.routes.map((r) => [r.ids[0], r]))
-                const routeIds = localRouteOrder[grp.label] ?? grp.routes.map((r) => r.ids[0])
-                const displayRoutes = routeIds.map((rid) => routeMap.get(rid)).filter((r): r is RouteEntry => !!r)
-                return (
-                <SortableTransitionItem key={grp.label} id={grp.label}>
-                <div
-                  className='overflow-hidden rounded-lg border border-slate-200 bg-white'
-                >
-                  {/* Label group header */}
-                  <div className='group/hdr flex items-center gap-2.5 border-b border-slate-100 bg-slate-50/60 px-3 py-2'>
-                    <TransitionDragHandle />
-                    {/* Group color swatch — click to change */}
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <button
-                          type='button'
-                          title='Change group color'
-                          className='h-3 w-3 shrink-0 rounded-full border border-slate-300 hover:scale-110 transition-transform'
-                          style={{ backgroundColor: grp.color ?? '#e2e8f0' }}
-                        />
-                      </PopoverTrigger>
-                      <PopoverContent align='start' className='w-auto p-3' sideOffset={6}>
-                        <p className='mb-2 text-[11px] font-medium text-slate-500'>Group color</p>
-                        <ColorPicker
-                          value={grp.color}
-                          onChange={(c) => {
-                            const allIds = grp.routes.flatMap((r) => r.ids)
-                            patchGroupColor.mutate({ ids: allIds, color: c })
-                          }}
-                        />
-                      </PopoverContent>
-                    </Popover>
-                    <span className='flex-1 text-[13px] font-semibold text-slate-800'>
-                      {grp.label}
-                    </span>
-                    <span className='text-[11px] text-slate-400 tabular-nums'>
-                      {grp.routes.length} route{grp.routes.length !== 1 ? 's' : ''}
-                    </span>
-                    <button
-                      type='button'
-                      onClick={() => setAddingRouteTo(grp.label)}
-                      className='flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-nvr-cyan opacity-0 hover:bg-nvr-cyan/10 group-hover/hdr:opacity-100 transition-opacity'
-                    >
-                      <Plus className='h-3 w-3' />
-                      Add route
-                    </button>
-                    <button
-                      type='button'
-                      onClick={() => {
-                        const allIds = grp.routes.flatMap((r) => r.ids)
-                        if (confirm(`Delete all routes for "${grp.label}"?`))
-                          deleteRoute.mutate(allIds)
-                      }}
-                      className='rounded p-1 text-slate-300 opacity-0 hover:text-red-500 group-hover/hdr:opacity-100 transition-opacity'
-                    >
-                      <Trash2 className='h-3.5 w-3.5' />
-                    </button>
-                  </div>
-
-                  {/* Route rows */}
-                  <DndContext sensors={stateSensors} collisionDetection={closestCenter} onDragEnd={(e) => handleRouteDragEnd(grp.label, e)}>
-                    <SortableContext items={routeIds} strategy={verticalListSortingStrategy}>
-                  {displayRoutes.map((route) => {
-                    const routeKey = `${grp.label}|${route.from_state ?? '_any_'}|${route.ids[0]}`
-                    const fromState = route.from_state ? stateById.get(route.from_state) : null
-                    const isEditing =
-                      editingRoute?.label === grp.label &&
-                      editingRoute.route.ids[0] === route.ids[0]
-
-                    if (isEditing) {
-                      return (
-                        <div key={routeKey} className='border-b border-slate-100 last:border-0 p-3'>
-                          <TransitionForm
-                            initial={{
-                              from_state: route.from_state,
-                              to_states: route.to_states,
-                              label: grp.label,
-                              color: grp.color,
-                              required_roles: route.required_roles,
-                              condition_rules: route.condition_rules
-                            }}
-                            fixedLabel={grp.label}
-                            states={states}
-                            collection={bindings[0]?.collection}
-                            saving={updateRoute.isPending}
-                            onSave={(data) => updateRoute.mutate({ route, data })}
-                            onCancel={() => setEditingRoute(null)}
-                          />
-                        </div>
-                      )
-                    }
-
+                  {displayGroups.map((grp) => {
+                    const routeMap = new Map(grp.routes.map((r) => [r.ids[0], r]))
+                    const routeIds = localRouteOrder[grp.label] ?? grp.routes.map((r) => r.ids[0])
+                    const displayRoutes = routeIds
+                      .map((rid) => routeMap.get(rid))
+                      .filter((r): r is RouteEntry => !!r)
                     return (
-                      <SortableTransitionItem key={routeKey} id={route.ids[0]}>
-                      <div
-                        className='group/row flex items-center gap-2 border-b border-slate-100 px-3 py-2 last:border-0 hover:bg-slate-50'
-                      >
-                        <TransitionDragHandle />
-                        <div className='flex flex-1 min-w-0 flex-wrap items-center gap-1.5 text-[12px]'>
-                          {fromState ? (
-                            <StateBadge state={fromState} />
-                          ) : (
-                            <span className='italic text-slate-400 text-[11px]'>any state</span>
-                          )}
-                          <ArrowRight className='h-3 w-3 text-slate-300 shrink-0' />
-                          {route.to_states.map((sid, i) => {
-                            const s = stateById.get(sid)
-                            return s ? (
-                              <span key={sid} className='flex items-center gap-1'>
-                                {i > 0 && <span className='text-slate-300'>·</span>}
-                                <StateBadge state={s} small />
-                              </span>
-                            ) : null
-                          })}
-                          {(route.condition_rules ?? []).length > 0 && (
-                            <span
-                              className='ml-1 inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy'
-                              title={(route.condition_rules ?? [])
-                                .map((r) => `${r.field} ${r.op} ${String(r.value ?? '')}`)
-                                .join(' AND ')}
-                            >
-                              <Filter className='h-2.5 w-2.5' />
-                              {(route.condition_rules ?? []).length}
+                      <SortableTransitionItem key={grp.label} id={grp.label}>
+                        <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+                          {/* Label group header */}
+                          <div className='group/hdr flex items-center gap-2.5 border-b border-slate-100 bg-slate-50/60 px-3 py-2'>
+                            <TransitionDragHandle />
+                            {/* Group color swatch — click to change */}
+                            <Popover>
+                              <PopoverTrigger asChild>
+                                <button
+                                  type='button'
+                                  title='Change group color'
+                                  className='h-3 w-3 shrink-0 rounded-full border border-slate-300 hover:scale-110 transition-transform'
+                                  style={{ backgroundColor: grp.color ?? '#e2e8f0' }}
+                                />
+                              </PopoverTrigger>
+                              <PopoverContent align='start' className='w-auto p-3' sideOffset={6}>
+                                <p className='mb-2 text-[11px] font-medium text-slate-500'>
+                                  Group color
+                                </p>
+                                <ColorPicker
+                                  value={grp.color}
+                                  onChange={(c) => {
+                                    const allIds = grp.routes.flatMap((r) => r.ids)
+                                    patchGroupColor.mutate({ ids: allIds, color: c })
+                                  }}
+                                />
+                              </PopoverContent>
+                            </Popover>
+                            <span className='flex-1 text-[13px] font-semibold text-slate-800'>
+                              {grp.label}
                             </span>
+                            <span className='text-[11px] text-slate-400 tabular-nums'>
+                              {grp.routes.length} route{grp.routes.length !== 1 ? 's' : ''}
+                            </span>
+                            <button
+                              type='button'
+                              onClick={() => setAddingRouteTo(grp.label)}
+                              className='flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-nvr-cyan opacity-0 hover:bg-nvr-cyan/10 group-hover/hdr:opacity-100 transition-opacity'
+                            >
+                              <Plus className='h-3 w-3' />
+                              Add route
+                            </button>
+                            <button
+                              type='button'
+                              onClick={() => {
+                                const allIds = grp.routes.flatMap((r) => r.ids)
+                                if (confirm(`Delete all routes for "${grp.label}"?`))
+                                  deleteRoute.mutate(allIds)
+                              }}
+                              className='rounded p-1 text-slate-300 opacity-0 hover:text-red-500 group-hover/hdr:opacity-100 transition-opacity'
+                            >
+                              <Trash2 className='h-3.5 w-3.5' />
+                            </button>
+                          </div>
+
+                          {/* Route rows */}
+                          <DndContext
+                            sensors={stateSensors}
+                            collisionDetection={closestCenter}
+                            onDragEnd={(e) => handleRouteDragEnd(grp.label, e)}
+                          >
+                            <SortableContext
+                              items={routeIds}
+                              strategy={verticalListSortingStrategy}
+                            >
+                              {displayRoutes.map((route) => {
+                                const routeKey = `${grp.label}|${route.from_state ?? '_any_'}|${route.ids[0]}`
+                                const fromState = route.from_state
+                                  ? stateById.get(route.from_state)
+                                  : null
+                                const isEditing =
+                                  editingRoute?.label === grp.label &&
+                                  editingRoute.route.ids[0] === route.ids[0]
+
+                                if (isEditing) {
+                                  return (
+                                    <div
+                                      key={routeKey}
+                                      className='border-b border-slate-100 last:border-0 p-3'
+                                    >
+                                      <TransitionForm
+                                        initial={{
+                                          from_state: route.from_state,
+                                          to_states: route.to_states,
+                                          label: grp.label,
+                                          color: grp.color,
+                                          required_roles: route.required_roles,
+                                          condition_rules: route.condition_rules
+                                        }}
+                                        fixedLabel={grp.label}
+                                        states={states}
+                                        collection={bindings[0]?.collection}
+                                        saving={updateRoute.isPending}
+                                        onSave={(data) => updateRoute.mutate({ route, data })}
+                                        onCancel={() => setEditingRoute(null)}
+                                      />
+                                    </div>
+                                  )
+                                }
+
+                                return (
+                                  <SortableTransitionItem key={routeKey} id={route.ids[0]}>
+                                    <div className='group/row flex items-center gap-2 border-b border-slate-100 px-3 py-2 last:border-0 hover:bg-slate-50'>
+                                      <TransitionDragHandle />
+                                      <div className='flex flex-1 min-w-0 flex-wrap items-center gap-1.5 text-[12px]'>
+                                        {fromState ? (
+                                          <StateBadge state={fromState} />
+                                        ) : (
+                                          <span className='italic text-slate-400 text-[11px]'>
+                                            any state
+                                          </span>
+                                        )}
+                                        <ArrowRight className='h-3 w-3 text-slate-300 shrink-0' />
+                                        {route.to_states.map((sid, i) => {
+                                          const s = stateById.get(sid)
+                                          return s ? (
+                                            <span key={sid} className='flex items-center gap-1'>
+                                              {i > 0 && <span className='text-slate-300'>·</span>}
+                                              <StateBadge state={s} small />
+                                            </span>
+                                          ) : null
+                                        })}
+                                        {(route.condition_rules ?? []).length > 0 && (
+                                          <span
+                                            className='ml-1 inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy'
+                                            title={(route.condition_rules ?? [])
+                                              .map(
+                                                (r) => `${r.field} ${r.op} ${String(r.value ?? '')}`
+                                              )
+                                              .join(' AND ')}
+                                          >
+                                            <Filter className='h-2.5 w-2.5' />
+                                            {(route.condition_rules ?? []).length}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className='flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100'>
+                                        <button
+                                          type='button'
+                                          onClick={() =>
+                                            setEditingRoute({ label: grp.label, route })
+                                          }
+                                          className='rounded p-1 text-slate-400 hover:text-slate-700'
+                                        >
+                                          <Pencil className='h-3.5 w-3.5' />
+                                        </button>
+                                        <button
+                                          type='button'
+                                          onClick={() => {
+                                            if (confirm('Delete this route?'))
+                                              deleteRoute.mutate(route.ids)
+                                          }}
+                                          className='rounded p-1 text-slate-400 hover:text-red-500'
+                                        >
+                                          <Trash2 className='h-3.5 w-3.5' />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </SortableTransitionItem>
+                                )
+                              })}
+                            </SortableContext>
+                          </DndContext>
+
+                          {/* Add route form */}
+                          {addingRouteTo === grp.label && (
+                            <div className='border-t border-slate-100 p-3'>
+                              <TransitionForm
+                                initial={{ color: grp.color }}
+                                fixedLabel={grp.label}
+                                states={states}
+                                collection={bindings[0]?.collection}
+                                saving={addRoute.isPending}
+                                onSave={(data) => addRoute.mutate({ labelGroup: grp, data })}
+                                onCancel={() => setAddingRouteTo(null)}
+                              />
+                            </div>
                           )}
                         </div>
-                        <div className='flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100'>
-                          <button
-                            type='button'
-                            onClick={() => setEditingRoute({ label: grp.label, route })}
-                            className='rounded p-1 text-slate-400 hover:text-slate-700'
-                          >
-                            <Pencil className='h-3.5 w-3.5' />
-                          </button>
-                          <button
-                            type='button'
-                            onClick={() => {
-                              if (confirm('Delete this route?')) deleteRoute.mutate(route.ids)
-                            }}
-                            className='rounded p-1 text-slate-400 hover:text-red-500'
-                          >
-                            <Trash2 className='h-3.5 w-3.5' />
-                          </button>
-                        </div>
-                      </div>
                       </SortableTransitionItem>
                     )
                   })}
-                    </SortableContext>
-                  </DndContext>
-
-                  {/* Add route form */}
-                  {addingRouteTo === grp.label && (
-                    <div className='border-t border-slate-100 p-3'>
-                      <TransitionForm
-                        initial={{ color: grp.color }}
-                        fixedLabel={grp.label}
-                        states={states}
-                        collection={bindings[0]?.collection}
-                        saving={addRoute.isPending}
-                        onSave={(data) => addRoute.mutate({ labelGroup: grp, data })}
-                        onCancel={() => setAddingRouteTo(null)}
-                      />
-                    </div>
-                  )}
-                </div>
-                </SortableTransitionItem>
-                )})}
                 </SortableContext>
               </DndContext>
 
@@ -2564,7 +2612,10 @@ export function PipelineEditPage() {
                             onChange={(e) =>
                               updateBinding.mutate({
                                 bindingId: b.id,
-                                body: { auto_start: e.target.checked, auto_start_state: b.auto_start_state }
+                                body: {
+                                  auto_start: e.target.checked,
+                                  auto_start_state: b.auto_start_state
+                                }
                               })
                             }
                             className='rounded'
@@ -2691,7 +2742,223 @@ export function PipelineEditPage() {
             <OwnerMatrix templateId={id!} states={orderedStates} bindings={bindings} />
           </div>
         )}
+
+        {/* Simulator */}
+        <PipelineSimulatorCard bindings={bindings} />
       </div>
     </>
+  )
+}
+
+// ─── Simulator — dry-run a record through the pipeline ────────────────────────
+
+interface SimState {
+  id: string
+  key: string
+  label: string
+  color: string | null
+  is_current: boolean
+  is_terminal: boolean
+  owners: Array<{ id: string; email: string; first_name: string | null; last_name: string | null }>
+  sla_rule: { name: string; duration_hours: number; business_hours_only: boolean } | null
+}
+
+interface SimTransition {
+  id: string
+  label: string
+  from_ok: boolean
+  conditions_pass: boolean
+  role_pass: boolean
+  available: boolean
+  required_roles: string[]
+  condition_rules: Array<{
+    field: string
+    op: string
+    value: unknown
+    record_value: unknown
+    passed: boolean
+  }>
+}
+
+function PipelineSimulatorCard({ bindings }: { bindings: Array<{ collection: string }> }) {
+  const [itemId, setItemId] = useState('')
+  const [collection, setCollection] = useState('')
+  const effectiveCollection = collection || bindings[0]?.collection || ''
+
+  const sim = useMutation({
+    mutationFn: () =>
+      api
+        .post<{
+          data: {
+            current_state: string | null
+            states: SimState[]
+            transitions: SimTransition[]
+            has_instance: boolean
+          } | null
+        }>('/pipelines/simulate', { collection: effectiveCollection, item_id: itemId.trim() })
+        .then((r) => r.data.data),
+    onError: () => toast.error('Simulation failed')
+  })
+  const result = sim.data
+
+  if (bindings.length === 0) return null
+
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4'>
+      <div>
+        <h2 className='text-[13px] font-semibold text-slate-800'>Simulator</h2>
+        <p className='text-[12px] text-slate-400'>
+          Dry-run a record: who would own each state, which transitions are available and why.
+        </p>
+      </div>
+      <div className='flex items-end gap-2'>
+        {bindings.length > 1 && (
+          <div>
+            <p className='mb-1 text-[11px] font-medium text-slate-500'>Collection</p>
+            <div className='flex items-center rounded-lg border border-slate-200 p-0.5'>
+              {bindings.map((b) => (
+                <button
+                  key={b.collection}
+                  type='button'
+                  onClick={() => setCollection(b.collection)}
+                  className={cn(
+                    'h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors',
+                    effectiveCollection === b.collection
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-400 hover:text-slate-700'
+                  )}
+                >
+                  {b.collection}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div>
+          <p className='mb-1 text-[11px] font-medium text-slate-500'>
+            Record ID{bindings.length === 1 ? ` (${effectiveCollection})` : ''}
+          </p>
+          <Input
+            value={itemId}
+            onChange={(e) => setItemId(e.target.value)}
+            placeholder='e.g. 366518'
+            className='h-8 w-40 text-[13px]'
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && itemId.trim()) sim.mutate()
+            }}
+          />
+        </div>
+        <Button size='sm' disabled={!itemId.trim() || sim.isPending} onClick={() => sim.mutate()}>
+          {sim.isPending ? 'Running…' : 'Simulate'}
+        </Button>
+      </div>
+
+      {sim.isSuccess && result === null && (
+        <p className='text-[12px] text-slate-400'>
+          No pipeline binding or instance for this record.
+        </p>
+      )}
+
+      {result && (
+        <div className='space-y-4'>
+          {!result.has_instance && (
+            <p className='text-[12px] text-amber-600'>
+              No workflow instance yet — simulating from the initial state.
+            </p>
+          )}
+          {/* State track with owners + SLA */}
+          <div className='grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
+            {result.states.map((s) => (
+              <div
+                key={s.id}
+                className={cn(
+                  'rounded-lg border p-3',
+                  s.is_current ? 'border-[#00ceff] bg-[#00ceff0a]' : 'border-slate-200'
+                )}
+              >
+                <div className='flex items-center gap-1.5'>
+                  <span
+                    className='h-2 w-2 shrink-0 rounded-full'
+                    style={{ background: s.color ?? '#94a3b8' }}
+                  />
+                  <p className='truncate text-[12px] font-semibold text-slate-800'>{s.label}</p>
+                  {s.is_current && (
+                    <Badge className='ml-auto h-4 shrink-0 px-1.5 text-[9px]'>current</Badge>
+                  )}
+                </div>
+                <p className='mt-1.5 text-[11px] text-slate-500'>
+                  {s.owners.length === 0
+                    ? 'No owners'
+                    : s.owners
+                        .map(
+                          (o) => [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
+                        )
+                        .slice(0, 3)
+                        .join(', ') + (s.owners.length > 3 ? ` +${s.owners.length - 3}` : '')}
+                </p>
+                {s.sla_rule && (
+                  <p className='mt-0.5 text-[10px] text-slate-400'>
+                    SLA: {s.sla_rule.duration_hours}h
+                    {s.sla_rule.business_hours_only ? ' (business)' : ''}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+          {/* Transitions */}
+          <table className='w-full text-left text-[12px]'>
+            <thead>
+              <tr className='border-b border-slate-100 text-[11px] text-slate-500'>
+                <th className='py-1.5 font-medium'>Transition</th>
+                <th className='py-1.5 font-medium'>From current</th>
+                <th className='py-1.5 font-medium'>Conditions</th>
+                <th className='py-1.5 font-medium'>Role</th>
+                <th className='py-1.5 font-medium'>Available</th>
+              </tr>
+            </thead>
+            <tbody className='divide-y divide-slate-50'>
+              {result.transitions.map((t) => (
+                <tr key={t.id} className={cn(!t.available && 'text-slate-400')}>
+                  <td className='py-1.5 font-medium'>{t.label}</td>
+                  <td className='py-1.5'>{t.from_ok ? '✓' : '—'}</td>
+                  <td className='py-1.5'>
+                    {t.condition_rules.length === 0 ? (
+                      '—'
+                    ) : t.conditions_pass ? (
+                      '✓ pass'
+                    ) : (
+                      <span
+                        className='text-red-500'
+                        title={t.condition_rules
+                          .filter((r) => !r.passed)
+                          .map(
+                            (r) =>
+                              `${r.field} ${r.op} ${JSON.stringify(r.value)} (is ${JSON.stringify(r.record_value)})`
+                          )
+                          .join('; ')}
+                      >
+                        ✗ {t.condition_rules.filter((r) => !r.passed).length} failing
+                      </span>
+                    )}
+                  </td>
+                  <td className='py-1.5'>
+                    {t.required_roles.length === 0 ? '—' : t.role_pass ? '✓' : '✗ restricted'}
+                  </td>
+                  <td className='py-1.5'>
+                    {t.available ? (
+                      <Badge className='h-4 bg-green-100 px-1.5 text-[9px] text-green-700'>
+                        yes
+                      </Badge>
+                    ) : (
+                      <span className='text-[11px]'>no</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }
