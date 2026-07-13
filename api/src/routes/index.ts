@@ -64,6 +64,7 @@ import { reportsRoutes } from './reports.js'
 import { backupsRoutes } from './backups.js'
 import { promotionRoutes } from './promotion.js'
 import { scheduledReportsRoutes } from './scheduled-reports.js'
+import { shareLinksRoutes } from './share-links.js'
 import { timelineRoutes } from './timeline.js'
 import { retentionRoutes } from './retention.js'
 import { revisionsRoutes } from './revisions.js'
@@ -158,6 +159,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(promotionRoutes, { prefix: '/promotion' })
   await app.register(scheduledReportsRoutes, { prefix: '/scheduled-reports' })
   await app.register(timelineRoutes, { prefix: '/timeline' })
+  await app.register(shareLinksRoutes, { prefix: '/share-links' })
   await app.register(bulkActionsRoutes)
   await app.register(itemActionsRoutes)
   await app.register(extensionRegistryRoutes)

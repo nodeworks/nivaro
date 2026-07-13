@@ -45,7 +45,8 @@ function parseJson<T>(v: unknown): T | null {
 
 export async function loadFormLayout(
   layoutId: number,
-  collection: string
+  collection: string,
+  opts: { includeReadonly?: boolean } = {}
 ): Promise<FormLayoutStructure | null> {
   const layout = await db('nivaro_collection_layouts')
     .where({ id: layoutId, collection })
@@ -82,11 +83,13 @@ export async function loadFormLayout(
     if (a.is_visible === 0 || a.is_visible === false) return null
     const meta = metaByField.get(path)
     if (!meta || meta.hidden === true || meta.hidden === 1) return null
-    if (meta.readonly === true || meta.readonly === 1) return null
     const overrides = parseJson<Record<string, unknown>>(a.overrides) ?? {}
-    if (overrides.readonly === true) return null
-    const opts = parseJson<Record<string, unknown>>(meta.options)
-    const rawChoices = opts?.choices ?? opts?.options
+    if (!opts.includeReadonly) {
+      if (meta.readonly === true || meta.readonly === 1) return null
+      if (overrides.readonly === true) return null
+    }
+    const fieldOpts = parseJson<Record<string, unknown>>(meta.options)
+    const rawChoices = fieldOpts?.choices ?? fieldOpts?.options
     const choices = Array.isArray(rawChoices)
       ? rawChoices
           .map((c: unknown) =>

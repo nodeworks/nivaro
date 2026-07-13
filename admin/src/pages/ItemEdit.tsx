@@ -26,6 +26,7 @@ import { toast } from 'sonner'
 import { ApprovalPanel } from '@/components/approval-panel'
 import { ErpStatusBadge } from '@/components/erp-status-badge'
 import { RecordDrilldownSheet } from '@/components/record-drilldown-sheet'
+import { ShareLinkPopover } from '@/components/share-link-popover'
 import { TimelineSheet } from '@/components/timeline-sheet'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -820,6 +821,13 @@ export function ItemEditPage() {
                       >
                         <History className='h-3.5 w-3.5' />
                       </Button>
+                    )}
+                    {id && !isNew && collection && (
+                      <ShareLinkPopover
+                        collection={collection}
+                        item={id}
+                        triggerClassName='rounded-none -ml-px first:ml-0'
+                      />
                     )}
                     {user?.is_admin && layoutAiEnabled && id && !isNew && (
                       <Button

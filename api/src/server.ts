@@ -24,6 +24,7 @@ import { socketioPlugin } from './plugins/socketio.js'
 import { adminProvisionRoutes } from './routes/admin/provision.js'
 import { loadScheduledFlows } from './routes/flows.js'
 import { formRendererRoutes } from './routes/form-renderer.js'
+import { sharePublicRoutes } from './routes/share-links.js'
 import { registerRoutes } from './routes/index.js'
 import { presencePublicRoutes } from './routes/presence.js'
 import { registerDigestCrons } from './services/digest.js'
@@ -150,6 +151,7 @@ export async function buildServer() {
   await app.register(registerRoutes, { prefix: '/api' })
   await app.register(graphqlPlugin, { prefix: '/api' })
   await app.register(formRendererRoutes)
+  await app.register(sharePublicRoutes)
 
   // ─── Serve admin static build (release image) ────────────────────────────
   const adminBuildPath = join(import.meta.dirname, '../../admin/dist')
