@@ -843,6 +843,15 @@ export async function dataModelRoutes(app: FastifyInstance) {
     }
   })
 
+  // ─── GET /:table/fields/:field/impact — what references this field? ──────
+
+  app.get('/:table/fields/:field/impact', async (req, reply) => {
+    const { table, field } = req.params as { table: string; field: string }
+    const { analyzeFieldImpact } = await import('../services/field-impact.js')
+    const impacts = await analyzeFieldImpact(table, field)
+    return reply.send({ data: impacts, total: impacts.length })
+  })
+
   // ─── GET /relations — list all CMS relations ─────────────────────────────
 
   app.get('/relations', async (_req, reply) => {

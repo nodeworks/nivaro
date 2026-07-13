@@ -12,7 +12,7 @@ import {
   rectIntersection,
   useDroppable,
   useSensor,
-  useSensors,
+  useSensors
 } from '@dnd-kit/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -24,6 +24,7 @@ import {
   ChevronsUpDown,
   ChevronUp,
   CornerDownLeft,
+  Crosshair,
   Eye,
   EyeOff,
   GripVertical,
@@ -51,21 +52,26 @@ const snapLeftEdgeToCursor: Modifier = ({ activatorEvent, draggingNodeRect, tran
   return transform
 }
 
-
 import {
   arrayMove,
   rectSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
-  verticalListSortingStrategy,
+  verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { CollectionFieldPicker, CollectionFieldPickerPanel, FieldPicker, FieldPickerPanel, type PickedField } from '@/components/field-picker'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
+import {
+  CollectionFieldPicker,
+  CollectionFieldPickerPanel,
+  FieldPicker,
+  FieldPickerPanel,
+  type PickedField
+} from '@/components/field-picker'
 import { FormulaBuilder } from '@/components/formula-builder'
 import { IconPicker } from '@/components/icon-picker'
 import { Badge } from '@/components/ui/badge'
@@ -94,10 +100,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
-import { useAuth } from '@/lib/auth'
-import { TreeSection } from '@/pages/DataModel'
-import { FieldRulesSection } from '@/pages/FieldRulesSection'
 import { api, type CMSField, type CMSRelation } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import {
   CHOICE_INTERFACES,
   type Choice,
@@ -112,6 +116,7 @@ import {
   parseJson,
   SLIDER_INTERFACES
 } from '@/lib/field-config'
+import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import {
   type CMSRelationRow,
   type CreateColumnBody,
@@ -122,8 +127,9 @@ import {
   type RelationType,
   schemaApi
 } from '@/lib/schema-api'
-import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import { cn, resolveCollectionIcon, titleCase } from '@/lib/utils'
+import { TreeSection } from '@/pages/DataModel'
+import { FieldRulesSection } from '@/pages/FieldRulesSection'
 
 // ─── Formula mode toggle (Builder | Raw) ─────────────────────────────────────
 
@@ -286,7 +292,9 @@ function O2MAggFieldCombobox({
       onChange={(v) => {
         const field = fields.find((f) => f.field === v)
         const opts = field?.options
-          ? typeof field.options === 'string' ? field.options : JSON.stringify(field.options)
+          ? typeof field.options === 'string'
+            ? field.options
+            : JSON.stringify(field.options)
           : null
         onChange(v, opts)
       }}
@@ -494,7 +502,20 @@ function normalizeDataType(col: { data_type: string; max_length: number | null }
 
 // ─── Add column form ──────────────────────────────────────────────────────────
 
-const NUMERIC_DATA_TYPES = new Set(['int', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric', 'float', 'real', 'money', 'smallmoney', 'integer', 'double'])
+const NUMERIC_DATA_TYPES = new Set([
+  'int',
+  'bigint',
+  'smallint',
+  'tinyint',
+  'decimal',
+  'numeric',
+  'float',
+  'real',
+  'money',
+  'smallmoney',
+  'integer',
+  'double'
+])
 
 const COLUMN_TYPES = [
   'string',
@@ -578,9 +599,9 @@ function AddColumnForm({
           ? {
               computed_formula: computedFormulaValue,
               computed_type: computedType,
-              computed_store: computedType === 'write' ? computedStore : false,
+              computed_store: computedType === 'write' ? computedStore : false
             }
-          : {}),
+          : {})
       })
       toast.success(`${isVirtual ? 'Computed field' : 'Column'} "${form.name}" added`)
       onSuccess()
@@ -612,7 +633,11 @@ function AddColumnForm({
           <Sel
             value={form.type}
             onChange={setFormType}
-            options={FIELD_TYPES.map((ft) => ({ value: ft.value, label: ft.label, group: ft.group }))}
+            options={FIELD_TYPES.map((ft) => ({
+              value: ft.value,
+              label: ft.label,
+              group: ft.group
+            }))}
             placeholder='Select type…'
           />
         </div>
@@ -663,9 +688,7 @@ function AddColumnForm({
               min={0}
               max={form.precision ?? 10}
               value={form.scale ?? ''}
-              onChange={(e) =>
-                set('scale', e.target.value ? Number(e.target.value) : undefined)
-              }
+              onChange={(e) => set('scale', e.target.value ? Number(e.target.value) : undefined)}
               placeholder='2'
               className='h-7 text-[12px]'
             />
@@ -922,7 +945,9 @@ function FieldsTab({
       {isSystem && (
         <div className='flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3'>
           <div>
-            <p className='text-[12px] font-medium text-amber-800'>System table — schema changes restricted</p>
+            <p className='text-[12px] font-medium text-amber-800'>
+              System table — schema changes restricted
+            </p>
             <p className='text-[11px] text-amber-600 mt-0.5'>
               {extendMode
                 ? 'Extend mode active. You can add columns and modify columns you created.'
@@ -944,54 +969,53 @@ function FieldsTab({
         </div>
       )}
 
-    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
-      {/* Column rows */}
-      {columns.map((col, i) => (
-        <ColumnRow
-          key={col.name}
-          col={col}
-          tableName={tableName}
-          isFirst={i === 0}
-          isSystem={isSystem}
-          canDrop={!isSystem || (extendMode && !!col.field_meta)}
-          onDrop={() => {
-            if (confirm(`Drop column "${col.name}"? This cannot be undone.`)) {
-              dropColumn.mutate(col.name)
-            }
-          }}
-          onRefresh={onRefresh}
-        />
-      ))}
-
-      {columns.length === 0 && !addingColumn && (
-        <div className='px-4 py-8 text-center text-[13px] text-slate-400'>No columns found</div>
-      )}
-
-      {/* Add column inline form — hidden for system tables unless extend mode */}
-      {(!isSystem || extendMode) && (
-        addingColumn ? (
-          <AddColumnForm
-            table={tableName}
-            onSuccess={() => {
-              setAddingColumn(false)
-              qc.invalidateQueries({ queryKey: ['data-model-table', tableName] })
+      <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+        {/* Column rows */}
+        {columns.map((col, i) => (
+          <ColumnRow
+            key={col.name}
+            col={col}
+            tableName={tableName}
+            isFirst={i === 0}
+            isSystem={isSystem}
+            canDrop={!isSystem || (extendMode && !!col.field_meta)}
+            onDrop={() => {
+              if (confirm(`Drop column "${col.name}"? This cannot be undone.`)) {
+                dropColumn.mutate(col.name)
+              }
             }}
-            onCancel={() => setAddingColumn(false)}
+            onRefresh={onRefresh}
           />
-        ) : (
-          <div className='border-t border-slate-100 px-4 py-2.5'>
-            <button
-              type='button'
-              onClick={() => setAddingColumn(true)}
-              className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-nvr-cyan'
-            >
-              <Plus className='h-3.5 w-3.5' />
-              Add column
-            </button>
-          </div>
-        )
-      )}
-    </div>
+        ))}
+
+        {columns.length === 0 && !addingColumn && (
+          <div className='px-4 py-8 text-center text-[13px] text-slate-400'>No columns found</div>
+        )}
+
+        {/* Add column inline form — hidden for system tables unless extend mode */}
+        {(!isSystem || extendMode) &&
+          (addingColumn ? (
+            <AddColumnForm
+              table={tableName}
+              onSuccess={() => {
+                setAddingColumn(false)
+                qc.invalidateQueries({ queryKey: ['data-model-table', tableName] })
+              }}
+              onCancel={() => setAddingColumn(false)}
+            />
+          ) : (
+            <div className='border-t border-slate-100 px-4 py-2.5'>
+              <button
+                type='button'
+                onClick={() => setAddingColumn(true)}
+                className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-nvr-cyan'
+              >
+                <Plus className='h-3.5 w-3.5' />
+                Add column
+              </button>
+            </div>
+          ))}
+      </div>
     </div>
   )
 }
@@ -1040,10 +1064,12 @@ function ColumnRow({
 
   return (
     <div className={cn(!isFirst && 'border-t border-slate-100')}>
-      <div className={cn(
-        'group flex items-center gap-3 px-4 py-2.5',
-        isProtected ? 'opacity-40 cursor-default' : 'hover:bg-slate-50'
-      )}>
+      <div
+        className={cn(
+          'group flex items-center gap-3 px-4 py-2.5',
+          isProtected ? 'opacity-40 cursor-default' : 'hover:bg-slate-50'
+        )}
+      >
         {/* PK indicator */}
         <div className='flex w-4 shrink-0 justify-center'>
           {col.is_primary_key && (
@@ -1291,8 +1317,9 @@ function Sel({
   const groups: Record<string, { value: string; label: string }[]> = {}
   const ungrouped: { value: string; label: string }[] = []
   for (const o of options) {
-    if (o.group) { (groups[o.group] ??= []).push(o) }
-    else ungrouped.push(o)
+    if (o.group) {
+      ;(groups[o.group] ??= []).push(o)
+    } else ungrouped.push(o)
   }
   const hasGroups = Object.keys(groups).length > 0
 
@@ -1317,7 +1344,9 @@ function Sel({
         <Command>
           <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
           <CommandList>
-            <CommandEmpty className='py-2 text-center text-[12px] text-slate-400'>No results</CommandEmpty>
+            <CommandEmpty className='py-2 text-center text-[12px] text-slate-400'>
+              No results
+            </CommandEmpty>
             {hasGroups
               ? Object.entries(groups).map(([group, items]) => (
                   <CommandGroup key={group} heading={group}>
@@ -1325,10 +1354,18 @@ function Sel({
                       <CommandItem
                         key={o.value}
                         value={`${o.label} ${o.value}`}
-                        onSelect={() => { onChange(o.value); setOpen(false) }}
+                        onSelect={() => {
+                          onChange(o.value)
+                          setOpen(false)
+                        }}
                         className='text-[12px]'
                       >
-                        <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === o.value ? 'opacity-100' : 'opacity-0')} />
+                        <Check
+                          className={cn(
+                            'mr-1.5 h-3 w-3 shrink-0',
+                            value === o.value ? 'opacity-100' : 'opacity-0'
+                          )}
+                        />
                         {o.label}
                       </CommandItem>
                     ))}
@@ -1338,10 +1375,18 @@ function Sel({
                   <CommandItem
                     key={o.value}
                     value={`${o.label} ${o.value}`}
-                    onSelect={() => { onChange(o.value); setOpen(false) }}
+                    onSelect={() => {
+                      onChange(o.value)
+                      setOpen(false)
+                    }}
                     className='text-[12px]'
                   >
-                    <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === o.value ? 'opacity-100' : 'opacity-0')} />
+                    <Check
+                      className={cn(
+                        'mr-1.5 h-3 w-3 shrink-0',
+                        value === o.value ? 'opacity-100' : 'opacity-0'
+                      )}
+                    />
                     {o.label}
                   </CommandItem>
                 ))}
@@ -1351,7 +1396,6 @@ function Sel({
     </Popover>
   )
 }
-
 
 // ─── Field meta editor ────────────────────────────────────────────────────────
 
@@ -1375,9 +1419,7 @@ function FieldMetaEditor({
   const [fieldInterface, setFieldInterface] = useState(
     fm?.interface ?? getDefaultInterface(abstractType)
   )
-  const [display, setDisplay] = useState(
-    fm?.display ?? getDefaultDisplay(abstractType)
-  )
+  const [display, setDisplay] = useState(fm?.display ?? getDefaultDisplay(abstractType))
   const [note, setNote] = useState(fm?.note ?? '')
   const [hidden, setHidden] = useState(fm?.hidden ?? false)
   const [readonly, setReadonly] = useState(fm?.readonly ?? false)
@@ -1493,7 +1535,7 @@ function FieldMetaEditor({
         mode: dtMode,
         format: dtFormat || undefined,
         on_create: dtOnCreate !== 'do_nothing' ? dtOnCreate : undefined,
-        on_update: dtOnUpdate !== 'do_nothing' ? dtOnUpdate : undefined,
+        on_update: dtOnUpdate !== 'do_nothing' ? dtOnUpdate : undefined
       })
     }
     if (COLOR_INTERFACES.has(fieldInterface)) {
@@ -1568,7 +1610,11 @@ function FieldMetaEditor({
           <Sel
             value={fieldType}
             onChange={setFieldType}
-            options={FIELD_TYPES.map((ft) => ({ value: ft.value, label: ft.label, group: ft.group }))}
+            options={FIELD_TYPES.map((ft) => ({
+              value: ft.value,
+              label: ft.label,
+              group: ft.group
+            }))}
             placeholder='Select type…'
             disabled={!col.is_virtual}
           />
@@ -1649,7 +1695,7 @@ function FieldMetaEditor({
                 options={[
                   { value: 'date', label: 'Date only' },
                   { value: 'time', label: 'Time only' },
-                  { value: 'datetime', label: 'Date & Time' },
+                  { value: 'datetime', label: 'Date & Time' }
                 ]}
               />
             </div>
@@ -1671,7 +1717,7 @@ function FieldMetaEditor({
                 onChange={setDtOnCreate}
                 options={[
                   { value: 'do_nothing', label: 'Do Nothing' },
-                  { value: 'now', label: 'Save Current Date/Time' },
+                  { value: 'now', label: 'Save Current Date/Time' }
                 ]}
               />
             </div>
@@ -1682,7 +1728,7 @@ function FieldMetaEditor({
                 onChange={setDtOnUpdate}
                 options={[
                   { value: 'do_nothing', label: 'Do Nothing' },
-                  { value: 'now', label: 'Save Current Date/Time' },
+                  { value: 'now', label: 'Save Current Date/Time' }
                 ]}
               />
             </div>
@@ -2106,7 +2152,8 @@ function TblSel({
       placeholder={placeholder ?? 'Select table…'}
       options={allTables.map((t) => ({
         value: t.name,
-        label: t.display_name && t.display_name !== t.name ? `${t.name} — ${t.display_name}` : t.name
+        label:
+          t.display_name && t.display_name !== t.name ? `${t.name} — ${t.display_name}` : t.name
       }))}
     />
   )
@@ -2145,27 +2192,42 @@ function ColSel({
   const showCreate = allowNew && !!trimmed && !cols.some((c) => c.name === trimmed)
 
   return (
-    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setSearch('') }}>
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o)
+        if (!o) setSearch('')
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type='button'
           disabled={isDisabled}
           className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-left text-[12px] text-slate-800 focus:outline-none focus:ring-1 focus:ring-nvr-cyan disabled:opacity-50 dark:border-border dark:bg-card dark:text-foreground'
         >
-          <span className={cn('flex min-w-0 flex-1 items-center gap-1 truncate', !value && 'text-slate-400')}>
-            {isFetching
-              ? 'Loading…'
-              : value
-                ? (
-                  <>
-                    <span className={cn('font-mono truncate', isNew && 'text-nvr-cyan')}>{value}</span>
-                    {isNew && (
-                      <span className='shrink-0 rounded bg-nvr-cyan/10 px-1 text-[9px] font-semibold uppercase tracking-wide text-nvr-cyan'>NEW</span>
-                    )}
-                    {selected && <span className='shrink-0 text-slate-400'>({selected.data_type})</span>}
-                  </>
-                )
-                : (placeholder ?? 'Select column…')}
+          <span
+            className={cn(
+              'flex min-w-0 flex-1 items-center gap-1 truncate',
+              !value && 'text-slate-400'
+            )}
+          >
+            {isFetching ? (
+              'Loading…'
+            ) : value ? (
+              <>
+                <span className={cn('font-mono truncate', isNew && 'text-nvr-cyan')}>{value}</span>
+                {isNew && (
+                  <span className='shrink-0 rounded bg-nvr-cyan/10 px-1 text-[9px] font-semibold uppercase tracking-wide text-nvr-cyan'>
+                    NEW
+                  </span>
+                )}
+                {selected && (
+                  <span className='shrink-0 text-slate-400'>({selected.data_type})</span>
+                )}
+              </>
+            ) : (
+              (placeholder ?? 'Select column…')
+            )}
           </span>
           <ChevronDown className='ml-1 h-3 w-3 shrink-0 text-slate-400' />
         </button>
@@ -2179,17 +2241,29 @@ function ColSel({
             onValueChange={setSearch}
           />
           <CommandList>
-            <CommandEmpty className={cn('py-2 text-center text-[12px] text-slate-400', showCreate && 'hidden')}>
+            <CommandEmpty
+              className={cn('py-2 text-center text-[12px] text-slate-400', showCreate && 'hidden')}
+            >
               No columns
             </CommandEmpty>
             {cols.map((c) => (
               <CommandItem
                 key={c.name}
                 value={`${c.name} ${c.data_type}`}
-                onSelect={() => { onChange(c.name); onNewColumn?.(''); setOpen(false); setSearch('') }}
+                onSelect={() => {
+                  onChange(c.name)
+                  onNewColumn?.('')
+                  setOpen(false)
+                  setSearch('')
+                }}
                 className='text-[12px]'
               >
-                <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === c.name ? 'opacity-100' : 'opacity-0')} />
+                <Check
+                  className={cn(
+                    'mr-1.5 h-3 w-3 shrink-0',
+                    value === c.name ? 'opacity-100' : 'opacity-0'
+                  )}
+                />
                 <span className='font-mono'>{c.name}</span>
                 <span className='ml-1.5 text-slate-400'>({c.data_type})</span>
               </CommandItem>
@@ -2198,7 +2272,12 @@ function ColSel({
               <CommandItem
                 key='__create__'
                 value={`__create__ ${trimmed}`}
-                onSelect={() => { onChange(trimmed); onNewColumn?.(trimmed); setOpen(false); setSearch('') }}
+                onSelect={() => {
+                  onChange(trimmed)
+                  onNewColumn?.(trimmed)
+                  setOpen(false)
+                  setSearch('')
+                }}
                 className='text-[12px] text-nvr-cyan'
               >
                 <span className='mr-1.5'>✚</span>
@@ -2843,7 +2922,10 @@ function RelationsTab({
       return `${rel.many_collection}.${rel.many_field} → ${tableName}.${rel.one_field ?? 'id'}`
     if (t === 'm2m') {
       const companion = cmsRelations.find(
-        (r) => r.many_collection === rel.many_collection && r.many_field === rel.junction_field && r.id !== rel.id
+        (r) =>
+          r.many_collection === rel.many_collection &&
+          r.many_field === rel.junction_field &&
+          r.id !== rel.id
       )
       const target =
         companion?.one_collection ??
@@ -2872,14 +2954,17 @@ function RelationsTab({
       base.m2m_many_field = rel.many_field
       base.m2m_junction_field = rel.junction_field ?? ''
       const companion = cmsRelations.find(
-        (r) => r.many_collection === rel.many_collection &&
-               r.many_field === rel.junction_field &&
-               r.id !== rel.id
+        (r) =>
+          r.many_collection === rel.many_collection &&
+          r.many_field === rel.junction_field &&
+          r.id !== rel.id
       )
       // fall back to stripping _id suffix if no companion exists yet
       const derivedTarget =
         companion?.one_collection ??
-        (rel.junction_field?.endsWith('_id') ? rel.junction_field.slice(0, -3) : rel.junction_field) ??
+        (rel.junction_field?.endsWith('_id')
+          ? rel.junction_field.slice(0, -3)
+          : rel.junction_field) ??
         ''
       base.m2m_one_collection = derivedTarget
       base.m2m_one_field = companion?.one_field ?? ''
@@ -2951,12 +3036,26 @@ function RelationsTab({
   const createMut = useMutation({
     mutationFn: async () => {
       if (selectedType === 'm2o' && form.m2o_is_new_field && form.m2o_many_field) {
-        await schemaApi.addColumn(tableName, { name: form.m2o_many_field, type: form.m2o_new_field_type, nullable: true })
-        await api.post(`/collections/${tableName}/fields`, { field: form.m2o_many_field, type: form.m2o_new_field_type })
+        await schemaApi.addColumn(tableName, {
+          name: form.m2o_many_field,
+          type: form.m2o_new_field_type,
+          nullable: true
+        })
+        await api.post(`/collections/${tableName}/fields`, {
+          field: form.m2o_many_field,
+          type: form.m2o_new_field_type
+        })
       }
       if (selectedType === 'm2a' && form.m2a_is_new_field && form.m2a_many_field) {
-        await schemaApi.addColumn(tableName, { name: form.m2a_many_field, type: form.m2a_new_field_type, nullable: true })
-        await api.post(`/collections/${tableName}/fields`, { field: form.m2a_many_field, type: form.m2a_new_field_type })
+        await schemaApi.addColumn(tableName, {
+          name: form.m2a_many_field,
+          type: form.m2a_new_field_type,
+          nullable: true
+        })
+        await api.post(`/collections/${tableName}/fields`, {
+          field: form.m2a_many_field,
+          type: form.m2a_new_field_type
+        })
       }
       if (selectedType === 'm2m' && form.m2m_auto && form.m2m_one_collection) {
         const junctionName =
@@ -2964,8 +3063,16 @@ function RelationsTab({
         const sourceFK = `${tableName}_id`
         const targetFK = `${form.m2m_one_collection}_id`
         await schemaApi.createTable({ name: junctionName })
-        await schemaApi.addColumn(junctionName, { name: sourceFK, type: 'integer', nullable: false })
-        await schemaApi.addColumn(junctionName, { name: targetFK, type: 'integer', nullable: false })
+        await schemaApi.addColumn(junctionName, {
+          name: sourceFK,
+          type: 'integer',
+          nullable: false
+        })
+        await schemaApi.addColumn(junctionName, {
+          name: targetFK,
+          type: 'integer',
+          nullable: false
+        })
         // primary relation (junction → source/this table)
         await schemaApi.createRelation({
           many_collection: junctionName,
@@ -3158,125 +3265,130 @@ function RelationsTab({
           </div>
         ) : cmsRelations.length > 0 ? (
           <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
-            {cmsRelations.filter(rel =>
-              // Only show relations directly involving this table.
-              // Junction companion rows (many_collection=junction, one_collection=other)
-              // stay in cmsRelations for M2M resolution but aren't table-level relations.
-              rel.many_collection === tableName ||
-              rel.one_collection === tableName
-            ).map((rel, i) => {
-              const t = detectRelationType(rel, tableName)
-              const isDeleting = deleteId === rel.id
-              const isEditing = editingId === rel.id
-              return (
-                <div key={rel.id} className={cn('px-4 py-3', i > 0 && 'border-t border-slate-100')}>
-                  {isDeleting ? (
-                    <div className='flex items-center gap-3'>
-                      <span className='text-[12px] text-slate-700'>Delete this relation?</span>
-                      <div className='ml-auto flex gap-2'>
-                        <Button
-                          type='button'
-                          variant='outline'
-                          size='sm'
-                          className='h-6 text-[11px]'
-                          onClick={() => setDeleteId(null)}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          type='button'
-                          size='sm'
-                          className='h-6 bg-red-500 text-[11px] text-white hover:bg-red-600'
-                          disabled={deleteMut.isPending}
-                          onClick={() => deleteMut.mutate(rel.id)}
-                        >
-                          Delete
-                        </Button>
+            {cmsRelations
+              .filter(
+                (rel) =>
+                  // Only show relations directly involving this table.
+                  // Junction companion rows (many_collection=junction, one_collection=other)
+                  // stay in cmsRelations for M2M resolution but aren't table-level relations.
+                  rel.many_collection === tableName || rel.one_collection === tableName
+              )
+              .map((rel, i) => {
+                const t = detectRelationType(rel, tableName)
+                const isDeleting = deleteId === rel.id
+                const isEditing = editingId === rel.id
+                return (
+                  <div
+                    key={rel.id}
+                    className={cn('px-4 py-3', i > 0 && 'border-t border-slate-100')}
+                  >
+                    {isDeleting ? (
+                      <div className='flex items-center gap-3'>
+                        <span className='text-[12px] text-slate-700'>Delete this relation?</span>
+                        <div className='ml-auto flex gap-2'>
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            className='h-6 text-[11px]'
+                            onClick={() => setDeleteId(null)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            type='button'
+                            size='sm'
+                            className='h-6 bg-red-500 text-[11px] text-white hover:bg-red-600'
+                            disabled={deleteMut.isPending}
+                            onClick={() => deleteMut.mutate(rel.id)}
+                          >
+                            Delete
+                          </Button>
+                        </div>
                       </div>
-                    </div>
-                  ) : isEditing ? (
-                    <div className='space-y-3'>
+                    ) : isEditing ? (
+                      <div className='space-y-3'>
+                        <div className='flex items-center gap-2'>
+                          <span
+                            className={cn(
+                              'rounded px-1.5 py-0.5 text-[10px] font-semibold',
+                              REL_TYPE_META[t].badgeCls
+                            )}
+                          >
+                            {t.toUpperCase()}
+                          </span>
+                          <span className='text-[12px] font-medium text-slate-600'>
+                            Edit relation
+                          </span>
+                        </div>
+
+                        <RelationFormDiagram
+                          relType={t}
+                          tableName={tableName}
+                          allTables={allTables}
+                          form={editForm}
+                          patch={editPatch}
+                        />
+
+                        <div className='flex justify-end gap-2'>
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            className='h-7 text-[12px]'
+                            onClick={() => setEditingId(null)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            type='button'
+                            size='sm'
+                            className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan-dark'
+                            disabled={!isEditFormValid(t) || updateMut.isPending}
+                            onClick={() =>
+                              updateMut.mutate({ id: rel.id, payload: buildEditPayload(t) })
+                            }
+                          >
+                            {updateMut.isPending ? 'Saving…' : 'Save Changes'}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
                       <div className='flex items-center gap-2'>
                         <span
                           className={cn(
-                            'rounded px-1.5 py-0.5 text-[10px] font-semibold',
+                            'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold',
                             REL_TYPE_META[t].badgeCls
                           )}
                         >
                           {t.toUpperCase()}
                         </span>
-                        <span className='text-[12px] font-medium text-slate-600'>
-                          Edit relation
+                        <span className='font-mono text-[12px] text-slate-700'>
+                          {formatRelSummary(rel)}
                         </span>
+                        <div className='ml-auto flex items-center gap-1'>
+                          <button
+                            type='button'
+                            onClick={() => startEdit(rel)}
+                            className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+                            title='Edit relation'
+                          >
+                            <Pencil className='h-3.5 w-3.5' />
+                          </button>
+                          <button
+                            type='button'
+                            onClick={() => setDeleteId(rel.id)}
+                            className='rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-500'
+                            title='Delete relation'
+                          >
+                            <Trash2 className='h-3.5 w-3.5' />
+                          </button>
+                        </div>
                       </div>
-
-                      <RelationFormDiagram
-                        relType={t}
-                        tableName={tableName}
-                        allTables={allTables}
-                        form={editForm}
-                        patch={editPatch}
-                      />
-
-                      <div className='flex justify-end gap-2'>
-                        <Button
-                          type='button'
-                          variant='outline'
-                          size='sm'
-                          className='h-7 text-[12px]'
-                          onClick={() => setEditingId(null)}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          type='button'
-                          size='sm'
-                          className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan-dark'
-                          disabled={!isEditFormValid(t) || updateMut.isPending}
-                          onClick={() =>
-                            updateMut.mutate({ id: rel.id, payload: buildEditPayload(t) })
-                          }
-                        >
-                          {updateMut.isPending ? 'Saving…' : 'Save Changes'}
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className='flex items-center gap-2'>
-                      <span
-                        className={cn(
-                          'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold',
-                          REL_TYPE_META[t].badgeCls
-                        )}
-                      >
-                        {t.toUpperCase()}
-                      </span>
-                      <span className='font-mono text-[12px] text-slate-700'>
-                        {formatRelSummary(rel)}
-                      </span>
-                      <div className='ml-auto flex items-center gap-1'>
-                        <button
-                          type='button'
-                          onClick={() => startEdit(rel)}
-                          className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700'
-                          title='Edit relation'
-                        >
-                          <Pencil className='h-3.5 w-3.5' />
-                        </button>
-                        <button
-                          type='button'
-                          onClick={() => setDeleteId(rel.id)}
-                          className='rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-500'
-                          title='Delete relation'
-                        >
-                          <Trash2 className='h-3.5 w-3.5' />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+                    )}
+                  </div>
+                )
+              })}
           </div>
         ) : mode === 'list' ? (
           <div className='rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-[13px] text-slate-400'>
@@ -3324,12 +3436,12 @@ function SettingsTab({
     if (templateDraft !== null) setTemplateDraft(null)
   }
 
-  const displayName = nameDraft ?? (meta?.display_name ?? '')
-  const singular = singularDraft ?? (meta?.singular ?? '')
-  const plural = pluralDraft ?? (meta?.plural ?? '')
-  const icon = iconDraft ?? (meta?.icon ?? '')
-  const note = noteDraft ?? (meta?.note ?? '')
-  const displayTemplate = templateDraft ?? (meta?.display_template ?? '')
+  const displayName = nameDraft ?? meta?.display_name ?? ''
+  const singular = singularDraft ?? meta?.singular ?? ''
+  const plural = pluralDraft ?? meta?.plural ?? ''
+  const icon = iconDraft ?? meta?.icon ?? ''
+  const note = noteDraft ?? meta?.note ?? ''
+  const displayTemplate = templateDraft ?? meta?.display_template ?? ''
 
   const registerMutation = useMutation({
     mutationFn: () =>
@@ -3505,28 +3617,35 @@ function ItemLockingSection({ tableName }: { tableName: string }) {
 function AddendumPipelineRow({
   pipeline,
   stateKeys,
-  onStateKeysChange,
+  onStateKeysChange
 }: {
   pipeline: { id: string; name: string }
   stateKeys: string[]
   onStateKeysChange: (keys: string[]) => void
 }) {
-  const { data: detail } = useQuery<{ states: Array<{ id: string; key: string; label: string; color?: string }> }>({
+  const { data: detail } = useQuery<{
+    states: Array<{ id: string; key: string; label: string; color?: string }>
+  }>({
     queryKey: ['pipeline-detail-lock', pipeline.id],
     queryFn: () => api.get(`/pipelines/${pipeline.id}`).then((r) => r.data.data),
-    staleTime: 60_000,
+    staleTime: 60_000
   })
   const states = detail?.states ?? []
 
   return (
     <div className='mt-3'>
-      <p className='text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5'>{pipeline.name}</p>
+      <p className='text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5'>
+        {pipeline.name}
+      </p>
       {states.length === 0 ? (
         <p className='text-[11px] text-slate-400 italic'>No states defined.</p>
       ) : (
         <div className='grid grid-cols-2 gap-x-4 gap-y-1'>
           {states.map((s) => (
-            <label key={s.key} className='flex items-center gap-1.5 text-[11px] cursor-pointer select-none'>
+            <label
+              key={s.key}
+              className='flex items-center gap-1.5 text-[11px] cursor-pointer select-none'
+            >
               <input
                 type='checkbox'
                 checked={stateKeys.includes(s.key)}
@@ -3537,7 +3656,9 @@ function AddendumPipelineRow({
                 className='rounded'
               />
               <span className='inline-flex items-center gap-1'>
-                {s.color && <span className='h-2 w-2 rounded-full shrink-0' style={{ background: s.color }} />}
+                {s.color && (
+                  <span className='h-2 w-2 rounded-full shrink-0' style={{ background: s.color }} />
+                )}
                 <span className='text-slate-700 dark:text-slate-300'>{s.label}</span>
               </span>
             </label>
@@ -3555,7 +3676,13 @@ function AddendumsSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta', tableName],
     queryFn: () =>
       api
-        .get<{ data: { addendums_enabled: boolean; addendum_allowed_states?: string | null; addendum_allowed_roles?: string | null } }>(`/collections/${tableName}`)
+        .get<{
+          data: {
+            addendums_enabled: boolean
+            addendum_allowed_states?: string | null
+            addendum_allowed_roles?: string | null
+          }
+        }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
     enabled: !!tableName,
     staleTime: 10 * 60 * 1000
@@ -3574,7 +3701,9 @@ function AddendumsSection({ tableName }: { tableName: string }) {
   const enabled = col?.addendums_enabled === true || (col?.addendums_enabled as unknown) === 1
 
   // State restrictions
-  const [stateRules, setStateRules] = useState<Array<{ pipeline_id: string; state_keys: string[] }>>([])
+  const [stateRules, setStateRules] = useState<
+    Array<{ pipeline_id: string; state_keys: string[] }>
+  >([])
   const [rulesInit, setRulesInit] = useState(false)
 
   useEffect(() => {
@@ -3592,20 +3721,22 @@ function AddendumsSection({ tableName }: { tableName: string }) {
   const saveRulesMut = useMutation({
     mutationFn: (rules: typeof stateRules) =>
       api.patch(`/collections/${tableName}`, {
-        addendum_allowed_states: rules.length ? JSON.stringify(rules) : null,
+        addendum_allowed_states: rules.length ? JSON.stringify(rules) : null
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
       toast.success('State restrictions saved')
     },
-    onError: () => toast.error('Failed to save state restrictions'),
+    onError: () => toast.error('Failed to save state restrictions')
   })
 
-  const { data: pipelinesData } = useQuery<Array<{ id: string; name: string; collections: string[] }>>({
+  const { data: pipelinesData } = useQuery<
+    Array<{ id: string; name: string; collections: string[] }>
+  >({
     queryKey: ['pipelines-list-for-lock'],
     queryFn: () => api.get('/pipelines').then((r) => r.data.data),
     staleTime: 60_000,
-    enabled: enabled && !!tableName,
+    enabled: enabled && !!tableName
   })
   const boundPipelines = (pipelinesData ?? []).filter((p) => p.collections.includes(tableName))
 
@@ -3636,20 +3767,20 @@ function AddendumsSection({ tableName }: { tableName: string }) {
   const saveRolesMut = useMutation({
     mutationFn: (roles: string[]) =>
       api.patch(`/collections/${tableName}`, {
-        addendum_allowed_roles: roles.length ? JSON.stringify(roles) : null,
+        addendum_allowed_roles: roles.length ? JSON.stringify(roles) : null
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
       toast.success('Role restrictions saved')
     },
-    onError: () => toast.error('Failed to save role restrictions'),
+    onError: () => toast.error('Failed to save role restrictions')
   })
 
   const { data: allRoles = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ['roles-list-addendum'],
     queryFn: () => api.get('/roles').then((r) => r.data.data ?? []),
     staleTime: 60_000,
-    enabled: enabled && !!tableName,
+    enabled: enabled && !!tableName
   })
 
   return (
@@ -3658,8 +3789,8 @@ function AddendumsSection({ tableName }: { tableName: string }) {
         <div>
           <p className='text-[13px] font-medium text-slate-800 dark:text-slate-100'>Addendums</p>
           <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400'>
-            Allow amendment records to be created against items in this collection, with optional cost
-            and timeline impact tracking.
+            Allow addendum records to be created against items in this collection, with optional
+            cost and timeline impact tracking.
           </p>
         </div>
         <Switch
@@ -3673,9 +3804,12 @@ function AddendumsSection({ tableName }: { tableName: string }) {
         <div className='border-t border-slate-100 dark:border-border px-4 pb-4 pt-3'>
           <div className='flex items-center justify-between mb-1'>
             <div>
-              <p className='text-[12px] font-medium text-slate-700 dark:text-slate-300'>State restrictions</p>
+              <p className='text-[12px] font-medium text-slate-700 dark:text-slate-300'>
+                State restrictions
+              </p>
               <p className='text-[11px] text-slate-500 dark:text-slate-400 mt-0.5'>
-                Check the pipeline states from which addendums can be created. Leave all unchecked to allow from any state.
+                Check the pipeline states from which addendums can be created. Leave all unchecked
+                to allow from any state.
               </p>
             </div>
             <Button
@@ -3690,7 +3824,9 @@ function AddendumsSection({ tableName }: { tableName: string }) {
           </div>
 
           {boundPipelines.length === 0 ? (
-            <p className='mt-2 text-[11px] text-slate-400 italic'>No pipelines are bound to this collection.</p>
+            <p className='mt-2 text-[11px] text-slate-400 italic'>
+              No pipelines are bound to this collection.
+            </p>
           ) : (
             boundPipelines.map((pipeline) => (
               <AddendumPipelineRow
@@ -3705,7 +3841,9 @@ function AddendumsSection({ tableName }: { tableName: string }) {
           <div className='mt-4 border-t border-slate-100 dark:border-border pt-3'>
             <div className='flex items-center justify-between mb-1'>
               <div>
-                <p className='text-[12px] font-medium text-slate-700 dark:text-slate-300'>Role restrictions</p>
+                <p className='text-[12px] font-medium text-slate-700 dark:text-slate-300'>
+                  Role restrictions
+                </p>
                 <p className='text-[11px] text-slate-500 dark:text-slate-400 mt-0.5'>
                   Roles allowed to create addendums. Leave all unchecked to allow any role.
                 </p>
@@ -3725,7 +3863,10 @@ function AddendumsSection({ tableName }: { tableName: string }) {
             ) : (
               <div className='grid grid-cols-2 gap-x-4 gap-y-1 mt-2'>
                 {allRoles.map((role) => (
-                  <label key={role.id} className='flex items-center gap-1.5 text-[11px] cursor-pointer select-none'>
+                  <label
+                    key={role.id}
+                    className='flex items-center gap-1.5 text-[11px] cursor-pointer select-none'
+                  >
                     <input
                       type='checkbox'
                       checked={allowedRoles.includes(role.id)}
@@ -3755,7 +3896,9 @@ function PickerFilterSection({ tableName }: { tableName: string }) {
   const { data: col } = useQuery({
     queryKey: ['collection-meta', tableName],
     queryFn: () =>
-      api.get<{ data: { picker_filter: unknown } }>(`/collections/${tableName}`).then((r) => r.data.data),
+      api
+        .get<{ data: { picker_filter: unknown } }>(`/collections/${tableName}`)
+        .then((r) => r.data.data),
     enabled: !!tableName,
     staleTime: 10 * 60 * 1000
   })
@@ -3803,12 +3946,13 @@ function PickerFilterSection({ tableName }: { tableName: string }) {
         <div>
           <p className='text-[13px] font-medium text-slate-800'>Relation Picker Filter</p>
           <p className='mt-0.5 text-[12px] text-slate-500'>
-            Records not matching this filter are hidden from all relation pickers for this collection. Existing references are unaffected.
+            Records not matching this filter are hidden from all relation pickers for this
+            collection. Existing references are unaffected.
           </p>
         </div>
         <Textarea
           value={draft}
-          onChange={e => setDraft(e.target.value)}
+          onChange={(e) => setDraft(e.target.value)}
           placeholder={'{"is_disabled": {"_neq": true}}'}
           rows={3}
           className='font-mono text-[12px]'
@@ -3818,9 +3962,13 @@ function PickerFilterSection({ tableName }: { tableName: string }) {
           Tip: use attribute filters — hard-coded IDs break on data migration.
         </p>
         <div className='flex gap-2'>
-          <Button size='sm' onClick={save} className='h-7 text-[12px]'>Save filter</Button>
+          <Button size='sm' onClick={save} className='h-7 text-[12px]'>
+            Save filter
+          </Button>
           {draft && (
-            <Button size='sm' variant='outline' onClick={clear} className='h-7 text-[12px]'>Clear</Button>
+            <Button size='sm' variant='outline' onClick={clear} className='h-7 text-[12px]'>
+              Clear
+            </Button>
           )}
         </div>
       </div>
@@ -4475,7 +4623,7 @@ const SLOT_META: Record<SlotKey, { name: string; defaultLabel: string; editable:
   __pipeline__: { name: 'Pipeline', defaultLabel: 'Pipeline', editable: true },
   __comments__: { name: 'Comments', defaultLabel: 'Comments', editable: true },
   __tasks__: { name: 'Tasks', defaultLabel: 'Tasks', editable: true },
-  __addendums__: { name: 'Addenda & Amendments', defaultLabel: 'Addenda & Amendments', editable: true },
+  __addendums__: { name: 'Addendums', defaultLabel: 'Addendums', editable: true }
 }
 // PDF Button is a special draggable field chip (not a top-level slot card): placed in groups
 // like __owners__, persisted as a field-assignment row with field = '__pdf__'.
@@ -4506,9 +4654,9 @@ interface FieldGroup {
 // ── Width options ──────────────────────────────────────────────────────────────
 const WIDTH_OPTIONS = [
   { span: 12, label: 'Full' },
-  { span: 6,  label: '1/2'  },
-  { span: 4,  label: '1/3'  },
-  { span: 3,  label: '1/4'  },
+  { span: 6, label: '1/2' },
+  { span: 4, label: '1/3' },
+  { span: 3, label: '1/4' }
 ] as const
 
 function parseColSpan(options: unknown): number {
@@ -4516,7 +4664,9 @@ function parseColSpan(options: unknown): number {
     const obj = typeof options === 'string' ? JSON.parse(options) : options
     const span = (obj as Record<string, unknown>)?.col_span
     return typeof span === 'number' ? span : 12
-  } catch { return 12 }
+  } catch {
+    return 12
+  }
 }
 
 // ── Friendly type badge colors (used in Layout tab chips) ─────────────────────
@@ -4538,7 +4688,76 @@ const FRIENDLY_TYPE_STYLES: Record<string, string> = {
   M2M: 'bg-nvr-cyan/15 text-nvr-cyan',
   O2M: 'bg-nvr-cyan/10 text-nvr-cyan',
   panel: 'bg-indigo-50 text-indigo-600',
-  owners: 'bg-violet-50 text-violet-600',
+  owners: 'bg-violet-50 text-violet-600'
+}
+
+// ── FieldImpactPopover — "what references this field?" ───────────────────────
+
+function FieldImpactPopover({ collection, fieldName }: { collection: string; fieldName: string }) {
+  const [open, setOpen] = useState(false)
+  const { data, isLoading } = useQuery({
+    queryKey: ['field-impact', collection, fieldName],
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{ source: string; label: string; detail: string; link: string | null }>
+          total: number
+        }>(`/data-model/${collection}/fields/${fieldName}/impact`)
+        .then((r) => r.data),
+    enabled: open,
+    staleTime: 60_000
+  })
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          onPointerDown={(e) => e.stopPropagation()}
+          className='rounded p-1 text-slate-300 hover:bg-slate-100 hover:text-nvr-navy dark:hover:bg-muted'
+          title='Where is this field used?'
+          aria-label='Field impact analysis'
+        >
+          <Crosshair className='h-3 w-3' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-80 p-3' align='end' onPointerDown={(e) => e.stopPropagation()}>
+        <p className='mb-2 text-[11px] font-semibold text-slate-500'>
+          References to <code className='font-mono'>{fieldName}</code>
+        </p>
+        {isLoading ? (
+          <Skeleton className='h-4 w-40' />
+        ) : !data || data.total === 0 ? (
+          <p className='text-[12px] text-slate-400'>
+            No references found — safe to rename or delete. (Layouts, queues, templates, formulas,
+            rules, alerts, watches, views and workflow conditions were scanned.)
+          </p>
+        ) : (
+          <div className='max-h-72 space-y-1.5 overflow-y-auto'>
+            {data.data.map((i, idx) => (
+              <div key={`${i.source}-${idx}`} className='text-[12px]'>
+                {i.link ? (
+                  <Link
+                    to={i.link}
+                    className='font-medium text-nvr-navy hover:underline dark:text-[#00ceff]'
+                  >
+                    {i.label}
+                  </Link>
+                ) : (
+                  <span className='font-medium text-slate-700 dark:text-slate-300'>{i.label}</span>
+                )}
+                <span className='text-slate-400'> — {i.detail}</span>
+              </div>
+            ))}
+            <p className='pt-1 text-[11px] text-slate-400'>
+              {data.total} reference{data.total !== 1 ? 's' : ''} — review before renaming or
+              deleting this field.
+            </p>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 // ── FieldSettingsPopover ──────────────────────────────────────────────────────
@@ -4554,7 +4773,11 @@ interface FieldSettings {
   max_values: number | null
   options?: string | null
   placeholder: string | null
-  drilldown?: { enabled?: boolean; layout_id?: number | null; width?: number | string | null } | null
+  drilldown?: {
+    enabled?: boolean
+    layout_id?: number | null
+    width?: number | string | null
+  } | null
 }
 
 // ── Cascade Filters ───────────────────────────────────────────────────────────
@@ -4578,7 +4801,7 @@ function CascadeFiltersEditor({
   rules,
   m2oFields,
   relatedCollection,
-  onChange,
+  onChange
 }: {
   rules: CascadeFilterRule[]
   m2oFields: CascadeParentField[]
@@ -4598,9 +4821,9 @@ function CascadeFiltersEditor({
 
   const { data: relColMeta } = useQuery({
     queryKey: ['collection-meta', relatedCollection],
-    queryFn: () => api.get(`/collections/${relatedCollection}`).then(r => r.data.data),
+    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
     enabled: !!relatedCollection,
-    staleTime: 10 * 60 * 1000,
+    staleTime: 10 * 60 * 1000
   })
   const relatedFields: string[] = relColMeta?.fields?.map((f: { field: string }) => f.field) ?? []
   const [clearOnChange, setClearOnChange] = useState(true)
@@ -4622,21 +4845,27 @@ function CascadeFiltersEditor({
   }
 
   function computeFilterIsMm(fc: string) {
-    const relRels = (relColMeta?.relations ?? []) as Array<{ one_field?: string; junction_field?: string }>
-    return relRels.some(r => r.one_field === fc && !!r.junction_field)
+    const relRels = (relColMeta?.relations ?? []) as Array<{
+      one_field?: string
+      junction_field?: string
+    }>
+    return relRels.some((r) => r.one_field === fc && !!r.junction_field)
   }
 
   function saveAdd() {
     if (!parentField.trim() || !filterColumn.trim()) return
     const fc = filterColumn.trim()
-    onChange([...rules, {
-      parent_field: parentField.trim(),
-      filter_column: fc,
-      clear_on_parent_change: clearOnChange,
-      clear_on_unavailable: clearOnUnavailable,
-      filter_is_m2m: computeFilterIsMm(fc),
-      show_all_if_no_parent: showAllIfNoParent,
-    }])
+    onChange([
+      ...rules,
+      {
+        parent_field: parentField.trim(),
+        filter_column: fc,
+        clear_on_parent_change: clearOnChange,
+        clear_on_unavailable: clearOnUnavailable,
+        filter_is_m2m: computeFilterIsMm(fc),
+        show_all_if_no_parent: showAllIfNoParent
+      }
+    ])
     setAdding(false)
   }
 
@@ -4655,12 +4884,18 @@ function CascadeFiltersEditor({
     if (editingIdx === null) return
     if (!editParentField.trim() || !editFilterColumn.trim()) return
     const fc = editFilterColumn.trim()
-    onChange(rules.map((r, i) => i === editingIdx ? {
-      ...r,
-      parent_field: editParentField.trim(),
-      filter_column: fc,
-      filter_is_m2m: computeFilterIsMm(fc),
-    } : r))
+    onChange(
+      rules.map((r, i) =>
+        i === editingIdx
+          ? {
+              ...r,
+              parent_field: editParentField.trim(),
+              filter_column: fc,
+              filter_is_m2m: computeFilterIsMm(fc)
+            }
+          : r
+      )
+    )
     setEditingIdx(null)
   }
 
@@ -4669,45 +4904,72 @@ function CascadeFiltersEditor({
   }
 
   function toggleClear(idx: number, val: boolean) {
-    onChange(rules.map((r, i) => i === idx ? { ...r, clear_on_parent_change: val, clear_on_unavailable: r.clear_on_unavailable ?? false } : r))
+    onChange(
+      rules.map((r, i) =>
+        i === idx
+          ? {
+              ...r,
+              clear_on_parent_change: val,
+              clear_on_unavailable: r.clear_on_unavailable ?? false
+            }
+          : r
+      )
+    )
   }
 
   function toggleUnavailable(idx: number, val: boolean) {
-    onChange(rules.map((r, i) => i === idx ? { ...r, clear_on_unavailable: val } : r))
+    onChange(rules.map((r, i) => (i === idx ? { ...r, clear_on_unavailable: val } : r)))
   }
 
   function toggleShowAll(idx: number, val: boolean) {
-    onChange(rules.map((r, i) => i === idx ? { ...r, show_all_if_no_parent: val } : r))
+    onChange(rules.map((r, i) => (i === idx ? { ...r, show_all_if_no_parent: val } : r)))
   }
 
   return (
     <div className='mt-4 border-t border-[#e2e8f0] pt-4'>
-      <p className='mb-2 text-[11px] font-medium text-[#6b7280]' style={{ letterSpacing: '0.01em' }}>Cascade Filters</p>
+      <p
+        className='mb-2 text-[11px] font-medium text-[#6b7280]'
+        style={{ letterSpacing: '0.01em' }}
+      >
+        Cascade Filters
+      </p>
 
       {rules.length > 0 && (
         <div className='mb-2 space-y-2'>
           {rules.map((rule, idx) => {
-            const parentMeta = m2oFields.find(f => f.field === rule.parent_field)
+            const parentMeta = m2oFields.find((f) => f.field === rule.parent_field)
             const parentLabel = parentMeta?.label ?? rule.parent_field
             const isM2MParent = parentMeta?.kind === 'M2M'
             const isEditing = editingIdx === idx
 
             if (isEditing) {
               return (
-                <div key={idx} className='space-y-2 rounded-md border border-nvr-cyan/40 bg-[#f6f8fa] p-2 dark:border-nvr-cyan/30 dark:bg-muted/40'>
+                <div
+                  key={idx}
+                  className='space-y-2 rounded-md border border-nvr-cyan/40 bg-[#f6f8fa] p-2 dark:border-nvr-cyan/30 dark:bg-muted/40'
+                >
                   <div>
                     <p className='mb-1 text-[10px] text-slate-500'>Parent field</p>
                     <Popover open={editPfOpen} onOpenChange={setEditPfOpen}>
                       <PopoverTrigger asChild>
-                        <button type='button' className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'>
+                        <button
+                          type='button'
+                          className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'
+                        >
                           {(() => {
-                            const sel = m2oFields.find(f => f.field === editParentField)
+                            const sel = m2oFields.find((f) => f.field === editParentField)
                             return sel ? (
                               <span className='flex items-center gap-1.5'>
                                 {sel.label}
-                                {sel.kind === 'M2M' && <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>M2M</span>}
+                                {sel.kind === 'M2M' && (
+                                  <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>
+                                    M2M
+                                  </span>
+                                )}
                               </span>
-                            ) : <span className='text-slate-400'>Parent field…</span>
+                            ) : (
+                              <span className='text-slate-400'>Parent field…</span>
+                            )
                           })()}
                           <ChevronsUpDown className='h-3 w-3 text-slate-400' />
                         </button>
@@ -4716,13 +4978,32 @@ function CascadeFiltersEditor({
                         <Command>
                           <CommandInput placeholder='Search fields…' className='h-7 text-[11px]' />
                           <CommandList>
-                            <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No relation fields</CommandEmpty>
+                            <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>
+                              No relation fields
+                            </CommandEmpty>
                             <CommandGroup>
-                              {m2oFields.map(item => (
-                                <CommandItem key={item.field} value={item.label} onSelect={() => { setEditParentField(item.field); setEditPfOpen(false) }} className='text-[11px]'>
-                                  <Check className={cn('mr-1.5 h-3 w-3 shrink-0', editParentField === item.field ? 'opacity-100' : 'opacity-0')} />
+                              {m2oFields.map((item) => (
+                                <CommandItem
+                                  key={item.field}
+                                  value={item.label}
+                                  onSelect={() => {
+                                    setEditParentField(item.field)
+                                    setEditPfOpen(false)
+                                  }}
+                                  className='text-[11px]'
+                                >
+                                  <Check
+                                    className={cn(
+                                      'mr-1.5 h-3 w-3 shrink-0',
+                                      editParentField === item.field ? 'opacity-100' : 'opacity-0'
+                                    )}
+                                  />
                                   <span className='flex-1'>{item.label}</span>
-                                  {item.kind === 'M2M' && <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>M2M</span>}
+                                  {item.kind === 'M2M' && (
+                                    <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>
+                                      M2M
+                                    </span>
+                                  )}
                                 </CommandItem>
                               ))}
                             </CommandGroup>
@@ -4732,24 +5013,54 @@ function CascadeFiltersEditor({
                     </Popover>
                   </div>
                   <div>
-                    <p className='mb-1 text-[10px] text-slate-500'>Filter column on{relatedCollection ? ` ${relatedCollection}` : ' related table'}</p>
+                    <p className='mb-1 text-[10px] text-slate-500'>
+                      Filter column on
+                      {relatedCollection ? ` ${relatedCollection}` : ' related table'}
+                    </p>
                     {relatedFields.length > 0 ? (
                       <Popover open={editFcOpen} onOpenChange={setEditFcOpen}>
                         <PopoverTrigger asChild>
-                          <button type='button' className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] hover:bg-slate-50 dark:border-border dark:bg-background'>
-                            <span className={editFilterColumn ? 'font-mono text-slate-700' : 'text-slate-400'}>{editFilterColumn || 'Select column…'}</span>
+                          <button
+                            type='button'
+                            className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] hover:bg-slate-50 dark:border-border dark:bg-background'
+                          >
+                            <span
+                              className={
+                                editFilterColumn ? 'font-mono text-slate-700' : 'text-slate-400'
+                              }
+                            >
+                              {editFilterColumn || 'Select column…'}
+                            </span>
                             <ChevronsUpDown className='h-3 w-3 text-slate-400' />
                           </button>
                         </PopoverTrigger>
                         <PopoverContent className='w-52 p-0' align='start'>
                           <Command>
-                            <CommandInput placeholder='Search columns…' className='h-7 text-[11px]' />
+                            <CommandInput
+                              placeholder='Search columns…'
+                              className='h-7 text-[11px]'
+                            />
                             <CommandList>
-                              <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No columns</CommandEmpty>
+                              <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>
+                                No columns
+                              </CommandEmpty>
                               <CommandGroup>
-                                {relatedFields.map(f => (
-                                  <CommandItem key={f} value={f} onSelect={() => { setEditFilterColumn(f); setEditFcOpen(false) }} className='font-mono text-[11px]'>
-                                    <Check className={cn('mr-1.5 h-3 w-3 shrink-0', editFilterColumn === f ? 'opacity-100' : 'opacity-0')} />
+                                {relatedFields.map((f) => (
+                                  <CommandItem
+                                    key={f}
+                                    value={f}
+                                    onSelect={() => {
+                                      setEditFilterColumn(f)
+                                      setEditFcOpen(false)
+                                    }}
+                                    className='font-mono text-[11px]'
+                                  >
+                                    <Check
+                                      className={cn(
+                                        'mr-1.5 h-3 w-3 shrink-0',
+                                        editFilterColumn === f ? 'opacity-100' : 'opacity-0'
+                                      )}
+                                    />
                                     {f}
                                   </CommandItem>
                                 ))}
@@ -4759,13 +5070,31 @@ function CascadeFiltersEditor({
                         </PopoverContent>
                       </Popover>
                     ) : (
-                      <Input value={editFilterColumn} onChange={e => setEditFilterColumn(e.target.value)} placeholder='e.g. division_id' className='h-7 font-mono text-[11px]' />
+                      <Input
+                        value={editFilterColumn}
+                        onChange={(e) => setEditFilterColumn(e.target.value)}
+                        placeholder='e.g. division_id'
+                        className='h-7 font-mono text-[11px]'
+                      />
                     )}
                   </div>
                   <div className='flex items-center gap-2'>
                     <span className='flex-1' />
-                    <button type='button' onClick={cancelEdit} className='rounded px-2 py-1 text-[12px] text-slate-500 hover:bg-slate-100'>Cancel</button>
-                    <Button size='sm' disabled={!editParentField || !editFilterColumn.trim()} onClick={saveEdit} className='h-7 px-3 py-1.5 text-[12px]'>Save</Button>
+                    <button
+                      type='button'
+                      onClick={cancelEdit}
+                      className='rounded px-2 py-1 text-[12px] text-slate-500 hover:bg-slate-100'
+                    >
+                      Cancel
+                    </button>
+                    <Button
+                      size='sm'
+                      disabled={!editParentField || !editFilterColumn.trim()}
+                      onClick={saveEdit}
+                      className='h-7 px-3 py-1.5 text-[12px]'
+                    >
+                      Save
+                    </Button>
                   </div>
                 </div>
               )
@@ -4779,34 +5108,62 @@ function CascadeFiltersEditor({
                 <div className='flex items-center gap-1.5'>
                   <span className='text-[12px] font-medium text-slate-700'>{parentLabel}</span>
                   {isM2MParent && (
-                    <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'>M2M</span>
+                    <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'>
+                      M2M
+                    </span>
                   )}
                   <span className='flex-1' />
-                  <button type='button' onClick={() => openEdit(idx)} className='rounded p-0.5 text-slate-300 transition-colors hover:text-slate-600'>
+                  <button
+                    type='button'
+                    onClick={() => openEdit(idx)}
+                    className='rounded p-0.5 text-slate-300 transition-colors hover:text-slate-600'
+                  >
                     <Pencil className='h-3 w-3' />
                   </button>
-                  <button type='button' onClick={() => removeRule(idx)} className='rounded p-0.5 text-slate-300 transition-colors hover:text-red-400'>
+                  <button
+                    type='button'
+                    onClick={() => removeRule(idx)}
+                    className='rounded p-0.5 text-slate-300 transition-colors hover:text-red-400'
+                  >
                     <X className='h-3.5 w-3.5' />
                   </button>
                 </div>
                 <div className='mt-1'>
                   <span className='font-mono text-[11px] text-[#6b7280]'>{rule.filter_column}</span>
-                  {rule.filter_is_m2m && <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'>M2M filter</span>}
+                  {rule.filter_is_m2m && (
+                    <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'>
+                      M2M filter
+                    </span>
+                  )}
                 </div>
                 <div className='mt-1.5 flex items-center gap-1.5'>
                   <span className='text-[10px] text-slate-400'>Clear on parent change</span>
                   <span className='flex-1' />
-                  <Switch checked={rule.clear_on_parent_change} onCheckedChange={val => toggleClear(idx, val)} className='scale-75' />
+                  <Switch
+                    checked={rule.clear_on_parent_change}
+                    onCheckedChange={(val) => toggleClear(idx, val)}
+                    className='scale-75'
+                  />
                 </div>
                 <div className='mt-1 flex items-center gap-1.5'>
                   <span className='text-[10px] text-slate-400'>Clear if value unavailable</span>
                   <span className='flex-1' />
-                  <Switch checked={rule.clear_on_unavailable ?? false} onCheckedChange={val => toggleUnavailable(idx, val)} className='scale-75' />
+                  <Switch
+                    checked={rule.clear_on_unavailable ?? false}
+                    onCheckedChange={(val) => toggleUnavailable(idx, val)}
+                    className='scale-75'
+                  />
                 </div>
                 <div className='mt-1 flex items-center gap-1.5'>
-                  <span className='text-[10px] text-slate-400'>Show all options if parent not set</span>
+                  <span className='text-[10px] text-slate-400'>
+                    Show all options if parent not set
+                  </span>
                   <span className='flex-1' />
-                  <Switch checked={rule.show_all_if_no_parent ?? true} onCheckedChange={val => toggleShowAll(idx, val)} className='scale-75' />
+                  <Switch
+                    checked={rule.show_all_if_no_parent ?? true}
+                    onCheckedChange={(val) => toggleShowAll(idx, val)}
+                    className='scale-75'
+                  />
                 </div>
               </div>
             )
@@ -4840,12 +5197,14 @@ function CascadeFiltersEditor({
                   className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'
                 >
                   {(() => {
-                    const sel = m2oFields.find(f => f.field === parentField)
+                    const sel = m2oFields.find((f) => f.field === parentField)
                     return sel ? (
                       <span className='flex items-center gap-1.5'>
                         {sel.label}
                         {sel.kind === 'M2M' && (
-                          <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>M2M</span>
+                          <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>
+                            M2M
+                          </span>
                         )}
                       </span>
                     ) : (
@@ -4859,19 +5218,31 @@ function CascadeFiltersEditor({
                 <Command>
                   <CommandInput placeholder='Search fields…' className='h-7 text-[11px]' />
                   <CommandList>
-                    <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No relation fields</CommandEmpty>
+                    <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>
+                      No relation fields
+                    </CommandEmpty>
                     <CommandGroup>
-                      {m2oFields.map(item => (
+                      {m2oFields.map((item) => (
                         <CommandItem
                           key={item.field}
                           value={item.label}
-                          onSelect={() => { setParentField(item.field); setPfOpen(false) }}
+                          onSelect={() => {
+                            setParentField(item.field)
+                            setPfOpen(false)
+                          }}
                           className='text-[11px]'
                         >
-                          <Check className={cn('mr-1.5 h-3 w-3 shrink-0', parentField === item.field ? 'opacity-100' : 'opacity-0')} />
+                          <Check
+                            className={cn(
+                              'mr-1.5 h-3 w-3 shrink-0',
+                              parentField === item.field ? 'opacity-100' : 'opacity-0'
+                            )}
+                          />
                           <span className='flex-1'>{item.label}</span>
                           {item.kind === 'M2M' && (
-                            <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>M2M</span>
+                            <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>
+                              M2M
+                            </span>
                           )}
                         </CommandItem>
                       ))}
@@ -4880,7 +5251,7 @@ function CascadeFiltersEditor({
                 </Command>
               </PopoverContent>
             </Popover>
-            {parentField && m2oFields.find(f => f.field === parentField)?.kind === 'M2M' && (
+            {parentField && m2oFields.find((f) => f.field === parentField)?.kind === 'M2M' && (
               <p className='mt-1 text-[10px] text-amber-600 dark:text-amber-400'>
                 M2M parent: the first staged selection's value is used as the filter.
               </p>
@@ -4909,16 +5280,26 @@ function CascadeFiltersEditor({
                   <Command>
                     <CommandInput placeholder='Search columns…' className='h-7 text-[11px]' />
                     <CommandList>
-                      <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No columns</CommandEmpty>
+                      <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>
+                        No columns
+                      </CommandEmpty>
                       <CommandGroup>
-                        {relatedFields.map(f => (
+                        {relatedFields.map((f) => (
                           <CommandItem
                             key={f}
                             value={f}
-                            onSelect={() => { setFilterColumn(f); setFcOpen(false) }}
+                            onSelect={() => {
+                              setFilterColumn(f)
+                              setFcOpen(false)
+                            }}
                             className='font-mono text-[11px]'
                           >
-                            <Check className={cn('mr-1.5 h-3 w-3 shrink-0', filterColumn === f ? 'opacity-100' : 'opacity-0')} />
+                            <Check
+                              className={cn(
+                                'mr-1.5 h-3 w-3 shrink-0',
+                                filterColumn === f ? 'opacity-100' : 'opacity-0'
+                              )}
+                            />
                             {f}
                           </CommandItem>
                         ))}
@@ -4930,7 +5311,7 @@ function CascadeFiltersEditor({
             ) : (
               <Input
                 value={filterColumn}
-                onChange={e => setFilterColumn(e.target.value)}
+                onChange={(e) => setFilterColumn(e.target.value)}
                 placeholder='e.g. division_id'
                 className='h-7 font-mono text-[11px]'
               />
@@ -4940,15 +5321,29 @@ function CascadeFiltersEditor({
           {/* clear options + actions */}
           <div className='space-y-1.5'>
             <div className='flex items-center gap-2'>
-              <Switch checked={clearOnChange} onCheckedChange={setClearOnChange} className='scale-75' />
+              <Switch
+                checked={clearOnChange}
+                onCheckedChange={setClearOnChange}
+                className='scale-75'
+              />
               <span className='text-[11px] text-slate-600'>Clear on parent change</span>
             </div>
             <div className='flex items-center gap-2'>
-              <Switch checked={clearOnUnavailable} onCheckedChange={setClearOnUnavailable} className='scale-75' />
-              <span className='text-[11px] text-slate-600'>Clear if value no longer in options</span>
+              <Switch
+                checked={clearOnUnavailable}
+                onCheckedChange={setClearOnUnavailable}
+                className='scale-75'
+              />
+              <span className='text-[11px] text-slate-600'>
+                Clear if value no longer in options
+              </span>
             </div>
             <div className='flex items-center gap-2'>
-              <Switch checked={showAllIfNoParent} onCheckedChange={setShowAllIfNoParent} className='scale-75' />
+              <Switch
+                checked={showAllIfNoParent}
+                onCheckedChange={setShowAllIfNoParent}
+                className='scale-75'
+              />
               <span className='text-[11px] text-slate-600'>Show all options if parent not set</span>
             </div>
           </div>
@@ -4976,21 +5371,43 @@ function CascadeFiltersEditor({
   )
 }
 
-function LayoutPicker({ collection, value, onChange, layoutType }: { collection?: string | null; value: number | null; onChange: (id: number | null, slug: string | null) => void; layoutType?: 'grouped' | 'table' }) {
+function LayoutPicker({
+  collection,
+  value,
+  onChange,
+  layoutType
+}: {
+  collection?: string | null
+  value: number | null
+  onChange: (id: number | null, slug: string | null) => void
+  layoutType?: 'grouped' | 'table'
+}) {
   const [open, setOpen] = useState(false)
   const { data: allLayouts = [] } = useQuery({
     queryKey: ['collection-layouts-list', collection],
-    queryFn: () => api.get<{ data: Array<{ id: number; name: string; slug: string | null; layout_type?: string }> }>(`/collection-layouts?collection=${collection}`).then(r => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{ id: number; name: string; slug: string | null; layout_type?: string }>
+        }>(`/collection-layouts?collection=${collection}`)
+        .then((r) => r.data.data ?? []),
     enabled: !!collection,
-    staleTime: 60_000,
+    staleTime: 60_000
   })
-  const layouts = layoutType ? allLayouts.filter(l => (l.layout_type ?? 'grouped') === layoutType) : allLayouts
-  const selected = layouts.find(l => l.id === value)
+  const layouts = layoutType
+    ? allLayouts.filter((l) => (l.layout_type ?? 'grouped') === layoutType)
+    : allLayouts
+  const selected = layouts.find((l) => l.id === value)
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type='button' className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'>
-          <span className={selected ? '' : 'text-slate-400'}>{selected ? selected.name : 'Select layout…'}</span>
+        <button
+          type='button'
+          className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'
+        >
+          <span className={selected ? '' : 'text-slate-400'}>
+            {selected ? selected.name : 'Select layout…'}
+          </span>
           <ChevronsUpDown className='h-3 w-3 text-slate-400' />
         </button>
       </PopoverTrigger>
@@ -4998,14 +5415,40 @@ function LayoutPicker({ collection, value, onChange, layoutType }: { collection?
         <Command>
           <CommandInput placeholder='Search layouts…' className='h-7 text-[11px]' />
           <CommandList>
-            <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>No layouts</CommandEmpty>
+            <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>
+              No layouts
+            </CommandEmpty>
             <CommandGroup>
-              <CommandItem value='' onSelect={() => { onChange(null, null); setOpen(false) }} className='text-[11px] text-slate-400'>None</CommandItem>
-              {layouts.map(l => (
-                <CommandItem key={l.id} value={l.name} onSelect={() => { onChange(l.id, l.slug ?? null); setOpen(false) }} className='text-[11px]'>
-                  <Check className={cn('mr-1.5 h-3 w-3 shrink-0', value === l.id ? 'opacity-100' : 'opacity-0')} />
+              <CommandItem
+                value=''
+                onSelect={() => {
+                  onChange(null, null)
+                  setOpen(false)
+                }}
+                className='text-[11px] text-slate-400'
+              >
+                None
+              </CommandItem>
+              {layouts.map((l) => (
+                <CommandItem
+                  key={l.id}
+                  value={l.name}
+                  onSelect={() => {
+                    onChange(l.id, l.slug ?? null)
+                    setOpen(false)
+                  }}
+                  className='text-[11px]'
+                >
+                  <Check
+                    className={cn(
+                      'mr-1.5 h-3 w-3 shrink-0',
+                      value === l.id ? 'opacity-100' : 'opacity-0'
+                    )}
+                  />
                   {l.name}
-                  {l.slug && <span className='ml-1.5 font-mono text-[10px] text-slate-400'>{l.slug}</span>}
+                  {l.slug && (
+                    <span className='ml-1.5 font-mono text-[10px] text-slate-400'>{l.slug}</span>
+                  )}
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -5021,7 +5464,7 @@ function CascadeRuleRow({
   parentFields,
   childFields,
   onChange,
-  onRemove,
+  onRemove
 }: {
   rule: { parent_field: string; child_field: string }
   parentFields: Array<{ value: string; label: string }>
@@ -5035,10 +5478,15 @@ function CascadeRuleRow({
     <div className='flex items-center gap-1.5'>
       <Popover open={pfOpen} onOpenChange={setPfOpen}>
         <PopoverTrigger asChild>
-          <button type='button' className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'>
-            {rule.parent_field
-              ? (parentFields.find(f => f.value === rule.parent_field)?.label ?? rule.parent_field)
-              : <span className='text-slate-400'>parent field…</span>}
+          <button
+            type='button'
+            className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'
+          >
+            {rule.parent_field ? (
+              (parentFields.find((f) => f.value === rule.parent_field)?.label ?? rule.parent_field)
+            ) : (
+              <span className='text-slate-400'>parent field…</span>
+            )}
           </button>
         </PopoverTrigger>
         <PopoverContent className='w-52 p-0' align='start'>
@@ -5046,8 +5494,16 @@ function CascadeRuleRow({
             <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
             <CommandList>
               <CommandGroup>
-                {parentFields.map(f => (
-                  <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, parent_field: f.value }); setPfOpen(false) }} className='text-[12px]'>
+                {parentFields.map((f) => (
+                  <CommandItem
+                    key={f.value}
+                    value={f.value}
+                    onSelect={() => {
+                      onChange({ ...rule, parent_field: f.value })
+                      setPfOpen(false)
+                    }}
+                    className='text-[12px]'
+                  >
                     {f.label}
                   </CommandItem>
                 ))}
@@ -5059,10 +5515,15 @@ function CascadeRuleRow({
       <span className='text-[10px] text-slate-400 shrink-0'>→</span>
       <Popover open={cfOpen} onOpenChange={setCfOpen}>
         <PopoverTrigger asChild>
-          <button type='button' className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'>
-            {rule.child_field
-              ? (childFields.find(f => f.value === rule.child_field)?.label ?? rule.child_field)
-              : <span className='text-slate-400'>child field…</span>}
+          <button
+            type='button'
+            className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'
+          >
+            {rule.child_field ? (
+              (childFields.find((f) => f.value === rule.child_field)?.label ?? rule.child_field)
+            ) : (
+              <span className='text-slate-400'>child field…</span>
+            )}
           </button>
         </PopoverTrigger>
         <PopoverContent className='w-52 p-0' align='start'>
@@ -5070,8 +5531,16 @@ function CascadeRuleRow({
             <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
             <CommandList>
               <CommandGroup>
-                {childFields.map(f => (
-                  <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, child_field: f.value }); setCfOpen(false) }} className='text-[12px]'>
+                {childFields.map((f) => (
+                  <CommandItem
+                    key={f.value}
+                    value={f.value}
+                    onSelect={() => {
+                      onChange({ ...rule, child_field: f.value })
+                      setCfOpen(false)
+                    }}
+                    className='text-[12px]'
+                  >
                     {f.label}
                   </CommandItem>
                 ))}
@@ -5080,7 +5549,13 @@ function CascadeRuleRow({
           </Command>
         </PopoverContent>
       </Popover>
-      <button type='button' onClick={onRemove} className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'>✕</button>
+      <button
+        type='button'
+        onClick={onRemove}
+        className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'
+      >
+        ✕
+      </button>
     </div>
   )
 }
@@ -5090,39 +5565,56 @@ type RowRuleSource = {
   source_field: string
   source_related_field: string
   // o2m_filtered only:
-  source_hop?: 'm2o' | 'o2m_first'  // how to resolve the intermediate record
-  o2m_collection?: string            // child collection to search
-  filter_field?: string              // field on child to filter
-  filter_value?: string              // value (supports $parent.X)
+  source_hop?: 'm2o' | 'o2m_first' // how to resolve the intermediate record
+  o2m_collection?: string // child collection to search
+  filter_field?: string // field on child to filter
+  filter_value?: string // value (supports $parent.X)
   // parent_m2o only:
-  source_one_collection?: string     // resolved one_collection of the parent M2O field
+  source_one_collection?: string // resolved one_collection of the parent M2O field
 }
 
 type RowRuleItem = {
   trigger_field?: string | null
   trigger_fields?: string[] | null
   trigger_related_field?: string | null
-  trigger_op?: string; trigger_value?: string | null
+  trigger_op?: string
+  trigger_value?: string | null
   target_field: string
   target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick'
   target_value?: string | null
   sources?: RowRuleSource[]
-  only_if_empty?: boolean; sort?: number
+  only_if_empty?: boolean
+  sort?: number
 }
 
-const ROW_RULE_SKIP_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
+const ROW_RULE_SKIP_TYPES = new Set([
+  'alias',
+  'o2m',
+  'm2m',
+  'm2a',
+  'presentation',
+  'group',
+  'divider'
+])
 
 function toFriendlyFieldLabel(field: string): string {
-  return field.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  return field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-function fieldTypeHint(field: string, type: string | undefined, m2oRels: Array<{ many_field: string }>, o2mRels?: Array<{ one_field: string }>): string {
-  if (o2mRels?.some(r => r.one_field === field)) return 'O2M'
-  if (m2oRels.some(r => r.many_field === field)) return 'M2O'
+function fieldTypeHint(
+  field: string,
+  type: string | undefined,
+  m2oRels: Array<{ many_field: string }>,
+  o2mRels?: Array<{ one_field: string }>
+): string {
+  if (o2mRels?.some((r) => r.one_field === field)) return 'O2M'
+  if (m2oRels.some((r) => r.many_field === field)) return 'M2O'
   const t = (type ?? '').toLowerCase()
-  if (['string', 'nvarchar', 'varchar', 'char', 'text'].some(x => t.includes(x))) return 'text'
-  if (['integer', 'bigint', 'smallint', 'tinyint'].some(x => t === x) || t === 'int') return 'number'
-  if (['decimal', 'float', 'double', 'real', 'money', 'numeric'].some(x => t.includes(x))) return 'decimal'
+  if (['string', 'nvarchar', 'varchar', 'char', 'text'].some((x) => t.includes(x))) return 'text'
+  if (['integer', 'bigint', 'smallint', 'tinyint'].some((x) => t === x) || t === 'int')
+    return 'number'
+  if (['decimal', 'float', 'double', 'real', 'money', 'numeric'].some((x) => t.includes(x)))
+    return 'decimal'
   if (t === 'boolean' || t === 'bit') return 'bool'
   if (t.includes('datetime') || t === 'timestamp') return 'datetime'
   if (t === 'date') return 'date'
@@ -5136,7 +5628,7 @@ function ViaValuePicker({
   collection,
   value,
   isMulti,
-  onChange,
+  onChange
 }: {
   collection: string
   value: string | null
@@ -5146,45 +5638,54 @@ function ViaValuePicker({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
 
-  const selectedIds = value ? value.split(',').map(s => s.trim()).filter(Boolean) : []
+  const selectedIds = value
+    ? value
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : []
 
   const { data: collectionMeta } = useQuery<{ display_template?: string | null }>({
     queryKey: ['collection-meta', collection],
-    queryFn: () => api.get(`/collections/${collection}`).then(r => r.data.data ?? {}),
+    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data ?? {}),
     enabled: !!collection,
-    staleTime: 5 * 60_000,
+    staleTime: 5 * 60_000
   })
 
   const displayTemplate = collectionMeta?.display_template ?? null
   const templateFields = displayTemplate ? extractTemplateFields(displayTemplate) : []
-  const extraFields = templateFields.filter(f => f !== 'id')
+  const extraFields = templateFields.filter((f) => f !== 'id')
 
   const { data: items = [] } = useQuery<Array<Record<string, unknown>>>({
     queryKey: ['via-pick-items', collection, search, extraFields.join(',')],
     queryFn: () =>
-      api.get<{ data: Array<Record<string, unknown>> }>(`/items/${collection}`, {
-        params: {
-          limit: 50,
-          ...(search ? { search } : {}),
-          ...(extraFields.length ? { fields: ['id', ...extraFields].join(',') } : {}),
-        },
-      }).then(r => r.data.data ?? []),
+      api
+        .get<{ data: Array<Record<string, unknown>> }>(`/items/${collection}`, {
+          params: {
+            limit: 50,
+            ...(search ? { search } : {}),
+            ...(extraFields.length ? { fields: ['id', ...extraFields].join(',') } : {})
+          }
+        })
+        .then((r) => r.data.data ?? []),
     enabled: !!collection,
-    staleTime: 30_000,
+    staleTime: 30_000
   })
 
   const { data: selectedItems = [] } = useQuery<Array<Record<string, unknown>>>({
     queryKey: ['via-pick-selected', collection, selectedIds.join(','), extraFields.join(',')],
     queryFn: () =>
-      api.get<{ data: Array<Record<string, unknown>> }>(`/items/${collection}`, {
-        params: {
-          filter: JSON.stringify({ id: { _in: selectedIds } }),
-          limit: selectedIds.length,
-          ...(extraFields.length ? { fields: ['id', ...extraFields].join(',') } : {}),
-        },
-      }).then(r => r.data.data ?? []),
+      api
+        .get<{ data: Array<Record<string, unknown>> }>(`/items/${collection}`, {
+          params: {
+            filter: JSON.stringify({ id: { _in: selectedIds } }),
+            limit: selectedIds.length,
+            ...(extraFields.length ? { fields: ['id', ...extraFields].join(',') } : {})
+          }
+        })
+        .then((r) => r.data.data ?? []),
     enabled: selectedIds.length > 0,
-    staleTime: 60_000,
+    staleTime: 60_000
   })
 
   function getLabel(item: Record<string, unknown>) {
@@ -5194,7 +5695,7 @@ function ViaValuePicker({
   function toggle(id: string) {
     if (isMulti) {
       const next = selectedIds.includes(id)
-        ? selectedIds.filter(s => s !== id)
+        ? selectedIds.filter((s) => s !== id)
         : [...selectedIds, id]
       onChange(next.length ? next.join(',') : null)
     } else {
@@ -5207,12 +5708,21 @@ function ViaValuePicker({
     <div className='space-y-1'>
       {selectedIds.length > 0 && (
         <div className='flex flex-wrap gap-1'>
-          {selectedIds.map(id => {
-            const item = selectedItems.find(r => String(r.id) === id)
+          {selectedIds.map((id) => {
+            const item = selectedItems.find((r) => String(r.id) === id)
             return (
-              <span key={id} className='inline-flex items-center gap-0.5 rounded bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan text-[10px] px-1.5 py-0.5'>
+              <span
+                key={id}
+                className='inline-flex items-center gap-0.5 rounded bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan text-[10px] px-1.5 py-0.5'
+              >
                 {item ? getLabel(item) : id}
-                <button type='button' onClick={() => toggle(id)} className='hover:text-red-400 ml-0.5'>✕</button>
+                <button
+                  type='button'
+                  onClick={() => toggle(id)}
+                  className='hover:text-red-400 ml-0.5'
+                >
+                  ✕
+                </button>
               </span>
             )
           })}
@@ -5220,21 +5730,41 @@ function ViaValuePicker({
       )}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <button type='button' className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left hover:border-slate-400 text-slate-400'>
-            {isMulti ? '+ add record…' : (selectedIds.length ? 'change…' : 'pick record…')}
+          <button
+            type='button'
+            className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left hover:border-slate-400 text-slate-400'
+          >
+            {isMulti ? '+ add record…' : selectedIds.length ? 'change…' : 'pick record…'}
           </button>
         </PopoverTrigger>
         <PopoverContent className='w-60 p-0' align='start'>
           <Command>
-            <CommandInput placeholder='Search…' className='h-8 text-[12px]' value={search} onValueChange={setSearch} />
+            <CommandInput
+              placeholder='Search…'
+              className='h-8 text-[12px]'
+              value={search}
+              onValueChange={setSearch}
+            />
             <CommandList>
               <CommandGroup>
-                {items.map(item => {
+                {items.map((item) => {
                   const id = String(item.id ?? '')
                   const isSelected = selectedIds.includes(id)
                   return (
-                    <CommandItem key={id} value={`${id} ${getLabel(item)}`} onSelect={() => toggle(id)} className='text-[12px]'>
-                      {isMulti && <Check className={cn('h-3 w-3 mr-1 shrink-0', isSelected ? 'opacity-100' : 'opacity-0')} />}
+                    <CommandItem
+                      key={id}
+                      value={`${id} ${getLabel(item)}`}
+                      onSelect={() => toggle(id)}
+                      className='text-[12px]'
+                    >
+                      {isMulti && (
+                        <Check
+                          className={cn(
+                            'h-3 w-3 mr-1 shrink-0',
+                            isSelected ? 'opacity-100' : 'opacity-0'
+                          )}
+                        />
+                      )}
                       {getLabel(item)}
                     </CommandItem>
                   )
@@ -5249,8 +5779,16 @@ function ViaValuePicker({
 }
 
 function PrecedenceSourceRow({
-  source, index, total, m2oRels, o2mRels, parentContextFields,
-  onChange, onRemove, onMoveUp, onMoveDown,
+  source,
+  index,
+  total,
+  m2oRels,
+  o2mRels,
+  parentContextFields,
+  onChange,
+  onRemove,
+  onMoveUp,
+  onMoveDown
 }: {
   source: RowRuleSource
   index: number
@@ -5275,71 +5813,124 @@ function PrecedenceSourceRow({
   const hop = source.source_hop ?? 'm2o'
 
   // For standard types: resolve the related collection for field picker
-  const relCollection = source.source_type === 'relation_field'
-    ? (m2oRels.find(r => r.many_field === source.source_field)?.one_collection ?? null)
-    : source.source_type === 'o2m_first'
-      ? (o2mRels.find(r => r.one_field === source.source_field)?.many_collection ?? null)
-      : isParentM2O
-        ? (source.source_one_collection ?? null)
-        : null
+  const relCollection =
+    source.source_type === 'relation_field'
+      ? (m2oRels.find((r) => r.many_field === source.source_field)?.one_collection ?? null)
+      : source.source_type === 'o2m_first'
+        ? (o2mRels.find((r) => r.one_field === source.source_field)?.many_collection ?? null)
+        : isParentM2O
+          ? (source.source_one_collection ?? null)
+          : null
 
   const { data: relFieldsRaw } = useQuery({
     queryKey: ['field-config-all', relCollection],
-    queryFn: () => api.get(`/field-config/${relCollection}`).then((r: { data: { data?: Array<{ field: string; label?: string | null; type?: string }> } }) => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get(`/field-config/${relCollection}`)
+        .then(
+          (r: {
+            data: { data?: Array<{ field: string; label?: string | null; type?: string }> }
+          }) => r.data.data ?? []
+        ),
     enabled: !!relCollection && !isFiltered,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   })
   const relFieldOpts = (relFieldsRaw ?? [])
-    .filter((f: { field: string; type?: string }) => f.field !== 'id' && !ROW_RULE_SKIP_TYPES.has(f.type ?? ''))
-    .map((f: { field: string; label?: string | null }) => ({ value: f.field, label: f.label || f.field }))
+    .filter(
+      (f: { field: string; type?: string }) =>
+        f.field !== 'id' && !ROW_RULE_SKIP_TYPES.has(f.type ?? '')
+    )
+    .map((f: { field: string; label?: string | null }) => ({
+      value: f.field,
+      label: f.label || f.field
+    }))
 
   const parentM2OOpts = useMemo(
-    () => (parentContextFields ?? []).filter(p => !!p.one_collection).map(p => ({ value: p.field, label: p.label, one_collection: p.one_collection! })),
+    () =>
+      (parentContextFields ?? [])
+        .filter((p) => !!p.one_collection)
+        .map((p) => ({ value: p.field, label: p.label, one_collection: p.one_collection! })),
     [parentContextFields]
   )
 
   const sourceFieldOpts = isFiltered
-    ? (hop === 'm2o' ? m2oRels.map(r => ({ value: r.many_field, label: r.many_field })) : o2mRels.map(r => ({ value: r.one_field, label: r.one_field })))
+    ? hop === 'm2o'
+      ? m2oRels.map((r) => ({ value: r.many_field, label: r.many_field }))
+      : o2mRels.map((r) => ({ value: r.one_field, label: r.one_field }))
     : isParentM2O
-      ? parentM2OOpts.map(p => ({ value: p.value, label: p.label }))
+      ? parentM2OOpts.map((p) => ({ value: p.value, label: p.label }))
       : source.source_type === 'relation_field'
-        ? m2oRels.map(r => ({ value: r.many_field, label: r.many_field }))
-        : o2mRels.map(r => ({ value: r.one_field, label: r.one_field }))
+        ? m2oRels.map((r) => ({ value: r.many_field, label: r.many_field }))
+        : o2mRels.map((r) => ({ value: r.one_field, label: r.one_field }))
 
   // For o2m_filtered: resolve intermediate collection to populate child collection picker
   const intermediateCollection = isFiltered
-    ? (hop === 'm2o'
-        ? (m2oRels.find(r => r.many_field === source.source_field)?.one_collection ?? null)
-        : (o2mRels.find(r => r.one_field === source.source_field)?.many_collection ?? null))
+    ? hop === 'm2o'
+      ? (m2oRels.find((r) => r.many_field === source.source_field)?.one_collection ?? null)
+      : (o2mRels.find((r) => r.one_field === source.source_field)?.many_collection ?? null)
     : null
 
   const { data: intermediateRelsRaw } = useQuery({
     queryKey: ['relations-for-intermediate', intermediateCollection],
-    queryFn: () => api.get<{ data: Array<{ one_collection?: string; many_collection?: string; junction_field?: string | null }> }>(`/data-model/relations/for/${intermediateCollection}`).then(r => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{
+            one_collection?: string
+            many_collection?: string
+            junction_field?: string | null
+          }>
+        }>(`/data-model/relations/for/${intermediateCollection}`)
+        .then((r) => r.data.data ?? []),
     enabled: isFiltered && !!intermediateCollection && !!source.source_field,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   })
   const childCollectionOpts = useMemo(() => {
-    const rels = (intermediateRelsRaw as Array<{ one_collection?: string; many_collection?: string; junction_field?: string | null }> | undefined) ?? []
+    const rels =
+      (intermediateRelsRaw as
+        | Array<{
+            one_collection?: string
+            many_collection?: string
+            junction_field?: string | null
+          }>
+        | undefined) ?? []
     return rels
-      .filter(r => r.one_collection === intermediateCollection && r.many_collection && !r.junction_field)
-      .map(r => ({ value: r.many_collection!, label: r.many_collection! }))
+      .filter(
+        (r) => r.one_collection === intermediateCollection && r.many_collection && !r.junction_field
+      )
+      .map((r) => ({ value: r.many_collection!, label: r.many_collection! }))
   }, [intermediateRelsRaw, intermediateCollection])
 
   // For o2m_filtered: fetch fields of the o2m_collection for filter_field + source_related_field pickers
   const { data: o2mFieldsRaw } = useQuery({
     queryKey: ['field-config-all', source.o2m_collection],
-    queryFn: () => api.get(`/field-config/${source.o2m_collection}`).then((r: { data: { data?: Array<{ field: string; label?: string | null; type?: string }> } }) => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get(`/field-config/${source.o2m_collection}`)
+        .then(
+          (r: {
+            data: { data?: Array<{ field: string; label?: string | null; type?: string }> }
+          }) => r.data.data ?? []
+        ),
     enabled: isFiltered && !!source.o2m_collection,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   })
   const o2mFieldOpts = (o2mFieldsRaw ?? [])
     .filter((f: { field: string; type?: string }) => !ROW_RULE_SKIP_TYPES.has(f.type ?? ''))
-    .map((f: { field: string; label?: string | null }) => ({ value: f.field, label: f.label || f.field }))
-  const o2mScalarOpts = o2mFieldOpts.filter((f: { value: string; label: string }) => f.value !== 'id')
+    .map((f: { field: string; label?: string | null }) => ({
+      value: f.field,
+      label: f.label || f.field
+    }))
+  const o2mScalarOpts = o2mFieldOpts.filter(
+    (f: { value: string; label: string }) => f.value !== 'id'
+  )
 
   const parentFieldOpts = useMemo(
-    () => (parentContextFields ?? []).map(p => ({ value: `$parent.${p.field}`, label: `$parent.${p.field}` })),
+    () =>
+      (parentContextFields ?? []).map((p) => ({
+        value: `$parent.${p.field}`,
+        label: `$parent.${p.field}`
+      })),
     [parentContextFields]
   )
 
@@ -5347,23 +5938,52 @@ function PrecedenceSourceRow({
     <div className='relative rounded-md border border-slate-200 bg-white overflow-hidden'>
       {/* Actions — pinned top-right */}
       <div className='absolute top-1 right-1 flex items-center gap-px z-10'>
-        <button type='button' onClick={onMoveUp} disabled={index === 0} className='h-6 w-6 flex items-center justify-center text-slate-400 hover:text-slate-700 disabled:opacity-20 transition-colors rounded hover:bg-slate-100'>↑</button>
-        <button type='button' onClick={onMoveDown} disabled={index === total - 1} className='h-6 w-6 flex items-center justify-center text-slate-400 hover:text-slate-700 disabled:opacity-20 transition-colors rounded hover:bg-slate-100'>↓</button>
-        <button type='button' onClick={onRemove} className='h-6 w-6 flex items-center justify-center text-slate-300 hover:text-red-400 transition-colors rounded hover:bg-red-50'>✕</button>
+        <button
+          type='button'
+          onClick={onMoveUp}
+          disabled={index === 0}
+          className='h-6 w-6 flex items-center justify-center text-slate-400 hover:text-slate-700 disabled:opacity-20 transition-colors rounded hover:bg-slate-100'
+        >
+          ↑
+        </button>
+        <button
+          type='button'
+          onClick={onMoveDown}
+          disabled={index === total - 1}
+          className='h-6 w-6 flex items-center justify-center text-slate-400 hover:text-slate-700 disabled:opacity-20 transition-colors rounded hover:bg-slate-100'
+        >
+          ↓
+        </button>
+        <button
+          type='button'
+          onClick={onRemove}
+          className='h-6 w-6 flex items-center justify-center text-slate-300 hover:text-red-400 transition-colors rounded hover:bg-red-50'
+        >
+          ✕
+        </button>
       </div>
 
       {/* Primary row */}
       <div className='flex items-center gap-1.5 flex-wrap px-2 py-1.5 pr-20'>
-        <span className='text-[11px] font-medium text-slate-400 w-4 text-right shrink-0 tabular-nums'>{index + 1}</span>
+        <span className='text-[11px] font-medium text-slate-400 w-4 text-right shrink-0 tabular-nums'>
+          {index + 1}
+        </span>
         <SelectButton
           value={source.source_type}
           opts={[
             { value: 'relation_field', label: 'M2O →' },
             { value: 'o2m_first', label: 'O2M first →' },
             { value: 'o2m_filtered', label: 'filtered child →' },
-            { value: 'parent_m2o', label: 'parent M2O →' },
+            { value: 'parent_m2o', label: 'parent M2O →' }
           ]}
-          onChange={v => onChange({ source_type: v as RowRuleSource['source_type'], source_field: '', source_related_field: '', source_hop: 'm2o' })}
+          onChange={(v) =>
+            onChange({
+              source_type: v as RowRuleSource['source_type'],
+              source_field: '',
+              source_related_field: '',
+              source_hop: 'm2o'
+            })
+          }
         />
 
         {isFiltered && (
@@ -5371,30 +5991,57 @@ function PrecedenceSourceRow({
             value={hop}
             opts={[
               { value: 'm2o', label: 'via M2O' },
-              { value: 'o2m_first', label: 'via O2M first' },
+              { value: 'o2m_first', label: 'via O2M first' }
             ]}
-            onChange={v => onChange({ ...source, source_hop: v as 'm2o' | 'o2m_first', source_field: '' })}
+            onChange={(v) =>
+              onChange({ ...source, source_hop: v as 'm2o' | 'o2m_first', source_field: '' })
+            }
           />
         )}
 
         <Popover open={sfOpen} onOpenChange={setSfOpen}>
           <PopoverTrigger asChild>
-            <button type='button' className='h-7 rounded border border-slate-200 bg-slate-50 px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[70px] max-w-[110px] transition-colors'>
+            <button
+              type='button'
+              className='h-7 rounded border border-slate-200 bg-slate-50 px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[70px] max-w-[110px] transition-colors'
+            >
               {source.source_field || <span className='text-slate-400'>field…</span>}
             </button>
           </PopoverTrigger>
           <PopoverContent className='w-44 p-0' align='start'>
-            <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
-              {sourceFieldOpts.length === 0
-                ? <div className='px-3 py-2 text-[11px] text-slate-400'>No relations</div>
-                : sourceFieldOpts.map(f => (
-                    <CommandItem key={f.value} value={f.value} onSelect={() => {
-                      const oneCol = isParentM2O ? (parentM2OOpts.find(p => p.value === f.value)?.one_collection ?? undefined) : undefined
-                      onChange({ ...source, source_field: f.value, source_related_field: '', ...(isParentM2O ? { source_one_collection: oneCol } : {}) })
-                      setSfOpen(false)
-                    }} className='text-[11px]'>{f.label}</CommandItem>
-                  ))}
-            </CommandGroup></CommandList></Command>
+            <Command>
+              <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+              <CommandList>
+                <CommandGroup>
+                  {sourceFieldOpts.length === 0 ? (
+                    <div className='px-3 py-2 text-[11px] text-slate-400'>No relations</div>
+                  ) : (
+                    sourceFieldOpts.map((f) => (
+                      <CommandItem
+                        key={f.value}
+                        value={f.value}
+                        onSelect={() => {
+                          const oneCol = isParentM2O
+                            ? (parentM2OOpts.find((p) => p.value === f.value)?.one_collection ??
+                              undefined)
+                            : undefined
+                          onChange({
+                            ...source,
+                            source_field: f.value,
+                            source_related_field: '',
+                            ...(isParentM2O ? { source_one_collection: oneCol } : {})
+                          })
+                          setSfOpen(false)
+                        }}
+                        className='text-[11px]'
+                      >
+                        {f.label}
+                      </CommandItem>
+                    ))
+                  )}
+                </CommandGroup>
+              </CommandList>
+            </Command>
           </PopoverContent>
         </Popover>
 
@@ -5403,20 +6050,44 @@ function PrecedenceSourceRow({
             <span className='text-slate-300 shrink-0'>→</span>
             <Popover open={rfOpen} onOpenChange={setRfOpen}>
               <PopoverTrigger asChild>
-                <button type='button' className='h-7 rounded border border-slate-200 bg-slate-50 px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[70px] max-w-[110px] transition-colors'>
-                  {source.source_related_field
-                    ? (relFieldOpts.find((f: { value: string }) => f.value === source.source_related_field)?.label ?? source.source_related_field)
-                    : <span className='text-slate-400'>{relCollection ? 'field…' : '—'}</span>}
+                <button
+                  type='button'
+                  className='h-7 rounded border border-slate-200 bg-slate-50 px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[70px] max-w-[110px] transition-colors'
+                >
+                  {source.source_related_field ? (
+                    (relFieldOpts.find(
+                      (f: { value: string }) => f.value === source.source_related_field
+                    )?.label ?? source.source_related_field)
+                  ) : (
+                    <span className='text-slate-400'>{relCollection ? 'field…' : '—'}</span>
+                  )}
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-44 p-0' align='start'>
-                <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
-                  {relFieldOpts.length === 0
-                    ? <div className='px-3 py-2 text-[11px] text-slate-400'>No fields</div>
-                    : relFieldOpts.map((f: { value: string; label: string }) => (
-                        <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...source, source_related_field: f.value }); setRfOpen(false) }} className='text-[11px]'>{f.label}</CommandItem>
-                      ))}
-                </CommandGroup></CommandList></Command>
+                <Command>
+                  <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                  <CommandList>
+                    <CommandGroup>
+                      {relFieldOpts.length === 0 ? (
+                        <div className='px-3 py-2 text-[11px] text-slate-400'>No fields</div>
+                      ) : (
+                        relFieldOpts.map((f: { value: string; label: string }) => (
+                          <CommandItem
+                            key={f.value}
+                            value={f.value}
+                            onSelect={() => {
+                              onChange({ ...source, source_related_field: f.value })
+                              setRfOpen(false)
+                            }}
+                            className='text-[11px]'
+                          >
+                            {f.label}
+                          </CommandItem>
+                        ))
+                      )}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
               </PopoverContent>
             </Popover>
           </>
@@ -5427,61 +6098,154 @@ function PrecedenceSourceRow({
       {isFiltered && (
         <div className='border-t border-slate-100 bg-slate-50 px-2 py-1.5'>
           <div className='flex items-center gap-1.5 flex-wrap pl-5'>
-            <span className='text-[10px] font-medium text-slate-400 shrink-0 uppercase tracking-wide'>in</span>
+            <span className='text-[10px] font-medium text-slate-400 shrink-0 uppercase tracking-wide'>
+              in
+            </span>
             <Popover open={childColOpen} onOpenChange={setChildColOpen}>
               <PopoverTrigger asChild>
-                <button type='button' className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[100px] max-w-[140px] transition-colors'>
-                  {source.o2m_collection || <span className='text-slate-400'>{intermediateCollection ? 'collection…' : 'pick field first'}</span>}
+                <button
+                  type='button'
+                  className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[100px] max-w-[140px] transition-colors'
+                >
+                  {source.o2m_collection || (
+                    <span className='text-slate-400'>
+                      {intermediateCollection ? 'collection…' : 'pick field first'}
+                    </span>
+                  )}
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-48 p-0' align='start'>
-                <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
-                  {childCollectionOpts.length === 0
-                    ? <div className='px-3 py-2 text-[11px] text-slate-400'>{intermediateCollection ? 'No child relations' : 'Pick field first'}</div>
-                    : childCollectionOpts.map(c => (
-                        <CommandItem key={c.value} value={c.value} onSelect={() => { onChange({ ...source, o2m_collection: c.value, filter_field: undefined, source_related_field: '' }); setChildColOpen(false) }} className='text-[11px]'>{c.label}</CommandItem>
-                      ))}
-                </CommandGroup></CommandList></Command>
+                <Command>
+                  <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                  <CommandList>
+                    <CommandGroup>
+                      {childCollectionOpts.length === 0 ? (
+                        <div className='px-3 py-2 text-[11px] text-slate-400'>
+                          {intermediateCollection ? 'No child relations' : 'Pick field first'}
+                        </div>
+                      ) : (
+                        childCollectionOpts.map((c) => (
+                          <CommandItem
+                            key={c.value}
+                            value={c.value}
+                            onSelect={() => {
+                              onChange({
+                                ...source,
+                                o2m_collection: c.value,
+                                filter_field: undefined,
+                                source_related_field: ''
+                              })
+                              setChildColOpen(false)
+                            }}
+                            className='text-[11px]'
+                          >
+                            {c.label}
+                          </CommandItem>
+                        ))
+                      )}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
               </PopoverContent>
             </Popover>
             <span className='text-[11px] text-slate-400 shrink-0'>where</span>
             <Popover open={ffOpen} onOpenChange={setFfOpen}>
               <PopoverTrigger asChild>
-                <button type='button' className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[80px] max-w-[110px] transition-colors'>
+                <button
+                  type='button'
+                  className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[80px] max-w-[110px] transition-colors'
+                >
                   {source.filter_field || <span className='text-slate-400'>field…</span>}
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-44 p-0' align='start'>
-                <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
-                  {o2mFieldOpts.length === 0
-                    ? <div className='px-3 py-2 text-[11px] text-slate-400'>{source.o2m_collection ? 'No fields' : 'Pick collection first'}</div>
-                    : o2mFieldOpts.map((f: { value: string; label: string }) => (
-                        <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...source, filter_field: f.value }); setFfOpen(false) }} className='text-[11px]'>{f.label}</CommandItem>
-                      ))}
-                </CommandGroup></CommandList></Command>
+                <Command>
+                  <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                  <CommandList>
+                    <CommandGroup>
+                      {o2mFieldOpts.length === 0 ? (
+                        <div className='px-3 py-2 text-[11px] text-slate-400'>
+                          {source.o2m_collection ? 'No fields' : 'Pick collection first'}
+                        </div>
+                      ) : (
+                        o2mFieldOpts.map((f: { value: string; label: string }) => (
+                          <CommandItem
+                            key={f.value}
+                            value={f.value}
+                            onSelect={() => {
+                              onChange({ ...source, filter_field: f.value })
+                              setFfOpen(false)
+                            }}
+                            className='text-[11px]'
+                          >
+                            {f.label}
+                          </CommandItem>
+                        ))
+                      )}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
               </PopoverContent>
             </Popover>
             <span className='text-[11px] text-slate-400 shrink-0'>=</span>
-            <Popover open={fvOpen} onOpenChange={v => { setFvOpen(v); if (!v) setFvSearch('') }}>
+            <Popover
+              open={fvOpen}
+              onOpenChange={(v) => {
+                setFvOpen(v)
+                if (!v) setFvSearch('')
+              }}
+            >
               <PopoverTrigger asChild>
-                <button type='button' className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[100px] max-w-[150px] transition-colors font-mono'>
+                <button
+                  type='button'
+                  className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[100px] max-w-[150px] transition-colors font-mono'
+                >
                   {source.filter_value || <span className='text-slate-400 font-sans'>value…</span>}
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-52 p-0' align='start'>
                 <Command shouldFilter={false}>
-                  <CommandInput placeholder='$parent.field or literal…' className='h-7 text-[11px]' value={fvSearch} onValueChange={setFvSearch} />
+                  <CommandInput
+                    placeholder='$parent.field or literal…'
+                    className='h-7 text-[11px]'
+                    value={fvSearch}
+                    onValueChange={setFvSearch}
+                  />
                   <CommandList>
-                    {parentFieldOpts.filter(p => !fvSearch || p.value.includes(fvSearch)).length > 0 && (
+                    {parentFieldOpts.filter((p) => !fvSearch || p.value.includes(fvSearch)).length >
+                      0 && (
                       <CommandGroup heading='Parent fields'>
-                        {parentFieldOpts.filter(p => !fvSearch || p.value.includes(fvSearch)).map(p => (
-                          <CommandItem key={p.value} value={p.value} onSelect={() => { onChange({ ...source, filter_value: p.value }); setFvOpen(false); setFvSearch('') }} className='text-[11px]'>{p.label}</CommandItem>
-                        ))}
+                        {parentFieldOpts
+                          .filter((p) => !fvSearch || p.value.includes(fvSearch))
+                          .map((p) => (
+                            <CommandItem
+                              key={p.value}
+                              value={p.value}
+                              onSelect={() => {
+                                onChange({ ...source, filter_value: p.value })
+                                setFvOpen(false)
+                                setFvSearch('')
+                              }}
+                              className='text-[11px]'
+                            >
+                              {p.label}
+                            </CommandItem>
+                          ))}
                       </CommandGroup>
                     )}
                     {fvSearch && (
                       <CommandGroup heading='Use as literal'>
-                        <CommandItem value={`__use__${fvSearch}`} onSelect={() => { onChange({ ...source, filter_value: fvSearch }); setFvOpen(false); setFvSearch('') }} className='text-[11px] font-mono'>{fvSearch}</CommandItem>
+                        <CommandItem
+                          value={`__use__${fvSearch}`}
+                          onSelect={() => {
+                            onChange({ ...source, filter_value: fvSearch })
+                            setFvOpen(false)
+                            setFvSearch('')
+                          }}
+                          className='text-[11px] font-mono'
+                        >
+                          {fvSearch}
+                        </CommandItem>
                       </CommandGroup>
                     )}
                   </CommandList>
@@ -5491,18 +6255,42 @@ function PrecedenceSourceRow({
             <span className='text-slate-300 shrink-0'>→</span>
             <Popover open={rfOpen} onOpenChange={setRfOpen}>
               <PopoverTrigger asChild>
-                <button type='button' className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[80px] max-w-[110px] transition-colors'>
-                  {source.source_related_field || <span className='text-slate-400'>{source.o2m_collection ? 'field…' : '—'}</span>}
+                <button
+                  type='button'
+                  className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[80px] max-w-[110px] transition-colors'
+                >
+                  {source.source_related_field || (
+                    <span className='text-slate-400'>{source.o2m_collection ? 'field…' : '—'}</span>
+                  )}
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-44 p-0' align='start'>
-                <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
-                  {o2mScalarOpts.length === 0
-                    ? <div className='px-3 py-2 text-[11px] text-slate-400'>{source.o2m_collection ? 'No fields' : 'Enter collection first'}</div>
-                    : o2mScalarOpts.map((f: { value: string; label: string }) => (
-                        <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...source, source_related_field: f.value }); setRfOpen(false) }} className='text-[11px]'>{f.label}</CommandItem>
-                      ))}
-                </CommandGroup></CommandList></Command>
+                <Command>
+                  <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                  <CommandList>
+                    <CommandGroup>
+                      {o2mScalarOpts.length === 0 ? (
+                        <div className='px-3 py-2 text-[11px] text-slate-400'>
+                          {source.o2m_collection ? 'No fields' : 'Enter collection first'}
+                        </div>
+                      ) : (
+                        o2mScalarOpts.map((f: { value: string; label: string }) => (
+                          <CommandItem
+                            key={f.value}
+                            value={f.value}
+                            onSelect={() => {
+                              onChange({ ...source, source_related_field: f.value })
+                              setRfOpen(false)
+                            }}
+                            className='text-[11px]'
+                          >
+                            {f.label}
+                          </CommandItem>
+                        ))
+                      )}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
               </PopoverContent>
             </Popover>
           </div>
@@ -5513,7 +6301,10 @@ function PrecedenceSourceRow({
 }
 
 function SelectButton<T extends string>({
-  value, opts, onChange, className,
+  value,
+  opts,
+  onChange,
+  className
 }: {
   value: T
   opts: Array<{ value: T; label: string }>
@@ -5521,21 +6312,30 @@ function SelectButton<T extends string>({
   className?: string
 }) {
   const [open, setOpen] = useState(false)
-  const label = opts.find(o => o.value === value)?.label ?? value
+  const label = opts.find((o) => o.value === value)?.label ?? value
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type='button' className={cn('h-7 rounded border border-slate-200 bg-white px-2.5 text-[11px] text-slate-700 hover:border-slate-400 flex items-center gap-1 shrink-0 transition-colors', className)}>
+        <button
+          type='button'
+          className={cn(
+            'h-7 rounded border border-slate-200 bg-white px-2.5 text-[11px] text-slate-700 hover:border-slate-400 flex items-center gap-1 shrink-0 transition-colors',
+            className
+          )}
+        >
           {label}
           <ChevronDown className='h-3 w-3 text-slate-400 ml-0.5 shrink-0' />
         </button>
       </PopoverTrigger>
       <PopoverContent className='w-auto min-w-[120px] p-1' align='start'>
-        {opts.map(o => (
+        {opts.map((o) => (
           <button
             key={o.value}
             type='button'
-            onClick={() => { onChange(o.value); setOpen(false) }}
+            onClick={() => {
+              onChange(o.value)
+              setOpen(false)
+            }}
             className={cn(
               'w-full text-left px-2.5 py-1.5 rounded text-[12px] hover:bg-slate-50 transition-colors',
               o.value === value ? 'font-medium text-slate-900 bg-slate-50' : 'text-slate-700'
@@ -5552,7 +6352,7 @@ function SelectButton<T extends string>({
 function OrTriggerPicker({
   value,
   fieldOpts,
-  onChange,
+  onChange
 }: {
   value: string
   fieldOpts: Array<{ value: string; label: string }>
@@ -5562,16 +6362,38 @@ function OrTriggerPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type='button' className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'>
-          {value ? (fieldOpts.find(f => f.value === value)?.label ?? value) : <span className='text-slate-400'>field…</span>}
+        <button
+          type='button'
+          className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'
+        >
+          {value ? (
+            (fieldOpts.find((f) => f.value === value)?.label ?? value)
+          ) : (
+            <span className='text-slate-400'>field…</span>
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent className='w-52 p-0' align='start'>
-        <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList><CommandGroup>
-          {fieldOpts.map(f => (
-            <CommandItem key={f.value} value={f.value} onSelect={() => { onChange(f.value); setOpen(false) }} className='text-[11px]'>{f.label}</CommandItem>
-          ))}
-        </CommandGroup></CommandList></Command>
+        <Command>
+          <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+          <CommandList>
+            <CommandGroup>
+              {fieldOpts.map((f) => (
+                <CommandItem
+                  key={f.value}
+                  value={f.value}
+                  onSelect={() => {
+                    onChange(f.value)
+                    setOpen(false)
+                  }}
+                  className='text-[11px]'
+                >
+                  {f.label}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
       </PopoverContent>
     </Popover>
   )
@@ -5585,7 +6407,7 @@ function RowRuleRow({
   onChange,
   onRemove,
   portalContainer,
-  parentContextFields,
+  parentContextFields
 }: {
   rule: RowRuleItem
   childFields: Array<{ field: string; label?: string | null; type?: string }>
@@ -5606,8 +6428,8 @@ function RowRuleRow({
   const [pickOpen, setPickOpen] = useState(false)
   const [pickSearch, setPickSearch] = useState('')
   const fieldOpts = childFields
-    .filter(f => !o2mRels.some(r => r.one_field === f.field))
-    .map(f => ({
+    .filter((f) => !o2mRels.some((r) => r.one_field === f.field))
+    .map((f) => ({
       value: f.field,
       label: toFriendlyFieldLabel(f.field),
       hint: fieldTypeHint(f.field, f.type, m2oRels, o2mRels)
@@ -5615,15 +6437,20 @@ function RowRuleRow({
     .sort((a, b) => a.label.localeCompare(b.label))
 
   const isParentTrigger = !!rule.trigger_field && rule.trigger_field.startsWith('$parent.')
-  const isTriggerM2O = !isParentTrigger && !!rule.trigger_field && !!m2oRels.find(r => r.many_field === rule.trigger_field)
+  const isTriggerM2O =
+    !isParentTrigger &&
+    !!rule.trigger_field &&
+    !!m2oRels.find((r) => r.many_field === rule.trigger_field)
   const relatedCollection = rule.trigger_field
-    ? (m2oRels.find(r => r.many_field === rule.trigger_field)?.one_collection ?? null)
+    ? (m2oRels.find((r) => r.many_field === rule.trigger_field)?.one_collection ?? null)
     : null
   const parentTriggerLabel = isParentTrigger
-    ? (parentContextFields?.find(p => `$parent.${p.field}` === rule.trigger_field)?.label ?? rule.trigger_field!.slice(8))
+    ? (parentContextFields?.find((p) => `$parent.${p.field}` === rule.trigger_field)?.label ??
+      rule.trigger_field!.slice(8))
     : null
   const parentTriggerOneCollection = isParentTrigger
-    ? (parentContextFields?.find(p => `$parent.${p.field}` === rule.trigger_field)?.one_collection ?? null)
+    ? (parentContextFields?.find((p) => `$parent.${p.field}` === rule.trigger_field)
+        ?.one_collection ?? null)
     : null
 
   // Parse dot-path in trigger_related_field (e.g. "category_type.type")
@@ -5633,60 +6460,116 @@ function RowRuleRow({
 
   const { data: relatedFieldsData } = useQuery({
     queryKey: ['field-config-all', relatedCollection],
-    queryFn: () => api.get(`/field-config/${relatedCollection}`).then((r: { data: { data?: Array<{ field: string; label?: string | null; type?: string }> } }) => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get(`/field-config/${relatedCollection}`)
+        .then(
+          (r: {
+            data: { data?: Array<{ field: string; label?: string | null; type?: string }> }
+          }) => r.data.data ?? []
+        ),
     enabled: !!relatedCollection && (rule.target_type === 'relation_field' || isTriggerM2O),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   })
 
   const relatedFieldOpts = (relatedFieldsData ?? [])
-    .filter((f: { field: string; type?: string }) => f.field !== 'id' && !ROW_RULE_SKIP_TYPES.has(f.type ?? ''))
-    .map((f: { field: string; label?: string | null }) => ({ value: f.field, label: f.label || f.field }))
+    .filter(
+      (f: { field: string; type?: string }) =>
+        f.field !== 'id' && !ROW_RULE_SKIP_TYPES.has(f.type ?? '')
+    )
+    .map((f: { field: string; label?: string | null }) => ({
+      value: f.field,
+      label: f.label || f.field
+    }))
 
   // Fetch relations on the related collection so we can detect 2nd-level M2O hops
   const { data: relCollRelations } = useQuery({
     queryKey: ['relations-for', relatedCollection],
-    queryFn: () => api.get<{ data: Array<{ many_collection?: string; many_field?: string; one_collection?: string; junction_field?: unknown }> }>(`/data-model/relations/for/${relatedCollection}`).then(r => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{
+            many_collection?: string
+            many_field?: string
+            one_collection?: string
+            junction_field?: unknown
+          }>
+        }>(`/data-model/relations/for/${relatedCollection}`)
+        .then((r) => r.data.data ?? []),
     enabled: !!relatedCollection && isTriggerM2O,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   })
 
   const seg1Rel = trfSeg1
-    ? (relCollRelations ?? []).find((r: { many_collection?: string; many_field?: string; one_collection?: string; junction_field?: unknown }) =>
-        r.many_collection === relatedCollection && r.many_field === trfSeg1 && !r.junction_field)
+    ? (relCollRelations ?? []).find(
+        (r: {
+          many_collection?: string
+          many_field?: string
+          one_collection?: string
+          junction_field?: unknown
+        }) =>
+          r.many_collection === relatedCollection && r.many_field === trfSeg1 && !r.junction_field
+      )
     : null
-  const relRelCollection = (seg1Rel as { one_collection?: string } | null | undefined)?.one_collection ?? null
+  const relRelCollection =
+    (seg1Rel as { one_collection?: string } | null | undefined)?.one_collection ?? null
 
   const { data: relRelFieldsData } = useQuery({
     queryKey: ['field-config-all', relRelCollection],
-    queryFn: () => api.get(`/field-config/${relRelCollection}`).then((r: { data: { data?: Array<{ field: string; label?: string | null; type?: string }> } }) => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get(`/field-config/${relRelCollection}`)
+        .then(
+          (r: {
+            data: { data?: Array<{ field: string; label?: string | null; type?: string }> }
+          }) => r.data.data ?? []
+        ),
     enabled: !!relRelCollection,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   })
 
   const relRelFieldOpts = (relRelFieldsData ?? [])
-    .filter((f: { field: string; type?: string }) => f.field !== 'id' && !ROW_RULE_SKIP_TYPES.has(f.type ?? ''))
-    .map((f: { field: string; label?: string | null }) => ({ value: f.field, label: f.label || f.field }))
+    .filter(
+      (f: { field: string; type?: string }) =>
+        f.field !== 'id' && !ROW_RULE_SKIP_TYPES.has(f.type ?? '')
+    )
+    .map((f: { field: string; label?: string | null }) => ({
+      value: f.field,
+      label: f.label || f.field
+    }))
 
   // Target field M2O detection — for the "pick record" target type
   const targetM2ORel = rule.target_field
-    ? m2oRels.find((r: { many_field?: string; junction_field?: unknown }) => r.many_field === rule.target_field && !r.junction_field)
+    ? m2oRels.find(
+        (r: { many_field?: string; junction_field?: unknown }) =>
+          r.many_field === rule.target_field && !r.junction_field
+      )
     : null
-  const targetRelCollection = (targetM2ORel as { one_collection?: string } | undefined)?.one_collection ?? null
+  const targetRelCollection =
+    (targetM2ORel as { one_collection?: string } | undefined)?.one_collection ?? null
 
   const { data: targetRelFieldsData } = useQuery({
     queryKey: ['field-config-all', targetRelCollection, 'pick'],
-    queryFn: () => api.get(`/field-config/${targetRelCollection}`).then((r: { data: { data?: Array<{ field: string; type?: string; label?: string | null }> } }) => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get(`/field-config/${targetRelCollection}`)
+        .then(
+          (r: {
+            data: { data?: Array<{ field: string; type?: string; label?: string | null }> }
+          }) => r.data.data ?? []
+        ),
     enabled: !!targetRelCollection && rule.target_type === 'pick',
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   })
 
   const pickDisplayField = useMemo(() => {
-    const fields = (targetRelFieldsData as Array<{ field: string; type?: string }> | undefined) ?? []
+    const fields =
+      (targetRelFieldsData as Array<{ field: string; type?: string }> | undefined) ?? []
     const preferred = ['name', 'title', 'label', 'display_name', 'subject', 'heading']
-    const byName = fields.find(f => preferred.includes(f.field))
+    const byName = fields.find((f) => preferred.includes(f.field))
     if (byName) return byName.field
     const textTypes = new Set(['string', 'text', 'varchar', 'nvarchar', 'char'])
-    return fields.find(f => f.field !== 'id' && textTypes.has(f.type ?? ''))?.field ?? null
+    return fields.find((f) => f.field !== 'id' && textTypes.has(f.type ?? ''))?.field ?? null
   }, [targetRelFieldsData])
 
   const { data: pickItemsData } = useQuery({
@@ -5694,10 +6577,12 @@ function RowRuleRow({
     queryFn: () => {
       const params = new URLSearchParams({ limit: '20' })
       if (pickSearch) params.set('search', pickSearch)
-      return api.get(`/items/${targetRelCollection}?${params}`).then((r: { data: { data?: Array<Record<string, unknown>> } }) => r.data.data ?? [])
+      return api
+        .get(`/items/${targetRelCollection}?${params}`)
+        .then((r: { data: { data?: Array<Record<string, unknown>> } }) => r.data.data ?? [])
     },
     enabled: !!targetRelCollection && rule.target_type === 'pick' && pickOpen,
-    staleTime: 30 * 1000,
+    staleTime: 30 * 1000
   })
 
   const pickItems = (pickItemsData as Array<Record<string, unknown>> | undefined) ?? []
@@ -5705,29 +6590,46 @@ function RowRuleRow({
   // Fetch the currently-selected pick target record (for label display when popover is closed)
   const { data: pickValueItemData } = useQuery({
     queryKey: ['row-rule-pick-value-item', targetRelCollection, rule.target_value],
-    queryFn: () => api.get(`/items/${targetRelCollection}/${rule.target_value}`)
-      .then((r: { data: { data?: Record<string, unknown> } }) => r.data.data ?? null),
+    queryFn: () =>
+      api
+        .get(`/items/${targetRelCollection}/${rule.target_value}`)
+        .then((r: { data: { data?: Record<string, unknown> } }) => r.data.data ?? null),
     enabled: !!targetRelCollection && rule.target_type === 'pick' && !!rule.target_value,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   })
 
   // Trigger value label — resolve FK id to display name when trigger is M2O or parent M2O
-  const triggerValueCollection = isParentTrigger ? parentTriggerOneCollection : (isTriggerM2O ? relatedCollection : null)
-  const triggerValueIsId = !!triggerValueCollection && !!rule.trigger_value && ['eq', 'neq'].includes(rule.trigger_op ?? '')
+  const triggerValueCollection = isParentTrigger
+    ? parentTriggerOneCollection
+    : isTriggerM2O
+      ? relatedCollection
+      : null
+  const triggerValueIsId =
+    !!triggerValueCollection &&
+    !!rule.trigger_value &&
+    ['eq', 'neq'].includes(rule.trigger_op ?? '')
 
   const { data: triggerValueItemData } = useQuery({
     queryKey: ['row-rule-trigger-value-item', triggerValueCollection, rule.trigger_value],
-    queryFn: () => api.get(`/items/${triggerValueCollection}/${rule.trigger_value}`)
-      .then((r: { data: { data?: Record<string, unknown> } }) => r.data.data ?? null),
+    queryFn: () =>
+      api
+        .get(`/items/${triggerValueCollection}/${rule.trigger_value}`)
+        .then((r: { data: { data?: Record<string, unknown> } }) => r.data.data ?? null),
     enabled: triggerValueIsId,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   })
 
-  function resolveItemLabel(item: Record<string, unknown> | null | undefined, fallback: string | null | undefined): string | null {
+  function resolveItemLabel(
+    item: Record<string, unknown> | null | undefined,
+    fallback: string | null | undefined
+  ): string | null {
     if (!item) return fallback ?? null
     const preferred = ['name', 'title', 'label', 'display_name', 'subject', 'heading']
-    const hit = preferred.find(k => item[k] != null && String(item[k]).trim() !== '')
-      ?? Object.keys(item).find(k => k !== 'id' && typeof item[k] === 'string' && String(item[k]).trim() !== '')
+    const hit =
+      preferred.find((k) => item[k] != null && String(item[k]).trim() !== '') ??
+      Object.keys(item).find(
+        (k) => k !== 'id' && typeof item[k] === 'string' && String(item[k]).trim() !== ''
+      )
     return hit ? String(item[hit]) : (fallback ?? null)
   }
 
@@ -5744,7 +6646,9 @@ function RowRuleRow({
 
   function moveSource(idx: number, dir: -1 | 1) {
     const next = [...sources]
-    const tmp = next[idx]; next[idx] = next[idx + dir]; next[idx + dir] = tmp
+    const tmp = next[idx]
+    next[idx] = next[idx + dir]
+    next[idx + dir] = tmp
     onChange({ ...rule, sources: next })
   }
 
@@ -5752,43 +6656,69 @@ function RowRuleRow({
   const triggerDisplayLabel = isParentTrigger
     ? `↑ ${parentTriggerLabel ?? rule.trigger_field!.slice(8)}`
     : rule.trigger_field
-      ? (fieldOpts.find(f => f.value === rule.trigger_field)?.label ?? rule.trigger_field)
+      ? (fieldOpts.find((f) => f.value === rule.trigger_field)?.label ?? rule.trigger_field)
       : null
-  const opLabels: Record<string, string> = { eq: '=', neq: '≠', nnull: '≠ empty', null: 'is empty', in: 'in', contains: '~' }
+  const opLabels: Record<string, string> = {
+    eq: '=',
+    neq: '≠',
+    nnull: '≠ empty',
+    null: 'is empty',
+    in: 'in',
+    contains: '~'
+  }
   const opStr = opLabels[rule.trigger_op ?? 'nnull'] ?? rule.trigger_op ?? ''
   const resolvedTriggerVal = triggerValueIsId
     ? resolveItemLabel(triggerValueItemData as Record<string, unknown> | null, rule.trigger_value)
     : rule.trigger_value
-  const valSnippet = resolvedTriggerVal ? ` "${resolvedTriggerVal.length > 20 ? `${resolvedTriggerVal.slice(0, 20)}…` : resolvedTriggerVal}"` : ''
+  const valSnippet = resolvedTriggerVal
+    ? ` "${resolvedTriggerVal.length > 20 ? `${resolvedTriggerVal.slice(0, 20)}…` : resolvedTriggerVal}"`
+    : ''
   const targetDisplayLabel = rule.target_field
-    ? (fieldOpts.find(f => f.value === rule.target_field)?.label ?? rule.target_field)
+    ? (fieldOpts.find((f) => f.value === rule.target_field)?.label ?? rule.target_field)
     : null
-  const resolvedPickVal = rule.target_type === 'pick' && rule.target_value
-    ? resolveItemLabel(pickValueItemData as Record<string, unknown> | null, rule.target_value)
-    : null
-  const targetTypeBadge: Record<string, string> = { set: '', relation_field: 'M2O', precedence: 'chain', clear: 'clear', pick: '' }
+  const resolvedPickVal =
+    rule.target_type === 'pick' && rule.target_value
+      ? resolveItemLabel(pickValueItemData as Record<string, unknown> | null, rule.target_value)
+      : null
+  const targetTypeBadge: Record<string, string> = {
+    set: '',
+    relation_field: 'M2O',
+    precedence: 'chain',
+    clear: 'clear',
+    pick: ''
+  }
   const pickSuffix = rule.target_type === 'pick' && resolvedPickVal ? ` = ${resolvedPickVal}` : ''
-  const collapsedSummary = triggerDisplayLabel && targetDisplayLabel
-    ? `${triggerDisplayLabel} ${opStr}${valSnippet} → ${targetDisplayLabel}${pickSuffix}${targetTypeBadge[rule.target_type] ? ` · ${targetTypeBadge[rule.target_type]}` : ''}`
-    : triggerDisplayLabel
-      ? `${triggerDisplayLabel} ${opStr}${valSnippet} → ?`
-      : '(new rule — click to configure)'
+  const collapsedSummary =
+    triggerDisplayLabel && targetDisplayLabel
+      ? `${triggerDisplayLabel} ${opStr}${valSnippet} → ${targetDisplayLabel}${pickSuffix}${targetTypeBadge[rule.target_type] ? ` · ${targetTypeBadge[rule.target_type]}` : ''}`
+      : triggerDisplayLabel
+        ? `${triggerDisplayLabel} ${opStr}${valSnippet} → ?`
+        : '(new rule — click to configure)'
 
   return (
     <div className='rounded-md border border-slate-200 bg-white overflow-hidden'>
       {/* Header — always visible, click to expand/collapse */}
       <div
         className='flex items-center gap-1.5 px-2.5 py-2 cursor-pointer select-none hover:bg-slate-50/80 transition-colors'
-        onClick={() => setExpanded(v => !v)}
+        onClick={() => setExpanded((v) => !v)}
       >
-        <ChevronRight className={`h-3.5 w-3.5 text-slate-400 shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} />
-        <span className='flex-1 text-[11px] text-slate-600 truncate min-w-0'>{collapsedSummary}</span>
+        <ChevronRight
+          className={`h-3.5 w-3.5 text-slate-400 shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
+        />
+        <span className='flex-1 text-[11px] text-slate-600 truncate min-w-0'>
+          {collapsedSummary}
+        </span>
         {rule.only_if_empty && (
-          <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-medium bg-amber-50 text-amber-600 border border-amber-100'>fallback</span>
+          <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-medium bg-amber-50 text-amber-600 border border-amber-100'>
+            fallback
+          </span>
         )}
         <button
           type='button'
-          onClick={e => { e.stopPropagation(); onRemove() }}
+          onClick={(e) => {
+            e.stopPropagation()
+            onRemove()
+          }}
           className='shrink-0 text-slate-300 hover:text-red-400 transition-colors ml-1'
         >
           <X className='h-3.5 w-3.5' />
@@ -5801,41 +6731,89 @@ function RowRuleRow({
           {/* IF section */}
           <div className='border-t border-slate-100 px-2.5 py-2 space-y-1.5 bg-slate-50/50'>
             <div className='flex items-start gap-1.5'>
-              <span className='text-[9px] font-semibold text-slate-400 mt-[7px] w-5 shrink-0 tracking-wide'>IF</span>
+              <span className='text-[9px] font-semibold text-slate-400 mt-[7px] w-5 shrink-0 tracking-wide'>
+                IF
+              </span>
               <div className='flex-1 min-w-0 space-y-1.5'>
                 {/* Trigger field + op */}
                 <div className='flex items-center gap-1.5'>
                   <Popover open={tfOpen} onOpenChange={setTfOpen}>
                     <PopoverTrigger asChild>
-                      <button type='button' className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0'>
-                        {isParentTrigger
-                          ? <span className='flex items-center gap-1'><span className='text-[9px] bg-nvr-cyan/10 text-nvr-cyan rounded px-1 py-0.5 shrink-0'>parent</span>{parentTriggerLabel}</span>
-                          : rule.trigger_field
-                            ? (fieldOpts.find(f => f.value === rule.trigger_field)?.label ?? rule.trigger_field)
-                            : <span className='text-slate-400'>when field changes…</span>}
+                      <button
+                        type='button'
+                        className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0'
+                      >
+                        {isParentTrigger ? (
+                          <span className='flex items-center gap-1'>
+                            <span className='text-[9px] bg-nvr-cyan/10 text-nvr-cyan rounded px-1 py-0.5 shrink-0'>
+                              parent
+                            </span>
+                            {parentTriggerLabel}
+                          </span>
+                        ) : rule.trigger_field ? (
+                          (fieldOpts.find((f) => f.value === rule.trigger_field)?.label ??
+                          rule.trigger_field)
+                        ) : (
+                          <span className='text-slate-400'>when field changes…</span>
+                        )}
                       </button>
                     </PopoverTrigger>
                     <PopoverContent className='w-52 p-0' align='start' container={portalContainer}>
-                      <Command><CommandInput placeholder='Search…' className='h-8 text-[12px]' /><CommandList className='max-h-[220px]'>
-                        {parentContextFields && parentContextFields.length > 0 && (
-                          <CommandGroup heading='↑ Parent record'>
-                            {parentContextFields.map(p => (
-                              <CommandItem key={`$parent.${p.field}`} value={`parent ${p.label} ${p.field}`} onSelect={() => { onChange({ ...rule, trigger_field: `$parent.${p.field}`, trigger_related_field: null }); setTfOpen(false) }} className='text-[12px] flex items-center justify-between gap-2'>
-                                <span className='truncate'>{p.label}</span>
-                                <span className='shrink-0 text-[9px] bg-nvr-cyan/10 text-nvr-cyan rounded px-1'>parent</span>
+                      <Command>
+                        <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
+                        <CommandList className='max-h-[220px]'>
+                          {parentContextFields && parentContextFields.length > 0 && (
+                            <CommandGroup heading='↑ Parent record'>
+                              {parentContextFields.map((p) => (
+                                <CommandItem
+                                  key={`$parent.${p.field}`}
+                                  value={`parent ${p.label} ${p.field}`}
+                                  onSelect={() => {
+                                    onChange({
+                                      ...rule,
+                                      trigger_field: `$parent.${p.field}`,
+                                      trigger_related_field: null
+                                    })
+                                    setTfOpen(false)
+                                  }}
+                                  className='text-[12px] flex items-center justify-between gap-2'
+                                >
+                                  <span className='truncate'>{p.label}</span>
+                                  <span className='shrink-0 text-[9px] bg-nvr-cyan/10 text-nvr-cyan rounded px-1'>
+                                    parent
+                                  </span>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          )}
+                          <CommandGroup
+                            heading={parentContextFields?.length ? 'Child record' : undefined}
+                          >
+                            {fieldOpts.map((f) => (
+                              <CommandItem
+                                key={f.value}
+                                value={`${f.label} ${f.value}`}
+                                onSelect={() => {
+                                  onChange({
+                                    ...rule,
+                                    trigger_field: f.value,
+                                    trigger_related_field: null
+                                  })
+                                  setTfOpen(false)
+                                }}
+                                className='text-[12px] flex items-center justify-between gap-2'
+                              >
+                                <span className='truncate'>{f.label}</span>
+                                {f.hint && (
+                                  <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-medium bg-slate-100 text-slate-500'>
+                                    {f.hint}
+                                  </span>
+                                )}
                               </CommandItem>
                             ))}
                           </CommandGroup>
-                        )}
-                        <CommandGroup heading={parentContextFields?.length ? 'Child record' : undefined}>
-                          {fieldOpts.map(f => (
-                            <CommandItem key={f.value} value={`${f.label} ${f.value}`} onSelect={() => { onChange({ ...rule, trigger_field: f.value, trigger_related_field: null }); setTfOpen(false) }} className='text-[12px] flex items-center justify-between gap-2'>
-                              <span className='truncate'>{f.label}</span>
-                              {f.hint && <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-medium bg-slate-100 text-slate-500'>{f.hint}</span>}
-                            </CommandItem>
-                          ))}
-                        </CommandGroup>
-                      </CommandList></Command>
+                        </CommandList>
+                      </Command>
                     </PopoverContent>
                   </Popover>
                   {!trfSeg1 && (
@@ -5847,9 +6825,9 @@ function RowRuleRow({
                         { value: 'eq', label: 'equals' },
                         { value: 'neq', label: '≠' },
                         { value: 'in', label: 'in list' },
-                        { value: 'contains', label: 'contains' },
+                        { value: 'contains', label: 'contains' }
                       ]}
-                      onChange={v => onChange({ ...rule, trigger_op: v })}
+                      onChange={(v) => onChange({ ...rule, trigger_op: v })}
                     />
                   )}
                 </div>
@@ -5860,19 +6838,53 @@ function RowRuleRow({
                     <span className='text-[10px] text-slate-400 shrink-0'>via:</span>
                     <Popover open={trfOpen} onOpenChange={setTrfOpen}>
                       <PopoverTrigger asChild>
-                        <button type='button' className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'>
-                          {trfSeg1
-                            ? (relatedFieldOpts.find((f: { value: string }) => f.value === trfSeg1)?.label ?? trfSeg1)
-                            : <span className='text-slate-400 italic'>FK id (direct)</span>}
+                        <button
+                          type='button'
+                          className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'
+                        >
+                          {trfSeg1 ? (
+                            (relatedFieldOpts.find((f: { value: string }) => f.value === trfSeg1)
+                              ?.label ?? trfSeg1)
+                          ) : (
+                            <span className='text-slate-400 italic'>FK id (direct)</span>
+                          )}
                         </button>
                       </PopoverTrigger>
-                      <PopoverContent className='w-48 p-0' align='start' container={portalContainer}>
-                        <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList className='max-h-[180px]'><CommandGroup>
-                          <CommandItem value='__none__' onSelect={() => { onChange({ ...rule, trigger_related_field: null }); setTrfOpen(false) }} className='text-[11px] text-slate-400 italic'>FK id (direct)</CommandItem>
-                          {relatedFieldOpts.map((f: { value: string; label: string }) => (
-                            <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, trigger_related_field: f.value }); setTrfOpen(false) }} className='text-[11px]'>{f.label}</CommandItem>
-                          ))}
-                        </CommandGroup></CommandList></Command>
+                      <PopoverContent
+                        className='w-48 p-0'
+                        align='start'
+                        container={portalContainer}
+                      >
+                        <Command>
+                          <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                          <CommandList className='max-h-[180px]'>
+                            <CommandGroup>
+                              <CommandItem
+                                value='__none__'
+                                onSelect={() => {
+                                  onChange({ ...rule, trigger_related_field: null })
+                                  setTrfOpen(false)
+                                }}
+                                className='text-[11px] text-slate-400 italic'
+                              >
+                                FK id (direct)
+                              </CommandItem>
+                              {relatedFieldOpts.map((f: { value: string; label: string }) => (
+                                <CommandItem
+                                  key={f.value}
+                                  value={f.value}
+                                  onSelect={() => {
+                                    onChange({ ...rule, trigger_related_field: f.value })
+                                    setTrfOpen(false)
+                                  }}
+                                  className='text-[11px]'
+                                >
+                                  {f.label}
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
                       </PopoverContent>
                     </Popover>
                     {trfSeg1 && relRelCollection && (
@@ -5880,19 +6892,63 @@ function RowRuleRow({
                         <span className='text-[10px] text-slate-400 shrink-0'>→</span>
                         <Popover open={trf2Open} onOpenChange={setTrf2Open}>
                           <PopoverTrigger asChild>
-                            <button type='button' className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'>
-                              {(trfSeg2 === '__entity__' || trfSeg2 === '__id__') ? <span className='italic'>(entity)</span>
-                                : trfSeg2 ? (relRelFieldOpts.find((f: { value: string }) => f.value === trfSeg2)?.label ?? trfSeg2)
-                                : <span className='text-slate-400 italic'>field…</span>}
+                            <button
+                              type='button'
+                              className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'
+                            >
+                              {trfSeg2 === '__entity__' || trfSeg2 === '__id__' ? (
+                                <span className='italic'>(entity)</span>
+                              ) : trfSeg2 ? (
+                                (relRelFieldOpts.find((f: { value: string }) => f.value === trfSeg2)
+                                  ?.label ?? trfSeg2)
+                              ) : (
+                                <span className='text-slate-400 italic'>field…</span>
+                              )}
                             </button>
                           </PopoverTrigger>
-                          <PopoverContent className='w-48 p-0' align='start' container={portalContainer}>
-                            <Command><CommandInput placeholder='Search…' className='h-7 text-[11px]' /><CommandList className='max-h-[180px]'><CommandGroup>
-                              <CommandItem value='__entity__' onSelect={() => { onChange({ ...rule, trigger_related_field: `${trfSeg1}.__entity__`, trigger_value: null }); setTrf2Open(false) }} className='text-[11px] italic text-slate-500'>(entity) — record picker</CommandItem>
-                              {relRelFieldOpts.map((f: { value: string; label: string }) => (
-                                <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, trigger_related_field: `${trfSeg1}.${f.value}`, trigger_value: null }); setTrf2Open(false) }} className='text-[11px]'>{f.label}</CommandItem>
-                              ))}
-                            </CommandGroup></CommandList></Command>
+                          <PopoverContent
+                            className='w-48 p-0'
+                            align='start'
+                            container={portalContainer}
+                          >
+                            <Command>
+                              <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                              <CommandList className='max-h-[180px]'>
+                                <CommandGroup>
+                                  <CommandItem
+                                    value='__entity__'
+                                    onSelect={() => {
+                                      onChange({
+                                        ...rule,
+                                        trigger_related_field: `${trfSeg1}.__entity__`,
+                                        trigger_value: null
+                                      })
+                                      setTrf2Open(false)
+                                    }}
+                                    className='text-[11px] italic text-slate-500'
+                                  >
+                                    (entity) — record picker
+                                  </CommandItem>
+                                  {relRelFieldOpts.map((f: { value: string; label: string }) => (
+                                    <CommandItem
+                                      key={f.value}
+                                      value={f.value}
+                                      onSelect={() => {
+                                        onChange({
+                                          ...rule,
+                                          trigger_related_field: `${trfSeg1}.${f.value}`,
+                                          trigger_value: null
+                                        })
+                                        setTrf2Open(false)
+                                      }}
+                                      className='text-[11px]'
+                                    >
+                                      {f.label}
+                                    </CommandItem>
+                                  ))}
+                                </CommandGroup>
+                              </CommandList>
+                            </Command>
                           </PopoverContent>
                         </Popover>
                       </>
@@ -5906,28 +6962,43 @@ function RowRuleRow({
                           { value: 'eq', label: 'equals' },
                           { value: 'neq', label: '≠' },
                           { value: 'in', label: 'in list' },
-                          { value: 'contains', label: 'contains' },
+                          { value: 'contains', label: 'contains' }
                         ]}
-                        onChange={v => onChange({ ...rule, trigger_op: v })}
+                        onChange={(v) => onChange({ ...rule, trigger_op: v })}
                       />
                     )}
                   </div>
                 )}
 
                 {/* Trigger value */}
-                {showTriggerValue && (
-                  isViaIdOrEntity && relRelCollection
-                    ? <ViaValuePicker collection={relRelCollection} value={rule.trigger_value ?? null} isMulti={rule.trigger_op === 'in'} onChange={v => onChange({ ...rule, trigger_value: v })} />
-                    : isParentTrigger && parentTriggerOneCollection
-                      ? <ViaValuePicker collection={parentTriggerOneCollection} value={rule.trigger_value ?? null} isMulti={rule.trigger_op === 'in'} onChange={v => onChange({ ...rule, trigger_value: v })} />
-                      : <input
-                          type='text'
-                          value={rule.trigger_value ?? ''}
-                          onChange={e => onChange({ ...rule, trigger_value: e.target.value || null })}
-                          placeholder={rule.trigger_op === 'in' ? 'val1, val2 (comma-separated)' : 'value (or $parent.field_name)'}
-                          className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-                        />
-                )}
+                {showTriggerValue &&
+                  (isViaIdOrEntity && relRelCollection ? (
+                    <ViaValuePicker
+                      collection={relRelCollection}
+                      value={rule.trigger_value ?? null}
+                      isMulti={rule.trigger_op === 'in'}
+                      onChange={(v) => onChange({ ...rule, trigger_value: v })}
+                    />
+                  ) : isParentTrigger && parentTriggerOneCollection ? (
+                    <ViaValuePicker
+                      collection={parentTriggerOneCollection}
+                      value={rule.trigger_value ?? null}
+                      isMulti={rule.trigger_op === 'in'}
+                      onChange={(v) => onChange({ ...rule, trigger_value: v })}
+                    />
+                  ) : (
+                    <input
+                      type='text'
+                      value={rule.trigger_value ?? ''}
+                      onChange={(e) => onChange({ ...rule, trigger_value: e.target.value || null })}
+                      placeholder={
+                        rule.trigger_op === 'in'
+                          ? 'val1, val2 (comma-separated)'
+                          : 'value (or $parent.field_name)'
+                      }
+                      className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+                    />
+                  ))}
 
                 {/* Extra OR triggers */}
                 {(rule.trigger_fields ?? []).map((tf, i) => (
@@ -5936,19 +7007,32 @@ function RowRuleRow({
                     <OrTriggerPicker
                       value={tf}
                       fieldOpts={fieldOpts}
-                      onChange={v => {
+                      onChange={(v) => {
                         const next = [...(rule.trigger_fields ?? [])]
                         next[i] = v
                         onChange({ ...rule, trigger_fields: next })
                       }}
                     />
-                    <button type='button' onClick={() => onChange({ ...rule, trigger_fields: (rule.trigger_fields ?? []).filter((_, j) => j !== i) })} className='shrink-0 text-slate-300 hover:text-red-400 text-[10px] px-0.5'>✕</button>
+                    <button
+                      type='button'
+                      onClick={() =>
+                        onChange({
+                          ...rule,
+                          trigger_fields: (rule.trigger_fields ?? []).filter((_, j) => j !== i)
+                        })
+                      }
+                      className='shrink-0 text-slate-300 hover:text-red-400 text-[10px] px-0.5'
+                    >
+                      ✕
+                    </button>
                   </div>
                 ))}
                 {rule.trigger_field && (
                   <button
                     type='button'
-                    onClick={() => onChange({ ...rule, trigger_fields: [...(rule.trigger_fields ?? []), ''] })}
+                    onClick={() =>
+                      onChange({ ...rule, trigger_fields: [...(rule.trigger_fields ?? []), ''] })
+                    }
                     className='text-[10px] text-nvr-cyan hover:underline'
                   >
                     + or when another field changes
@@ -5961,25 +7045,52 @@ function RowRuleRow({
           {/* SET section */}
           <div className='border-t border-slate-100 px-2.5 py-2 space-y-1.5'>
             <div className='flex items-start gap-1.5'>
-              <span className='text-[10px] font-semibold text-slate-500 mt-[7px] w-5 shrink-0 tracking-wide'>SET</span>
+              <span className='text-[10px] font-semibold text-slate-500 mt-[7px] w-5 shrink-0 tracking-wide'>
+                SET
+              </span>
               <div className='flex-1 min-w-0 space-y-1.5'>
                 {/* Target field + type */}
                 <div className='flex items-center gap-1.5'>
                   <Popover open={tgtOpen} onOpenChange={setTgtOpen}>
                     <PopoverTrigger asChild>
-                      <button type='button' className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0'>
-                        {rule.target_field ? (fieldOpts.find(f => f.value === rule.target_field)?.label ?? rule.target_field) : <span className='text-slate-400'>target field…</span>}
+                      <button
+                        type='button'
+                        className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0'
+                      >
+                        {rule.target_field ? (
+                          (fieldOpts.find((f) => f.value === rule.target_field)?.label ??
+                          rule.target_field)
+                        ) : (
+                          <span className='text-slate-400'>target field…</span>
+                        )}
                       </button>
                     </PopoverTrigger>
                     <PopoverContent className='w-52 p-0' align='start' container={portalContainer}>
-                      <Command><CommandInput placeholder='Search…' className='h-8 text-[12px]' /><CommandList className='max-h-[180px]'><CommandGroup>
-                        {fieldOpts.map(f => (
-                          <CommandItem key={f.value} value={`${f.label} ${f.value}`} onSelect={() => { onChange({ ...rule, target_field: f.value }); setTgtOpen(false) }} className='text-[12px] flex items-center justify-between gap-2'>
-                            <span className='truncate'>{f.label}</span>
-                            {f.hint && <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-medium bg-slate-100 text-slate-500'>{f.hint}</span>}
-                          </CommandItem>
-                        ))}
-                      </CommandGroup></CommandList></Command>
+                      <Command>
+                        <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
+                        <CommandList className='max-h-[180px]'>
+                          <CommandGroup>
+                            {fieldOpts.map((f) => (
+                              <CommandItem
+                                key={f.value}
+                                value={`${f.label} ${f.value}`}
+                                onSelect={() => {
+                                  onChange({ ...rule, target_field: f.value })
+                                  setTgtOpen(false)
+                                }}
+                                className='text-[12px] flex items-center justify-between gap-2'
+                              >
+                                <span className='truncate'>{f.label}</span>
+                                {f.hint && (
+                                  <span className='shrink-0 rounded px-1 py-0.5 text-[9px] font-medium bg-slate-100 text-slate-500'>
+                                    {f.hint}
+                                  </span>
+                                )}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
                     </PopoverContent>
                   </Popover>
                   <SelectButton
@@ -5989,9 +7100,16 @@ function RowRuleRow({
                       { value: 'pick', label: '= pick record' },
                       { value: 'relation_field', label: '= from M2O' },
                       { value: 'precedence', label: '= chain' },
-                      { value: 'clear', label: '= clear' },
+                      { value: 'clear', label: '= clear' }
                     ]}
-                    onChange={v => onChange({ ...rule, target_type: v as RowRuleItem['target_type'], target_value: null, sources: [] })}
+                    onChange={(v) =>
+                      onChange({
+                        ...rule,
+                        target_type: v as RowRuleItem['target_type'],
+                        target_value: null,
+                        sources: []
+                      })
+                    }
                   />
                 </div>
 
@@ -5999,20 +7117,46 @@ function RowRuleRow({
                 {showTargetValue && showRelatedCombobox && (
                   <Popover open={tvOpen} onOpenChange={setTvOpen}>
                     <PopoverTrigger asChild>
-                      <button type='button' className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400'>
-                        {rule.target_value
-                          ? (relatedFieldOpts.find((f: { value: string }) => f.value === rule.target_value)?.label ?? rule.target_value)
-                          : <span className='text-slate-400'>field from {relatedCollection}…</span>}
+                      <button
+                        type='button'
+                        className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400'
+                      >
+                        {rule.target_value ? (
+                          (relatedFieldOpts.find(
+                            (f: { value: string }) => f.value === rule.target_value
+                          )?.label ?? rule.target_value)
+                        ) : (
+                          <span className='text-slate-400'>field from {relatedCollection}…</span>
+                        )}
                       </button>
                     </PopoverTrigger>
                     <PopoverContent className='w-52 p-0' align='start' container={portalContainer}>
-                      <Command><CommandInput placeholder='Search…' className='h-8 text-[12px]' /><CommandList className='max-h-[180px]'><CommandGroup>
-                        {relatedFieldOpts.length === 0
-                          ? <div className='px-3 py-2 text-[11px] text-slate-400'>No fields found</div>
-                          : relatedFieldOpts.map((f: { value: string; label: string }) => (
-                              <CommandItem key={f.value} value={f.value} onSelect={() => { onChange({ ...rule, target_value: f.value }); setTvOpen(false) }} className='text-[12px]'>{f.label}</CommandItem>
-                            ))}
-                      </CommandGroup></CommandList></Command>
+                      <Command>
+                        <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
+                        <CommandList className='max-h-[180px]'>
+                          <CommandGroup>
+                            {relatedFieldOpts.length === 0 ? (
+                              <div className='px-3 py-2 text-[11px] text-slate-400'>
+                                No fields found
+                              </div>
+                            ) : (
+                              relatedFieldOpts.map((f: { value: string; label: string }) => (
+                                <CommandItem
+                                  key={f.value}
+                                  value={f.value}
+                                  onSelect={() => {
+                                    onChange({ ...rule, target_value: f.value })
+                                    setTvOpen(false)
+                                  }}
+                                  className='text-[12px]'
+                                >
+                                  {f.label}
+                                </CommandItem>
+                              ))
+                            )}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
                     </PopoverContent>
                   </Popover>
                 )}
@@ -6023,75 +7167,142 @@ function RowRuleRow({
                     <input
                       type='text'
                       value={rule.target_value ?? ''}
-                      onChange={e => onChange({ ...rule, target_value: e.target.value || null })}
-                      placeholder={rule.target_type === 'relation_field' ? 'select an M2O trigger field first' : 'value'}
+                      onChange={(e) => onChange({ ...rule, target_value: e.target.value || null })}
+                      placeholder={
+                        rule.target_type === 'relation_field'
+                          ? 'select an M2O trigger field first'
+                          : 'value'
+                      }
                       className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'
                       readOnly={rule.target_type === 'relation_field'}
                     />
-                    {parentContextFields && parentContextFields.length > 0 && rule.target_type === 'set' && (
-                      <Popover open={parentTvOpen} onOpenChange={setParentTvOpen}>
-                        <PopoverTrigger asChild>
-                          <button type='button' title='Use parent field value' className='h-7 px-1.5 rounded border border-slate-200 bg-white text-[10px] text-nvr-cyan hover:border-nvr-cyan shrink-0'>↑</button>
-                        </PopoverTrigger>
-                        <PopoverContent className='w-52 p-0' align='end' container={portalContainer}>
-                          <Command><CommandList className='max-h-[180px]'><CommandGroup heading='Copy from parent'>
-                            {parentContextFields.map(p => (
-                              <CommandItem key={p.field} value={`${p.label} ${p.field}`} onSelect={() => { onChange({ ...rule, target_value: `$parent.${p.field}` }); setParentTvOpen(false) }} className='text-[12px] flex items-center justify-between gap-2'>
-                                <span className='truncate'>{p.label}</span>
-                                <span className='shrink-0 text-[9px] font-mono text-slate-400'>{p.field}</span>
-                              </CommandItem>
-                            ))}
-                          </CommandGroup></CommandList></Command>
-                        </PopoverContent>
-                      </Popover>
-                    )}
+                    {parentContextFields &&
+                      parentContextFields.length > 0 &&
+                      rule.target_type === 'set' && (
+                        <Popover open={parentTvOpen} onOpenChange={setParentTvOpen}>
+                          <PopoverTrigger asChild>
+                            <button
+                              type='button'
+                              title='Use parent field value'
+                              className='h-7 px-1.5 rounded border border-slate-200 bg-white text-[10px] text-nvr-cyan hover:border-nvr-cyan shrink-0'
+                            >
+                              ↑
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent
+                            className='w-52 p-0'
+                            align='end'
+                            container={portalContainer}
+                          >
+                            <Command>
+                              <CommandList className='max-h-[180px]'>
+                                <CommandGroup heading='Copy from parent'>
+                                  {parentContextFields.map((p) => (
+                                    <CommandItem
+                                      key={p.field}
+                                      value={`${p.label} ${p.field}`}
+                                      onSelect={() => {
+                                        onChange({ ...rule, target_value: `$parent.${p.field}` })
+                                        setParentTvOpen(false)
+                                      }}
+                                      className='text-[12px] flex items-center justify-between gap-2'
+                                    >
+                                      <span className='truncate'>{p.label}</span>
+                                      <span className='shrink-0 text-[9px] font-mono text-slate-400'>
+                                        {p.field}
+                                      </span>
+                                    </CommandItem>
+                                  ))}
+                                </CommandGroup>
+                              </CommandList>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
+                      )}
                   </div>
                 )}
 
                 {/* Pick record combobox */}
-                {showPickCombobox && (
-                  !targetRelCollection
-                    ? <p className='text-[10px] text-slate-400 italic'>Select an M2O target field first</p>
-                    : (
-                      <Popover open={pickOpen} onOpenChange={setPickOpen}>
-                        <PopoverTrigger asChild>
-                          <button type='button' className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400'>
-                            {rule.target_value
-                              ? (resolveItemLabel(pickValueItemData as Record<string, unknown> | null, rule.target_value) ?? String(rule.target_value))
-                              : <span className='text-slate-400'>pick from {targetRelCollection}…</span>}
-                          </button>
-                        </PopoverTrigger>
-                        <PopoverContent className='w-56 p-0' align='start' container={portalContainer}>
-                          <Command>
-                            <CommandInput placeholder='Search…' className='h-8 text-[12px]' value={pickSearch} onValueChange={setPickSearch} />
-                            <CommandList className='max-h-[180px]'>
-                              <CommandGroup>
-                                {pickItems.length === 0
-                                  ? <div className='px-3 py-2 text-[11px] text-slate-400'>No records found</div>
-                                  : pickItems.map(item => {
-                                      const id = String(item.id)
-                                      const label = pickDisplayField && item[pickDisplayField] != null ? String(item[pickDisplayField]) : id
-                                      return (
-                                        <CommandItem key={id} value={`${label} ${id}`}
-                                          onSelect={() => { onChange({ ...rule, target_value: id }); setPickOpen(false) }}
-                                          className='text-[12px] flex items-center justify-between gap-2'>
-                                          <span className='truncate'>{label}</span>
-                                          {label !== id && <span className='shrink-0 font-mono text-[9px] text-slate-400'>{id}</span>}
-                                        </CommandItem>
-                                      )
-                                    })}
-                              </CommandGroup>
-                            </CommandList>
-                          </Command>
-                        </PopoverContent>
-                      </Popover>
-                    )
-                )}
+                {showPickCombobox &&
+                  (!targetRelCollection ? (
+                    <p className='text-[10px] text-slate-400 italic'>
+                      Select an M2O target field first
+                    </p>
+                  ) : (
+                    <Popover open={pickOpen} onOpenChange={setPickOpen}>
+                      <PopoverTrigger asChild>
+                        <button
+                          type='button'
+                          className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400'
+                        >
+                          {rule.target_value ? (
+                            (resolveItemLabel(
+                              pickValueItemData as Record<string, unknown> | null,
+                              rule.target_value
+                            ) ?? String(rule.target_value))
+                          ) : (
+                            <span className='text-slate-400'>pick from {targetRelCollection}…</span>
+                          )}
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        className='w-56 p-0'
+                        align='start'
+                        container={portalContainer}
+                      >
+                        <Command>
+                          <CommandInput
+                            placeholder='Search…'
+                            className='h-8 text-[12px]'
+                            value={pickSearch}
+                            onValueChange={setPickSearch}
+                          />
+                          <CommandList className='max-h-[180px]'>
+                            <CommandGroup>
+                              {pickItems.length === 0 ? (
+                                <div className='px-3 py-2 text-[11px] text-slate-400'>
+                                  No records found
+                                </div>
+                              ) : (
+                                pickItems.map((item) => {
+                                  const id = String(item.id)
+                                  const label =
+                                    pickDisplayField && item[pickDisplayField] != null
+                                      ? String(item[pickDisplayField])
+                                      : id
+                                  return (
+                                    <CommandItem
+                                      key={id}
+                                      value={`${label} ${id}`}
+                                      onSelect={() => {
+                                        onChange({ ...rule, target_value: id })
+                                        setPickOpen(false)
+                                      }}
+                                      className='text-[12px] flex items-center justify-between gap-2'
+                                    >
+                                      <span className='truncate'>{label}</span>
+                                      {label !== id && (
+                                        <span className='shrink-0 font-mono text-[9px] text-slate-400'>
+                                          {id}
+                                        </span>
+                                      )}
+                                    </CommandItem>
+                                  )
+                                })
+                              )}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
+                  ))}
 
                 {/* Precedence chain sources */}
                 {rule.target_type === 'precedence' && (
                   <div className='space-y-1.5 pt-0.5'>
-                    <p className='text-[11px] text-slate-500 font-medium'>Sources — first non-null wins:</p>
+                    <p className='text-[11px] text-slate-500 font-medium'>
+                      Sources — first non-null wins:
+                    </p>
                     {sources.map((src, idx) => (
                       <PrecedenceSourceRow
                         key={idx}
@@ -6101,15 +7312,34 @@ function RowRuleRow({
                         m2oRels={m2oRels}
                         o2mRels={o2mRels}
                         parentContextFields={parentContextFields}
-                        onChange={updated => onChange({ ...rule, sources: sources.map((s, i) => i === idx ? updated : s) })}
-                        onRemove={() => onChange({ ...rule, sources: sources.filter((_, i) => i !== idx) })}
+                        onChange={(updated) =>
+                          onChange({
+                            ...rule,
+                            sources: sources.map((s, i) => (i === idx ? updated : s))
+                          })
+                        }
+                        onRemove={() =>
+                          onChange({ ...rule, sources: sources.filter((_, i) => i !== idx) })
+                        }
                         onMoveUp={() => moveSource(idx, -1)}
                         onMoveDown={() => moveSource(idx, 1)}
                       />
                     ))}
                     <button
                       type='button'
-                      onClick={() => onChange({ ...rule, sources: [...sources, { source_type: 'relation_field', source_field: '', source_related_field: '' }] })}
+                      onClick={() =>
+                        onChange({
+                          ...rule,
+                          sources: [
+                            ...sources,
+                            {
+                              source_type: 'relation_field',
+                              source_field: '',
+                              source_related_field: ''
+                            }
+                          ]
+                        })
+                      }
                       className='text-[11px] text-nvr-cyan hover:text-nvr-cyan/80 font-medium transition-colors'
                     >
                       + Add source
@@ -6123,8 +7353,15 @@ function RowRuleRow({
           {/* Footer */}
           <div className='border-t border-slate-100 px-2.5 py-1.5 bg-slate-50/50'>
             <label className='flex items-center gap-2 cursor-pointer'>
-              <input type='checkbox' checked={!!rule.only_if_empty} onChange={e => onChange({ ...rule, only_if_empty: e.target.checked })} className='h-3.5 w-3.5 accent-nvr-cyan' />
-              <span className='text-[11px] text-slate-600'>Only set if target is currently empty</span>
+              <input
+                type='checkbox'
+                checked={!!rule.only_if_empty}
+                onChange={(e) => onChange({ ...rule, only_if_empty: e.target.checked })}
+                className='h-3.5 w-3.5 accent-nvr-cyan'
+              />
+              <span className='text-[11px] text-slate-600'>
+                Only set if target is currently empty
+              </span>
             </label>
           </div>
         </>
@@ -6135,30 +7372,31 @@ function RowRuleRow({
 
 function RoleConditionRow({
   roleIds,
-  onRoleIdsChange,
+  onRoleIdsChange
 }: {
   roleIds: string[]
   onRoleIdsChange: (ids: string[]) => void
 }) {
   const { data: rolesData } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ['roles-list-for-lock'],
-    queryFn: () => api.get('/roles').then(r => r.data.data),
-    staleTime: 60_000,
+    queryFn: () => api.get('/roles').then((r) => r.data.data),
+    staleTime: 60_000
   })
   const roles = rolesData ?? []
   return (
     <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1'>
-      {roles.length === 0 && (
-        <p className='text-[10px] text-slate-400'>No roles found.</p>
-      )}
-      {roles.map(r => (
-        <label key={r.id} className='flex items-center gap-1.5 text-[10px] cursor-pointer select-none'>
+      {roles.length === 0 && <p className='text-[10px] text-slate-400'>No roles found.</p>}
+      {roles.map((r) => (
+        <label
+          key={r.id}
+          className='flex items-center gap-1.5 text-[10px] cursor-pointer select-none'
+        >
           <input
             type='checkbox'
             checked={roleIds.includes(r.id)}
-            onChange={e => {
+            onChange={(e) => {
               if (e.target.checked) onRoleIdsChange([...roleIds, r.id])
-              else onRoleIdsChange(roleIds.filter(id => id !== r.id))
+              else onRoleIdsChange(roleIds.filter((id) => id !== r.id))
             }}
             className='rounded'
           />
@@ -6174,7 +7412,7 @@ function PipelineStateConditionRow({
   pipelineId,
   stateKeys,
   onPipelineChange,
-  onStateKeysChange,
+  onStateKeysChange
 }: {
   collection?: string
   pipelineId?: string
@@ -6182,18 +7420,24 @@ function PipelineStateConditionRow({
   onPipelineChange: (id: string | undefined) => void
   onStateKeysChange: (keys: string[]) => void
 }) {
-  const { data: pipelinesData } = useQuery<Array<{ id: string; name: string; collections: string[] }>>({
+  const { data: pipelinesData } = useQuery<
+    Array<{ id: string; name: string; collections: string[] }>
+  >({
     queryKey: ['pipelines-list-for-lock'],
-    queryFn: () => api.get('/pipelines').then(r => r.data.data),
-    staleTime: 60_000,
+    queryFn: () => api.get('/pipelines').then((r) => r.data.data),
+    staleTime: 60_000
   })
-  const bound = (pipelinesData ?? []).filter(p => !collection || p.collections.includes(collection))
+  const bound = (pipelinesData ?? []).filter(
+    (p) => !collection || p.collections.includes(collection)
+  )
 
-  const { data: pipelineDetail } = useQuery<{ states: Array<{ id: string; key: string; label: string; color?: string }> }>({
+  const { data: pipelineDetail } = useQuery<{
+    states: Array<{ id: string; key: string; label: string; color?: string }>
+  }>({
     queryKey: ['pipeline-detail-lock', pipelineId],
-    queryFn: () => api.get(`/pipelines/${pipelineId}`).then(r => r.data.data),
+    queryFn: () => api.get(`/pipelines/${pipelineId}`).then((r) => r.data.data),
     staleTime: 60_000,
-    enabled: !!pipelineId,
+    enabled: !!pipelineId
   })
   const states = pipelineDetail?.states ?? []
 
@@ -6201,25 +7445,32 @@ function PipelineStateConditionRow({
     <div className='space-y-1.5'>
       <select
         value={pipelineId ?? ''}
-        onChange={e => onPipelineChange(e.target.value || undefined)}
+        onChange={(e) => onPipelineChange(e.target.value || undefined)}
         className='w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px]'
       >
         <option value=''>— Select pipeline —</option>
-        {bound.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        {bound.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
       </select>
       {bound.length === 0 && (
         <p className='text-[10px] text-slate-400'>No pipelines bound to this collection.</p>
       )}
       {pipelineId && states.length > 0 && (
         <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1'>
-          {states.map(s => (
-            <label key={s.key} className='flex items-center gap-1.5 text-[10px] cursor-pointer select-none'>
+          {states.map((s) => (
+            <label
+              key={s.key}
+              className='flex items-center gap-1.5 text-[10px] cursor-pointer select-none'
+            >
               <input
                 type='checkbox'
                 checked={stateKeys.includes(s.key)}
-                onChange={e => {
+                onChange={(e) => {
                   if (e.target.checked) onStateKeysChange([...stateKeys, s.key])
-                  else onStateKeysChange(stateKeys.filter(k => k !== s.key))
+                  else onStateKeysChange(stateKeys.filter((k) => k !== s.key))
                 }}
                 className='rounded'
               />
@@ -6255,7 +7506,7 @@ function FieldSettingsPopover({
   onInlineDisplayChange,
   collection,
   prefillFromParent,
-  onPrefillFromParentChange,
+  onPrefillFromParentChange
 }: {
   fieldName: string
   abstractType?: string
@@ -6270,8 +7521,15 @@ function FieldSettingsPopover({
   onRowRevisionsChange?: (v: boolean) => void
   allowRevisionRestore?: boolean
   onAllowRevisionRestoreChange?: (v: boolean) => void
-  lockConditions?: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
-  onLockConditionsChange?: (v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
+  lockConditions?: Array<{
+    type: string
+    state_keys?: string[]
+    role_ids?: string[]
+    pipeline_id?: string
+  }>
+  onLockConditionsChange?: (
+    v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  ) => void
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
   collection?: string
@@ -6293,7 +7551,7 @@ function FieldSettingsPopover({
   // Drill-down config (M2O / M2M / relation-path): overrides.drilldown
   const ddQualifies = isM2O || isM2M || (settings.interface ?? '') === 'relation-path'
   const [ddEnabled, setDdEnabled] = useState(
-    settings.drilldown?.enabled ?? ((settings.interface ?? '') === 'relation-path')
+    settings.drilldown?.enabled ?? (settings.interface ?? '') === 'relation-path'
   )
   const [ddLayoutId, setDdLayoutId] = useState<number | null>(settings.drilldown?.layout_id ?? null)
   const [ddWidth, setDdWidth] = useState<string>(
@@ -6308,7 +7566,9 @@ function FieldSettingsPopover({
       return null
     }
   }, [relatedCollection, settings.options])
-  const { data: ddDetailLayouts = [] } = useQuery<Array<{ id: number; name: string; layout_type?: string }>>({
+  const { data: ddDetailLayouts = [] } = useQuery<
+    Array<{ id: number; name: string; layout_type?: string }>
+  >({
     queryKey: ['detail-layouts', ddTargetCollection],
     enabled: !!ddTargetCollection && ddQualifies,
     queryFn: () =>
@@ -6321,7 +7581,9 @@ function FieldSettingsPopover({
         )
   })
   const [inlineRelation, setInlineRelation] = useState(settings.inline_relation)
-  const [maxValues, setMaxValues] = useState<string>(settings.max_values != null ? String(settings.max_values) : '')
+  const [maxValues, setMaxValues] = useState<string>(
+    settings.max_values != null ? String(settings.max_values) : ''
+  )
   const [cascadeRules, setCascadeRules] = useState<CascadeFilterRule[]>([])
   const [gridLayoutSlug, setGridLayoutSlug] = useState<string | null>(null)
   const [gridLayoutId, setGridLayoutId] = useState<number | null>(null)
@@ -6336,7 +7598,9 @@ function FieldSettingsPopover({
   const [saveMode, setSaveMode] = useState<'immediate' | 'pending'>('immediate')
   const [showLineNumbers, setShowLineNumbers] = useState(false)
   const [enableReorder, setEnableReorder] = useState(true)
-  const [parentCascades, setParentCascades] = useState<Array<{ parent_field: string; child_field: string }>>([])
+  const [parentCascades, setParentCascades] = useState<
+    Array<{ parent_field: string; child_field: string }>
+  >([])
   const [rowRulesLocal, setRowRulesLocal] = useState<RowRuleItem[]>([])
   const [parentContextFieldsLocal, setParentContextFieldsLocal] = useState<string[]>([])
   const [uniqueBy, setUniqueBy] = useState<string[]>([])
@@ -6349,7 +7613,17 @@ function FieldSettingsPopover({
   const [groupedGroupFieldOpen, setGroupedGroupFieldOpen] = useState(false)
   const [groupedOptionFieldOpen, setGroupedOptionFieldOpen] = useState(false)
 
-  const isNumericAbstractType = ['integer', 'bigInteger', 'decimal', 'float', 'money', 'smallmoney', 'tinyint', 'smallint', 'bigint'].includes(abstractType ?? '')
+  const isNumericAbstractType = [
+    'integer',
+    'bigInteger',
+    'decimal',
+    'float',
+    'money',
+    'smallmoney',
+    'tinyint',
+    'smallint',
+    'bigint'
+  ].includes(abstractType ?? '')
 
   // Child M2O fields for cascade config — fetched from related collection's relations
   const { data: childCollectionMeta } = useQuery({
@@ -6359,50 +7633,90 @@ function FieldSettingsPopover({
     staleTime: 10 * 60 * 1000
   })
 
-  type RelRow = { many_collection?: string; many_field?: string; one_collection?: string; one_field?: string; junction_field?: string | null }
+  type RelRow = {
+    many_collection?: string
+    many_field?: string
+    one_collection?: string
+    one_field?: string
+    junction_field?: string | null
+  }
   const isInlineTable = iface === 'inline-table' || settings.interface === 'inline-table'
   // Grouped combobox pickers (Group by / Option field) list the target
   // collection's M2O fields — the relations fetch must run for that interface
   // too, not just inline tables, or the pickers render empty.
-  const isRelationGrouped = iface === 'relation-grouped' || settings.interface === 'relation-grouped'
+  const isRelationGrouped =
+    iface === 'relation-grouped' || settings.interface === 'relation-grouped'
   const { data: childRelationsRaw = [] } = useQuery<RelRow[]>({
     queryKey: ['relations-for', relatedCollection],
-    queryFn: () => api.get<{ data: RelRow[] }>(`/data-model/relations/for/${relatedCollection}`).then(r => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get<{ data: RelRow[] }>(`/data-model/relations/for/${relatedCollection}`)
+        .then((r) => r.data.data ?? []),
     enabled: !!relatedCollection && (isInlineTable || isRelationGrouped),
     staleTime: 5 * 60 * 1000
   })
 
-  const childM2OFields = useMemo(() => childRelationsRaw
-    .filter(r => r.many_collection === relatedCollection && r.many_field && !r.junction_field)
-    .map(r => ({ value: r.many_field!, label: `${r.many_field} → ${r.one_collection}` }))
-  , [childRelationsRaw, relatedCollection])
+  const childM2OFields = useMemo(
+    () =>
+      childRelationsRaw
+        .filter((r) => r.many_collection === relatedCollection && r.many_field && !r.junction_field)
+        .map((r) => ({ value: r.many_field!, label: `${r.many_field} → ${r.one_collection}` })),
+    [childRelationsRaw, relatedCollection]
+  )
 
-  const childM2ORels = useMemo(() => childRelationsRaw
-    .filter(r => r.many_collection === relatedCollection && r.many_field && r.one_collection && !r.junction_field)
-    .map(r => ({ many_field: r.many_field!, one_collection: r.one_collection! }))
-  , [childRelationsRaw, relatedCollection])
+  const childM2ORels = useMemo(
+    () =>
+      childRelationsRaw
+        .filter(
+          (r) =>
+            r.many_collection === relatedCollection &&
+            r.many_field &&
+            r.one_collection &&
+            !r.junction_field
+        )
+        .map((r) => ({ many_field: r.many_field!, one_collection: r.one_collection! })),
+    [childRelationsRaw, relatedCollection]
+  )
 
-  const childO2MRels = useMemo(() => childRelationsRaw
-    .filter(r => r.one_collection === relatedCollection && r.many_collection && !r.junction_field)
-    .map(r => ({
-      one_field: (!r.one_field || r.one_field === 'id') ? r.many_collection! : r.one_field!,
-      many_collection: r.many_collection!
-    }))
-  , [childRelationsRaw, relatedCollection])
+  const childO2MRels = useMemo(
+    () =>
+      childRelationsRaw
+        .filter(
+          (r) => r.one_collection === relatedCollection && r.many_collection && !r.junction_field
+        )
+        .map((r) => ({
+          one_field: !r.one_field || r.one_field === 'id' ? r.many_collection! : r.one_field!,
+          many_collection: r.many_collection!
+        })),
+    [childRelationsRaw, relatedCollection]
+  )
 
   const parentM2OFields = useMemo(
-    () => (m2oFields ?? []).filter((f) => f.kind === 'M2O').map((f) => ({ value: f.field, label: f.label })),
+    () =>
+      (m2oFields ?? [])
+        .filter((f) => f.kind === 'M2O')
+        .map((f) => ({ value: f.field, label: f.label })),
     [m2oFields]
   )
 
-  const { data: childAllFields = [] } = useQuery<Array<{ field: string; label?: string | null; type?: string; interface?: string | null; hidden?: boolean }>>({
+  const { data: childAllFields = [] } = useQuery<
+    Array<{
+      field: string
+      label?: string | null
+      type?: string
+      interface?: string | null
+      hidden?: boolean
+    }>
+  >({
     queryKey: ['field-config-all', relatedCollection],
     queryFn: () => api.get(`/field-config/${relatedCollection}`).then((r) => r.data.data ?? []),
     enabled: !!relatedCollection && isInlineTable,
     staleTime: 5 * 60 * 1000
   })
 
-  const { data: parentAllFields = [] } = useQuery<Array<{ field: string; label?: string | null; type?: string; interface?: string | null }>>({
+  const { data: parentAllFields = [] } = useQuery<
+    Array<{ field: string; label?: string | null; type?: string; interface?: string | null }>
+  >({
     queryKey: ['field-config-all', collection],
     queryFn: () => api.get(`/field-config/${collection}`).then((r) => r.data.data ?? []),
     enabled: !!collection && iface === 'inline-table',
@@ -6411,7 +7725,10 @@ function FieldSettingsPopover({
 
   const { data: parentRelationsRaw = [] } = useQuery<RelRow[]>({
     queryKey: ['relations-for', collection],
-    queryFn: () => api.get<{ data: RelRow[] }>(`/data-model/relations/for/${collection}`).then(r => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get<{ data: RelRow[] }>(`/data-model/relations/for/${collection}`)
+        .then((r) => r.data.data ?? []),
     enabled: !!collection && isInlineTable,
     staleTime: 5 * 60 * 1000
   })
@@ -6420,7 +7737,12 @@ function FieldSettingsPopover({
   const parentFieldRelatedCollectionMap = useMemo(() => {
     const map: Record<string, string> = {}
     for (const r of parentRelationsRaw) {
-      if (r.many_collection === collection && r.many_field && r.one_collection && !r.junction_field) {
+      if (
+        r.many_collection === collection &&
+        r.many_field &&
+        r.one_collection &&
+        !r.junction_field
+      ) {
         map[r.many_field] = r.one_collection
       }
       // M2M: junction row gives us the far-end via two rows; find the row where junction_field is set
@@ -6429,7 +7751,12 @@ function FieldSettingsPopover({
     // Also handle M2M: junction rows
     for (const r of parentRelationsRaw) {
       if (r.one_collection === collection && r.junction_field && r.many_collection) {
-        const companion = parentRelationsRaw.find(c => c.many_collection === r.many_collection && c.many_field === r.junction_field && c.one_collection !== collection)
+        const companion = parentRelationsRaw.find(
+          (c) =>
+            c.many_collection === r.many_collection &&
+            c.many_field === r.junction_field &&
+            c.one_collection !== collection
+        )
         if (companion?.one_collection) {
           if (r.one_field) map[r.one_field] = companion.one_collection
         }
@@ -6439,8 +7766,9 @@ function FieldSettingsPopover({
   }, [parentRelationsRaw, collection])
 
   const SKIP_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
-  const uniqueByOptions = useMemo(() =>
-    childAllFields.filter((f) => !f.hidden && f.field !== 'id' && !SKIP_TYPES.has(f.type ?? '')),
+  const uniqueByOptions = useMemo(
+    () =>
+      childAllFields.filter((f) => !f.hidden && f.field !== 'id' && !SKIP_TYPES.has(f.type ?? '')),
     [childAllFields]
   )
 
@@ -6459,33 +7787,69 @@ function FieldSettingsPopover({
       setInlineRelation(settings.inline_relation)
       setMaxValues(settings.max_values != null ? String(settings.max_values) : '')
       // dependencyConfig is already a parsed object from the API — use directly
-      const dep = (dependencyConfig && typeof dependencyConfig === 'object') ? dependencyConfig : {}
-      setCascadeRules(Array.isArray(dep.cascade_filters) ? dep.cascade_filters as CascadeFilterRule[] : [])
+      const dep = dependencyConfig && typeof dependencyConfig === 'object' ? dependencyConfig : {}
+      setCascadeRules(
+        Array.isArray(dep.cascade_filters) ? (dep.cascade_filters as CascadeFilterRule[]) : []
+      )
       // Parse inline-grid / inline-table options from settings.options
       try {
-        const opts = settings.options ? (typeof settings.options === 'string' ? JSON.parse(settings.options) : settings.options) as Record<string, unknown> : {}
+        const opts = settings.options
+          ? ((typeof settings.options === 'string'
+              ? JSON.parse(settings.options)
+              : settings.options) as Record<string, unknown>)
+          : {}
         setGridLayoutSlug((opts.layout_slug as string | null) ?? null)
         setGridLayoutId((opts.layout_id as number | null) ?? null)
-        setGridShowTotals(!!(opts.grid_show_totals))
+        setGridShowTotals(!!opts.grid_show_totals)
         setAllowUpload(opts.allow_upload !== false)
         setAllowPick(opts.allow_pick !== false)
-        setFilePendingSave(!!(opts.pending_save))
+        setFilePendingSave(!!opts.pending_save)
         setNumFormat((opts.format as 'int' | 'decimal' | 'currency' | '') ?? '')
         setNumPrecisionFmt(opts.precision != null ? String(opts.precision) : '2')
         setNumCurrency((opts.currency as string) ?? 'USD')
         setNumAggregate((opts.aggregate as 'sum' | 'count' | 'avg' | 'min' | 'max' | '') ?? '')
         setSaveMode((opts.save_mode as 'immediate' | 'pending') ?? 'immediate')
-        setShowLineNumbers(!!(opts.show_line_numbers))
+        setShowLineNumbers(!!opts.show_line_numbers)
         setEnableReorder(opts.enable_reorder !== false)
-        setParentCascades(Array.isArray(opts.parent_cascades) ? opts.parent_cascades as Array<{ parent_field: string; child_field: string }> : [])
-        setRowRulesLocal(Array.isArray(opts.row_rules) ? opts.row_rules as typeof rowRulesLocal : [])
-        setParentContextFieldsLocal(Array.isArray(opts.parent_context_fields) ? opts.parent_context_fields as string[] : [])
-        setUniqueBy(Array.isArray(opts.unique_by) ? opts.unique_by as string[] : [])
+        setParentCascades(
+          Array.isArray(opts.parent_cascades)
+            ? (opts.parent_cascades as Array<{ parent_field: string; child_field: string }>)
+            : []
+        )
+        setRowRulesLocal(
+          Array.isArray(opts.row_rules) ? (opts.row_rules as typeof rowRulesLocal) : []
+        )
+        setParentContextFieldsLocal(
+          Array.isArray(opts.parent_context_fields) ? (opts.parent_context_fields as string[]) : []
+        )
+        setUniqueBy(Array.isArray(opts.unique_by) ? (opts.unique_by as string[]) : [])
         setSortField((opts.sort_field as string) ?? '')
         setSortDir((opts.sort_dir as 'asc' | 'desc') === 'desc' ? 'desc' : 'asc')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
-      } catch { setGridLayoutSlug(null); setGridLayoutId(null); setGridShowTotals(false); setAllowUpload(true); setAllowPick(true); setFilePendingSave(false); setNumFormat(''); setNumPrecisionFmt('2'); setNumCurrency('USD'); setNumAggregate(''); setSaveMode('immediate'); setShowLineNumbers(false); setEnableReorder(true); setParentCascades([]); setRowRulesLocal([]); setParentContextFieldsLocal([]); setUniqueBy([]); setSortField(''); setSortDir('asc'); setGroupedGroupField(''); setGroupedOptionField('') }
+      } catch {
+        setGridLayoutSlug(null)
+        setGridLayoutId(null)
+        setGridShowTotals(false)
+        setAllowUpload(true)
+        setAllowPick(true)
+        setFilePendingSave(false)
+        setNumFormat('')
+        setNumPrecisionFmt('2')
+        setNumCurrency('USD')
+        setNumAggregate('')
+        setSaveMode('immediate')
+        setShowLineNumbers(false)
+        setEnableReorder(true)
+        setParentCascades([])
+        setRowRulesLocal([])
+        setParentContextFieldsLocal([])
+        setUniqueBy([])
+        setSortField('')
+        setSortDir('asc')
+        setGroupedGroupField('')
+        setGroupedOptionField('')
+      }
     }
     setOpen(next)
   }
@@ -6495,7 +7859,8 @@ function FieldSettingsPopover({
     // Merge cascade_filters into dependency_config object and send to API (API will JSON.stringify it)
     let depPatch: Record<string, unknown> | null = null
     if (isM2O || isM2M) {
-      const existing = (dependencyConfig && typeof dependencyConfig === 'object') ? dependencyConfig : {}
+      const existing =
+        dependencyConfig && typeof dependencyConfig === 'object' ? dependencyConfig : {}
       const merged: Record<string, unknown> = { ...existing }
       if (cascadeRules.length > 0) {
         merged.cascade_filters = cascadeRules
@@ -6506,35 +7871,93 @@ function FieldSettingsPopover({
     }
     // Inline-grid / inline-table options for O2M
     let optionsPatch: string | null = null
-    const needsOptionsPatch = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table')) || isNumericAbstractType || iface === 'file-image' || iface === 'files-m2m' || iface === 'relation-grouped'
+    const needsOptionsPatch =
+      (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table')) ||
+      isNumericAbstractType ||
+      iface === 'file-image' ||
+      iface === 'files-m2m' ||
+      iface === 'relation-grouped'
     if (needsOptionsPatch) {
       try {
-        const existing = settings.options ? (typeof settings.options === 'string' ? JSON.parse(settings.options) : settings.options) as Record<string, unknown> : {}
+        const existing = settings.options
+          ? ((typeof settings.options === 'string'
+              ? JSON.parse(settings.options)
+              : settings.options) as Record<string, unknown>)
+          : {}
         const formatOpts: Record<string, unknown> = {}
         if (isNumericAbstractType && numFormat) {
           formatOpts.format = numFormat
           if (numFormat === 'decimal') formatOpts.precision = parseInt(numPrecisionFmt, 10) || 2
           if (numFormat === 'currency') formatOpts.currency = numCurrency || 'USD'
         } else if (isNumericAbstractType) {
-          delete existing.format; delete existing.precision; delete existing.currency
+          delete existing.format
+          delete existing.precision
+          delete existing.currency
         }
         if (isNumericAbstractType && numAggregate) {
           formatOpts.aggregate = numAggregate
         } else if (isNumericAbstractType) {
           delete existing.aggregate
         }
-        const o2mOpts = (abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table'))
-          ? { layout_slug: gridLayoutSlug, layout_id: gridLayoutId, ...(iface === 'inline-grid' ? { grid_show_totals: gridShowTotals } : { save_mode: saveMode, show_line_numbers: showLineNumbers, enable_reorder: enableReorder, ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}), ...(rowRulesLocal.length > 0 ? { row_rules: rowRulesLocal } : { row_rules: undefined }), ...(parentContextFieldsLocal.length > 0 ? { parent_context_fields: parentContextFieldsLocal } : { parent_context_fields: undefined }), ...(uniqueBy.length > 0 ? { unique_by: uniqueBy } : { unique_by: undefined }), ...(sortField ? { sort_field: sortField, sort_dir: sortDir } : { sort_field: undefined, sort_dir: undefined }) }) }
-          : {}
-        const fileOpts = (iface === 'file-image' || iface === 'files-m2m')
-          ? { allow_upload: allowUpload, allow_pick: allowPick, ...(iface === 'files-m2m' ? { pending_save: filePendingSave } : {}) }
-          : {}
-        const groupedOpts = iface === 'relation-grouped'
-          ? { group_field: groupedGroupField || undefined, option_field: groupedOptionField || undefined }
-          : {}
-        optionsPatch = JSON.stringify({ ...existing, ...o2mOpts, ...fileOpts, ...formatOpts, ...groupedOpts })
+        const o2mOpts =
+          abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table')
+            ? {
+                layout_slug: gridLayoutSlug,
+                layout_id: gridLayoutId,
+                ...(iface === 'inline-grid'
+                  ? { grid_show_totals: gridShowTotals }
+                  : {
+                      save_mode: saveMode,
+                      show_line_numbers: showLineNumbers,
+                      enable_reorder: enableReorder,
+                      ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}),
+                      ...(rowRulesLocal.length > 0
+                        ? { row_rules: rowRulesLocal }
+                        : { row_rules: undefined }),
+                      ...(parentContextFieldsLocal.length > 0
+                        ? { parent_context_fields: parentContextFieldsLocal }
+                        : { parent_context_fields: undefined }),
+                      ...(uniqueBy.length > 0 ? { unique_by: uniqueBy } : { unique_by: undefined }),
+                      ...(sortField
+                        ? { sort_field: sortField, sort_dir: sortDir }
+                        : { sort_field: undefined, sort_dir: undefined })
+                    })
+              }
+            : {}
+        const fileOpts =
+          iface === 'file-image' || iface === 'files-m2m'
+            ? {
+                allow_upload: allowUpload,
+                allow_pick: allowPick,
+                ...(iface === 'files-m2m' ? { pending_save: filePendingSave } : {})
+              }
+            : {}
+        const groupedOpts =
+          iface === 'relation-grouped'
+            ? {
+                group_field: groupedGroupField || undefined,
+                option_field: groupedOptionField || undefined
+              }
+            : {}
+        optionsPatch = JSON.stringify({
+          ...existing,
+          ...o2mOpts,
+          ...fileOpts,
+          ...formatOpts,
+          ...groupedOpts
+        })
       } catch {
-        optionsPatch = JSON.stringify({ ...(isNumericAbstractType && numFormat ? { format: numFormat, ...(numFormat === 'decimal' ? { precision: parseInt(numPrecisionFmt, 10) || 2 } : {}), ...(numFormat === 'currency' ? { currency: numCurrency } : {}) } : {}) })
+        optionsPatch = JSON.stringify({
+          ...(isNumericAbstractType && numFormat
+            ? {
+                format: numFormat,
+                ...(numFormat === 'decimal'
+                  ? { precision: parseInt(numPrecisionFmt, 10) || 2 }
+                  : {}),
+                ...(numFormat === 'currency' ? { currency: numCurrency } : {})
+              }
+            : {})
+        })
       }
     }
     const normalizedDdWidth = (() => {
@@ -6546,19 +7969,26 @@ function FieldSettingsPopover({
       if (px) return Math.min(2000, Math.max(320, Number(px[1])))
       return null
     })()
-    const patch: Partial<FieldSettings> & { dependency_config?: Record<string, unknown> | null; options?: string | null } = {
-      label: label.trim() !== '' ? label.trim() : (settings.label === '' ? '' : null),
+    const patch: Partial<FieldSettings> & {
+      dependency_config?: Record<string, unknown> | null
+      options?: string | null
+    } = {
+      label: label.trim() !== '' ? label.trim() : settings.label === '' ? '' : null,
       interface: iface || null,
       note: note.trim() || null,
       placeholder: placeholder.trim() || null,
       ...(ddQualifies
-        ? { drilldown: ddEnabled ? { enabled: true, layout_id: ddLayoutId, width: normalizedDdWidth } : { enabled: false } }
+        ? {
+            drilldown: ddEnabled
+              ? { enabled: true, layout_id: ddLayoutId, width: normalizedDdWidth }
+              : { enabled: false }
+          }
         : {}),
       required,
       hidden,
       readonly,
       inline_relation: inlineRelation,
-      max_values: maxV && maxV > 0 ? maxV : null,
+      max_values: maxV && maxV > 0 ? maxV : null
     }
     if (isM2O || isM2M) patch.dependency_config = depPatch
     if (optionsPatch !== null || needsOptionsPatch) patch.options = optionsPatch
@@ -6568,10 +7998,16 @@ function FieldSettingsPopover({
   }
 
   const interfaceOptions = abstractType
-    ? getInterfaces(abstractType).map(i => ({ value: i.value, label: i.label }))
+    ? getInterfaces(abstractType).map((i) => ({ value: i.value, label: i.label }))
     : []
 
-  const hasOverrides = !!settings.label || !!settings.interface || !!settings.note || settings.hidden || settings.readonly || settings.required
+  const hasOverrides =
+    !!settings.label ||
+    !!settings.interface ||
+    !!settings.note ||
+    settings.hidden ||
+    settings.readonly ||
+    settings.required
 
   const SectionHeader = ({ label }: { label: string }) => (
     <div className='flex items-center gap-2'>
@@ -6586,7 +8022,7 @@ function FieldSettingsPopover({
         <button
           type='button'
           title='Display settings'
-          onPointerDown={e => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           className={cn(
             'shrink-0 rounded p-0.5 transition-colors',
             hasOverrides
@@ -6600,137 +8036,123 @@ function FieldSettingsPopover({
       <SheetContent
         side='right'
         className='!w-[480px] flex flex-col p-0 gap-0'
-        onPointerDown={e => e.stopPropagation()}
-        onClick={e => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
         <div className='shrink-0 border-b border-slate-100 px-3 py-2 pr-10'>
           <p className='text-[12px] font-medium text-slate-800'>Display settings</p>
           <p className='text-[11px] text-slate-400 font-mono'>{fieldName}</p>
         </div>
         <div className='flex-1 overflow-y-auto'>
-        <div className='p-4 space-y-5'>
-
-          {/* ── Display ── */}
-          <div className='space-y-3'>
-            <SectionHeader label='Display' />
-            <div className='space-y-1'>
-              <Label className='text-[11px] text-slate-600'>Label</Label>
-              <Input value={label} onChange={e => setLabel(e.target.value)} placeholder={titleCase(fieldName)} className='h-7 text-[12px]' />
-            </div>
-            {interfaceOptions.length > 0 && (
+          <div className='p-4 space-y-5'>
+            {/* ── Display ── */}
+            <div className='space-y-3'>
+              <SectionHeader label='Display' />
               <div className='space-y-1'>
-                <Label className='text-[11px] text-slate-600'>Interface</Label>
-                <Combobox value={iface} onChange={setIface} options={[{ value: '', label: 'Default' }, ...interfaceOptions]} placeholder='Default' />
+                <Label className='text-[11px] text-slate-600'>Label</Label>
+                <Input
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder={titleCase(fieldName)}
+                  className='h-7 text-[12px]'
+                />
               </div>
-            )}
-            <div className='space-y-1'>
-              <Label className='text-[11px] text-slate-600'>Placeholder</Label>
-              <Input value={placeholder} onChange={e => setPlaceholder(e.target.value)} placeholder='e.g. Enter a value…' className='h-7 text-[12px]' />
-            </div>
-            <div className='space-y-1'>
-              <Label className='text-[11px] text-slate-600'>Helper text</Label>
-              <Textarea value={note} onChange={e => setNote(e.target.value)} placeholder='Description shown below the field' className='min-h-[52px] resize-none text-[12px]' />
-            </div>
-          </div>
-
-          {/* ── Behavior ── */}
-          <div className='space-y-3'>
-            <SectionHeader label='Behavior' />
-            <div className='divide-y divide-slate-100 rounded-md border border-slate-200'>
-              {([
-                { key: 'required', label: 'Required', value: required, set: setRequired },
-                { key: 'hidden', label: 'Hidden', value: hidden, set: setHidden },
-                { key: 'readonly', label: 'Read-only', value: readonly, set: setReadonly },
-              ] as const).map(row => (
-                <div key={row.key} className='flex items-center justify-between px-3 py-2'>
-                  <span className='text-[12px] text-slate-700'>{row.label}</span>
-                  <Switch checked={row.value} onCheckedChange={row.set} className='scale-90' />
-                </div>
-              ))}
-              {(isM2O || isM2M) && (
-                <div className='flex items-center justify-between px-3 py-2'>
-                  <span className='text-[12px] text-slate-700'>Inline edit</span>
-                  <Switch checked={inlineRelation} onCheckedChange={setInlineRelation} className='scale-90' />
+              {interfaceOptions.length > 0 && (
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-slate-600'>Interface</Label>
+                  <Combobox
+                    value={iface}
+                    onChange={setIface}
+                    options={[{ value: '', label: 'Default' }, ...interfaceOptions]}
+                    placeholder='Default'
+                  />
                 </div>
               )}
-            </div>
-            {isM2M && (
               <div className='space-y-1'>
-                <Label className='text-[11px] text-slate-600'>Max values</Label>
-                <Input type='number' min={1} value={maxValues} onChange={e => setMaxValues(e.target.value)} placeholder='Unlimited' className='h-7 text-[12px]' />
-                <p className='text-[10px] text-slate-400'>Leave blank for unlimited. Set to 1 for single-select.</p>
+                <Label className='text-[11px] text-slate-600'>Placeholder</Label>
+                <Input
+                  value={placeholder}
+                  onChange={(e) => setPlaceholder(e.target.value)}
+                  placeholder='e.g. Enter a value…'
+                  className='h-7 text-[12px]'
+                />
               </div>
-            )}
-          </div>
+              <div className='space-y-1'>
+                <Label className='text-[11px] text-slate-600'>Helper text</Label>
+                <Textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder='Description shown below the field'
+                  className='min-h-[52px] resize-none text-[12px]'
+                />
+              </div>
+            </div>
 
-          {/* ── Numeric format ── */}
-          {isNumericAbstractType && (
+            {/* ── Behavior ── */}
             <div className='space-y-3'>
-              <SectionHeader label='Format' />
-              <div className='flex gap-1.5'>
-                {([
-                  { val: '' as const, label: 'Default' },
-                  { val: 'int' as const, label: 'Integer' },
-                  { val: 'decimal' as const, label: 'Decimal' },
-                  { val: 'currency' as const, label: 'Currency' },
-                ] as { val: '' | 'int' | 'decimal' | 'currency'; label: string }[]).map(opt => (
-                  <button
-                    key={opt.val}
-                    type='button'
-                    onClick={() => setNumFormat(opt.val)}
-                    className={cn(
-                      'px-2 py-0.5 rounded text-[11px] border transition-colors',
-                      numFormat === opt.val
-                        ? 'bg-nvr-cyan text-white border-nvr-cyan'
-                        : 'border-slate-200 text-slate-600 hover:border-slate-400'
-                    )}
-                  >
-                    {opt.label}
-                  </button>
+              <SectionHeader label='Behavior' />
+              <div className='divide-y divide-slate-100 rounded-md border border-slate-200'>
+                {(
+                  [
+                    { key: 'required', label: 'Required', value: required, set: setRequired },
+                    { key: 'hidden', label: 'Hidden', value: hidden, set: setHidden },
+                    { key: 'readonly', label: 'Read-only', value: readonly, set: setReadonly }
+                  ] as const
+                ).map((row) => (
+                  <div key={row.key} className='flex items-center justify-between px-3 py-2'>
+                    <span className='text-[12px] text-slate-700'>{row.label}</span>
+                    <Switch checked={row.value} onCheckedChange={row.set} className='scale-90' />
+                  </div>
                 ))}
+                {(isM2O || isM2M) && (
+                  <div className='flex items-center justify-between px-3 py-2'>
+                    <span className='text-[12px] text-slate-700'>Inline edit</span>
+                    <Switch
+                      checked={inlineRelation}
+                      onCheckedChange={setInlineRelation}
+                      className='scale-90'
+                    />
+                  </div>
+                )}
               </div>
-              {numFormat === 'decimal' && (
+              {isM2M && (
                 <div className='space-y-1'>
-                  <Label className='text-[11px] text-slate-500'>Decimal places</Label>
+                  <Label className='text-[11px] text-slate-600'>Max values</Label>
                   <Input
                     type='number'
-                    min={0}
-                    max={10}
-                    value={numPrecisionFmt}
-                    onChange={e => setNumPrecisionFmt(e.target.value)}
-                    className='h-7 text-[12px] w-24'
+                    min={1}
+                    value={maxValues}
+                    onChange={(e) => setMaxValues(e.target.value)}
+                    placeholder='Unlimited'
+                    className='h-7 text-[12px]'
                   />
+                  <p className='text-[10px] text-slate-400'>
+                    Leave blank for unlimited. Set to 1 for single-select.
+                  </p>
                 </div>
               )}
-              {numFormat === 'currency' && (
-                <div className='space-y-1'>
-                  <Label className='text-[11px] text-slate-500'>Currency code</Label>
-                  <Input
-                    value={numCurrency}
-                    onChange={e => setNumCurrency(e.target.value.toUpperCase())}
-                    placeholder='USD'
-                    className='h-7 text-[12px] w-24'
-                  />
-                </div>
-              )}
-              <div className='space-y-1'>
-                <Label className='text-[11px] text-slate-600'>Footer aggregate</Label>
-                <div className='flex flex-wrap gap-1'>
-                  {([
-                    { val: '' as const, label: 'None' },
-                    { val: 'sum' as const, label: 'SUM' },
-                    { val: 'count' as const, label: 'COUNT' },
-                    { val: 'avg' as const, label: 'AVG' },
-                    { val: 'min' as const, label: 'MIN' },
-                    { val: 'max' as const, label: 'MAX' },
-                  ] as { val: '' | 'sum' | 'count' | 'avg' | 'min' | 'max'; label: string }[]).map(opt => (
+            </div>
+
+            {/* ── Numeric format ── */}
+            {isNumericAbstractType && (
+              <div className='space-y-3'>
+                <SectionHeader label='Format' />
+                <div className='flex gap-1.5'>
+                  {(
+                    [
+                      { val: '' as const, label: 'Default' },
+                      { val: 'int' as const, label: 'Integer' },
+                      { val: 'decimal' as const, label: 'Decimal' },
+                      { val: 'currency' as const, label: 'Currency' }
+                    ] as { val: '' | 'int' | 'decimal' | 'currency'; label: string }[]
+                  ).map((opt) => (
                     <button
                       key={opt.val}
                       type='button'
-                      onClick={() => setNumAggregate(opt.val)}
+                      onClick={() => setNumFormat(opt.val)}
                       className={cn(
-                        'px-2 py-0.5 rounded text-[11px] border transition-colors font-mono',
-                        numAggregate === opt.val
+                        'px-2 py-0.5 rounded text-[11px] border transition-colors',
+                        numFormat === opt.val
                           ? 'bg-nvr-cyan text-white border-nvr-cyan'
                           : 'border-slate-200 text-slate-600 hover:border-slate-400'
                       )}
@@ -6739,463 +8161,821 @@ function FieldSettingsPopover({
                     </button>
                   ))}
                 </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── File options ── */}
-          {(iface === 'file-image' || iface === 'files-m2m') && (
-            <div className='space-y-3'>
-              <SectionHeader label='File options' />
-              <div className='divide-y divide-slate-100 rounded-md border border-slate-200'>
-                {[
-                  { key: 'allowUpload', label: 'Allow upload', value: allowUpload, set: setAllowUpload },
-                  { key: 'allowPick', label: 'Allow picking existing files', value: allowPick, set: setAllowPick },
-                  ...(iface === 'files-m2m' ? [{ key: 'pendingSave', label: 'Save on form submit', value: filePendingSave, set: setFilePendingSave }] : []),
-                ].map(row => (
-                  <div key={row.key} className='flex items-center justify-between px-3 py-2'>
-                    <span className='text-[12px] text-slate-700'>{row.label}</span>
-                    <Switch checked={row.value} onCheckedChange={row.set} className='scale-90' />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── Drill-down ── */}
-          {ddQualifies && (
-            <div className='space-y-2'>
-              <SectionHeader label='Drill-down' />
-              <label className='flex cursor-pointer items-center justify-between'>
-                <span className='text-[11px] text-slate-600'>Click value opens detail panel</span>
-                <input
-                  type='checkbox'
-                  checked={ddEnabled}
-                  onChange={(e) => setDdEnabled(e.target.checked)}
-                  className='h-3.5 w-3.5 rounded accent-nvr-cyan'
-                />
-              </label>
-              {ddEnabled && (
-                <div className='grid grid-cols-2 gap-2'>
+                {numFormat === 'decimal' && (
                   <div className='space-y-1'>
-                    <Label className='text-[11px] text-slate-500'>Detail layout</Label>
-                    <select
-                      value={ddLayoutId ?? ''}
-                      onChange={(e) => setDdLayoutId(e.target.value ? Number(e.target.value) : null)}
-                      className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
-                    >
-                      <option value=''>Default (active detail)</option>
-                      {ddDetailLayouts.map((l) => (
-                        <option key={l.id} value={l.id}>{l.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className='space-y-1'>
-                    <Label className='text-[11px] text-slate-500'>Panel width</Label>
+                    <Label className='text-[11px] text-slate-500'>Decimal places</Label>
                     <Input
-                      value={ddWidth}
-                      onChange={(e) => setDdWidth(e.target.value)}
-                      placeholder='640, 900px or 75%'
-                      className='h-[26px] text-[11px]'
+                      type='number'
+                      min={0}
+                      max={10}
+                      value={numPrecisionFmt}
+                      onChange={(e) => setNumPrecisionFmt(e.target.value)}
+                      className='h-7 text-[12px] w-24'
                     />
                   </div>
+                )}
+                {numFormat === 'currency' && (
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-slate-500'>Currency code</Label>
+                    <Input
+                      value={numCurrency}
+                      onChange={(e) => setNumCurrency(e.target.value.toUpperCase())}
+                      placeholder='USD'
+                      className='h-7 text-[12px] w-24'
+                    />
+                  </div>
+                )}
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-slate-600'>Footer aggregate</Label>
+                  <div className='flex flex-wrap gap-1'>
+                    {(
+                      [
+                        { val: '' as const, label: 'None' },
+                        { val: 'sum' as const, label: 'SUM' },
+                        { val: 'count' as const, label: 'COUNT' },
+                        { val: 'avg' as const, label: 'AVG' },
+                        { val: 'min' as const, label: 'MIN' },
+                        { val: 'max' as const, label: 'MAX' }
+                      ] as { val: '' | 'sum' | 'count' | 'avg' | 'min' | 'max'; label: string }[]
+                    ).map((opt) => (
+                      <button
+                        key={opt.val}
+                        type='button'
+                        onClick={() => setNumAggregate(opt.val)}
+                        className={cn(
+                          'px-2 py-0.5 rounded text-[11px] border transition-colors font-mono',
+                          numAggregate === opt.val
+                            ? 'bg-nvr-cyan text-white border-nvr-cyan'
+                            : 'border-slate-200 text-slate-600 hover:border-slate-400'
+                        )}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              )}
-              {ddEnabled && !ddTargetCollection && (
-                <p className='text-[10px] text-slate-400'>Target collection unknown — save the layout once, then reopen.</p>
-              )}
-            </div>
-          )}
+              </div>
+            )}
 
-          {/* ── Grouped combobox ── */}
-          {iface === 'relation-grouped' && (
-            <div className='space-y-3'>
-              <SectionHeader label='Grouped combobox' />
+            {/* ── File options ── */}
+            {(iface === 'file-image' || iface === 'files-m2m') && (
+              <div className='space-y-3'>
+                <SectionHeader label='File options' />
+                <div className='divide-y divide-slate-100 rounded-md border border-slate-200'>
+                  {[
+                    {
+                      key: 'allowUpload',
+                      label: 'Allow upload',
+                      value: allowUpload,
+                      set: setAllowUpload
+                    },
+                    {
+                      key: 'allowPick',
+                      label: 'Allow picking existing files',
+                      value: allowPick,
+                      set: setAllowPick
+                    },
+                    ...(iface === 'files-m2m'
+                      ? [
+                          {
+                            key: 'pendingSave',
+                            label: 'Save on form submit',
+                            value: filePendingSave,
+                            set: setFilePendingSave
+                          }
+                        ]
+                      : [])
+                  ].map((row) => (
+                    <div key={row.key} className='flex items-center justify-between px-3 py-2'>
+                      <span className='text-[12px] text-slate-700'>{row.label}</span>
+                      <Switch checked={row.value} onCheckedChange={row.set} className='scale-90' />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Drill-down ── */}
+            {ddQualifies && (
               <div className='space-y-2'>
-                <div className='space-y-1'>
-                  <Label className='text-[11px] text-slate-600'>Group by field</Label>
-                  <Popover open={groupedGroupFieldOpen} onOpenChange={setGroupedGroupFieldOpen}>
-                    <PopoverTrigger asChild>
-                      <button type='button' className='flex h-8 w-full items-center justify-between rounded border border-slate-200 bg-white px-2 text-[12px] hover:bg-slate-50'>
-                        <span className={groupedGroupField ? '' : 'text-slate-400'}>{(childM2OFields.find(f => f.value === groupedGroupField)?.label ?? groupedGroupField) || 'Select field…'}</span>
-                        <ChevronDown className='h-3.5 w-3.5 opacity-50' />
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent className='w-[260px] p-0' align='start'>
-                      <Command>
-                        <CommandInput placeholder='Search fields…' className='h-8 text-[12px]' />
-                        <CommandList>
-                          {childM2OFields.map(f => (
-                            <CommandItem key={f.value} value={f.value} onSelect={() => { setGroupedGroupField(f.value); setGroupedGroupFieldOpen(false) }} className='text-[12px]'>{f.label}</CommandItem>
-                          ))}
-                        </CommandList>
-                      </Command>
-                    </PopoverContent>
-                  </Popover>
-                </div>
-                <div className='space-y-1'>
-                  <Label className='text-[11px] text-slate-600'>Option field (leaf)</Label>
-                  <Popover open={groupedOptionFieldOpen} onOpenChange={setGroupedOptionFieldOpen}>
-                    <PopoverTrigger asChild>
-                      <button type='button' className='flex h-8 w-full items-center justify-between rounded border border-slate-200 bg-white px-2 text-[12px] hover:bg-slate-50'>
-                        <span className={groupedOptionField ? '' : 'text-slate-400'}>{(childM2OFields.find(f => f.value === groupedOptionField)?.label ?? groupedOptionField) || 'Select field…'}</span>
-                        <ChevronDown className='h-3.5 w-3.5 opacity-50' />
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent className='w-[260px] p-0' align='start'>
-                      <Command>
-                        <CommandInput placeholder='Search fields…' className='h-8 text-[12px]' />
-                        <CommandList>
-                          {childM2OFields.map(f => (
-                            <CommandItem key={f.value} value={f.value} onSelect={() => { setGroupedOptionField(f.value); setGroupedOptionFieldOpen(false) }} className='text-[12px]'>{f.label}</CommandItem>
-                          ))}
-                        </CommandList>
-                      </Command>
-                    </PopoverContent>
-                  </Popover>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── Cascade filters (M2O/M2M) ── */}
-          {(isM2O || isM2M) && (
-            <CascadeFiltersEditor
-              rules={cascadeRules}
-              m2oFields={(m2oFields ?? []).filter(f => f.field !== fieldName)}
-              relatedCollection={relatedCollection}
-              onChange={setCascadeRules}
-            />
-          )}
-
-          {/* ── Inline display (M2O) ── */}
-          {isM2O && relatedCollection && (
-            <div className='space-y-2'>
-              <SectionHeader label='Display value' />
-              <InlineDisplaySection
-                relatedCollection={relatedCollection}
-                entries={localInlineEntries}
-                separator={localInlineSeparator}
-                onChange={setLocalInlineEntries}
-                onSeparatorChange={setLocalInlineSeparator}
-              />
-            </div>
-          )}
-
-          {/* ── Table / Grid settings (O2M) ── */}
-          {abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table') && (
-            <div className='space-y-4'>
-              <SectionHeader label={iface === 'inline-table' ? 'Table settings' : 'Grid settings'} />
-
-              {/* Layout */}
-              <div className='space-y-1.5'>
-                <Label className='text-[11px] text-slate-600'>Layout</Label>
-                <LayoutPicker collection={relatedCollection} value={gridLayoutId} onChange={(id, slug) => { setGridLayoutId(id); setGridLayoutSlug(slug) }} layoutType={iface === 'inline-table' ? 'table' : 'grouped'} />
-              </div>
-
-              {/* Options */}
-              <div className='divide-y divide-slate-100 rounded-md border border-slate-200'>
-                {iface === 'inline-grid' && (
-                  <div className='flex items-center justify-between px-3 py-2'>
-                    <span className='text-[12px] text-slate-700'>Show column totals</span>
-                    <Switch checked={gridShowTotals} onCheckedChange={setGridShowTotals} className='scale-90' />
-                  </div>
-                )}
-                {iface === 'inline-table' && (
-                  <>
-                    <div className='flex items-center justify-between px-3 py-2'>
-                      <div>
-                        <p className='text-[12px] text-slate-700'>Save with main form</p>
-                        <p className='text-[10px] text-slate-400'>Rows save when the parent record saves</p>
-                      </div>
-                      <Switch checked={saveMode === 'pending'} onCheckedChange={v => setSaveMode(v ? 'pending' : 'immediate')} className='scale-90' />
-                    </div>
-                    <div className='flex items-center justify-between px-3 py-2'>
-                      <span className='text-[12px] text-slate-700'>Show line numbers</span>
-                      <Switch checked={showLineNumbers} onCheckedChange={setShowLineNumbers} className='scale-90' />
-                    </div>
-                    <div className='flex items-center justify-between px-3 py-2'>
-                      <span className='text-[12px] text-slate-700'>Drag to reorder</span>
-                      <Switch checked={enableReorder} onCheckedChange={setEnableReorder} className='scale-90' />
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Cascade from parent (table only) */}
-              {iface === 'inline-table' && (
-                <div className='space-y-2'>
-                  <div className='flex items-center justify-between'>
-                    <Label className='text-[11px] text-slate-600'>Cascade from parent</Label>
-                    <button type='button' onClick={() => setParentCascades([...parentCascades, { parent_field: '', child_field: '' }])} className='text-[10px] text-nvr-cyan hover:underline'>
-                      + Add
-                    </button>
-                  </div>
-                  {parentCascades.length === 0 && (
-                    <p className='text-[10px] text-slate-400'>Parent = M2O on this form. Child = M2O on each row.</p>
-                  )}
-                  {parentCascades.map((rule, idx) => (
-                    <CascadeRuleRow
-                      key={idx}
-                      rule={rule}
-                      parentFields={parentM2OFields}
-                      childFields={childM2OFields}
-                      onChange={(updated) => setParentCascades(parentCascades.map((r, i) => i === idx ? updated : r))}
-                      onRemove={() => setParentCascades(parentCascades.filter((_, i) => i !== idx))}
-                    />
-                  ))}
-                </div>
-              )}
-
-              {/* Row rules (table only) */}
-              {iface === 'inline-table' && (
-                <div className='space-y-2'>
-                  <div ref={setRowRulePortalContainer} />
-                  <div className='flex items-center justify-between'>
-                    <Label className='text-[11px] text-slate-600'>Row auto-fill rules</Label>
-                    <button
-                      type='button'
-                      onClick={() => setRowRulesLocal([...rowRulesLocal, { trigger_field: null, trigger_op: 'nnull', target_field: '', target_type: 'relation_field', sort: rowRulesLocal.length }])}
-                      className='text-[10px] text-nvr-cyan hover:underline'
-                    >
-                      + Add rule
-                    </button>
-                  </div>
-                  {rowRulesLocal.length === 0 && (
-                    <p className='text-[10px] text-slate-400'>No rules. Rules auto-fill row fields when conditions are met.</p>
-                  )}
-                  {rowRulesLocal.map((rule, idx) => (
-                    <RowRuleRow
-                      key={idx}
-                      rule={rule}
-                      childFields={(() => {
-                        const seen = new Map<string, { field: string; label?: string | null; type?: string; interface?: string | null; hidden?: boolean }>()
-                        const O2M_IFACES = new Set(['inline-table', 'inline-grid', 'list-o2m', 'relation-list'])
-                        for (const f of childAllFields.filter(f => !f.hidden && f.field !== 'id' && !f.field.startsWith('__') && !ROW_RULE_SKIP_TYPES.has(f.type ?? '') && !O2M_IFACES.has(f.interface ?? ''))) {
-                          const existing = seen.get(f.field)
-                          if (!existing || (!existing.label && f.label)) seen.set(f.field, f)
+                <SectionHeader label='Drill-down' />
+                <label className='flex cursor-pointer items-center justify-between'>
+                  <span className='text-[11px] text-slate-600'>Click value opens detail panel</span>
+                  <input
+                    type='checkbox'
+                    checked={ddEnabled}
+                    onChange={(e) => setDdEnabled(e.target.checked)}
+                    className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                  />
+                </label>
+                {ddEnabled && (
+                  <div className='grid grid-cols-2 gap-2'>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px] text-slate-500'>Detail layout</Label>
+                      <select
+                        value={ddLayoutId ?? ''}
+                        onChange={(e) =>
+                          setDdLayoutId(e.target.value ? Number(e.target.value) : null)
                         }
-                        return [...seen.values()]
-                      })()}
-                      m2oRels={childM2ORels}
-                      o2mRels={childO2MRels}
-                      onChange={updated => setRowRulesLocal(rowRulesLocal.map((r, i) => i === idx ? updated : r))}
-                      onRemove={() => setRowRulesLocal(rowRulesLocal.filter((_, i) => i !== idx))}
-                      portalContainer={rowRulePortalContainer}
-                      parentContextFields={parentContextFieldsLocal.map(field => ({ field, label: parentAllFields.find(pf => pf.field === field)?.label || field, one_collection: parentFieldRelatedCollectionMap[field] ?? null }))}
-                    />
-                  ))}
-                  {/* Parent context — always visible for inline-table */}
-                  <div className='pt-1 border-t border-slate-100 space-y-1.5'>
-                    <Label className='text-[11px] text-slate-600'>Parent context fields</Label>
-                    <p className='text-[10px] text-slate-400'>Available as <code className='font-mono bg-slate-100 px-0.5 rounded'>$parent.field</code> in rules above.</p>
-                    <Popover open={parentCtxOpen} onOpenChange={setParentCtxOpen}>
+                        className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                      >
+                        <option value=''>Default (active detail)</option>
+                        {ddDetailLayouts.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px] text-slate-500'>Panel width</Label>
+                      <Input
+                        value={ddWidth}
+                        onChange={(e) => setDdWidth(e.target.value)}
+                        placeholder='640, 900px or 75%'
+                        className='h-[26px] text-[11px]'
+                      />
+                    </div>
+                  </div>
+                )}
+                {ddEnabled && !ddTargetCollection && (
+                  <p className='text-[10px] text-slate-400'>
+                    Target collection unknown — save the layout once, then reopen.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* ── Grouped combobox ── */}
+            {iface === 'relation-grouped' && (
+              <div className='space-y-3'>
+                <SectionHeader label='Grouped combobox' />
+                <div className='space-y-2'>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-slate-600'>Group by field</Label>
+                    <Popover open={groupedGroupFieldOpen} onOpenChange={setGroupedGroupFieldOpen}>
                       <PopoverTrigger asChild>
-                        <button type='button' className='w-full flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-left hover:border-slate-400'>
-                          <span className={cn('truncate', parentContextFieldsLocal.length ? 'text-slate-700' : 'text-slate-400')}>
-                            {parentContextFieldsLocal.length
-                              ? parentContextFieldsLocal.map(f => parentAllFields.find(pf => pf.field === f)?.label || f).join(', ')
-                              : 'None selected'}
+                        <button
+                          type='button'
+                          className='flex h-8 w-full items-center justify-between rounded border border-slate-200 bg-white px-2 text-[12px] hover:bg-slate-50'
+                        >
+                          <span className={groupedGroupField ? '' : 'text-slate-400'}>
+                            {(childM2OFields.find((f) => f.value === groupedGroupField)?.label ??
+                              groupedGroupField) ||
+                              'Select field…'}
                           </span>
-                          <ChevronDown className='h-3.5 w-3.5 text-slate-400 ml-1 shrink-0' />
+                          <ChevronDown className='h-3.5 w-3.5 opacity-50' />
                         </button>
                       </PopoverTrigger>
-                      <PopoverContent className='w-64 p-0' align='start'>
+                      <PopoverContent className='w-[260px] p-0' align='start'>
                         <Command>
                           <CommandInput placeholder='Search fields…' className='h-8 text-[12px]' />
-                          <CommandList className='max-h-[220px]'>
-                            <CommandGroup>
-                              {parentAllFields
-                                .filter(f => f.field !== 'id' && !SKIP_TYPES.has(f.type ?? '') && !['inline-table','inline-grid','list-o2m','relation-list'].includes(f.interface ?? ''))
-                                .map(f => {
-                                  const checked = parentContextFieldsLocal.includes(f.field)
-                                  return (
-                                    <CommandItem
-                                      key={f.field}
-                                      value={`${f.label || f.field} ${f.field}`}
-                                      onSelect={() => setParentContextFieldsLocal(checked ? parentContextFieldsLocal.filter(x => x !== f.field) : [...parentContextFieldsLocal, f.field])}
-                                      className='text-[11px] flex items-center gap-2'
-                                    >
-                                      <Check className={cn('h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')} />
-                                      <span className='flex-1 truncate'>{f.label || f.field}</span>
-                                      <span className='font-mono text-[9px] text-slate-400 shrink-0'>{f.field}</span>
-                                    </CommandItem>
-                                  )
-                                })}
-                            </CommandGroup>
+                          <CommandList>
+                            {childM2OFields.map((f) => (
+                              <CommandItem
+                                key={f.value}
+                                value={f.value}
+                                onSelect={() => {
+                                  setGroupedGroupField(f.value)
+                                  setGroupedGroupFieldOpen(false)
+                                }}
+                                className='text-[12px]'
+                              >
+                                {f.label}
+                              </CommandItem>
+                            ))}
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-slate-600'>Option field (leaf)</Label>
+                    <Popover open={groupedOptionFieldOpen} onOpenChange={setGroupedOptionFieldOpen}>
+                      <PopoverTrigger asChild>
+                        <button
+                          type='button'
+                          className='flex h-8 w-full items-center justify-between rounded border border-slate-200 bg-white px-2 text-[12px] hover:bg-slate-50'
+                        >
+                          <span className={groupedOptionField ? '' : 'text-slate-400'}>
+                            {(childM2OFields.find((f) => f.value === groupedOptionField)?.label ??
+                              groupedOptionField) ||
+                              'Select field…'}
+                          </span>
+                          <ChevronDown className='h-3.5 w-3.5 opacity-50' />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent className='w-[260px] p-0' align='start'>
+                        <Command>
+                          <CommandInput placeholder='Search fields…' className='h-8 text-[12px]' />
+                          <CommandList>
+                            {childM2OFields.map((f) => (
+                              <CommandItem
+                                key={f.value}
+                                value={f.value}
+                                onSelect={() => {
+                                  setGroupedOptionField(f.value)
+                                  setGroupedOptionFieldOpen(false)
+                                }}
+                                className='text-[12px]'
+                              >
+                                {f.label}
+                              </CommandItem>
+                            ))}
                           </CommandList>
                         </Command>
                       </PopoverContent>
                     </Popover>
                   </div>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Unique by (table only) */}
-              {iface === 'inline-table' && (
+            {/* ── Cascade filters (M2O/M2M) ── */}
+            {(isM2O || isM2M) && (
+              <CascadeFiltersEditor
+                rules={cascadeRules}
+                m2oFields={(m2oFields ?? []).filter((f) => f.field !== fieldName)}
+                relatedCollection={relatedCollection}
+                onChange={setCascadeRules}
+              />
+            )}
+
+            {/* ── Inline display (M2O) ── */}
+            {isM2O && relatedCollection && (
+              <div className='space-y-2'>
+                <SectionHeader label='Display value' />
+                <InlineDisplaySection
+                  relatedCollection={relatedCollection}
+                  entries={localInlineEntries}
+                  separator={localInlineSeparator}
+                  onChange={setLocalInlineEntries}
+                  onSeparatorChange={setLocalInlineSeparator}
+                />
+              </div>
+            )}
+
+            {/* ── Table / Grid settings (O2M) ── */}
+            {abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table') && (
+              <div className='space-y-4'>
+                <SectionHeader
+                  label={iface === 'inline-table' ? 'Table settings' : 'Grid settings'}
+                />
+
+                {/* Layout */}
                 <div className='space-y-1.5'>
-                  <Label className='text-[11px] text-slate-600'>Unique rows by</Label>
-                  <Popover open={uniqueByOpen} onOpenChange={setUniqueByOpen}>
-                    <PopoverTrigger asChild>
-                      <button type='button' className='w-full flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-left hover:border-slate-400'>
-                        <span className={uniqueBy.length ? 'text-slate-700' : 'text-slate-400'}>
-                          {uniqueBy.length ? uniqueBy.map(f => uniqueByOptions.find(o => o.field === f)?.label || f).join(', ') : 'None (no uniqueness enforced)'}
-                        </span>
-                        <ChevronDown className='h-3.5 w-3.5 text-slate-400 ml-1 shrink-0' />
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent className='w-56 p-1' align='start'>
-                      {uniqueByOptions.length === 0 ? (
-                        <p className='px-2 py-1 text-[11px] text-slate-400'>No fields available</p>
-                      ) : (
-                        <>
-                          {uniqueByOptions.map((f) => {
-                            const checked = uniqueBy.includes(f.field)
-                            return (
-                              <button key={f.field} type='button'
-                                onClick={() => setUniqueBy(checked ? uniqueBy.filter(x => x !== f.field) : [...uniqueBy, f.field])}
-                                className='flex w-full items-center gap-2 rounded px-2 py-1 text-[11px] hover:bg-slate-100'>
-                                <span className={`h-3.5 w-3.5 rounded border flex items-center justify-center shrink-0 ${checked ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'}`}>
-                                  {checked && <span className='text-white text-[8px] font-bold'>✓</span>}
-                                </span>
-                                <span className='flex-1 truncate text-slate-700'>{f.label || f.field}</span>
-                                <span className='text-slate-400 font-mono text-[10px]'>{f.type}</span>
-                              </button>
-                            )
-                          })}
-                          {uniqueBy.length > 0 && (
-                            <button type='button' onClick={() => setUniqueBy([])} className='mt-1 w-full rounded px-2 py-1 text-[10px] text-slate-400 hover:text-red-500 text-left'>Clear all</button>
-                          )}
-                        </>
-                      )}
-                    </PopoverContent>
-                  </Popover>
-                  {uniqueBy.length > 0 && (
-                    <p className='text-[10px] text-slate-400'>Blocks duplicates by: {uniqueBy.join(', ')}</p>
+                  <Label className='text-[11px] text-slate-600'>Layout</Label>
+                  <LayoutPicker
+                    collection={relatedCollection}
+                    value={gridLayoutId}
+                    onChange={(id, slug) => {
+                      setGridLayoutId(id)
+                      setGridLayoutSlug(slug)
+                    }}
+                    layoutType={iface === 'inline-table' ? 'table' : 'grouped'}
+                  />
+                </div>
+
+                {/* Options */}
+                <div className='divide-y divide-slate-100 rounded-md border border-slate-200'>
+                  {iface === 'inline-grid' && (
+                    <div className='flex items-center justify-between px-3 py-2'>
+                      <span className='text-[12px] text-slate-700'>Show column totals</span>
+                      <Switch
+                        checked={gridShowTotals}
+                        onCheckedChange={setGridShowTotals}
+                        className='scale-90'
+                      />
+                    </div>
+                  )}
+                  {iface === 'inline-table' && (
+                    <>
+                      <div className='flex items-center justify-between px-3 py-2'>
+                        <div>
+                          <p className='text-[12px] text-slate-700'>Save with main form</p>
+                          <p className='text-[10px] text-slate-400'>
+                            Rows save when the parent record saves
+                          </p>
+                        </div>
+                        <Switch
+                          checked={saveMode === 'pending'}
+                          onCheckedChange={(v) => setSaveMode(v ? 'pending' : 'immediate')}
+                          className='scale-90'
+                        />
+                      </div>
+                      <div className='flex items-center justify-between px-3 py-2'>
+                        <span className='text-[12px] text-slate-700'>Show line numbers</span>
+                        <Switch
+                          checked={showLineNumbers}
+                          onCheckedChange={setShowLineNumbers}
+                          className='scale-90'
+                        />
+                      </div>
+                      <div className='flex items-center justify-between px-3 py-2'>
+                        <span className='text-[12px] text-slate-700'>Drag to reorder</span>
+                        <Switch
+                          checked={enableReorder}
+                          onCheckedChange={setEnableReorder}
+                          className='scale-90'
+                        />
+                      </div>
+                    </>
                   )}
                 </div>
-              )}
 
-              {/* Sort by (table only) */}
-              {iface === 'inline-table' && uniqueByOptions.length > 0 && (
-                <div className='space-y-1.5'>
-                  <Label className='text-[11px] text-slate-600'>Sort rows by</Label>
-                  <div className='flex gap-1'>
-                    <Popover open={sortFieldOpen} onOpenChange={setSortFieldOpen}>
+                {/* Cascade from parent (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-2'>
+                    <div className='flex items-center justify-between'>
+                      <Label className='text-[11px] text-slate-600'>Cascade from parent</Label>
+                      <button
+                        type='button'
+                        onClick={() =>
+                          setParentCascades([
+                            ...parentCascades,
+                            { parent_field: '', child_field: '' }
+                          ])
+                        }
+                        className='text-[10px] text-nvr-cyan hover:underline'
+                      >
+                        + Add
+                      </button>
+                    </div>
+                    {parentCascades.length === 0 && (
+                      <p className='text-[10px] text-slate-400'>
+                        Parent = M2O on this form. Child = M2O on each row.
+                      </p>
+                    )}
+                    {parentCascades.map((rule, idx) => (
+                      <CascadeRuleRow
+                        key={idx}
+                        rule={rule}
+                        parentFields={parentM2OFields}
+                        childFields={childM2OFields}
+                        onChange={(updated) =>
+                          setParentCascades(parentCascades.map((r, i) => (i === idx ? updated : r)))
+                        }
+                        onRemove={() =>
+                          setParentCascades(parentCascades.filter((_, i) => i !== idx))
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Row rules (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-2'>
+                    <div ref={setRowRulePortalContainer} />
+                    <div className='flex items-center justify-between'>
+                      <Label className='text-[11px] text-slate-600'>Row auto-fill rules</Label>
+                      <button
+                        type='button'
+                        onClick={() =>
+                          setRowRulesLocal([
+                            ...rowRulesLocal,
+                            {
+                              trigger_field: null,
+                              trigger_op: 'nnull',
+                              target_field: '',
+                              target_type: 'relation_field',
+                              sort: rowRulesLocal.length
+                            }
+                          ])
+                        }
+                        className='text-[10px] text-nvr-cyan hover:underline'
+                      >
+                        + Add rule
+                      </button>
+                    </div>
+                    {rowRulesLocal.length === 0 && (
+                      <p className='text-[10px] text-slate-400'>
+                        No rules. Rules auto-fill row fields when conditions are met.
+                      </p>
+                    )}
+                    {rowRulesLocal.map((rule, idx) => (
+                      <RowRuleRow
+                        key={idx}
+                        rule={rule}
+                        childFields={(() => {
+                          const seen = new Map<
+                            string,
+                            {
+                              field: string
+                              label?: string | null
+                              type?: string
+                              interface?: string | null
+                              hidden?: boolean
+                            }
+                          >()
+                          const O2M_IFACES = new Set([
+                            'inline-table',
+                            'inline-grid',
+                            'list-o2m',
+                            'relation-list'
+                          ])
+                          for (const f of childAllFields.filter(
+                            (f) =>
+                              !f.hidden &&
+                              f.field !== 'id' &&
+                              !f.field.startsWith('__') &&
+                              !ROW_RULE_SKIP_TYPES.has(f.type ?? '') &&
+                              !O2M_IFACES.has(f.interface ?? '')
+                          )) {
+                            const existing = seen.get(f.field)
+                            if (!existing || (!existing.label && f.label)) seen.set(f.field, f)
+                          }
+                          return [...seen.values()]
+                        })()}
+                        m2oRels={childM2ORels}
+                        o2mRels={childO2MRels}
+                        onChange={(updated) =>
+                          setRowRulesLocal(rowRulesLocal.map((r, i) => (i === idx ? updated : r)))
+                        }
+                        onRemove={() => setRowRulesLocal(rowRulesLocal.filter((_, i) => i !== idx))}
+                        portalContainer={rowRulePortalContainer}
+                        parentContextFields={parentContextFieldsLocal.map((field) => ({
+                          field,
+                          label: parentAllFields.find((pf) => pf.field === field)?.label || field,
+                          one_collection: parentFieldRelatedCollectionMap[field] ?? null
+                        }))}
+                      />
+                    ))}
+                    {/* Parent context — always visible for inline-table */}
+                    <div className='pt-1 border-t border-slate-100 space-y-1.5'>
+                      <Label className='text-[11px] text-slate-600'>Parent context fields</Label>
+                      <p className='text-[10px] text-slate-400'>
+                        Available as{' '}
+                        <code className='font-mono bg-slate-100 px-0.5 rounded'>$parent.field</code>{' '}
+                        in rules above.
+                      </p>
+                      <Popover open={parentCtxOpen} onOpenChange={setParentCtxOpen}>
+                        <PopoverTrigger asChild>
+                          <button
+                            type='button'
+                            className='w-full flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-left hover:border-slate-400'
+                          >
+                            <span
+                              className={cn(
+                                'truncate',
+                                parentContextFieldsLocal.length
+                                  ? 'text-slate-700'
+                                  : 'text-slate-400'
+                              )}
+                            >
+                              {parentContextFieldsLocal.length
+                                ? parentContextFieldsLocal
+                                    .map(
+                                      (f) =>
+                                        parentAllFields.find((pf) => pf.field === f)?.label || f
+                                    )
+                                    .join(', ')
+                                : 'None selected'}
+                            </span>
+                            <ChevronDown className='h-3.5 w-3.5 text-slate-400 ml-1 shrink-0' />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent className='w-64 p-0' align='start'>
+                          <Command>
+                            <CommandInput
+                              placeholder='Search fields…'
+                              className='h-8 text-[12px]'
+                            />
+                            <CommandList className='max-h-[220px]'>
+                              <CommandGroup>
+                                {parentAllFields
+                                  .filter(
+                                    (f) =>
+                                      f.field !== 'id' &&
+                                      !SKIP_TYPES.has(f.type ?? '') &&
+                                      ![
+                                        'inline-table',
+                                        'inline-grid',
+                                        'list-o2m',
+                                        'relation-list'
+                                      ].includes(f.interface ?? '')
+                                  )
+                                  .map((f) => {
+                                    const checked = parentContextFieldsLocal.includes(f.field)
+                                    return (
+                                      <CommandItem
+                                        key={f.field}
+                                        value={`${f.label || f.field} ${f.field}`}
+                                        onSelect={() =>
+                                          setParentContextFieldsLocal(
+                                            checked
+                                              ? parentContextFieldsLocal.filter(
+                                                  (x) => x !== f.field
+                                                )
+                                              : [...parentContextFieldsLocal, f.field]
+                                          )
+                                        }
+                                        className='text-[11px] flex items-center gap-2'
+                                      >
+                                        <Check
+                                          className={cn(
+                                            'h-3 w-3 shrink-0',
+                                            checked ? 'opacity-100' : 'opacity-0'
+                                          )}
+                                        />
+                                        <span className='flex-1 truncate'>
+                                          {f.label || f.field}
+                                        </span>
+                                        <span className='font-mono text-[9px] text-slate-400 shrink-0'>
+                                          {f.field}
+                                        </span>
+                                      </CommandItem>
+                                    )
+                                  })}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  </div>
+                )}
+
+                {/* Unique by (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Unique rows by</Label>
+                    <Popover open={uniqueByOpen} onOpenChange={setUniqueByOpen}>
                       <PopoverTrigger asChild>
-                        <button type='button' className='flex flex-1 items-center justify-between rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 hover:border-slate-300'>
-                          <span className='truncate'>{sortField ? (uniqueByOptions.find(f => f.field === sortField)?.label || sortField) : 'None'}</span>
-                          <ChevronDown className='h-3 w-3 text-slate-400 shrink-0' />
+                        <button
+                          type='button'
+                          className='w-full flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-left hover:border-slate-400'
+                        >
+                          <span className={uniqueBy.length ? 'text-slate-700' : 'text-slate-400'}>
+                            {uniqueBy.length
+                              ? uniqueBy
+                                  .map(
+                                    (f) => uniqueByOptions.find((o) => o.field === f)?.label || f
+                                  )
+                                  .join(', ')
+                              : 'None (no uniqueness enforced)'}
+                          </span>
+                          <ChevronDown className='h-3.5 w-3.5 text-slate-400 ml-1 shrink-0' />
                         </button>
                       </PopoverTrigger>
-                      <PopoverContent className='w-48 p-1' align='start'>
-                        <button type='button' onClick={() => { setSortField(''); setSortFieldOpen(false) }} className='flex w-full items-center rounded px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-100'>— None</button>
-                        {uniqueByOptions.map(f => (
-                          <button key={f.field} type='button' onClick={() => { setSortField(f.field); setSortFieldOpen(false) }}
-                            className={`flex w-full items-center justify-between rounded px-2 py-1 text-[11px] hover:bg-slate-100 ${sortField === f.field ? 'text-nvr-cyan font-medium' : 'text-slate-700'}`}>
-                            <span className='truncate'>{f.label || f.field}</span>
-                            <span className='text-slate-400 font-mono text-[10px]'>{f.type}</span>
-                          </button>
-                        ))}
+                      <PopoverContent className='w-56 p-1' align='start'>
+                        {uniqueByOptions.length === 0 ? (
+                          <p className='px-2 py-1 text-[11px] text-slate-400'>
+                            No fields available
+                          </p>
+                        ) : (
+                          <>
+                            {uniqueByOptions.map((f) => {
+                              const checked = uniqueBy.includes(f.field)
+                              return (
+                                <button
+                                  key={f.field}
+                                  type='button'
+                                  onClick={() =>
+                                    setUniqueBy(
+                                      checked
+                                        ? uniqueBy.filter((x) => x !== f.field)
+                                        : [...uniqueBy, f.field]
+                                    )
+                                  }
+                                  className='flex w-full items-center gap-2 rounded px-2 py-1 text-[11px] hover:bg-slate-100'
+                                >
+                                  <span
+                                    className={`h-3.5 w-3.5 rounded border flex items-center justify-center shrink-0 ${checked ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'}`}
+                                  >
+                                    {checked && (
+                                      <span className='text-white text-[8px] font-bold'>✓</span>
+                                    )}
+                                  </span>
+                                  <span className='flex-1 truncate text-slate-700'>
+                                    {f.label || f.field}
+                                  </span>
+                                  <span className='text-slate-400 font-mono text-[10px]'>
+                                    {f.type}
+                                  </span>
+                                </button>
+                              )
+                            })}
+                            {uniqueBy.length > 0 && (
+                              <button
+                                type='button'
+                                onClick={() => setUniqueBy([])}
+                                className='mt-1 w-full rounded px-2 py-1 text-[10px] text-slate-400 hover:text-red-500 text-left'
+                              >
+                                Clear all
+                              </button>
+                            )}
+                          </>
+                        )}
                       </PopoverContent>
                     </Popover>
-                    {sortField && (
-                      <button type='button' onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
-                        className='shrink-0 rounded border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:border-slate-300 hover:text-nvr-cyan'>
-                        {sortDir === 'asc' ? '↑ ASC' : '↓ DESC'}
-                      </button>
+                    {uniqueBy.length > 0 && (
+                      <p className='text-[10px] text-slate-400'>
+                        Blocks duplicates by: {uniqueBy.join(', ')}
+                      </p>
                     )}
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Revision history (table only) */}
-              {iface === 'inline-table' && onRowRevisionsChange && (
-                <div className='divide-y divide-slate-100 rounded-md border border-slate-200'>
-                  <div className='flex items-center justify-between px-3 py-2'>
-                    <span className='text-[12px] text-slate-700'>Row revision history</span>
-                    <Switch checked={!!showRowRevisions} onCheckedChange={onRowRevisionsChange} className='scale-90' />
-                  </div>
-                  {showRowRevisions && onAllowRevisionRestoreChange && (
-                    <div className='flex items-center justify-between px-3 py-2 bg-slate-50/50'>
-                      <span className='text-[12px] text-slate-600 pl-2'>Allow restore</span>
-                      <Switch checked={!!allowRevisionRestore} onCheckedChange={onAllowRevisionRestoreChange} className='scale-90' />
+                {/* Sort by (table only) */}
+                {iface === 'inline-table' && uniqueByOptions.length > 0 && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Sort rows by</Label>
+                    <div className='flex gap-1'>
+                      <Popover open={sortFieldOpen} onOpenChange={setSortFieldOpen}>
+                        <PopoverTrigger asChild>
+                          <button
+                            type='button'
+                            className='flex flex-1 items-center justify-between rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 hover:border-slate-300'
+                          >
+                            <span className='truncate'>
+                              {sortField
+                                ? uniqueByOptions.find((f) => f.field === sortField)?.label ||
+                                  sortField
+                                : 'None'}
+                            </span>
+                            <ChevronDown className='h-3 w-3 text-slate-400 shrink-0' />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent className='w-48 p-1' align='start'>
+                          <button
+                            type='button'
+                            onClick={() => {
+                              setSortField('')
+                              setSortFieldOpen(false)
+                            }}
+                            className='flex w-full items-center rounded px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-100'
+                          >
+                            — None
+                          </button>
+                          {uniqueByOptions.map((f) => (
+                            <button
+                              key={f.field}
+                              type='button'
+                              onClick={() => {
+                                setSortField(f.field)
+                                setSortFieldOpen(false)
+                              }}
+                              className={`flex w-full items-center justify-between rounded px-2 py-1 text-[11px] hover:bg-slate-100 ${sortField === f.field ? 'text-nvr-cyan font-medium' : 'text-slate-700'}`}
+                            >
+                              <span className='truncate'>{f.label || f.field}</span>
+                              <span className='text-slate-400 font-mono text-[10px]'>{f.type}</span>
+                            </button>
+                          ))}
+                        </PopoverContent>
+                      </Popover>
+                      {sortField && (
+                        <button
+                          type='button'
+                          onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                          className='shrink-0 rounded border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:border-slate-300 hover:text-nvr-cyan'
+                        >
+                          {sortDir === 'asc' ? '↑ ASC' : '↓ DESC'}
+                        </button>
+                      )}
                     </div>
-                  )}
-                </div>
-              )}
+                  </div>
+                )}
 
-              {/* Addendum: prefill from parent record */}
-              {onPrefillFromParentChange && (
-                <div className='flex items-center justify-between rounded-md border border-slate-200 px-3 py-2'>
-                  <span className='text-[12px] text-slate-700'>Prefill from current record</span>
-                  <Switch checked={prefillFromParent ?? true} onCheckedChange={onPrefillFromParentChange} className='scale-90' />
-                </div>
-              )}
-            </div>
-          )}
+                {/* Revision history (table only) */}
+                {iface === 'inline-table' && onRowRevisionsChange && (
+                  <div className='divide-y divide-slate-100 rounded-md border border-slate-200'>
+                    <div className='flex items-center justify-between px-3 py-2'>
+                      <span className='text-[12px] text-slate-700'>Row revision history</span>
+                      <Switch
+                        checked={!!showRowRevisions}
+                        onCheckedChange={onRowRevisionsChange}
+                        className='scale-90'
+                      />
+                    </div>
+                    {showRowRevisions && onAllowRevisionRestoreChange && (
+                      <div className='flex items-center justify-between px-3 py-2 bg-slate-50/50'>
+                        <span className='text-[12px] text-slate-600 pl-2'>Allow restore</span>
+                        <Switch
+                          checked={!!allowRevisionRestore}
+                          onCheckedChange={onAllowRevisionRestoreChange}
+                          className='scale-90'
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
 
-          {/* ── Lock conditions ── */}
-          {onLockConditionsChange && (
-            <div className='space-y-3'>
-              <div className='flex items-center gap-2'>
-                <span className='text-[11px] font-medium text-slate-500 shrink-0'>Lock conditions</span>
-                <div className='flex-1 h-px bg-slate-100' />
-                <button type='button'
-                  onClick={() => onLockConditionsChange([...lockConditions, { type: 'pipeline_state', state_keys: [] }])}
-                  className='text-[10px] text-nvr-cyan hover:underline shrink-0'>
-                  + Add
-                </button>
+                {/* Addendum: prefill from parent record */}
+                {onPrefillFromParentChange && (
+                  <div className='flex items-center justify-between rounded-md border border-slate-200 px-3 py-2'>
+                    <span className='text-[12px] text-slate-700'>Prefill from current record</span>
+                    <Switch
+                      checked={prefillFromParent ?? true}
+                      onCheckedChange={onPrefillFromParentChange}
+                      className='scale-90'
+                    />
+                  </div>
+                )}
               </div>
-              {lockConditions.length === 0 && (
-                <p className='text-[10px] text-slate-400'>No conditions — field is always editable.</p>
-              )}
-              {lockConditions.map((cond, i) => (
-                <div key={i} className='rounded-md border border-slate-200 bg-white overflow-hidden'>
-                  <div className='flex items-center gap-1.5 px-2.5 py-2 bg-slate-50/50'>
-                    <select
-                      value={cond.type}
-                      onChange={(e) => { const next = [...lockConditions]; next[i] = { ...next[i], type: e.target.value }; onLockConditionsChange(next) }}
-                      className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px]'
-                    >
-                      <option value='pipeline_state'>Pipeline state</option>
-                      <option value='role'>User role</option>
-                    </select>
-                    <button type='button' onClick={() => onLockConditionsChange(lockConditions.filter((_, j) => j !== i))} className='text-slate-400 hover:text-red-500'>
-                      <X className='h-3.5 w-3.5' />
-                    </button>
-                  </div>
-                  {cond.type === 'pipeline_state' && (
-                    <div className='px-2.5 py-2 border-t border-slate-100'>
-                      <PipelineStateConditionRow
-                        collection={collection}
-                        pipelineId={cond.pipeline_id}
-                        stateKeys={cond.state_keys ?? []}
-                        onPipelineChange={(pid) => { const next = [...lockConditions]; next[i] = { ...next[i], pipeline_id: pid, state_keys: [] }; onLockConditionsChange(next) }}
-                        onStateKeysChange={(keys) => { const next = [...lockConditions]; next[i] = { ...next[i], state_keys: keys }; onLockConditionsChange(next) }}
-                      />
-                    </div>
-                  )}
-                  {cond.type === 'role' && (
-                    <div className='px-2.5 py-2 border-t border-slate-100'>
-                      <RoleConditionRow
-                        roleIds={cond.role_ids ?? []}
-                        onRoleIdsChange={(ids) => { const next = [...lockConditions]; next[i] = { ...next[i], role_ids: ids }; onLockConditionsChange(next) }}
-                      />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+            )}
 
-        </div>
+            {/* ── Lock conditions ── */}
+            {onLockConditionsChange && (
+              <div className='space-y-3'>
+                <div className='flex items-center gap-2'>
+                  <span className='text-[11px] font-medium text-slate-500 shrink-0'>
+                    Lock conditions
+                  </span>
+                  <div className='flex-1 h-px bg-slate-100' />
+                  <button
+                    type='button'
+                    onClick={() =>
+                      onLockConditionsChange([
+                        ...lockConditions,
+                        { type: 'pipeline_state', state_keys: [] }
+                      ])
+                    }
+                    className='text-[10px] text-nvr-cyan hover:underline shrink-0'
+                  >
+                    + Add
+                  </button>
+                </div>
+                {lockConditions.length === 0 && (
+                  <p className='text-[10px] text-slate-400'>
+                    No conditions — field is always editable.
+                  </p>
+                )}
+                {lockConditions.map((cond, i) => (
+                  <div
+                    key={i}
+                    className='rounded-md border border-slate-200 bg-white overflow-hidden'
+                  >
+                    <div className='flex items-center gap-1.5 px-2.5 py-2 bg-slate-50/50'>
+                      <select
+                        value={cond.type}
+                        onChange={(e) => {
+                          const next = [...lockConditions]
+                          next[i] = { ...next[i], type: e.target.value }
+                          onLockConditionsChange(next)
+                        }}
+                        className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px]'
+                      >
+                        <option value='pipeline_state'>Pipeline state</option>
+                        <option value='role'>User role</option>
+                      </select>
+                      <button
+                        type='button'
+                        onClick={() =>
+                          onLockConditionsChange(lockConditions.filter((_, j) => j !== i))
+                        }
+                        className='text-slate-400 hover:text-red-500'
+                      >
+                        <X className='h-3.5 w-3.5' />
+                      </button>
+                    </div>
+                    {cond.type === 'pipeline_state' && (
+                      <div className='px-2.5 py-2 border-t border-slate-100'>
+                        <PipelineStateConditionRow
+                          collection={collection}
+                          pipelineId={cond.pipeline_id}
+                          stateKeys={cond.state_keys ?? []}
+                          onPipelineChange={(pid) => {
+                            const next = [...lockConditions]
+                            next[i] = { ...next[i], pipeline_id: pid, state_keys: [] }
+                            onLockConditionsChange(next)
+                          }}
+                          onStateKeysChange={(keys) => {
+                            const next = [...lockConditions]
+                            next[i] = { ...next[i], state_keys: keys }
+                            onLockConditionsChange(next)
+                          }}
+                        />
+                      </div>
+                    )}
+                    {cond.type === 'role' && (
+                      <div className='px-2.5 py-2 border-t border-slate-100'>
+                        <RoleConditionRow
+                          roleIds={cond.role_ids ?? []}
+                          onRoleIdsChange={(ids) => {
+                            const next = [...lockConditions]
+                            next[i] = { ...next[i], role_ids: ids }
+                            onLockConditionsChange(next)
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <div className='shrink-0 flex gap-2 p-3 border-t border-slate-100'>
           <Button size='sm' className='h-7 flex-1 text-[12px]' onClick={save}>
             Save
           </Button>
-          <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setOpen(false)}>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-7 text-[12px]'
+            onClick={() => setOpen(false)}
+          >
             Cancel
           </Button>
         </div>
@@ -7236,7 +9016,7 @@ function FieldChip({
   collection,
   compact,
   prefillFromParent,
-  onPrefillFromParentChange,
+  onPrefillFromParentChange
 }: {
   fieldName: string
   displayName?: string
@@ -7259,8 +9039,15 @@ function FieldChip({
   onRowRevisionsChange?: (v: boolean) => void
   allowRevisionRestore?: boolean
   onAllowRevisionRestoreChange?: (v: boolean) => void
-  lockConditions?: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
-  onLockConditionsChange?: (v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
+  lockConditions?: Array<{
+    type: string
+    state_keys?: string[]
+    role_ids?: string[]
+    pipeline_id?: string
+  }>
+  onLockConditionsChange?: (
+    v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  ) => void
   extraControls?: React.ReactNode
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
@@ -7270,7 +9057,7 @@ function FieldChip({
   onPrefillFromParentChange?: (v: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
-  const widthLabel = WIDTH_OPTIONS.find(w => w.span === colSpan)?.label ?? 'Full'
+  const widthLabel = WIDTH_OPTIONS.find((w) => w.span === colSpan)?.label ?? 'Full'
 
   if (compact) {
     return (
@@ -7291,10 +9078,12 @@ function FieldChip({
           {displayName ?? <span className='font-mono text-[11px]'>{fieldName}</span>}
         </span>
         {fieldType && (
-          <span className={cn(
-            'shrink-0 rounded px-1 py-px font-mono text-[9px] leading-none',
-            FRIENDLY_TYPE_STYLES[fieldType] ?? 'bg-slate-100 text-slate-500'
-          )}>
+          <span
+            className={cn(
+              'shrink-0 rounded px-1 py-px font-mono text-[9px] leading-none',
+              FRIENDLY_TYPE_STYLES[fieldType] ?? 'bg-slate-100 text-slate-500'
+            )}
+          >
             {fieldType}
           </span>
         )}
@@ -7307,7 +9096,9 @@ function FieldChip({
       style={style}
       className={cn(
         'group flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-[12px] select-none',
-        isDragging ? 'shadow-lg opacity-80 ring-2 ring-nvr-cyan/40' : 'shadow-sm hover:border-slate-300'
+        isDragging
+          ? 'shadow-lg opacity-80 ring-2 ring-nvr-cyan/40'
+          : 'shadow-sm hover:border-slate-300'
       )}
     >
       {/* drag handle */}
@@ -7325,10 +9116,12 @@ function FieldChip({
 
       {/* type badge */}
       {fieldType && (
-        <span className={cn(
-          'shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px]',
-          FRIENDLY_TYPE_STYLES[fieldType] ?? 'bg-slate-100 text-slate-500'
-        )}>
+        <span
+          className={cn(
+            'shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px]',
+            FRIENDLY_TYPE_STYLES[fieldType] ?? 'bg-slate-100 text-slate-500'
+          )}
+        >
           {fieldType}
         </span>
       )}
@@ -7359,16 +9152,28 @@ function FieldChip({
         />
       )}
 
+      {/* impact analysis popover */}
+      {fieldSettings && collection && (
+        <FieldImpactPopover collection={collection} fieldName={fieldName} />
+      )}
+
       {/* label visibility toggle */}
       {onSettings && (
-        <div onPointerDown={e => e.stopPropagation()}>
+        <div onPointerDown={(e) => e.stopPropagation()}>
           <button
             type='button'
             title={fieldSettings?.label === '' ? 'Show label' : 'Hide label'}
             onClick={() => onSettings({ label: fieldSettings?.label === '' ? null : '' })}
-            className={cn('shrink-0 rounded p-0.5 hover:text-slate-600', fieldSettings?.label === '' ? 'text-amber-400' : 'text-slate-300')}
+            className={cn(
+              'shrink-0 rounded p-0.5 hover:text-slate-600',
+              fieldSettings?.label === '' ? 'text-amber-400' : 'text-slate-300'
+            )}
           >
-            {fieldSettings?.label === '' ? <EyeOff className='h-3 w-3' /> : <Eye className='h-3 w-3' />}
+            {fieldSettings?.label === '' ? (
+              <EyeOff className='h-3 w-3' />
+            ) : (
+              <Eye className='h-3 w-3' />
+            )}
           </button>
         </div>
       )}
@@ -7377,9 +9182,12 @@ function FieldChip({
 
       {/* unassign — send back to pool */}
       {onUnassign && (
-        <div onPointerDown={e => e.stopPropagation()}>
-          <button type='button' onClick={onUnassign}
-            className='shrink-0 rounded p-0.5 text-slate-300 hover:text-red-400'>
+        <div onPointerDown={(e) => e.stopPropagation()}>
+          <button
+            type='button'
+            onClick={onUnassign}
+            className='shrink-0 rounded p-0.5 text-slate-300 hover:text-red-400'
+          >
             <X className='h-3 w-3' />
           </button>
         </div>
@@ -7387,10 +9195,10 @@ function FieldChip({
 
       {/* width selector — stopPropagation prevents dnd-kit from capturing pointer events */}
       {onColSpan && (
-        <div className='relative shrink-0' onPointerDown={e => e.stopPropagation()}>
+        <div className='relative shrink-0' onPointerDown={(e) => e.stopPropagation()}>
           <button
             type='button'
-            onClick={() => setOpen(o => !o)}
+            onClick={() => setOpen((o) => !o)}
             className='flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-slate-200'
           >
             {widthLabel}
@@ -7398,18 +9206,24 @@ function FieldChip({
           </button>
           {open && (
             <div className='absolute right-0 top-full z-20 mt-1 rounded-md border border-slate-200 bg-white py-1 shadow-md'>
-              {WIDTH_OPTIONS.map(w => (
+              {WIDTH_OPTIONS.map((w) => (
                 <button
                   key={w.span}
                   type='button'
-                  onClick={() => { onColSpan(w.span); setOpen(false) }}
+                  onClick={() => {
+                    onColSpan(w.span)
+                    setOpen(false)
+                  }}
                   className={cn(
                     'flex w-full items-center gap-2.5 px-3 py-1.5 text-[12px] hover:bg-slate-50',
                     w.span === colSpan ? 'font-medium text-nvr-cyan' : 'text-slate-700'
                   )}
                 >
                   <span className='inline-flex h-2.5 w-12 overflow-hidden rounded-sm bg-slate-100'>
-                    <span className='h-full rounded-sm bg-nvr-cyan/50' style={{ width: `${(w.span / 12) * 100}%` }} />
+                    <span
+                      className='h-full rounded-sm bg-nvr-cyan/50'
+                      style={{ width: `${(w.span / 12) * 100}%` }}
+                    />
                   </span>
                   {w.label}
                 </button>
@@ -7451,7 +9265,7 @@ function SortableFieldChip({
   collection,
   compact,
   prefillFromParent,
-  onPrefillFromParentChange,
+  onPrefillFromParentChange
 }: {
   fieldName: string
   displayName?: string
@@ -7473,8 +9287,15 @@ function SortableFieldChip({
   onRowRevisionsChange?: (v: boolean) => void
   allowRevisionRestore?: boolean
   onAllowRevisionRestoreChange?: (v: boolean) => void
-  lockConditions?: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
-  onLockConditionsChange?: (v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
+  lockConditions?: Array<{
+    type: string
+    state_keys?: string[]
+    role_ids?: string[]
+    pipeline_id?: string
+  }>
+  onLockConditionsChange?: (
+    v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  ) => void
   extraControls?: React.ReactNode
   inlineDisplayConfig?: InlineDisplayConfig
   onInlineDisplayChange?: (config: InlineDisplayConfig) => void
@@ -7485,7 +9306,7 @@ function SortableFieldChip({
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId ?? fieldName,
-    data: { type: 'field' },
+    data: { type: 'field' }
   })
   return (
     <div
@@ -7495,7 +9316,7 @@ function SortableFieldChip({
         transform: DndCSS.Transform.toString(transform),
         transition,
         opacity: isDragging ? 0.3 : 1,
-        gridColumn: inGrid ? `span ${colSpan}` : undefined,
+        gridColumn: inGrid ? `span ${colSpan}` : undefined
       }}
     >
       <FieldChip
@@ -7547,13 +9368,40 @@ function parseSortableId(id: string): { container: string | null; fieldName: str
 
 // ── SortableUngroupedZone ─────────────────────────────────────────────────────
 
-function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchField, getFieldSettings, handleFieldSettings, relKind, friendlyType, getM2OFields, getDependencyConfig, getRelatedCollection, onUnassign, onReturnAll, isTableMode, getExtraControls, widgetSlotMeta, getInlineDisplay, onInlineDisplayChange, getLockConditions, onLockConditions, collection, getPrefillFromParent, onPrefillFromParent }: {
+function SortableUngroupedZone({
+  localFieldOrder,
+  allFields,
+  getColSpan,
+  patchField,
+  getFieldSettings,
+  handleFieldSettings,
+  relKind,
+  friendlyType,
+  getM2OFields,
+  getDependencyConfig,
+  getRelatedCollection,
+  onUnassign,
+  onReturnAll,
+  isTableMode,
+  getExtraControls,
+  widgetSlotMeta,
+  getInlineDisplay,
+  onInlineDisplayChange,
+  getLockConditions,
+  onLockConditions,
+  collection,
+  getPrefillFromParent,
+  onPrefillFromParent
+}: {
   localFieldOrder: Record<string, string[]>
   allFields: Array<{ field: string; type?: string; options?: string | null }>
   getColSpan: (f: string) => number
   patchField: (field: string, patch: Record<string, unknown>) => void
   getFieldSettings: (f: string) => FieldSettings
-  handleFieldSettings: (f: string, patch: Partial<FieldSettings> & { dependency_config?: string }) => void
+  handleFieldSettings: (
+    f: string,
+    patch: Partial<FieldSettings> & { dependency_config?: string }
+  ) => void
   relKind: (f: string) => string | null
   friendlyType: (type: string | undefined, field: string) => string | undefined
   getM2OFields?: () => CascadeParentField[]
@@ -7562,27 +9410,59 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
   onUnassign?: (f: string, groupKey: string) => void
   onReturnAll?: () => void
   isTableMode?: boolean
-  getExtraControls?: (f: string, opts?: { isM2O?: boolean; relatedCollection?: string | null }) => React.ReactNode
-  widgetSlotMeta?: Record<string, { widget_id: number; name: string; label_override: string | null }>
+  getExtraControls?: (
+    f: string,
+    opts?: { isM2O?: boolean; relatedCollection?: string | null }
+  ) => React.ReactNode
+  widgetSlotMeta?: Record<
+    string,
+    { widget_id: number; name: string; label_override: string | null }
+  >
   getInlineDisplay?: (f: string) => InlineDisplayConfig | undefined
   onInlineDisplayChange?: (f: string, config: InlineDisplayConfig) => void
-  getLockConditions?: (f: string) => Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
-  onLockConditions?: (f: string, v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
+  getLockConditions?: (
+    f: string
+  ) => Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  onLockConditions?: (
+    f: string,
+    v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  ) => void
   collection?: string
   getPrefillFromParent?: (f: string) => boolean
   onPrefillFromParent?: (f: string, v: boolean) => void
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: 'group:__ungrouped__' })
-  const style = { transform: DndCSS.Transform.toString(transform), transition, opacity: isDragging ? 0 : 1 }
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: 'group:__ungrouped__'
+  })
+  const style = {
+    transform: DndCSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0 : 1
+  }
   const fields = localFieldOrder.__unassigned__ ?? []
   return (
-    <div ref={setNodeRef} style={style} className='rounded-lg border border-dashed border-slate-300 bg-white dark:bg-card'>
+    <div
+      ref={setNodeRef}
+      style={style}
+      className='rounded-lg border border-dashed border-slate-300 bg-white dark:bg-card'
+    >
       <div className='flex items-center gap-1.5 border-b border-slate-200 px-3 py-2 dark:border-border'>
-        <button type='button' {...attributes} {...listeners} className='cursor-grab touch-none rounded p-0.5 text-slate-300 hover:text-slate-500 active:cursor-grabbing'>
+        <button
+          type='button'
+          {...attributes}
+          {...listeners}
+          className='cursor-grab touch-none rounded p-0.5 text-slate-300 hover:text-slate-500 active:cursor-grabbing'
+        >
           <GripVertical className='h-3.5 w-3.5' />
         </button>
-        <span className='text-[11px] font-medium text-slate-500'>{isTableMode ? 'Columns' : 'Ungrouped'}</span>
-        <span className='text-[10px] text-slate-300'>{isTableMode ? '— column order in the table' : '— fields rendered above sections in the item editor'}</span>
+        <span className='text-[11px] font-medium text-slate-500'>
+          {isTableMode ? 'Columns' : 'Ungrouped'}
+        </span>
+        <span className='text-[10px] text-slate-300'>
+          {isTableMode
+            ? '— column order in the table'
+            : '— fields rendered above sections in the item editor'}
+        </span>
         {fields.length > 0 && onReturnAll && (
           <button
             type='button'
@@ -7594,92 +9474,137 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
         )}
       </div>
       <DroppableFieldZone containerId='__unassigned__'>
-        <SortableContext items={fields.map(f => toSortableId('__unassigned__', f))} strategy={rectSortingStrategy}>
-          <div className={cn('min-h-[52px] p-3', fields.length === 0 ? 'flex items-center justify-center' : 'grid grid-cols-12 gap-2 auto-rows-auto')}>
+        <SortableContext
+          items={fields.map((f) => toSortableId('__unassigned__', f))}
+          strategy={rectSortingStrategy}
+        >
+          <div
+            className={cn(
+              'min-h-[52px] p-3',
+              fields.length === 0
+                ? 'flex items-center justify-center'
+                : 'grid grid-cols-12 gap-2 auto-rows-auto'
+            )}
+          >
             {fields.length === 0 ? (
-              <p className='text-[11px] text-slate-300'>{isTableMode ? 'Add fields to define table columns' : 'Drop fields here to leave them ungrouped'}</p>
-            ) : fields.map(f => {
-              if (f === OWNERS_FIELD) {
+              <p className='text-[11px] text-slate-300'>
+                {isTableMode
+                  ? 'Add fields to define table columns'
+                  : 'Drop fields here to leave them ungrouped'}
+              </p>
+            ) : (
+              fields.map((f) => {
+                if (f === OWNERS_FIELD) {
+                  return (
+                    <SortableFieldChip
+                      key={toSortableId('__unassigned__', f)}
+                      sortableId={toSortableId('__unassigned__', f)}
+                      fieldName={f}
+                      displayName='Owners'
+                      fieldType='owners'
+                      colSpan={getColSpan(f)}
+                      onColSpan={
+                        isTableMode ? undefined : (span) => patchField(f, { col_span: span })
+                      }
+                      onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
+                      inGrid
+                    />
+                  )
+                }
+                if (f === PDF_FIELD) {
+                  return (
+                    <SortableFieldChip
+                      key={toSortableId('__unassigned__', f)}
+                      sortableId={toSortableId('__unassigned__', f)}
+                      fieldName={f}
+                      displayName='PDF Button'
+                      fieldType='pdf'
+                      colSpan={getColSpan(f)}
+                      onColSpan={
+                        isTableMode ? undefined : (span) => patchField(f, { col_span: span })
+                      }
+                      onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
+                      extraControls={getExtraControls?.(f)}
+                      inGrid
+                    />
+                  )
+                }
+                if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
+                  const meta = widgetSlotMeta?.[f]
+                  return (
+                    <SortableFieldChip
+                      key={toSortableId('__unassigned__', f)}
+                      sortableId={toSortableId('__unassigned__', f)}
+                      fieldName={f}
+                      displayName={meta?.label_override || meta?.name || 'Widget'}
+                      fieldType='widget'
+                      colSpan={getColSpan(f)}
+                      onColSpan={
+                        isTableMode ? undefined : (span) => patchField(f, { col_span: span })
+                      }
+                      onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
+                      extraControls={getExtraControls?.(f)}
+                      inGrid
+                    />
+                  )
+                }
+                const ft = allFields.find((af) => af.field === f)
+                const settings = getFieldSettings(f)
+                const kind = relKind(f)
                 return (
                   <SortableFieldChip
                     key={toSortableId('__unassigned__', f)}
                     sortableId={toSortableId('__unassigned__', f)}
                     fieldName={f}
-                    displayName='Owners'
-                    fieldType='owners'
+                    displayName={settings.label || titleCase(f)}
+                    fieldType={kind ?? friendlyType(ft?.type, f)}
+                    abstractType={kind ? kind.toLowerCase() : ft?.type}
+                    isM2O={kind === 'M2O'}
+                    isM2M={kind === 'M2M'}
                     colSpan={getColSpan(f)}
-                    onColSpan={isTableMode ? undefined : (span) => patchField(f, { col_span: span })}
+                    onColSpan={
+                      isTableMode ? undefined : (span) => patchField(f, { col_span: span })
+                    }
+                    fieldSettings={settings}
+                    onSettings={(patch) => handleFieldSettings(f, patch)}
+                    m2oFields={
+                      kind === 'M2O' || kind === 'M2M' || kind === 'O2M'
+                        ? getM2OFields?.()
+                        : undefined
+                    }
+                    dependencyConfig={
+                      kind === 'M2O' || kind === 'M2M' ? getDependencyConfig?.(f) : undefined
+                    }
+                    relatedCollection={
+                      kind === 'M2O' || kind === 'M2M' || kind === 'O2M'
+                        ? getRelatedCollection?.(f)
+                        : undefined
+                    }
                     onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
+                    lockConditions={getLockConditions?.(f) ?? []}
+                    onLockConditionsChange={
+                      onLockConditions ? (v) => onLockConditions(f, v) : undefined
+                    }
+                    extraControls={getExtraControls?.(f, {
+                      isM2O: kind === 'M2O',
+                      relatedCollection: getRelatedCollection?.(f)
+                    })}
+                    inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
+                    onInlineDisplayChange={
+                      kind === 'M2O' && onInlineDisplayChange
+                        ? (config) => onInlineDisplayChange(f, config)
+                        : undefined
+                    }
+                    collection={collection}
+                    prefillFromParent={getPrefillFromParent?.(f)}
+                    onPrefillFromParentChange={
+                      onPrefillFromParent ? (v) => onPrefillFromParent(f, v) : undefined
+                    }
                     inGrid
                   />
                 )
-              }
-              if (f === PDF_FIELD) {
-                return (
-                  <SortableFieldChip
-                    key={toSortableId('__unassigned__', f)}
-                    sortableId={toSortableId('__unassigned__', f)}
-                    fieldName={f}
-                    displayName='PDF Button'
-                    fieldType='pdf'
-                    colSpan={getColSpan(f)}
-                    onColSpan={isTableMode ? undefined : (span) => patchField(f, { col_span: span })}
-                    onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
-                    extraControls={getExtraControls?.(f)}
-                    inGrid
-                  />
-                )
-              }
-              if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
-                const meta = widgetSlotMeta?.[f]
-                return (
-                  <SortableFieldChip
-                    key={toSortableId('__unassigned__', f)}
-                    sortableId={toSortableId('__unassigned__', f)}
-                    fieldName={f}
-                    displayName={meta?.label_override || meta?.name || 'Widget'}
-                    fieldType='widget'
-                    colSpan={getColSpan(f)}
-                    onColSpan={isTableMode ? undefined : (span) => patchField(f, { col_span: span })}
-                    onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
-                    extraControls={getExtraControls?.(f)}
-                    inGrid
-                  />
-                )
-              }
-              const ft = allFields.find(af => af.field === f)
-              const settings = getFieldSettings(f)
-              const kind = relKind(f)
-              return (
-                <SortableFieldChip
-                  key={toSortableId('__unassigned__', f)}
-                  sortableId={toSortableId('__unassigned__', f)}
-                  fieldName={f}
-                  displayName={settings.label || titleCase(f)}
-                  fieldType={kind ?? friendlyType(ft?.type, f)}
-                  abstractType={kind ? kind.toLowerCase() : ft?.type}
-                  isM2O={kind === 'M2O'}
-                  isM2M={kind === 'M2M'}
-                  colSpan={getColSpan(f)}
-                  onColSpan={isTableMode ? undefined : (span) => patchField(f, { col_span: span })}
-                  fieldSettings={settings}
-                  onSettings={patch => handleFieldSettings(f, patch)}
-                  m2oFields={kind === 'M2O' || kind === 'M2M' || kind === 'O2M' ? getM2OFields?.() : undefined}
-                  dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
-                  relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
-                  onUnassign={onUnassign ? () => onUnassign(f, '__unassigned__') : undefined}
-                  lockConditions={getLockConditions?.(f) ?? []}
-                  onLockConditionsChange={onLockConditions ? v => onLockConditions(f, v) : undefined}
-                  extraControls={getExtraControls?.(f, { isM2O: kind === 'M2O', relatedCollection: getRelatedCollection?.(f) })}
-                  inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
-                  onInlineDisplayChange={kind === 'M2O' && onInlineDisplayChange ? (config) => onInlineDisplayChange(f, config) : undefined}
-                  collection={collection}
-                  prefillFromParent={getPrefillFromParent?.(f)}
-                  onPrefillFromParentChange={onPrefillFromParent ? v => onPrefillFromParent(f, v) : undefined}
-                  inGrid
-                />
-              )
-            })}
+              })
+            )}
           </div>
         </SortableContext>
       </DroppableFieldZone>
@@ -7692,14 +9617,20 @@ function SortableUngroupedZone({ localFieldOrder, allFields, getColSpan, patchFi
 function SwapConfigEditor({
   group,
   allFields,
-  onGroupSettings,
+  onGroupSettings
 }: {
   group: FieldGroup
   allFields: Array<{ field: string; type?: string }>
   onGroupSettings: (id: number, patch: Partial<Pick<FieldGroup, 'swap_config'>>) => void
 }) {
   type AltField = { field: string; width: 1 | 2 }
-  type SwapCfg = { enabled: boolean; primary_field: string; alternate_fields: AltField[]; toggle_label?: string; back_label?: string }
+  type SwapCfg = {
+    enabled: boolean
+    primary_field: string
+    alternate_fields: AltField[]
+    toggle_label?: string
+    back_label?: string
+  }
 
   const [pfOpen, setPfOpen] = useState(false)
   const [afOpen, setAfOpen] = useState(false)
@@ -7715,35 +9646,56 @@ function SwapConfigEditor({
         typeof x === 'string' ? { field: x, width: 2 } : x
       )
       return { ...raw, alternate_fields: alts } as SwapCfg
-    } catch { return null }
+    } catch {
+      return null
+    }
   })()
 
   const save = (patch: Partial<SwapCfg>) => {
-    const next: SwapCfg = { enabled: swapCfg?.enabled ?? false, primary_field: swapCfg?.primary_field ?? '', alternate_fields: swapCfg?.alternate_fields ?? [], toggle_label: swapCfg?.toggle_label, back_label: swapCfg?.back_label, ...patch }
+    const next: SwapCfg = {
+      enabled: swapCfg?.enabled ?? false,
+      primary_field: swapCfg?.primary_field ?? '',
+      alternate_fields: swapCfg?.alternate_fields ?? [],
+      toggle_label: swapCfg?.toggle_label,
+      back_label: swapCfg?.back_label,
+      ...patch
+    }
     onGroupSettings(group.id, { swap_config: JSON.stringify(next) })
   }
 
   const fieldLabel = (f: string) => titleCase(f)
-  const altFieldKeys = new Set((swapCfg?.alternate_fields ?? []).map(a => a.field))
-  const pfFiltered = allFields.filter(f => !f.field.startsWith('__') && f.field.toLowerCase().includes(pfSearch.toLowerCase()))
-  const afFiltered = allFields.filter(f => !f.field.startsWith('__') && f.field.toLowerCase().includes(afSearch.toLowerCase()) && !altFieldKeys.has(f.field))
+  const altFieldKeys = new Set((swapCfg?.alternate_fields ?? []).map((a) => a.field))
+  const pfFiltered = allFields.filter(
+    (f) => !f.field.startsWith('__') && f.field.toLowerCase().includes(pfSearch.toLowerCase())
+  )
+  const afFiltered = allFields.filter(
+    (f) =>
+      !f.field.startsWith('__') &&
+      f.field.toLowerCase().includes(afSearch.toLowerCase()) &&
+      !altFieldKeys.has(f.field)
+  )
   const altFields = swapCfg?.alternate_fields ?? []
 
   const setWidth = (field: string, width: 1 | 2) => {
-    save({ alternate_fields: altFields.map(a => a.field === field ? { ...a, width } : a) })
+    save({ alternate_fields: altFields.map((a) => (a.field === field ? { ...a, width } : a)) })
   }
   const removeAlt = (field: string) => {
-    save({ alternate_fields: altFields.filter(a => a.field !== field) })
+    save({ alternate_fields: altFields.filter((a) => a.field !== field) })
   }
 
   return (
     <div className='border-t border-slate-100 dark:border-border pt-3 space-y-2'>
       <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Field Swap</p>
-      <p className='text-[10px] text-slate-400'>Toggle between a M2O picker and manual entry fields.</p>
+      <p className='text-[10px] text-slate-400'>
+        Toggle between a M2O picker and manual entry fields.
+      </p>
       <label className='flex items-center gap-2 text-[11px] text-slate-600'>
-        <input type='checkbox' checked={!!swapCfg?.enabled}
-          onChange={e => save({ enabled: e.target.checked })}
-          className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
+        <input
+          type='checkbox'
+          checked={!!swapCfg?.enabled}
+          onChange={(e) => save({ enabled: e.target.checked })}
+          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+        />
         Enable field swap
       </label>
       {swapCfg?.enabled && (
@@ -7751,32 +9703,62 @@ function SwapConfigEditor({
           {/* Primary field */}
           <div>
             <p className='text-[10px] text-slate-400 mb-1'>Primary field (M2O)</p>
-            <button type='button'
-              onClick={() => { setPfOpen(v => !v); setPfSearch('') }}
-              className='w-full h-7 rounded border border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-left text-[11px] flex items-center justify-between gap-1 hover:border-nvr-cyan/50'>
-              {swapCfg.primary_field
-                ? <span className='flex-1 truncate'><span className='font-medium'>{fieldLabel(swapCfg.primary_field)}</span> <span className='font-mono text-[10px] text-slate-400'>{swapCfg.primary_field}</span></span>
-                : <span className='text-slate-400'>Select field…</span>}
+            <button
+              type='button'
+              onClick={() => {
+                setPfOpen((v) => !v)
+                setPfSearch('')
+              }}
+              className='w-full h-7 rounded border border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-left text-[11px] flex items-center justify-between gap-1 hover:border-nvr-cyan/50'
+            >
+              {swapCfg.primary_field ? (
+                <span className='flex-1 truncate'>
+                  <span className='font-medium'>{fieldLabel(swapCfg.primary_field)}</span>{' '}
+                  <span className='font-mono text-[10px] text-slate-400'>
+                    {swapCfg.primary_field}
+                  </span>
+                </span>
+              ) : (
+                <span className='text-slate-400'>Select field…</span>
+              )}
               <ChevronDown className='h-3 w-3 shrink-0 text-slate-400' />
             </button>
             {pfOpen && (
               <div className='mt-0.5 rounded border border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm overflow-hidden'>
                 <div className='flex items-center border-b border-slate-100 dark:border-border px-2'>
                   <Search className='h-3 w-3 text-slate-400 shrink-0' />
-                  <input autoFocus value={pfSearch} onChange={e => setPfSearch(e.target.value)}
-                    placeholder='Search…' className='flex-1 h-7 bg-transparent px-2 text-[11px] outline-none' />
+                  <input
+                    autoFocus
+                    value={pfSearch}
+                    onChange={(e) => setPfSearch(e.target.value)}
+                    placeholder='Search…'
+                    className='flex-1 h-7 bg-transparent px-2 text-[11px] outline-none'
+                  />
                 </div>
                 <div className='max-h-36 overflow-y-auto'>
-                  {pfFiltered.length === 0
-                    ? <p className='px-3 py-2 text-[11px] text-slate-400'>No fields</p>
-                    : pfFiltered.map(f => (
-                      <button key={f.field} type='button'
-                        onClick={() => { save({ primary_field: f.field }); setPfOpen(false) }}
-                        className={['w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 dark:hover:bg-muted flex items-center justify-between gap-2', swapCfg.primary_field === f.field ? 'bg-nvr-cyan/5 text-nvr-cyan' : ''].join(' ')}>
+                  {pfFiltered.length === 0 ? (
+                    <p className='px-3 py-2 text-[11px] text-slate-400'>No fields</p>
+                  ) : (
+                    pfFiltered.map((f) => (
+                      <button
+                        key={f.field}
+                        type='button'
+                        onClick={() => {
+                          save({ primary_field: f.field })
+                          setPfOpen(false)
+                        }}
+                        className={[
+                          'w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 dark:hover:bg-muted flex items-center justify-between gap-2',
+                          swapCfg.primary_field === f.field ? 'bg-nvr-cyan/5 text-nvr-cyan' : ''
+                        ].join(' ')}
+                      >
                         <span className='font-medium truncate'>{fieldLabel(f.field)}</span>
-                        <span className='font-mono text-[10px] text-slate-400 shrink-0'>{f.type ?? ''}</span>
+                        <span className='font-mono text-[10px] text-slate-400 shrink-0'>
+                          {f.type ?? ''}
+                        </span>
                       </button>
-                    ))}
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -7786,49 +9768,97 @@ function SwapConfigEditor({
             <p className='text-[10px] text-slate-400 mb-1'>Alternate fields</p>
             {altFields.length > 0 && (
               <div className='mb-1 space-y-1'>
-                {altFields.map(a => (
-                  <div key={a.field} className='flex items-center gap-1.5 rounded border border-slate-100 dark:border-border bg-white dark:bg-card px-2 py-1'>
-                    <span className='flex-1 truncate text-[11px] font-medium text-slate-700 dark:text-slate-200'>{fieldLabel(a.field)}</span>
+                {altFields.map((a) => (
+                  <div
+                    key={a.field}
+                    className='flex items-center gap-1.5 rounded border border-slate-100 dark:border-border bg-white dark:bg-card px-2 py-1'
+                  >
+                    <span className='flex-1 truncate text-[11px] font-medium text-slate-700 dark:text-slate-200'>
+                      {fieldLabel(a.field)}
+                    </span>
                     <div className='flex rounded border border-slate-200 dark:border-border overflow-hidden shrink-0'>
-                      <button type='button'
+                      <button
+                        type='button'
                         onClick={() => setWidth(a.field, 1)}
-                        className={['px-1.5 py-0.5 text-[10px] font-medium transition-colors', a.width === 1 ? 'bg-nvr-cyan text-white' : 'text-slate-400 hover:text-slate-600'].join(' ')}
-                        title='Half width'>½
+                        className={[
+                          'px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                          a.width === 1
+                            ? 'bg-nvr-cyan text-white'
+                            : 'text-slate-400 hover:text-slate-600'
+                        ].join(' ')}
+                        title='Half width'
+                      >
+                        ½
                       </button>
-                      <button type='button'
+                      <button
+                        type='button'
                         onClick={() => setWidth(a.field, 2)}
-                        className={['px-1.5 py-0.5 text-[10px] font-medium transition-colors border-l border-slate-200 dark:border-border', a.width === 2 ? 'bg-nvr-cyan text-white' : 'text-slate-400 hover:text-slate-600'].join(' ')}
-                        title='Full width'>1
+                        className={[
+                          'px-1.5 py-0.5 text-[10px] font-medium transition-colors border-l border-slate-200 dark:border-border',
+                          a.width === 2
+                            ? 'bg-nvr-cyan text-white'
+                            : 'text-slate-400 hover:text-slate-600'
+                        ].join(' ')}
+                        title='Full width'
+                      >
+                        1
                       </button>
                     </div>
-                    <button type='button' onClick={() => removeAlt(a.field)} className='text-slate-300 hover:text-red-500 text-[14px] leading-none shrink-0'>×</button>
+                    <button
+                      type='button'
+                      onClick={() => removeAlt(a.field)}
+                      className='text-slate-300 hover:text-red-500 text-[14px] leading-none shrink-0'
+                    >
+                      ×
+                    </button>
                   </div>
                 ))}
               </div>
             )}
-            <button type='button'
-              onClick={() => { setAfOpen(v => !v); setAfSearch('') }}
-              className='w-full h-7 rounded border border-dashed border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-left text-[11px] flex items-center gap-1.5 text-slate-400 hover:border-nvr-cyan/50 hover:text-nvr-cyan'>
+            <button
+              type='button'
+              onClick={() => {
+                setAfOpen((v) => !v)
+                setAfSearch('')
+              }}
+              className='w-full h-7 rounded border border-dashed border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-left text-[11px] flex items-center gap-1.5 text-slate-400 hover:border-nvr-cyan/50 hover:text-nvr-cyan'
+            >
               <Plus className='h-3 w-3' /> Add field…
             </button>
             {afOpen && (
               <div className='mt-0.5 rounded border border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm overflow-hidden'>
                 <div className='flex items-center border-b border-slate-100 dark:border-border px-2'>
                   <Search className='h-3 w-3 text-slate-400 shrink-0' />
-                  <input autoFocus value={afSearch} onChange={e => setAfSearch(e.target.value)}
-                    placeholder='Search…' className='flex-1 h-7 bg-transparent px-2 text-[11px] outline-none' />
+                  <input
+                    autoFocus
+                    value={afSearch}
+                    onChange={(e) => setAfSearch(e.target.value)}
+                    placeholder='Search…'
+                    className='flex-1 h-7 bg-transparent px-2 text-[11px] outline-none'
+                  />
                 </div>
                 <div className='max-h-36 overflow-y-auto'>
-                  {afFiltered.length === 0
-                    ? <p className='px-3 py-2 text-[11px] text-slate-400'>No more fields</p>
-                    : afFiltered.map(f => (
-                      <button key={f.field} type='button'
-                        onClick={() => { save({ alternate_fields: [...altFields, { field: f.field, width: 2 }] }); setAfSearch(''); setAfOpen(false) }}
-                        className='w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 dark:hover:bg-muted flex items-center justify-between gap-2'>
+                  {afFiltered.length === 0 ? (
+                    <p className='px-3 py-2 text-[11px] text-slate-400'>No more fields</p>
+                  ) : (
+                    afFiltered.map((f) => (
+                      <button
+                        key={f.field}
+                        type='button'
+                        onClick={() => {
+                          save({ alternate_fields: [...altFields, { field: f.field, width: 2 }] })
+                          setAfSearch('')
+                          setAfOpen(false)
+                        }}
+                        className='w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 dark:hover:bg-muted flex items-center justify-between gap-2'
+                      >
                         <span className='font-medium truncate'>{fieldLabel(f.field)}</span>
-                        <span className='font-mono text-[10px] text-slate-400 shrink-0'>{f.type ?? ''}</span>
+                        <span className='font-mono text-[10px] text-slate-400 shrink-0'>
+                          {f.type ?? ''}
+                        </span>
                       </button>
-                    ))}
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -7837,19 +9867,25 @@ function SwapConfigEditor({
           <div className='flex gap-2'>
             <div className='flex-1'>
               <p className='text-[10px] text-slate-400 mb-1'>Toggle label</p>
-              <input type='text' placeholder='Enter custom'
+              <input
+                type='text'
+                placeholder='Enter custom'
                 key={`tl-${group.id}`}
                 defaultValue={swapCfg.toggle_label ?? ''}
-                onBlur={e => save({ toggle_label: e.target.value || undefined })}
-                className='w-full h-6 rounded border border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-[11px]' />
+                onBlur={(e) => save({ toggle_label: e.target.value || undefined })}
+                className='w-full h-6 rounded border border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-[11px]'
+              />
             </div>
             <div className='flex-1'>
               <p className='text-[10px] text-slate-400 mb-1'>Back label</p>
-              <input type='text' placeholder='Use saved'
+              <input
+                type='text'
+                placeholder='Use saved'
                 key={`bl-${group.id}`}
                 defaultValue={swapCfg.back_label ?? ''}
-                onBlur={e => save({ back_label: e.target.value || undefined })}
-                className='w-full h-6 rounded border border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-[11px]' />
+                onBlur={(e) => save({ back_label: e.target.value || undefined })}
+                className='w-full h-6 rounded border border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-[11px]'
+              />
             </div>
           </div>
         </div>
@@ -7893,7 +9929,7 @@ function SortableGroupCard({
   onInlineDisplayChange,
   collection,
   getPrefillFromParent,
-  onPrefillFromParent,
+  onPrefillFromParent
 }: {
   group: FieldGroup
   fieldNames: string[]
@@ -7907,7 +9943,10 @@ function SortableGroupCard({
   getRelKind?: (f: string) => string | null
   getFriendlyType?: (t?: string, fieldName?: string) => string | undefined
   getFieldSettings?: (f: string) => FieldSettings
-  onFieldSettings?: (f: string, patch: Partial<FieldSettings> & { dependency_config?: string }) => void
+  onFieldSettings?: (
+    f: string,
+    patch: Partial<FieldSettings> & { dependency_config?: string }
+  ) => void
   getM2OFields?: () => CascadeParentField[]
   getDependencyConfig?: (f: string) => Record<string, unknown> | null
   getRelatedCollection?: (f: string) => string | null
@@ -7916,15 +9955,38 @@ function SortableGroupCard({
   containerGroups?: FieldGroup[]
   onSetContainer?: (id: number, container_id: number | null) => void
   onToggleCollapsed?: (id: number) => void
-  onGroupSettings?: (id: number, patch: Partial<Pick<FieldGroup, 'hide_when_empty' | 'visibility_mode' | 'summary_fields' | 'summary_hide_empty' | 'swap_config'>>) => void
+  onGroupSettings?: (
+    id: number,
+    patch: Partial<
+      Pick<
+        FieldGroup,
+        | 'hide_when_empty'
+        | 'visibility_mode'
+        | 'summary_fields'
+        | 'summary_hide_empty'
+        | 'swap_config'
+      >
+    >
+  ) => void
   getRowRevisions?: (f: string) => boolean
   onRowRevisions?: (f: string, v: boolean) => void
   getAllowRevisionRestore?: (f: string) => boolean
   onAllowRevisionRestore?: (f: string, v: boolean) => void
-  getLockConditions?: (f: string) => Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
-  onLockConditions?: (f: string, v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>) => void
-  getExtraControls?: (f: string, opts?: { isM2O?: boolean; relatedCollection?: string | null }) => React.ReactNode
-  widgetSlotMeta?: Record<string, { widget_id: number; name: string; label_override: string | null }>
+  getLockConditions?: (
+    f: string
+  ) => Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  onLockConditions?: (
+    f: string,
+    v: Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+  ) => void
+  getExtraControls?: (
+    f: string,
+    opts?: { isM2O?: boolean; relatedCollection?: string | null }
+  ) => React.ReactNode
+  widgetSlotMeta?: Record<
+    string,
+    { widget_id: number; name: string; label_override: string | null }
+  >
   getInlineDisplay?: (f: string) => InlineDisplayConfig | undefined
   onInlineDisplayChange?: (f: string, config: InlineDisplayConfig) => void
   collection?: string
@@ -7943,7 +10005,7 @@ function SortableGroupCard({
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `group:${group.key}`,
-    data: { type: 'group' },
+    data: { type: 'group' }
   })
 
   return (
@@ -7954,24 +10016,36 @@ function SortableGroupCard({
     >
       {/* Group header */}
       <div className='group flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2.5'>
-        <span className='shrink-0 cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing' {...attributes} {...listeners}>
+        <span
+          className='shrink-0 cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing'
+          {...attributes}
+          {...listeners}
+        >
           <GripVertical className='h-3.5 w-3.5' />
         </span>
         {/* Icon picker */}
-        <div className='flex items-center' onPointerDown={e => e.stopPropagation()}>
+        <div className='flex items-center' onPointerDown={(e) => e.stopPropagation()}>
           {(() => {
             const GroupIcon = group.icon ? resolveCollectionIcon(group.icon) : null
             return (
               <IconPicker
                 value={group.icon ?? ''}
-                onChange={v => onIconChange(v || null)}
+                onChange={(v) => onIconChange(v || null)}
                 trigger={
                   GroupIcon ? (
-                    <button type='button' title='Change icon' className='shrink-0 rounded p-0.5 text-slate-400 hover:text-nvr-cyan transition-colors'>
+                    <button
+                      type='button'
+                      title='Change icon'
+                      className='shrink-0 rounded p-0.5 text-slate-400 hover:text-nvr-cyan transition-colors'
+                    >
                       <GroupIcon className='h-3.5 w-3.5' />
                     </button>
                   ) : (
-                    <button type='button' title='Add icon' className='shrink-0 rounded p-0.5 text-slate-300 hover:text-slate-500 transition-all'>
+                    <button
+                      type='button'
+                      title='Add icon'
+                      className='shrink-0 rounded p-0.5 text-slate-300 hover:text-slate-500 transition-all'
+                    >
                       <Plus className='h-3 w-3' />
                     </button>
                   )
@@ -7984,16 +10058,25 @@ function SortableGroupCard({
           <input
             autoFocus
             value={labelDraft}
-            onChange={e => setLabelDraft(e.target.value)}
+            onChange={(e) => setLabelDraft(e.target.value)}
             onBlur={commitRename}
-            onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') { setLabelDraft(group.label); setEditing(false) } }}
-            onPointerDown={e => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitRename()
+              if (e.key === 'Escape') {
+                setLabelDraft(group.label)
+                setEditing(false)
+              }
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
             className='flex-1 rounded border border-nvr-cyan/50 bg-white px-1.5 py-0.5 text-[13px] font-medium text-slate-800 outline-none ring-1 ring-nvr-cyan/30'
           />
         ) : (
           <button
             type='button'
-            onClick={() => { setLabelDraft(group.label); setEditing(true) }}
+            onClick={() => {
+              setLabelDraft(group.label)
+              setEditing(true)
+            }}
             title='Click to rename'
             className='group/label flex flex-1 items-center gap-1 truncate text-left text-[13px] font-medium text-slate-800 hover:text-nvr-cyan'
           >
@@ -8012,192 +10095,259 @@ function SortableGroupCard({
             {group.tab_mode === 'steps' ? 'steps' : 'tabs'}
           </button>
         )}
-        {group.type === 'tab' && containerGroups && containerGroups.length > 0 && onSetContainer && (
-          <select
-            value={group.container_id ?? ''}
-            onChange={e => onSetContainer(group.id, e.target.value ? Number(e.target.value) : null)}
-            onPointerDown={e => e.stopPropagation()}
-            className='rounded border border-slate-200 bg-white px-1 py-0.5 text-[10px] text-slate-500'
-          >
-            <option value=''>No container</option>
-            {containerGroups.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-          </select>
-        )}
-        {(group.type === 'section' || group.type === 'metadata' || group.type === 'tab') && onGroupSettings && (
-          <div onPointerDown={e => e.stopPropagation()}>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type='button' title='Section settings' className='shrink-0 rounded p-1 text-slate-300 hover:text-slate-500'>
-                  <Settings2 className='h-3.5 w-3.5' />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className='w-[260px] p-3 space-y-3' align='end'>
-                <div>
-                  <Label className='mb-1 block text-[11px]'>Show section</Label>
-                  <Sel
-                    value={group.visibility_mode ?? 'always'}
-                    onChange={v => onGroupSettings(group.id, { visibility_mode: v as 'always' | 'new_only' | 'existing_only' })}
-                    options={[
-                      { value: 'always', label: 'Always' },
-                      { value: 'new_only', label: 'New items only' },
-                      { value: 'existing_only', label: 'Existing items only' }
-                    ]}
-                  />
-                </div>
-                <label className='flex items-center gap-2 text-[12px] text-slate-600'>
-                  <input
-                    type='checkbox'
-                    checked={!!group.hide_when_empty}
-                    onChange={e => onGroupSettings(group.id, { hide_when_empty: e.target.checked })}
-                    className='h-3.5 w-3.5'
-                  />
-                  Hide when all fields are empty
-                </label>
-                <div>
-                  <Label className='mb-1 block text-[11px]'>Collapsed summary fields</Label>
-                  <p className='mb-1.5 text-[10px] text-slate-400'>Shown in the collapsed bar</p>
-                  <div className='space-y-1.5 max-h-[220px] overflow-y-auto'>
-                    {(() => {
-                      type SummaryAggConfig = { field: string; agg: 'sum' | 'count' | 'avg' | 'min' | 'max'; agg_field: string; label?: string }
-                      type SummaryScalarConfig = { field: string; label?: string }
-                      type SummaryEntry = string | SummaryScalarConfig | SummaryAggConfig
-
-                      let selected: SummaryEntry[] = []
-                      try {
-                        const p = JSON.parse(group.summary_fields ?? '[]')
-                        if (Array.isArray(p)) selected = p
-                      } catch { /* noop */ }
-
-                      const entryKey = (e: SummaryEntry) => typeof e === 'string' ? e : e.field
-                      const findEntry = (f: string): SummaryEntry | undefined => selected.find(e => entryKey(e) === f)
-                      const getEntryLabel = (e: SummaryEntry): string => typeof e === 'string' ? '' : (e.label ?? '')
-
-                      const save = (next: SummaryEntry[]) =>
-                        onGroupSettings(group.id, { summary_fields: JSON.stringify(next) })
-
-                      const setEntryLabel = (f: string, label: string) => {
-                        const next = selected.map(e => {
-                          if (entryKey(e) !== f) return e
-                          if (typeof e === 'string') return label ? { field: f, label } : f
-                          return { ...e, label: label || undefined }
+        {group.type === 'tab' &&
+          containerGroups &&
+          containerGroups.length > 0 &&
+          onSetContainer && (
+            <select
+              value={group.container_id ?? ''}
+              onChange={(e) =>
+                onSetContainer(group.id, e.target.value ? Number(e.target.value) : null)
+              }
+              onPointerDown={(e) => e.stopPropagation()}
+              className='rounded border border-slate-200 bg-white px-1 py-0.5 text-[10px] text-slate-500'
+            >
+              <option value=''>No container</option>
+              {containerGroups.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          )}
+        {(group.type === 'section' || group.type === 'metadata' || group.type === 'tab') &&
+          onGroupSettings && (
+            <div onPointerDown={(e) => e.stopPropagation()}>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type='button'
+                    title='Section settings'
+                    className='shrink-0 rounded p-1 text-slate-300 hover:text-slate-500'
+                  >
+                    <Settings2 className='h-3.5 w-3.5' />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className='w-[260px] p-3 space-y-3' align='end'>
+                  <div>
+                    <Label className='mb-1 block text-[11px]'>Show section</Label>
+                    <Sel
+                      value={group.visibility_mode ?? 'always'}
+                      onChange={(v) =>
+                        onGroupSettings(group.id, {
+                          visibility_mode: v as 'always' | 'new_only' | 'existing_only'
                         })
-                        save(next)
                       }
-
-                      const AGG_OPTIONS: { value: SummaryAggConfig['agg']; label: string }[] = [
-                        { value: 'count', label: 'Count' },
-                        { value: 'sum', label: 'Sum' },
-                        { value: 'avg', label: 'Average' },
-                        { value: 'min', label: 'Min' },
-                        { value: 'max', label: 'Max' },
-                      ]
-
-                      return fieldNames.map(f => {
-                        const isO2M = getRelKind?.(f) === 'O2M'
-                        const entry = findEntry(f)
-                        const checked = !!entry
-                        const aggEntry = entry && typeof entry !== 'string' && 'agg' in entry ? entry : null
-                        const currentAgg = aggEntry?.agg ?? 'count'
-                        const currentAggField = aggEntry?.agg_field ?? ''
-                        const needsAggField = currentAgg !== 'count'
-
-                        return (
-                          <div key={f} className='rounded border border-slate-100 bg-slate-50/60 p-1.5'>
-                            <div className='flex items-center gap-2'>
-                              <label className='flex flex-1 items-center gap-2 text-[12px] text-slate-700 cursor-pointer min-w-0'>
-                                <input
-                                  type='checkbox'
-                                  checked={checked}
-                                  onChange={() => {
-                                    if (checked) {
-                                      save(selected.filter(e => entryKey(e) !== f))
-                                    } else {
-                                      save([...selected, isO2M ? { field: f, agg: 'count', agg_field: '' } : f])
-                                    }
-                                  }}
-                                  className='h-3.5 w-3.5 shrink-0'
-                                />
-                                <span className='font-medium truncate'>{titleCase(f)}</span>
-                              </label>
-                              {isO2M && (
-                                <span className='shrink-0 rounded bg-nvr-cyan/10 px-1 py-px text-[9px] font-medium text-nvr-cyan uppercase tracking-wide'>list</span>
-                              )}
-                            </div>
-                            {checked && isO2M && (
-                              <div className='mt-1.5 ml-5 space-y-1'>
-                                <div className='flex items-center gap-1.5'>
-                                  <span className='text-[10px] text-slate-400 shrink-0'>Show:</span>
-                                  <select
-                                    value={currentAgg}
-                                    onChange={e => {
-                                      const agg = e.target.value as SummaryAggConfig['agg']
-                                      save(selected.map(ent =>
-                                        entryKey(ent) === f
-                                          ? { field: f, agg, agg_field: agg === 'count' ? '' : currentAggField }
-                                          : ent
-                                      ))
-                                    }}
-                                    className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-                                  >
-                                    {AGG_OPTIONS.map(o => (
-                                      <option key={o.value} value={o.value}>{o.label}</option>
-                                    ))}
-                                  </select>
-                                </div>
-                                {needsAggField && (
-                                  <div className='flex items-center gap-1.5'>
-                                    <span className='text-[10px] text-slate-400 shrink-0'>of column:</span>
-                                    <div className='flex-1'>
-                                      <O2MAggFieldCombobox
-                                        relatedCollection={getRelatedCollection?.(f) ?? null}
-                                        value={currentAggField}
-                                        onChange={(v, fieldOpts) => {
-                                          save(selected.map(ent =>
-                                            entryKey(ent) === f
-                                              ? { field: f, agg: currentAgg, agg_field: v, field_options: fieldOpts }
-                                              : ent
-                                          ))
-                                        }}
-                                      />
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                            {checked && (
-                              <div className='mt-1.5 ml-5 flex items-center gap-1.5'>
-                                <span className='text-[10px] text-slate-400 shrink-0'>Label:</span>
-                                <input
-                                  type='text'
-                                  key={`label-${f}`}
-                                  defaultValue={entry ? getEntryLabel(entry) : ''}
-                                  onBlur={e => setEntryLabel(f, e.target.value)}
-                                  placeholder={titleCase(f)}
-                                  className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
-                                />
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })
-                    })()}
-                    {fieldNames.length === 0 && <p className='text-[11px] text-slate-300'>No fields assigned</p>}
+                      options={[
+                        { value: 'always', label: 'Always' },
+                        { value: 'new_only', label: 'New items only' },
+                        { value: 'existing_only', label: 'Existing items only' }
+                      ]}
+                    />
                   </div>
-                  <label className='flex items-center gap-2 text-[11px] text-slate-600 mt-2'>
+                  <label className='flex items-center gap-2 text-[12px] text-slate-600'>
                     <input
                       type='checkbox'
-                      checked={!!group.summary_hide_empty}
-                      onChange={e => onGroupSettings(group.id, { summary_hide_empty: e.target.checked })}
+                      checked={!!group.hide_when_empty}
+                      onChange={(e) =>
+                        onGroupSettings(group.id, { hide_when_empty: e.target.checked })
+                      }
                       className='h-3.5 w-3.5'
                     />
-                    Hide fields with no values
+                    Hide when all fields are empty
                   </label>
-                </div>
-                <SwapConfigEditor group={group} allFields={allFields} onGroupSettings={onGroupSettings} />
-              </PopoverContent>
-            </Popover>
-          </div>
-        )}
+                  <div>
+                    <Label className='mb-1 block text-[11px]'>Collapsed summary fields</Label>
+                    <p className='mb-1.5 text-[10px] text-slate-400'>Shown in the collapsed bar</p>
+                    <div className='space-y-1.5 max-h-[220px] overflow-y-auto'>
+                      {(() => {
+                        type SummaryAggConfig = {
+                          field: string
+                          agg: 'sum' | 'count' | 'avg' | 'min' | 'max'
+                          agg_field: string
+                          label?: string
+                        }
+                        type SummaryScalarConfig = { field: string; label?: string }
+                        type SummaryEntry = string | SummaryScalarConfig | SummaryAggConfig
+
+                        let selected: SummaryEntry[] = []
+                        try {
+                          const p = JSON.parse(group.summary_fields ?? '[]')
+                          if (Array.isArray(p)) selected = p
+                        } catch {
+                          /* noop */
+                        }
+
+                        const entryKey = (e: SummaryEntry) => (typeof e === 'string' ? e : e.field)
+                        const findEntry = (f: string): SummaryEntry | undefined =>
+                          selected.find((e) => entryKey(e) === f)
+                        const getEntryLabel = (e: SummaryEntry): string =>
+                          typeof e === 'string' ? '' : (e.label ?? '')
+
+                        const save = (next: SummaryEntry[]) =>
+                          onGroupSettings(group.id, { summary_fields: JSON.stringify(next) })
+
+                        const setEntryLabel = (f: string, label: string) => {
+                          const next = selected.map((e) => {
+                            if (entryKey(e) !== f) return e
+                            if (typeof e === 'string') return label ? { field: f, label } : f
+                            return { ...e, label: label || undefined }
+                          })
+                          save(next)
+                        }
+
+                        const AGG_OPTIONS: { value: SummaryAggConfig['agg']; label: string }[] = [
+                          { value: 'count', label: 'Count' },
+                          { value: 'sum', label: 'Sum' },
+                          { value: 'avg', label: 'Average' },
+                          { value: 'min', label: 'Min' },
+                          { value: 'max', label: 'Max' }
+                        ]
+
+                        return fieldNames.map((f) => {
+                          const isO2M = getRelKind?.(f) === 'O2M'
+                          const entry = findEntry(f)
+                          const checked = !!entry
+                          const aggEntry =
+                            entry && typeof entry !== 'string' && 'agg' in entry ? entry : null
+                          const currentAgg = aggEntry?.agg ?? 'count'
+                          const currentAggField = aggEntry?.agg_field ?? ''
+                          const needsAggField = currentAgg !== 'count'
+
+                          return (
+                            <div
+                              key={f}
+                              className='rounded border border-slate-100 bg-slate-50/60 p-1.5'
+                            >
+                              <div className='flex items-center gap-2'>
+                                <label className='flex flex-1 items-center gap-2 text-[12px] text-slate-700 cursor-pointer min-w-0'>
+                                  <input
+                                    type='checkbox'
+                                    checked={checked}
+                                    onChange={() => {
+                                      if (checked) {
+                                        save(selected.filter((e) => entryKey(e) !== f))
+                                      } else {
+                                        save([
+                                          ...selected,
+                                          isO2M ? { field: f, agg: 'count', agg_field: '' } : f
+                                        ])
+                                      }
+                                    }}
+                                    className='h-3.5 w-3.5 shrink-0'
+                                  />
+                                  <span className='font-medium truncate'>{titleCase(f)}</span>
+                                </label>
+                                {isO2M && (
+                                  <span className='shrink-0 rounded bg-nvr-cyan/10 px-1 py-px text-[9px] font-medium text-nvr-cyan uppercase tracking-wide'>
+                                    list
+                                  </span>
+                                )}
+                              </div>
+                              {checked && isO2M && (
+                                <div className='mt-1.5 ml-5 space-y-1'>
+                                  <div className='flex items-center gap-1.5'>
+                                    <span className='text-[10px] text-slate-400 shrink-0'>
+                                      Show:
+                                    </span>
+                                    <select
+                                      value={currentAgg}
+                                      onChange={(e) => {
+                                        const agg = e.target.value as SummaryAggConfig['agg']
+                                        save(
+                                          selected.map((ent) =>
+                                            entryKey(ent) === f
+                                              ? {
+                                                  field: f,
+                                                  agg,
+                                                  agg_field: agg === 'count' ? '' : currentAggField
+                                                }
+                                              : ent
+                                          )
+                                        )
+                                      }}
+                                      className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+                                    >
+                                      {AGG_OPTIONS.map((o) => (
+                                        <option key={o.value} value={o.value}>
+                                          {o.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  {needsAggField && (
+                                    <div className='flex items-center gap-1.5'>
+                                      <span className='text-[10px] text-slate-400 shrink-0'>
+                                        of column:
+                                      </span>
+                                      <div className='flex-1'>
+                                        <O2MAggFieldCombobox
+                                          relatedCollection={getRelatedCollection?.(f) ?? null}
+                                          value={currentAggField}
+                                          onChange={(v, fieldOpts) => {
+                                            save(
+                                              selected.map((ent) =>
+                                                entryKey(ent) === f
+                                                  ? {
+                                                      field: f,
+                                                      agg: currentAgg,
+                                                      agg_field: v,
+                                                      field_options: fieldOpts
+                                                    }
+                                                  : ent
+                                              )
+                                            )
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {checked && (
+                                <div className='mt-1.5 ml-5 flex items-center gap-1.5'>
+                                  <span className='text-[10px] text-slate-400 shrink-0'>
+                                    Label:
+                                  </span>
+                                  <input
+                                    type='text'
+                                    key={`label-${f}`}
+                                    defaultValue={entry ? getEntryLabel(entry) : ''}
+                                    onBlur={(e) => setEntryLabel(f, e.target.value)}
+                                    placeholder={titleCase(f)}
+                                    className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })
+                      })()}
+                      {fieldNames.length === 0 && (
+                        <p className='text-[11px] text-slate-300'>No fields assigned</p>
+                      )}
+                    </div>
+                    <label className='flex items-center gap-2 text-[11px] text-slate-600 mt-2'>
+                      <input
+                        type='checkbox'
+                        checked={!!group.summary_hide_empty}
+                        onChange={(e) =>
+                          onGroupSettings(group.id, { summary_hide_empty: e.target.checked })
+                        }
+                        className='h-3.5 w-3.5'
+                      />
+                      Hide fields with no values
+                    </label>
+                  </div>
+                  <SwapConfigEditor
+                    group={group}
+                    allFields={allFields}
+                    onGroupSettings={onGroupSettings}
+                  />
+                </PopoverContent>
+              </Popover>
+            </div>
+          )}
         <button
           type='button'
           title='Click to cycle section / tab / record info / container'
@@ -8218,14 +10368,26 @@ function SortableGroupCard({
         {(group.type === 'section' || group.type === 'metadata') && (
           <button
             type='button'
-            title={group.is_collapsed ? 'Default: collapsed — click to start expanded' : 'Default: expanded — click to start collapsed'}
+            title={
+              group.is_collapsed
+                ? 'Default: collapsed — click to start expanded'
+                : 'Default: expanded — click to start collapsed'
+            }
             onClick={() => onToggleCollapsed?.(group.id)}
             className='rounded p-1 text-slate-300 hover:text-slate-500'
           >
-            {group.is_collapsed ? <ChevronRight className='h-3.5 w-3.5' /> : <ChevronDown className='h-3.5 w-3.5' />}
+            {group.is_collapsed ? (
+              <ChevronRight className='h-3.5 w-3.5' />
+            ) : (
+              <ChevronDown className='h-3.5 w-3.5' />
+            )}
           </button>
         )}
-        <button type='button' onClick={onDelete} className='rounded p-1 text-slate-300 hover:text-red-500'>
+        <button
+          type='button'
+          onClick={onDelete}
+          className='rounded p-1 text-slate-300 hover:text-red-500'
+        >
           <Trash2 className='h-3.5 w-3.5' />
         </button>
       </div>
@@ -8233,127 +10395,171 @@ function SortableGroupCard({
       {/* Field drop zone — hidden for container groups (they hold tab children, not fields directly) */}
       {group.type === 'container' ? (
         <div className='flex min-h-[44px] items-center justify-center px-3 py-2'>
-          <p className='text-[11px] text-slate-300'>Assign tab groups to this container using the selector on each tab group</p>
+          <p className='text-[11px] text-slate-300'>
+            Assign tab groups to this container using the selector on each tab group
+          </p>
         </div>
       ) : null}
-      {group.type !== 'container' && <DroppableFieldZone containerId={group.key}>
-      <SortableContext items={fieldNames.map(f => toSortableId(group.key, f))} strategy={rectSortingStrategy}>
-        <div
-          className={cn(
-            'min-h-[52px] p-3',
-            fieldNames.length === 0
-              ? 'flex items-center justify-center'
-              : 'grid grid-cols-12 gap-2 auto-rows-auto'
-          )}
-        >
-          {fieldNames.length === 0 ? (
-            <p className='text-[11px] text-slate-300'>Drop fields here</p>
-          ) : (
-            fieldNames.map(f => {
-              if (f === OWNERS_FIELD) {
-                return (
-                  <SortableFieldChip
-                    key={toSortableId(group.key, f)}
-                    sortableId={toSortableId(group.key, f)}
-                    fieldName={f}
-                    displayName='Owners'
-                    fieldType='owners'
-                    colSpan={getColSpan(f)}
-                    onColSpan={(span) => onColSpan(f, span)}
-                    onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
-                    inGrid
-                  />
-                )
-              }
-              if (f === PDF_FIELD) {
-                return (
-                  <SortableFieldChip
-                    key={toSortableId(group.key, f)}
-                    sortableId={toSortableId(group.key, f)}
-                    fieldName={f}
-                    displayName='PDF Button'
-                    fieldType='pdf'
-                    colSpan={getColSpan(f)}
-                    onColSpan={(span) => onColSpan(f, span)}
-                    onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
-                    extraControls={getExtraControls?.(f)}
-                    inGrid
-                  />
-                )
-              }
-              if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
-                const meta = widgetSlotMeta?.[f]
-                return (
-                  <SortableFieldChip
-                    key={toSortableId(group.key, f)}
-                    sortableId={toSortableId(group.key, f)}
-                    fieldName={f}
-                    displayName={meta?.label_override || meta?.name || 'Widget'}
-                    fieldType='widget'
-                    colSpan={getColSpan(f)}
-                    onColSpan={(span) => onColSpan(f, span)}
-                    onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
-                    extraControls={getExtraControls?.(f)}
-                    inGrid
-                  />
-                )
-              }
-              const ft = allFields.find(af => af.field === f)
-              const settings = getFieldSettings?.(f)
-              const kind = getRelKind?.(f)
-              return (
-                <SortableFieldChip
-                  key={toSortableId(group.key, f)}
-                  sortableId={toSortableId(group.key, f)}
-                  fieldName={f}
-                  displayName={settings?.label || titleCase(f)}
-                  fieldType={kind ?? getFriendlyType?.(ft?.type, f)}
-                  abstractType={kind ? kind.toLowerCase() : ft?.type}
-                  isM2O={kind === 'M2O'}
-                  isM2M={kind === 'M2M'}
-                  colSpan={getColSpan(f)}
-                  onColSpan={span => onColSpan(f, span)}
-                  fieldSettings={settings}
-                  onSettings={onFieldSettings ? patch => onFieldSettings(f, patch) : undefined}
-                  m2oFields={kind === 'M2O' || kind === 'M2M' || kind === 'O2M' ? getM2OFields?.() : undefined}
-                  dependencyConfig={(kind === 'M2O' || kind === 'M2M') ? getDependencyConfig?.(f) : undefined}
-                  relatedCollection={(kind === 'M2O' || kind === 'M2M' || kind === 'O2M') ? getRelatedCollection?.(f) : undefined}
-                  onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
-                  rowRevisions={getRowRevisions?.(f)}
-                  onRowRevisionsChange={onRowRevisions ? v => onRowRevisions(f, v) : undefined}
-                  allowRevisionRestore={getAllowRevisionRestore?.(f) ?? true}
-                  onAllowRevisionRestoreChange={onAllowRevisionRestore ? v => onAllowRevisionRestore(f, v) : undefined}
-                  lockConditions={getLockConditions?.(f) ?? []}
-                  onLockConditionsChange={onLockConditions ? v => onLockConditions(f, v) : undefined}
-                  extraControls={getExtraControls?.(f, { isM2O: kind === 'M2O', relatedCollection: getRelatedCollection?.(f) })}
-                  inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
-                  onInlineDisplayChange={kind === 'M2O' && onInlineDisplayChange ? (config) => onInlineDisplayChange(f, config) : undefined}
-                  collection={collection}
-                  prefillFromParent={getPrefillFromParent?.(f)}
-                  onPrefillFromParentChange={onPrefillFromParent ? v => onPrefillFromParent(f, v) : undefined}
-                  inGrid
-                />
-              )
-            })
-          )}
-        </div>
-      </SortableContext>
-      </DroppableFieldZone>}
+      {group.type !== 'container' && (
+        <DroppableFieldZone containerId={group.key}>
+          <SortableContext
+            items={fieldNames.map((f) => toSortableId(group.key, f))}
+            strategy={rectSortingStrategy}
+          >
+            <div
+              className={cn(
+                'min-h-[52px] p-3',
+                fieldNames.length === 0
+                  ? 'flex items-center justify-center'
+                  : 'grid grid-cols-12 gap-2 auto-rows-auto'
+              )}
+            >
+              {fieldNames.length === 0 ? (
+                <p className='text-[11px] text-slate-300'>Drop fields here</p>
+              ) : (
+                fieldNames.map((f) => {
+                  if (f === OWNERS_FIELD) {
+                    return (
+                      <SortableFieldChip
+                        key={toSortableId(group.key, f)}
+                        sortableId={toSortableId(group.key, f)}
+                        fieldName={f}
+                        displayName='Owners'
+                        fieldType='owners'
+                        colSpan={getColSpan(f)}
+                        onColSpan={(span) => onColSpan(f, span)}
+                        onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
+                        inGrid
+                      />
+                    )
+                  }
+                  if (f === PDF_FIELD) {
+                    return (
+                      <SortableFieldChip
+                        key={toSortableId(group.key, f)}
+                        sortableId={toSortableId(group.key, f)}
+                        fieldName={f}
+                        displayName='PDF Button'
+                        fieldType='pdf'
+                        colSpan={getColSpan(f)}
+                        onColSpan={(span) => onColSpan(f, span)}
+                        onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
+                        extraControls={getExtraControls?.(f)}
+                        inGrid
+                      />
+                    )
+                  }
+                  if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
+                    const meta = widgetSlotMeta?.[f]
+                    return (
+                      <SortableFieldChip
+                        key={toSortableId(group.key, f)}
+                        sortableId={toSortableId(group.key, f)}
+                        fieldName={f}
+                        displayName={meta?.label_override || meta?.name || 'Widget'}
+                        fieldType='widget'
+                        colSpan={getColSpan(f)}
+                        onColSpan={(span) => onColSpan(f, span)}
+                        onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
+                        extraControls={getExtraControls?.(f)}
+                        inGrid
+                      />
+                    )
+                  }
+                  const ft = allFields.find((af) => af.field === f)
+                  const settings = getFieldSettings?.(f)
+                  const kind = getRelKind?.(f)
+                  return (
+                    <SortableFieldChip
+                      key={toSortableId(group.key, f)}
+                      sortableId={toSortableId(group.key, f)}
+                      fieldName={f}
+                      displayName={settings?.label || titleCase(f)}
+                      fieldType={kind ?? getFriendlyType?.(ft?.type, f)}
+                      abstractType={kind ? kind.toLowerCase() : ft?.type}
+                      isM2O={kind === 'M2O'}
+                      isM2M={kind === 'M2M'}
+                      colSpan={getColSpan(f)}
+                      onColSpan={(span) => onColSpan(f, span)}
+                      fieldSettings={settings}
+                      onSettings={
+                        onFieldSettings ? (patch) => onFieldSettings(f, patch) : undefined
+                      }
+                      m2oFields={
+                        kind === 'M2O' || kind === 'M2M' || kind === 'O2M'
+                          ? getM2OFields?.()
+                          : undefined
+                      }
+                      dependencyConfig={
+                        kind === 'M2O' || kind === 'M2M' ? getDependencyConfig?.(f) : undefined
+                      }
+                      relatedCollection={
+                        kind === 'M2O' || kind === 'M2M' || kind === 'O2M'
+                          ? getRelatedCollection?.(f)
+                          : undefined
+                      }
+                      onUnassign={onUnassign ? () => onUnassign(f, group.key) : undefined}
+                      rowRevisions={getRowRevisions?.(f)}
+                      onRowRevisionsChange={
+                        onRowRevisions ? (v) => onRowRevisions(f, v) : undefined
+                      }
+                      allowRevisionRestore={getAllowRevisionRestore?.(f) ?? true}
+                      onAllowRevisionRestoreChange={
+                        onAllowRevisionRestore ? (v) => onAllowRevisionRestore(f, v) : undefined
+                      }
+                      lockConditions={getLockConditions?.(f) ?? []}
+                      onLockConditionsChange={
+                        onLockConditions ? (v) => onLockConditions(f, v) : undefined
+                      }
+                      extraControls={getExtraControls?.(f, {
+                        isM2O: kind === 'M2O',
+                        relatedCollection: getRelatedCollection?.(f)
+                      })}
+                      inlineDisplayConfig={kind === 'M2O' ? getInlineDisplay?.(f) : undefined}
+                      onInlineDisplayChange={
+                        kind === 'M2O' && onInlineDisplayChange
+                          ? (config) => onInlineDisplayChange(f, config)
+                          : undefined
+                      }
+                      collection={collection}
+                      prefillFromParent={getPrefillFromParent?.(f)}
+                      onPrefillFromParentChange={
+                        onPrefillFromParent ? (v) => onPrefillFromParent(f, v) : undefined
+                      }
+                      inGrid
+                    />
+                  )
+                })
+              )}
+            </div>
+          </SortableContext>
+        </DroppableFieldZone>
+      )}
     </div>
   )
 }
 
 // ── DroppableFieldZone ────────────────────────────────────────────────────────
 
-function DroppableFieldZone({ containerId, children, className }: { containerId: string; children: React.ReactNode; className?: string }) {
+function DroppableFieldZone({
+  containerId,
+  children,
+  className
+}: {
+  containerId: string
+  children: React.ReactNode
+  className?: string
+}) {
   const { setNodeRef, isOver } = useDroppable({ id: `drop:${containerId}` })
   return (
-    <div ref={setNodeRef} className={cn('transition-colors', isOver && 'bg-nvr-cyan/[0.04]', className)}>
+    <div
+      ref={setNodeRef}
+      className={cn('transition-colors', isOver && 'bg-nvr-cyan/[0.04]', className)}
+    >
       {children}
     </div>
   )
 }
-
 
 // ─── Layouts tab ─────────────────────────────────────────────────────────────
 
@@ -8400,7 +10606,7 @@ interface CollectionLayout {
 function WorkflowCombobox({
   value,
   options,
-  onChange,
+  onChange
 }: {
   value: string | null
   options: Array<{ id: string; name: string }>
@@ -8415,7 +10621,9 @@ function WorkflowCombobox({
           type='button'
           className='flex max-w-[140px] items-center justify-between gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
         >
-          <span className='truncate text-slate-700 dark:text-slate-200'>{selected?.name ?? 'None'}</span>
+          <span className='truncate text-slate-700 dark:text-slate-200'>
+            {selected?.name ?? 'None'}
+          </span>
           <ChevronsUpDown className='h-3 w-3 shrink-0 text-slate-400' />
         </button>
       </PopoverTrigger>
@@ -8425,20 +10633,30 @@ function WorkflowCombobox({
           <CommandList>
             <CommandItem
               value='__none__'
-              onSelect={() => { onChange(null); setOpen(false) }}
+              onSelect={() => {
+                onChange(null)
+                setOpen(false)
+              }}
               className='text-[11px]'
             >
-              <Check className={cn('mr-1.5 h-3 w-3', value == null ? 'opacity-100' : 'opacity-0')} />
+              <Check
+                className={cn('mr-1.5 h-3 w-3', value == null ? 'opacity-100' : 'opacity-0')}
+              />
               None
             </CommandItem>
             {options.map((o) => (
               <CommandItem
                 key={o.id}
                 value={o.name}
-                onSelect={() => { onChange(o.id); setOpen(false) }}
+                onSelect={() => {
+                  onChange(o.id)
+                  setOpen(false)
+                }}
                 className='text-[11px]'
               >
-                <Check className={cn('mr-1.5 h-3 w-3', value === o.id ? 'opacity-100' : 'opacity-0')} />
+                <Check
+                  className={cn('mr-1.5 h-3 w-3', value === o.id ? 'opacity-100' : 'opacity-0')}
+                />
                 {o.name}
               </CommandItem>
             ))}
@@ -8474,12 +10692,21 @@ function LayoutVisibilitySection({
       <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Visibility</span>
       <div className='flex flex-wrap items-center gap-1.5'>
         {roleIds.length === 0 ? (
-          <span className='text-[11px] text-slate-400 dark:text-slate-500'>Visible to everyone</span>
+          <span className='text-[11px] text-slate-400 dark:text-slate-500'>
+            Visible to everyone
+          </span>
         ) : (
           roleIds.map((id) => (
-            <span key={id} className='inline-flex items-center gap-1 rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan'>
+            <span
+              key={id}
+              className='inline-flex items-center gap-1 rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan'
+            >
               {roleName(id)}
-              <button type='button' onClick={() => removeRole(id)} className='hover:text-nvr-navy dark:hover:text-white'>
+              <button
+                type='button'
+                onClick={() => removeRole(id)}
+                className='hover:text-nvr-navy dark:hover:text-white'
+              >
                 <X className='h-2.5 w-2.5' />
               </button>
             </span>
@@ -8500,10 +10727,17 @@ function LayoutVisibilitySection({
             <Command>
               <CommandInput placeholder='Search roles…' className='h-8 text-[12px]' />
               <CommandList>
-                <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>No roles</CommandEmpty>
+                <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+                  No roles
+                </CommandEmpty>
                 <CommandGroup>
                   {available.map((r) => (
-                    <CommandItem key={r.id} value={r.name} onSelect={() => addRole(r.id)} className='text-[12px]'>
+                    <CommandItem
+                      key={r.id}
+                      value={r.name}
+                      onSelect={() => addRole(r.id)}
+                      className='text-[12px]'
+                    >
                       {r.name}
                     </CommandItem>
                   ))}
@@ -8522,7 +10756,13 @@ function LayoutVisibilitySection({
   )
 }
 
-function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Array<{ name: string; data_type: string }> }) {
+function LayoutsTab({
+  tableName,
+  dbColumns
+}: {
+  tableName: string
+  dbColumns: Array<{ name: string; data_type: string }>
+}) {
   const qc = useQueryClient()
   const invalidateLayouts = useCallback(
     () => qc.invalidateQueries({ queryKey: ['collection-layouts', tableName] }),
@@ -8532,7 +10772,10 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   const { data: layouts = [], isSuccess: layoutsLoaded } = useQuery<CollectionLayout[]>({
     queryKey: ['collection-layouts', tableName],
     queryFn: () =>
-      api.get<{ data: CollectionLayout[] }>('/collection-layouts', { params: { collection: tableName } })
+      api
+        .get<{ data: CollectionLayout[] }>('/collection-layouts', {
+          params: { collection: tableName }
+        })
         .then((r) => r.data.data ?? []),
     enabled: !!tableName
   })
@@ -8549,14 +10792,18 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
 
   const { data: addendumLayouts = [] } = useQuery<Array<{ id: number; name: string }>>({
     queryKey: ['addendum-layouts-list', tableName],
-    queryFn: () => api.get('/collection-layouts', { params: { collection: tableName, layout_type: 'addendum' } }).then((r) => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get('/collection-layouts', { params: { collection: tableName, layout_type: 'addendum' } })
+        .then((r) => r.data.data ?? []),
     enabled: !!tableName
   })
 
   // Auto-seed "Default" layout for collections that have none yet
   useEffect(() => {
     if (layoutsLoaded && layouts.length === 0 && tableName) {
-      api.post('/collection-layouts', { collection: tableName, name: 'Default', slug: 'default' })
+      api
+        .post('/collection-layouts', { collection: tableName, name: 'Default', slug: 'default' })
         .then(() => qc.invalidateQueries({ queryKey: ['collection-layouts', tableName] }))
     }
   }, [layoutsLoaded, layouts.length, tableName, qc])
@@ -8572,23 +10819,37 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
 
   function nameToSlug(name: string) {
-    return name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+    return name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_|_$/g, '')
   }
 
   const createMut = useMutation({
-    mutationFn: (name: string) => api.post('/collection-layouts', { collection: tableName, name, slug: nameToSlug(name) }),
-    onSuccess: () => { invalidateLayouts(); setAdding(false); setNewName('') },
+    mutationFn: (name: string) =>
+      api.post('/collection-layouts', { collection: tableName, name, slug: nameToSlug(name) }),
+    onSuccess: () => {
+      invalidateLayouts()
+      setAdding(false)
+      setNewName('')
+    },
     onError: () => toast.error('Failed to create layout')
   })
 
   const activateMut = useMutation({
     mutationFn: (id: number) => api.post(`/collection-layouts/${id}/activate`),
-    onSuccess: () => { invalidateLayouts(); toast.success('Layout activated') }
+    onSuccess: () => {
+      invalidateLayouts()
+      toast.success('Layout activated')
+    }
   })
 
   const cloneMut = useMutation({
     mutationFn: ({ id, name }: { id: number; name: string }) =>
-      api.post<{ data: CollectionLayout }>(`/collection-layouts/${id}/clone`, { name, slug: nameToSlug(name) }),
+      api.post<{ data: CollectionLayout }>(`/collection-layouts/${id}/clone`, {
+        name,
+        slug: nameToSlug(name)
+      }),
     onSuccess: (res) => {
       invalidateLayouts()
       setSelectedId(res.data.data.id)
@@ -8598,27 +10859,63 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => api.delete(`/collection-layouts/${id}`),
-    onSuccess: () => { invalidateLayouts(); setSelectedId(null) },
+    onSuccess: () => {
+      invalidateLayouts()
+      setSelectedId(null)
+    },
     onError: () => toast.error('Cannot delete the only layout')
   })
 
   const renameMut = useMutation({
     mutationFn: ({ id, name }: { id: number; name: string }) =>
       api.patch(`/collection-layouts/${id}`, { name }),
-    onSuccess: () => { invalidateLayouts(); setEditingId(null) }
+    onSuccess: () => {
+      invalidateLayouts()
+      setEditingId(null)
+    }
   })
 
   const patchLayoutMut = useMutation({
-    mutationFn: (patch: { id: number } & Partial<Pick<CollectionLayout,
-      'slug' | 'disable_comments' | 'disable_tasks' | 'disable_revisions' |
-      'disable_clone' | 'disable_delete' | 'accordion_mode' | 'tab_mode' |
-      'validate_before_next' | 'summary_enabled' | 'summary_show_all' |
-      'summary_hide_empty' | 'ai_enabled' | 'conditions' | 'allow_clone' |
-      'allow_schedule' | 'allow_disable_pickers' | 'layout_type' | 'row_order_field' |
-      'pdf_theme' | 'pdf_template_id' | 'pdf_cover_enabled' | 'pdf_cover_title_field' |
-      'pdf_cover_subtitle' | 'pdf_show_logo' | 'pdf_page_size' | 'pdf_orientation' | 'pdf_button_label' | 'is_active' |
-      'addendum_layout_id' | 'workflow_template_id' | 'single_active_addendum' | 'addendum_default_view'
-    >>) => {
+    mutationFn: (
+      patch: { id: number } & Partial<
+        Pick<
+          CollectionLayout,
+          | 'slug'
+          | 'disable_comments'
+          | 'disable_tasks'
+          | 'disable_revisions'
+          | 'disable_clone'
+          | 'disable_delete'
+          | 'accordion_mode'
+          | 'tab_mode'
+          | 'validate_before_next'
+          | 'summary_enabled'
+          | 'summary_show_all'
+          | 'summary_hide_empty'
+          | 'ai_enabled'
+          | 'conditions'
+          | 'allow_clone'
+          | 'allow_schedule'
+          | 'allow_disable_pickers'
+          | 'layout_type'
+          | 'row_order_field'
+          | 'pdf_theme'
+          | 'pdf_template_id'
+          | 'pdf_cover_enabled'
+          | 'pdf_cover_title_field'
+          | 'pdf_cover_subtitle'
+          | 'pdf_show_logo'
+          | 'pdf_page_size'
+          | 'pdf_orientation'
+          | 'pdf_button_label'
+          | 'is_active'
+          | 'addendum_layout_id'
+          | 'workflow_template_id'
+          | 'single_active_addendum'
+          | 'addendum_default_view'
+        >
+      >
+    ) => {
       const { id, ...rest } = patch
       return api.patch(`/collection-layouts/${id}`, rest)
     },
@@ -8640,7 +10937,9 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
     <div className='flex min-h-0 gap-4'>
       {/* Left sidebar */}
       <div className='flex w-[140px] shrink-0 flex-col gap-0.5 border-r border-slate-200 pr-3 dark:border-border'>
-        <p className='mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400'>Layouts</p>
+        <p className='mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
+          Layouts
+        </p>
         {layouts.map((l) => (
           <div key={l.id} className='group relative'>
             {editingId === l.id ? (
@@ -8667,29 +10966,53 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                     : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
                 )}
               >
-                <button type='button' onClick={() => setSelectedId(l.id)} className='flex min-w-0 flex-1 items-center gap-1.5'>
+                <button
+                  type='button'
+                  onClick={() => setSelectedId(l.id)}
+                  className='flex min-w-0 flex-1 items-center gap-1.5'
+                >
                   {l.is_active ? (
-                    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', l.layout_type === 'file' ? 'bg-amber-400' : l.layout_type === 'addendum' ? 'bg-violet-400' : l.layout_type === 'detail' ? 'bg-emerald-400' : 'bg-nvr-cyan')} />
+                    <span
+                      className={cn(
+                        'h-1.5 w-1.5 shrink-0 rounded-full',
+                        l.layout_type === 'file'
+                          ? 'bg-amber-400'
+                          : l.layout_type === 'addendum'
+                            ? 'bg-violet-400'
+                            : l.layout_type === 'detail'
+                              ? 'bg-emerald-400'
+                              : 'bg-nvr-cyan'
+                      )}
+                    />
                   ) : (
                     <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-transparent' />
                   )}
                   <span className='truncate'>{l.name}</span>
                   {l.layout_type && l.layout_type !== 'grouped' && (
-                    <span className={cn(
-                      'shrink-0 rounded px-1 py-px text-[9px] font-medium uppercase tracking-wide',
-                      l.layout_type === 'addendum' ? 'bg-violet-100 text-violet-600 dark:bg-violet-900/40 dark:text-violet-400'
-                      : l.layout_type === 'file' ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400'
-                      : l.layout_type === 'table' ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400'
-                      : l.layout_type === 'detail' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
-                      : ''
-                    )}>
+                    <span
+                      className={cn(
+                        'shrink-0 rounded px-1 py-px text-[9px] font-medium uppercase tracking-wide',
+                        l.layout_type === 'addendum'
+                          ? 'bg-violet-100 text-violet-600 dark:bg-violet-900/40 dark:text-violet-400'
+                          : l.layout_type === 'file'
+                            ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400'
+                            : l.layout_type === 'table'
+                              ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400'
+                              : l.layout_type === 'detail'
+                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
+                                : ''
+                      )}
+                    >
                       {l.layout_type === 'addendum' ? 'addn' : l.layout_type}
                     </span>
                   )}
                 </button>
                 <button
                   type='button'
-                  onClick={() => { setEditingId(l.id); setEditingName(l.name) }}
+                  onClick={() => {
+                    setEditingId(l.id)
+                    setEditingName(l.name)
+                  }}
                   className='shrink-0 opacity-0 transition-opacity group-hover:opacity-50 hover:!opacity-100'
                 >
                   <Pencil className='h-3 w-3' />
@@ -8710,7 +11033,10 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
               autoFocus
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              onBlur={() => { setAdding(false); setNewName('') }}
+              onBlur={() => {
+                setAdding(false)
+                setNewName('')
+              }}
               placeholder='Layout name'
               className='w-full rounded border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-nvr-cyan dark:border-border'
             />
@@ -8730,11 +11056,15 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
       <div className='min-h-0 flex-1'>
         {selected && (
           <div className='mb-3 flex items-center gap-2'>
-            <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>{selected.name}</span>
+            <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+              {selected.name}
+            </span>
             {selected.layout_type === 'file' ? (
               <button
                 type='button'
-                onClick={() => patchLayoutMut.mutate({ id: selected.id, is_active: !selected.is_active })}
+                onClick={() =>
+                  patchLayoutMut.mutate({ id: selected.id, is_active: !selected.is_active })
+                }
                 className={cn(
                   'rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
                   selected.is_active
@@ -8745,7 +11075,9 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                 {selected.is_active ? 'PDF Export Active' : 'Enable PDF Export'}
               </button>
             ) : selected.is_active ? (
-              <span className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan'>Default Layout</span>
+              <span className='rounded bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-cyan'>
+                Default Layout
+              </span>
             ) : (
               <button
                 type='button'
@@ -8758,7 +11090,9 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
             <div className='ml-auto flex items-center gap-1'>
               <button
                 type='button'
-                onClick={() => cloneMut.mutate({ id: selected.id, name: `${selected.name} (copy)` })}
+                onClick={() =>
+                  cloneMut.mutate({ id: selected.id, name: `${selected.name} (copy)` })
+                }
                 className='rounded px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
               >
                 Clone
@@ -8768,7 +11102,10 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                   <span className='text-[10px] text-slate-500'>Delete?</span>
                   <button
                     type='button'
-                    onClick={() => { deleteMut.mutate(selected.id); setConfirmDeleteId(null) }}
+                    onClick={() => {
+                      deleteMut.mutate(selected.id)
+                      setConfirmDeleteId(null)
+                    }}
                     className='rounded px-2 py-0.5 text-[10px] text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20'
                   >
                     Yes
@@ -8798,13 +11135,23 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
             {/* Collapsed summary row */}
             <button
               type='button'
-              onClick={() => setSettingsExpanded(v => !v)}
+              onClick={() => setSettingsExpanded((v) => !v)}
               className='flex w-full items-center gap-2 px-3 py-2 text-left'
             >
-              <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>Settings</span>
+              <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+                Settings
+              </span>
               <div className='flex flex-1 flex-wrap items-center gap-1.5'>
-                {!!selected.summary_enabled && <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>summary</span>}
-                {!!selected.ai_enabled && <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>AI</span>}
+                {!!selected.summary_enabled && (
+                  <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>
+                    summary
+                  </span>
+                )}
+                {!!selected.ai_enabled && (
+                  <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>
+                    AI
+                  </span>
+                )}
                 {selected.layout_type === 'file' && (
                   <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>
                     PDF · {selected.pdf_theme ?? 'classic'}
@@ -8812,18 +11159,26 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                 )}
                 {(selected.conditions?.role_ids?.length ?? 0) > 0 && (
                   <span className='rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-muted dark:text-slate-300'>
-                    {selected.conditions?.role_ids?.length} {(selected.conditions?.role_ids?.length ?? 0) === 1 ? 'role' : 'roles'}
+                    {selected.conditions?.role_ids?.length}{' '}
+                    {(selected.conditions?.role_ids?.length ?? 0) === 1 ? 'role' : 'roles'}
                   </span>
                 )}
               </div>
-              <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150', settingsExpanded && 'rotate-180')} />
+              <ChevronDown
+                className={cn(
+                  'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150',
+                  settingsExpanded && 'rotate-180'
+                )}
+              />
             </button>
 
             {/* Expanded edit panel */}
             {settingsExpanded && (
               <div className='space-y-2 border-t border-slate-200 px-3 py-3 dark:border-border'>
                 <div className='space-y-1'>
-                  <label className='block text-[11px] font-medium text-slate-600 dark:text-slate-300'>Machine name (slug)</label>
+                  <label className='block text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                    Machine name (slug)
+                  </label>
                   <div className='flex items-center gap-1.5'>
                     <input
                       value={slugDraft}
@@ -8851,7 +11206,10 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                       <button
                         type='button'
                         onClick={() => {
-                          const gen = selected.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+                          const gen = selected.name
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]+/g, '_')
+                            .replace(/^_|_$/g, '')
                           setSlugDraft(gen)
                           patchLayoutMut.mutate({ id: selected.id, slug: gen })
                         }}
@@ -8861,10 +11219,14 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                       </button>
                     )}
                   </div>
-                  <p className='text-[10px] text-slate-400'>Used to reference this layout in code. Only a–z, 0–9, and _.</p>
+                  <p className='text-[10px] text-slate-400'>
+                    Used to reference this layout in code. Only a–z, 0–9, and _.
+                  </p>
                 </div>
                 <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
-                  <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Layout type</span>
+                  <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                    Layout type
+                  </span>
                   <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
                     {(['grouped', 'table', 'file', 'addendum', 'detail'] as const).map((lt) => (
                       <button
@@ -8878,7 +11240,11 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                             : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
                         )}
                       >
-                        {lt === 'addendum' ? 'Addendum Form' : lt === 'detail' ? 'Detail (drill-down)' : lt}
+                        {lt === 'addendum'
+                          ? 'Addendum Form'
+                          : lt === 'detail'
+                            ? 'Detail (drill-down)'
+                            : lt}
                       </button>
                     ))}
                   </div>
@@ -8886,333 +11252,620 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
                 {selected.layout_type === 'addendum' && (
                   <div className='space-y-2'>
                     <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
-                      <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Workflow</span>
+                      <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                        Workflow
+                      </span>
                       <WorkflowCombobox
                         value={selected.workflow_template_id ?? null}
                         options={workflowTemplates}
-                        onChange={(val) => patchLayoutMut.mutate({ id: selected.id, workflow_template_id: val })}
+                        onChange={(val) =>
+                          patchLayoutMut.mutate({ id: selected.id, workflow_template_id: val })
+                        }
                       />
                     </div>
                     <label className='flex cursor-pointer items-center justify-between'>
                       <div>
-                        <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>One at a time</span>
-                        <p className='text-[10px] text-slate-400 dark:text-slate-500'>Block new addenda while one is active</p>
+                        <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                          One at a time
+                        </span>
+                        <p className='text-[10px] text-slate-400 dark:text-slate-500'>
+                          Block new addendum while one is active
+                        </p>
                       </div>
                       <input
                         type='checkbox'
                         checked={!!selected.single_active_addendum}
-                        onChange={(e) => patchLayoutMut.mutate({ id: selected.id, single_active_addendum: e.target.checked })}
+                        onChange={(e) =>
+                          patchLayoutMut.mutate({
+                            id: selected.id,
+                            single_active_addendum: e.target.checked
+                          })
+                        }
                         className='h-3.5 w-3.5 rounded accent-nvr-cyan'
                       />
                     </label>
                   </div>
                 )}
-                {(selected.layout_type == null || selected.layout_type === 'grouped') && (<>
-                  <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
-                    <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Addendum form</span>
-                    <select
-                      value={selected.addendum_layout_id ?? ''}
-                      onChange={(e) => patchLayoutMut.mutate({ id: selected.id, addendum_layout_id: e.target.value ? Number(e.target.value) : null })}
-                      className='max-w-[140px] rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
-                    >
-                      <option value=''>Collection default</option>
-                      {addendumLayouts.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                    </select>
-                  </div>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <div>
-                      <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Default to addendum view</span>
-                      <p className='text-[10px] text-slate-400 dark:text-slate-500'>Show active addendum changes first on item open</p>
-                    </div>
-                    <input
-                      type='checkbox'
-                      checked={!!selected.addendum_default_view}
-                      onChange={(e) => patchLayoutMut.mutate({ id: selected.id, addendum_default_view: e.target.checked })}
-                      className='h-3.5 w-3.5 rounded accent-nvr-cyan'
-                    />
-                  </label>
-                </>)}
-                {selected.layout_type !== 'addendum' && (<>
-                {(selected.layout_type ?? 'grouped') !== 'table' && (<>
-                  <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
-                    <label className='flex cursor-pointer items-center justify-between'>
-                      <span className='text-[11px] text-slate-500 dark:text-slate-400'>Summary panel</span>
-                      <input type='checkbox' checked={!!selected.summary_enabled} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_enabled: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                    </label>
-                    {!!selected.summary_enabled && (
-                      <label className='flex cursor-pointer items-center justify-between'>
-                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Show all fields in summary</span>
-                        <input type='checkbox' checked={!!selected.summary_show_all} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_show_all: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                      </label>
-                    )}
-                    {!!selected.summary_enabled && (
-                      <label className='flex cursor-pointer items-center justify-between'>
-                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide fields with no values</span>
-                        <input type='checkbox' checked={!!selected.summary_hide_empty} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, summary_hide_empty: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                      </label>
-                    )}
-                  </div>
-                </>)}
-                {(selected.layout_type ?? 'grouped') === 'table' && (
-                  <div className='border-t border-slate-200 dark:border-border pt-2 space-y-2'>
-                    <label className='flex cursor-pointer items-center justify-between'>
-                      <span className='text-[11px] text-slate-500 dark:text-slate-400'>Allow row reordering</span>
-                      <input type='checkbox'
-                        checked={!!selected.row_order_field}
-                        onChange={(e) => patchLayoutMut.mutate({ id: selected.id, row_order_field: e.target.checked ? (dbColumns.find(c => NUMERIC_DATA_TYPES.has(c.data_type.toLowerCase()))?.name ?? null) : null })}
-                        className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                    </label>
-                    {!!selected.row_order_field && (
-                      <div>
-                        <p className='text-[10px] text-slate-400 mb-1'>Order field</p>
-                        <select
-                          value={selected.row_order_field ?? ''}
-                          onChange={(e) => patchLayoutMut.mutate({ id: selected.id, row_order_field: e.target.value || null })}
-                          className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-700 dark:border-border dark:bg-background dark:text-slate-300'>
-                          <option value=''>— select field —</option>
-                          {dbColumns.filter(c => NUMERIC_DATA_TYPES.has(c.data_type.toLowerCase())).map(c => (
-                            <option key={c.name} value={c.name}>{c.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {(selected.layout_type ?? 'grouped') === 'file' && (
-                  <div className='border-t border-slate-200 dark:border-border pt-2 space-y-3'>
-                    <p className='text-[10px] font-semibold text-slate-400 dark:text-slate-500 mb-1'>PDF Settings</p>
-
-                    {/* Theme */}
-                    <div className='space-y-1'>
-                      <label className='block text-[11px] font-medium text-slate-600 dark:text-slate-300'>Theme</label>
-                      <div className='flex gap-1.5'>
-                        {(['classic', 'minimal', 'executive'] as const).map((t) => (
-                          <button
-                            key={t}
-                            type='button'
-                            onClick={() => patchLayoutMut.mutate({ id: selected.id, pdf_theme: t })}
-                            className={cn(
-                              'flex-1 rounded-md border px-2 py-1.5 text-[11px] font-medium transition-colors capitalize',
-                              (selected.pdf_theme ?? 'classic') === t
-                                ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
-                                : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border dark:hover:border-slate-600'
-                            )}
-                          >
-                            {t}
-                          </button>
-                        ))}
-                      </div>
-                      <button
-                        type='button'
-                        onClick={() => patchLayoutMut.mutate({ id: selected.id, pdf_theme: 'custom' })}
-                        className={cn(
-                          'w-full rounded-md border px-2 py-1.5 text-[11px] font-medium transition-colors',
-                          selected.pdf_theme === 'custom'
-                            ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
-                            : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border'
-                        )}
+                {(selected.layout_type == null || selected.layout_type === 'grouped') && (
+                  <>
+                    <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
+                      <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                        Addendum form
+                      </span>
+                      <select
+                        value={selected.addendum_layout_id ?? ''}
+                        onChange={(e) =>
+                          patchLayoutMut.mutate({
+                            id: selected.id,
+                            addendum_layout_id: e.target.value ? Number(e.target.value) : null
+                          })
+                        }
+                        className='max-w-[140px] rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
                       >
-                        Custom template
-                      </button>
-                      {selected.pdf_theme === 'custom' && (
-                        <div className='space-y-1'>
-                          <p className='text-[10px] text-slate-400'>Enter the ID of a template from Settings → PDF Templates</p>
+                        <option value=''>Collection default</option>
+                        {addendumLayouts.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <label className='flex cursor-pointer items-center justify-between'>
+                      <div>
+                        <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                          Default to addendum view
+                        </span>
+                        <p className='text-[10px] text-slate-400 dark:text-slate-500'>
+                          Show active addendum changes first on item open
+                        </p>
+                      </div>
+                      <input
+                        type='checkbox'
+                        checked={!!selected.addendum_default_view}
+                        onChange={(e) =>
+                          patchLayoutMut.mutate({
+                            id: selected.id,
+                            addendum_default_view: e.target.checked
+                          })
+                        }
+                        className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                      />
+                    </label>
+                  </>
+                )}
+                {selected.layout_type !== 'addendum' && (
+                  <>
+                    {(selected.layout_type ?? 'grouped') !== 'table' && (
+                      <>
+                        <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
+                          <label className='flex cursor-pointer items-center justify-between'>
+                            <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                              Summary panel
+                            </span>
+                            <input
+                              type='checkbox'
+                              checked={!!selected.summary_enabled}
+                              onChange={(e) =>
+                                patchLayoutMut.mutate({
+                                  id: selected.id,
+                                  summary_enabled: e.target.checked
+                                })
+                              }
+                              className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                            />
+                          </label>
+                          {!!selected.summary_enabled && (
+                            <label className='flex cursor-pointer items-center justify-between'>
+                              <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                                Show all fields in summary
+                              </span>
+                              <input
+                                type='checkbox'
+                                checked={!!selected.summary_show_all}
+                                onChange={(e) =>
+                                  patchLayoutMut.mutate({
+                                    id: selected.id,
+                                    summary_show_all: e.target.checked
+                                  })
+                                }
+                                className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                              />
+                            </label>
+                          )}
+                          {!!selected.summary_enabled && (
+                            <label className='flex cursor-pointer items-center justify-between'>
+                              <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                                Hide fields with no values
+                              </span>
+                              <input
+                                type='checkbox'
+                                checked={!!selected.summary_hide_empty}
+                                onChange={(e) =>
+                                  patchLayoutMut.mutate({
+                                    id: selected.id,
+                                    summary_hide_empty: e.target.checked
+                                  })
+                                }
+                                className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                              />
+                            </label>
+                          )}
+                        </div>
+                      </>
+                    )}
+                    {(selected.layout_type ?? 'grouped') === 'table' && (
+                      <div className='border-t border-slate-200 dark:border-border pt-2 space-y-2'>
+                        <label className='flex cursor-pointer items-center justify-between'>
+                          <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                            Allow row reordering
+                          </span>
                           <input
-                            type='number'
-                            placeholder='Template ID'
-                            value={selected.pdf_template_id ?? ''}
+                            type='checkbox'
+                            checked={!!selected.row_order_field}
                             onChange={(e) =>
                               patchLayoutMut.mutate({
                                 id: selected.id,
-                                pdf_template_id: e.target.value ? Number(e.target.value) : null,
+                                row_order_field: e.target.checked
+                                  ? (dbColumns.find((c) =>
+                                      NUMERIC_DATA_TYPES.has(c.data_type.toLowerCase())
+                                    )?.name ?? null)
+                                  : null
+                              })
+                            }
+                            className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                          />
+                        </label>
+                        {!!selected.row_order_field && (
+                          <div>
+                            <p className='text-[10px] text-slate-400 mb-1'>Order field</p>
+                            <select
+                              value={selected.row_order_field ?? ''}
+                              onChange={(e) =>
+                                patchLayoutMut.mutate({
+                                  id: selected.id,
+                                  row_order_field: e.target.value || null
+                                })
+                              }
+                              className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-700 dark:border-border dark:bg-background dark:text-slate-300'
+                            >
+                              <option value=''>— select field —</option>
+                              {dbColumns
+                                .filter((c) => NUMERIC_DATA_TYPES.has(c.data_type.toLowerCase()))
+                                .map((c) => (
+                                  <option key={c.name} value={c.name}>
+                                    {c.name}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {(selected.layout_type ?? 'grouped') === 'file' && (
+                      <div className='border-t border-slate-200 dark:border-border pt-2 space-y-3'>
+                        <p className='text-[10px] font-semibold text-slate-400 dark:text-slate-500 mb-1'>
+                          PDF Settings
+                        </p>
+
+                        {/* Theme */}
+                        <div className='space-y-1'>
+                          <label className='block text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                            Theme
+                          </label>
+                          <div className='flex gap-1.5'>
+                            {(['classic', 'minimal', 'executive'] as const).map((t) => (
+                              <button
+                                key={t}
+                                type='button'
+                                onClick={() =>
+                                  patchLayoutMut.mutate({ id: selected.id, pdf_theme: t })
+                                }
+                                className={cn(
+                                  'flex-1 rounded-md border px-2 py-1.5 text-[11px] font-medium transition-colors capitalize',
+                                  (selected.pdf_theme ?? 'classic') === t
+                                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
+                                    : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border dark:hover:border-slate-600'
+                                )}
+                              >
+                                {t}
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            type='button'
+                            onClick={() =>
+                              patchLayoutMut.mutate({ id: selected.id, pdf_theme: 'custom' })
+                            }
+                            className={cn(
+                              'w-full rounded-md border px-2 py-1.5 text-[11px] font-medium transition-colors',
+                              selected.pdf_theme === 'custom'
+                                ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
+                                : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border'
+                            )}
+                          >
+                            Custom template
+                          </button>
+                          {selected.pdf_theme === 'custom' && (
+                            <div className='space-y-1'>
+                              <p className='text-[10px] text-slate-400'>
+                                Enter the ID of a template from Settings → PDF Templates
+                              </p>
+                              <input
+                                type='number'
+                                placeholder='Template ID'
+                                value={selected.pdf_template_id ?? ''}
+                                onChange={(e) =>
+                                  patchLayoutMut.mutate({
+                                    id: selected.id,
+                                    pdf_template_id: e.target.value ? Number(e.target.value) : null
+                                  })
+                                }
+                                className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Cover page */}
+                        <div className='space-y-1.5'>
+                          <label className='flex cursor-pointer items-center justify-between'>
+                            <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                              Cover page
+                            </span>
+                            <input
+                              type='checkbox'
+                              checked={Boolean(selected.pdf_cover_enabled ?? true)}
+                              onChange={(e) =>
+                                patchLayoutMut.mutate({
+                                  id: selected.id,
+                                  pdf_cover_enabled: e.target.checked
+                                })
+                              }
+                              className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                            />
+                          </label>
+                          {Boolean(selected.pdf_cover_enabled ?? true) && (
+                            <>
+                              <div>
+                                <p className='text-[10px] text-slate-400 mb-1'>
+                                  Title field (collection field key, e.g. "name")
+                                </p>
+                                <input
+                                  type='text'
+                                  placeholder='e.g. name'
+                                  value={selected.pdf_cover_title_field ?? ''}
+                                  onChange={(e) =>
+                                    patchLayoutMut.mutate({
+                                      id: selected.id,
+                                      pdf_cover_title_field: e.target.value || null
+                                    })
+                                  }
+                                  className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+                                />
+                              </div>
+                              <div>
+                                <p className='text-[10px] text-slate-400 mb-1'>
+                                  Subtitle (static text)
+                                </p>
+                                <input
+                                  type='text'
+                                  placeholder='e.g. Procurement Summary Q4 2026'
+                                  value={selected.pdf_cover_subtitle ?? ''}
+                                  onChange={(e) =>
+                                    patchLayoutMut.mutate({
+                                      id: selected.id,
+                                      pdf_cover_subtitle: e.target.value || null
+                                    })
+                                  }
+                                  className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+                                />
+                              </div>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Button label */}
+                        <div className='space-y-1'>
+                          <label className='block text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                            Button label
+                          </label>
+                          <input
+                            type='text'
+                            placeholder='Download PDF'
+                            value={selected.pdf_button_label ?? ''}
+                            onChange={(e) =>
+                              patchLayoutMut.mutate({
+                                id: selected.id,
+                                pdf_button_label: e.target.value || null
                               })
                             }
                             className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
                           />
+                          <p className='text-[10px] text-slate-400'>
+                            Text shown on the download button. Default: "Download PDF"
+                          </p>
                         </div>
-                      )}
-                    </div>
 
-                    {/* Cover page */}
-                    <div className='space-y-1.5'>
-                      <label className='flex cursor-pointer items-center justify-between'>
-                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Cover page</span>
-                        <input
-                          type='checkbox'
-                          checked={Boolean(selected.pdf_cover_enabled ?? true)}
-                          onChange={(e) => patchLayoutMut.mutate({ id: selected.id, pdf_cover_enabled: e.target.checked })}
-                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
-                        />
-                      </label>
-                      {Boolean(selected.pdf_cover_enabled ?? true) && (
-                        <>
-                          <div>
-                            <p className='text-[10px] text-slate-400 mb-1'>Title field (collection field key, e.g. "name")</p>
+                        {/* Page settings */}
+                        <div className='space-y-1.5'>
+                          <label className='flex cursor-pointer items-center justify-between'>
+                            <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                              Include logo
+                            </span>
                             <input
-                              type='text'
-                              placeholder='e.g. name'
-                              value={selected.pdf_cover_title_field ?? ''}
+                              type='checkbox'
+                              checked={Boolean(selected.pdf_show_logo ?? true)}
                               onChange={(e) =>
-                                patchLayoutMut.mutate({ id: selected.id, pdf_cover_title_field: e.target.value || null })
+                                patchLayoutMut.mutate({
+                                  id: selected.id,
+                                  pdf_show_logo: e.target.checked
+                                })
                               }
-                              className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+                              className='h-3.5 w-3.5 rounded accent-nvr-cyan'
                             />
-                          </div>
-                          <div>
-                            <p className='text-[10px] text-slate-400 mb-1'>Subtitle (static text)</p>
-                            <input
-                              type='text'
-                              placeholder='e.g. Procurement Summary Q4 2026'
-                              value={selected.pdf_cover_subtitle ?? ''}
-                              onChange={(e) =>
-                                patchLayoutMut.mutate({ id: selected.id, pdf_cover_subtitle: e.target.value || null })
-                              }
-                              className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
-                            />
-                          </div>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Button label */}
-                    <div className='space-y-1'>
-                      <label className='block text-[11px] font-medium text-slate-600 dark:text-slate-300'>Button label</label>
-                      <input
-                        type='text'
-                        placeholder='Download PDF'
-                        value={selected.pdf_button_label ?? ''}
-                        onChange={(e) => patchLayoutMut.mutate({ id: selected.id, pdf_button_label: e.target.value || null })}
-                        className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
-                      />
-                      <p className='text-[10px] text-slate-400'>Text shown on the download button. Default: "Download PDF"</p>
-                    </div>
-
-                    {/* Page settings */}
-                    <div className='space-y-1.5'>
-                      <label className='flex cursor-pointer items-center justify-between'>
-                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Include logo</span>
-                        <input
-                          type='checkbox'
-                          checked={Boolean(selected.pdf_show_logo ?? true)}
-                          onChange={(e) => patchLayoutMut.mutate({ id: selected.id, pdf_show_logo: e.target.checked })}
-                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
-                        />
-                      </label>
-                      <div className='flex gap-2'>
-                        <div className='flex-1'>
-                          <p className='text-[10px] text-slate-400 mb-1'>Page size</p>
-                          <div className='flex rounded-md border border-slate-200 bg-white overflow-hidden dark:border-border dark:bg-background'>
-                            {(['A4', 'Letter'] as const).map((sz) => (
-                              <button
-                                key={sz}
-                                type='button'
-                                onClick={() => patchLayoutMut.mutate({ id: selected.id, pdf_page_size: sz })}
-                                className={cn(
-                                  'flex-1 py-1 text-[11px] font-medium transition-colors',
-                                  (selected.pdf_page_size ?? 'A4') === sz
-                                    ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
-                                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
-                                )}
-                              >
-                                {sz}
-                              </button>
-                            ))}
+                          </label>
+                          <div className='flex gap-2'>
+                            <div className='flex-1'>
+                              <p className='text-[10px] text-slate-400 mb-1'>Page size</p>
+                              <div className='flex rounded-md border border-slate-200 bg-white overflow-hidden dark:border-border dark:bg-background'>
+                                {(['A4', 'Letter'] as const).map((sz) => (
+                                  <button
+                                    key={sz}
+                                    type='button'
+                                    onClick={() =>
+                                      patchLayoutMut.mutate({ id: selected.id, pdf_page_size: sz })
+                                    }
+                                    className={cn(
+                                      'flex-1 py-1 text-[11px] font-medium transition-colors',
+                                      (selected.pdf_page_size ?? 'A4') === sz
+                                        ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
+                                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                                    )}
+                                  >
+                                    {sz}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className='flex-1'>
+                              <p className='text-[10px] text-slate-400 mb-1'>Orientation</p>
+                              <div className='flex rounded-md border border-slate-200 bg-white overflow-hidden dark:border-border dark:bg-background'>
+                                {(['portrait', 'landscape'] as const).map((o) => (
+                                  <button
+                                    key={o}
+                                    type='button'
+                                    onClick={() =>
+                                      patchLayoutMut.mutate({ id: selected.id, pdf_orientation: o })
+                                    }
+                                    className={cn(
+                                      'flex-1 py-1 text-[11px] font-medium transition-colors capitalize',
+                                      (selected.pdf_orientation ?? 'portrait') === o
+                                        ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
+                                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                                    )}
+                                  >
+                                    {o.slice(0, 4)}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                           </div>
                         </div>
-                        <div className='flex-1'>
-                          <p className='text-[10px] text-slate-400 mb-1'>Orientation</p>
-                          <div className='flex rounded-md border border-slate-200 bg-white overflow-hidden dark:border-border dark:bg-background'>
-                            {(['portrait', 'landscape'] as const).map((o) => (
-                              <button
-                                key={o}
-                                type='button'
-                                onClick={() => patchLayoutMut.mutate({ id: selected.id, pdf_orientation: o })}
-                                className={cn(
-                                  'flex-1 py-1 text-[11px] font-medium transition-colors capitalize',
-                                  (selected.pdf_orientation ?? 'portrait') === o
-                                    ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
-                                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
-                                )}
-                              >
-                                {o.slice(0, 4)}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
+
+                        {/* Preview */}
+                        <button
+                          type='button'
+                          onClick={() =>
+                            window.open(
+                              `/api/collection-layouts/${selected.id}/preview-html`,
+                              '_blank'
+                            )
+                          }
+                          className='w-full rounded-md border border-dashed border-slate-300 py-1.5 text-[11px] text-slate-500 transition-colors hover:border-nvr-cyan hover:text-nvr-cyan dark:border-border dark:text-slate-400'
+                        >
+                          Preview theme →
+                        </button>
                       </div>
+                    )}
+                    <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Enable AI features
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.ai_enabled}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({ id: selected.id, ai_enabled: e.target.checked })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Accordion mode (one section open)
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.accordion_mode}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              accordion_mode: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
                     </div>
-
-                    {/* Preview */}
-                    <button
-                      type='button'
-                      onClick={() => window.open(`/api/collection-layouts/${selected.id}/preview-html`, '_blank')}
-                      className='w-full rounded-md border border-dashed border-slate-300 py-1.5 text-[11px] text-slate-500 transition-colors hover:border-nvr-cyan hover:text-nvr-cyan dark:border-border dark:text-slate-400'
-                    >
-                      Preview theme →
-                    </button>
-                  </div>
+                    <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
+                      <p className='text-[10px] font-semibold text-slate-400 dark:text-slate-500 mb-1'>
+                        Hide panels
+                      </p>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Hide revisions
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.disable_revisions}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              disable_revisions: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Hide comments
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.disable_comments}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              disable_comments: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Hide tasks
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.disable_tasks}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              disable_tasks: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Hide clone button
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.disable_clone}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              disable_clone: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Hide delete button
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.disable_delete}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              disable_delete: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                    </div>
+                    <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
+                      <p className='text-[10px] font-semibold text-slate-400 dark:text-slate-500 mb-1'>
+                        Show for all users
+                      </p>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Clone button
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.allow_clone}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              allow_clone: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Schedule button
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.allow_schedule}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              allow_schedule: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Disable in pickers button
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.allow_disable_pickers}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              allow_disable_pickers: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                    </div>
+                    <div className='border-t border-slate-200 dark:border-border pt-2'>
+                      <LayoutVisibilitySection
+                        selected={selected}
+                        roles={roles}
+                        onChange={(roleIds) =>
+                          patchLayoutMut.mutate({
+                            id: selected.id,
+                            conditions: roleIds.length > 0 ? { role_ids: roleIds } : null
+                          })
+                        }
+                      />
+                    </div>
+                  </>
                 )}
-                <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Enable AI features</span>
-                    <input type='checkbox' checked={!!selected.ai_enabled} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, ai_enabled: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Accordion mode (one section open)</span>
-                    <input type='checkbox' checked={!!selected.accordion_mode} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, accordion_mode: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                </div>
-                <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
-                  <p className='text-[10px] font-semibold text-slate-400 dark:text-slate-500 mb-1'>Hide panels</p>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide revisions</span>
-                    <input type='checkbox' checked={!!selected.disable_revisions} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, disable_revisions: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide comments</span>
-                    <input type='checkbox' checked={!!selected.disable_comments} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, disable_comments: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide tasks</span>
-                    <input type='checkbox' checked={!!selected.disable_tasks} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, disable_tasks: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide clone button</span>
-                    <input type='checkbox' checked={!!selected.disable_clone} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, disable_clone: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide delete button</span>
-                    <input type='checkbox' checked={!!selected.disable_delete} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, disable_delete: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                </div>
-                <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
-                  <p className='text-[10px] font-semibold text-slate-400 dark:text-slate-500 mb-1'>Show for all users</p>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Clone button</span>
-                    <input type='checkbox' checked={!!selected.allow_clone} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, allow_clone: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Schedule button</span>
-                    <input type='checkbox' checked={!!selected.allow_schedule} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, allow_schedule: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                  <label className='flex cursor-pointer items-center justify-between'>
-                    <span className='text-[11px] text-slate-500 dark:text-slate-400'>Disable in pickers button</span>
-                    <input type='checkbox' checked={!!selected.allow_disable_pickers} onChange={(e) => patchLayoutMut.mutate({ id: selected.id, allow_disable_pickers: e.target.checked })} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-                  </label>
-                </div>
-                <div className='border-t border-slate-200 dark:border-border pt-2'>
-                  <LayoutVisibilitySection
-                    selected={selected}
-                    roles={roles}
-                    onChange={(roleIds) => patchLayoutMut.mutate({ id: selected.id, conditions: roleIds.length > 0 ? { role_ids: roleIds } : null })}
-                  />
-                </div>
-                </>)}
               </div>
             )}
           </div>
         )}
-        <FieldGroupsTab tableName={tableName} dbColumns={dbColumns} layoutId={effectiveId} layoutType={selected?.layout_type === 'table' ? 'table' : selected?.layout_type === 'addendum' ? 'addendum' : 'grouped'} />
+        <FieldGroupsTab
+          tableName={tableName}
+          dbColumns={dbColumns}
+          layoutId={effectiveId}
+          layoutType={
+            selected?.layout_type === 'table'
+              ? 'table'
+              : selected?.layout_type === 'addendum'
+                ? 'addendum'
+                : 'grouped'
+          }
+        />
       </div>
     </div>
   )
@@ -9220,7 +11873,13 @@ function LayoutsTab({ tableName, dbColumns }: { tableName: string; dbColumns: Ar
 
 // ── LayoutTab ─────────────────────────────────────────────────────────────────
 
-function PdfFieldConfig({ tableName, value, filenameTemplate, onChange, onFilenameChange }: {
+function PdfFieldConfig({
+  tableName,
+  value,
+  filenameTemplate,
+  onChange,
+  onFilenameChange
+}: {
   tableName: string
   value: string | null | undefined
   filenameTemplate: string | null | undefined
@@ -9229,47 +11888,75 @@ function PdfFieldConfig({ tableName, value, filenameTemplate, onChange, onFilena
 }) {
   const { data: relData } = useQuery({
     queryKey: ['relations-for', tableName],
-    queryFn: () => api.get<{ data: Array<{ id: number; many_collection: string; many_field: string; one_collection: string | null; one_field: string | null; junction_field: string | null }> }>(`/data-model/relations/for/${tableName}`).then(r => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{
+            id: number
+            many_collection: string
+            many_field: string
+            one_collection: string | null
+            one_field: string | null
+            junction_field: string | null
+          }>
+        }>(`/data-model/relations/for/${tableName}`)
+        .then((r) => r.data.data ?? []),
     enabled: !!tableName,
-    staleTime: 30_000,
+    staleTime: 30_000
   })
 
   // Find M2M fields on this collection that point to nivaro_files
   const fileFields = useMemo(() => {
     if (!relData) return []
-    const junctions = relData.filter(r => r.one_collection === tableName && r.junction_field != null)
+    const junctions = relData.filter(
+      (r) => r.one_collection === tableName && r.junction_field != null
+    )
     const results: Array<{ field: string; junction: string }> = []
     const seen = new Set<string>()
     for (const jr of junctions) {
       if (seen.has(jr.many_collection)) continue
       // Primary: companion row explicitly points to nivaro_files
-      const companion = relData.find(r => r.many_collection === jr.many_collection && r.one_collection === 'nivaro_files')
+      const companion = relData.find(
+        (r) => r.many_collection === jr.many_collection && r.one_collection === 'nivaro_files'
+      )
       // Fallback: single-row M2M where junction_field or junction table name hints at files
       const jf = jr.junction_field ?? ''
       const looksLikeFiles = !!companion || /file/i.test(jf) || /file/i.test(jr.many_collection)
       if (!looksLikeFiles) continue
       seen.add(jr.many_collection)
       // Derive display name: skip 'id' (it's the PK ref, not a useful alias)
-      const fieldName = (jr.one_field && jr.one_field !== 'id')
-        ? jr.one_field
-        : jr.many_collection
-            .replace(new RegExp(`^${tableName}_?|_?${tableName}$`, 'i'), '')
-            .replace(/^_|_$/g, '') || jr.many_collection
+      const fieldName =
+        jr.one_field && jr.one_field !== 'id'
+          ? jr.one_field
+          : jr.many_collection
+              .replace(new RegExp(`^${tableName}_?|_?${tableName}$`, 'i'), '')
+              .replace(/^_|_$/g, '') || jr.many_collection
       results.push({ field: fieldName, junction: jr.many_collection })
     }
     return results
   }, [relData, tableName])
 
   const [open, setOpen] = useState(false)
-  const selected = fileFields.find(f => f.field === value) ?? null
+  const selected = fileFields.find((f) => f.field === value) ?? null
 
   return (
     <div className='mt-1.5 space-y-1'>
-      <p className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>Attach PDF to field</p>
+      <p className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>
+        Attach PDF to field
+      </p>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <button type='button' className='flex w-full items-center justify-between rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 hover:border-nvr-cyan/50 dark:border-border dark:bg-card dark:text-slate-200'>
-            <span>{selected ? selected.field : <span className='text-slate-400'>Select file field…</span>}</span>
+          <button
+            type='button'
+            className='flex w-full items-center justify-between rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 hover:border-nvr-cyan/50 dark:border-border dark:bg-card dark:text-slate-200'
+          >
+            <span>
+              {selected ? (
+                selected.field
+              ) : (
+                <span className='text-slate-400'>Select file field…</span>
+              )}
+            </span>
             <ChevronDown className='h-3 w-3 text-slate-400' />
           </button>
         </PopoverTrigger>
@@ -9281,12 +11968,27 @@ function PdfFieldConfig({ tableName, value, filenameTemplate, onChange, onFilena
                 {fileFields.length === 0 ? 'No file M2M fields found' : 'No match'}
               </CommandEmpty>
               {value && (
-                <CommandItem value='__clear__' onSelect={() => { onChange(null); setOpen(false) }} className='text-[11px] text-slate-400'>
+                <CommandItem
+                  value='__clear__'
+                  onSelect={() => {
+                    onChange(null)
+                    setOpen(false)
+                  }}
+                  className='text-[11px] text-slate-400'
+                >
                   Clear
                 </CommandItem>
               )}
-              {fileFields.map(f => (
-                <CommandItem key={f.field} value={f.field} onSelect={() => { onChange(f.field); setOpen(false) }} className='text-[11px]'>
+              {fileFields.map((f) => (
+                <CommandItem
+                  key={f.field}
+                  value={f.field}
+                  onSelect={() => {
+                    onChange(f.field)
+                    setOpen(false)
+                  }}
+                  className='text-[11px]'
+                >
                   {f.field}
                   <span className='ml-auto text-[10px] text-slate-400 truncate'>{f.junction}</span>
                 </CommandItem>
@@ -9296,21 +11998,31 @@ function PdfFieldConfig({ tableName, value, filenameTemplate, onChange, onFilena
         </PopoverContent>
       </Popover>
       <div className='mt-2 space-y-1'>
-        <p className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>Filename template</p>
+        <p className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>
+          Filename template
+        </p>
         <input
           type='text'
           value={filenameTemplate ?? ''}
-          onChange={e => onFilenameChange(e.target.value || null)}
+          onChange={(e) => onFilenameChange(e.target.value || null)}
           placeholder='e.g. {{title}}-report'
           className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 placeholder:text-slate-300 focus:border-nvr-cyan/50 focus:outline-none dark:border-border dark:bg-card dark:text-slate-200'
         />
-        <p className='text-[10px] text-slate-400'>Use {'{{field}}'} tokens. Defaults to template name.</p>
+        <p className='text-[10px] text-slate-400'>
+          Use {'{{field}}'} tokens. Defaults to template name.
+        </p>
       </div>
     </div>
   )
 }
 
-function PdfFieldConfigButton({ tableName, value, filenameTemplate, onChange, onFilenameChange }: {
+function PdfFieldConfigButton({
+  tableName,
+  value,
+  filenameTemplate,
+  onChange,
+  onFilenameChange
+}: {
   tableName: string
   value: string | null | undefined
   filenameTemplate: string | null | undefined
@@ -9319,10 +12031,14 @@ function PdfFieldConfigButton({ tableName, value, filenameTemplate, onChange, on
 }) {
   const [open, setOpen] = useState(false)
   return (
-    <div onPointerDown={e => e.stopPropagation()}>
+    <div onPointerDown={(e) => e.stopPropagation()}>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <button type='button' title='PDF settings' className='shrink-0 rounded p-0.5 text-slate-300 hover:text-nvr-cyan'>
+          <button
+            type='button'
+            title='PDF settings'
+            className='shrink-0 rounded p-0.5 text-slate-300 hover:text-nvr-cyan'
+          >
             <Settings2 className='h-3 w-3' />
           </button>
         </PopoverTrigger>
@@ -9341,7 +12057,14 @@ function PdfFieldConfigButton({ tableName, value, filenameTemplate, onChange, on
 }
 
 function SortableSlotCard({
-  slotKey, slots, updateSlot, editingSlot, setEditingSlot, slotLabelDraft, setSlotLabelDraft, tableName
+  slotKey,
+  slots,
+  updateSlot,
+  editingSlot,
+  setEditingSlot,
+  slotLabelDraft,
+  setSlotLabelDraft,
+  tableName
 }: {
   slotKey: SlotKey
   slots: Record<SlotKey, SlotState>
@@ -9357,62 +12080,100 @@ function SortableSlotCard({
   const label = s.label_override?.trim() || meta.defaultLabel
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `slot:${slotKey}`,
-    data: { type: 'slot' },
+    data: { type: 'slot' }
   })
   const isEditing = editingSlot === slotKey
   return (
     <div
       ref={setNodeRef}
       style={{ transform: DndCSS.Transform.toString(transform), transition }}
-      className={cn('rounded-lg border border-dashed border-slate-200 bg-slate-50', isDragging && 'opacity-0')}
+      className={cn(
+        'rounded-lg border border-dashed border-slate-200 bg-slate-50',
+        isDragging && 'opacity-0'
+      )}
     >
       <div className='flex items-center gap-2 px-3 py-2'>
-        <button type='button' {...attributes} {...listeners} className='cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing'>
+        <button
+          type='button'
+          {...attributes}
+          {...listeners}
+          className='cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing'
+        >
           <GripVertical className='h-3.5 w-3.5' />
         </button>
-        <span className='shrink-0 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>{meta.name}</span>
+        <span className='shrink-0 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>
+          {meta.name}
+        </span>
         {meta.editable && isEditing ? (
-          <input autoFocus value={slotLabelDraft}
-            onChange={e => setSlotLabelDraft(e.target.value)}
+          <input
+            autoFocus
+            value={slotLabelDraft}
+            onChange={(e) => setSlotLabelDraft(e.target.value)}
             onBlur={() => {
               const v = slotLabelDraft.trim()
               updateSlot(slotKey, { label_override: v && v !== meta.defaultLabel ? v : null })
               setEditingSlot(null)
             }}
-            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditingSlot(null) }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              if (e.key === 'Escape') setEditingSlot(null)
+            }}
             placeholder={meta.defaultLabel}
             className='flex-1 rounded border border-nvr-cyan/50 bg-white px-1.5 py-0.5 text-[12px] font-medium text-slate-800 outline-none ring-1 ring-nvr-cyan/30'
           />
         ) : meta.editable ? (
-          <button type='button' onClick={() => { setSlotLabelDraft(label); setEditingSlot(slotKey) }}
-            className='group/slot flex flex-1 items-center gap-1 truncate text-left text-[12px] font-medium text-slate-700 hover:text-nvr-cyan'>
+          <button
+            type='button'
+            onClick={() => {
+              setSlotLabelDraft(label)
+              setEditingSlot(slotKey)
+            }}
+            className='group/slot flex flex-1 items-center gap-1 truncate text-left text-[12px] font-medium text-slate-700 hover:text-nvr-cyan'
+          >
             <span className='truncate'>{label}</span>
             <Pencil className='h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/slot:opacity-50' />
           </button>
         ) : (
           <span className='flex-1 truncate text-[12px] font-medium text-slate-700'>{label}</span>
         )}
-        {!s.is_visible && <span className='shrink-0 rounded bg-slate-500 px-1.5 py-0.5 text-[10px] font-medium text-white'>hidden</span>}
-        <button type='button' title={s.default_expanded ? 'Start collapsed' : 'Start expanded'}
+        {!s.is_visible && (
+          <span className='shrink-0 rounded bg-slate-500 px-1.5 py-0.5 text-[10px] font-medium text-white'>
+            hidden
+          </span>
+        )}
+        <button
+          type='button'
+          title={s.default_expanded ? 'Start collapsed' : 'Start expanded'}
           onClick={() => updateSlot(slotKey, { default_expanded: !s.default_expanded })}
           className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'
         >
-          {s.default_expanded
-            ? <ChevronDown className='h-3.5 w-3.5' />
-            : <ChevronRight className='h-3.5 w-3.5' />}
+          {s.default_expanded ? (
+            <ChevronDown className='h-3.5 w-3.5' />
+          ) : (
+            <ChevronRight className='h-3.5 w-3.5' />
+          )}
         </button>
         {slotKey === '__pipeline__' && (
           <button
             type='button'
-            title={s.show_approval_chain ? 'Hide approval chain button' : 'Show approval chain button'}
+            title={
+              s.show_approval_chain ? 'Hide approval chain button' : 'Show approval chain button'
+            }
             onClick={() => updateSlot(slotKey, { show_approval_chain: !s.show_approval_chain })}
-            className={cn('shrink-0 rounded p-1 transition-colors', s.show_approval_chain ? 'text-nvr-cyan' : 'text-slate-400 hover:text-nvr-cyan')}
+            className={cn(
+              'shrink-0 rounded p-1 transition-colors',
+              s.show_approval_chain ? 'text-nvr-cyan' : 'text-slate-400 hover:text-nvr-cyan'
+            )}
           >
             <Users className='h-3.5 w-3.5' />
           </button>
         )}
-        <button type='button' title={s.is_visible ? 'Hide' : 'Show'} onClick={() => updateSlot(slotKey, { is_visible: !s.is_visible })}
-          className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'>
+        <button
+          type='button'
+          title={s.is_visible ? 'Hide' : 'Show'}
+          onClick={() => updateSlot(slotKey, { is_visible: !s.is_visible })}
+          className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'
+        >
           {s.is_visible ? <Eye className='h-3.5 w-3.5' /> : <EyeOff className='h-3.5 w-3.5' />}
         </button>
       </div>
@@ -9420,16 +12181,27 @@ function SortableSlotCard({
   )
 }
 
-type InlineDisplayEntry = { field: string; label: string | null; format: string | null; line_break?: boolean }
+type InlineDisplayEntry = {
+  field: string
+  label: string | null
+  format: string | null
+  line_break?: boolean
+}
 type InlineDisplayConfig = { entries: InlineDisplayEntry[]; separator: string | null }
-type SubtitleField = { field: string; label: string | null; color?: string; weight?: string; display_as?: string }
+type SubtitleField = {
+  field: string
+  label: string | null
+  color?: string
+  weight?: string
+  display_as?: string
+}
 
 function InlineDisplaySection({
   relatedCollection,
   entries,
   separator,
   onChange,
-  onSeparatorChange,
+  onSeparatorChange
 }: {
   relatedCollection: string
   entries: InlineDisplayEntry[]
@@ -9439,8 +12211,9 @@ function InlineDisplaySection({
 }) {
   const { data: relFields = [] } = useQuery<Array<{ field: string; label?: string }>>({
     queryKey: ['field-config', relatedCollection],
-    queryFn: () => api.get(`/field-config/${relatedCollection}`).then((r) => r.data?.data ?? r.data ?? []),
-    staleTime: 60_000,
+    queryFn: () =>
+      api.get(`/field-config/${relatedCollection}`).then((r) => r.data?.data ?? r.data ?? []),
+    staleTime: 60_000
   })
   const fieldOptions = (relFields as Array<{ field: string; label?: string }>)
     .filter((f) => !f.field.startsWith('__'))
@@ -9449,23 +12222,35 @@ function InlineDisplaySection({
     { value: 'text', label: 'Text' },
     { value: 'date', label: 'Date' },
     { value: 'datetime', label: 'Date & Time' },
-    { value: 'boolean', label: 'Yes / No' },
+    { value: 'boolean', label: 'Yes / No' }
   ]
   return (
     <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5'>
-      <p className='text-[9px] font-semibold uppercase tracking-wider text-slate-400'>Inline display</p>
+      <p className='text-[9px] font-semibold uppercase tracking-wider text-slate-400'>
+        Inline display
+      </p>
       <div className='flex gap-1 mt-1'>
         <button
           type='button'
           onClick={() => onSeparatorChange(null)}
-          className={cn('flex-1 rounded border px-2 py-0.5 text-[10px]', separator === null ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300')}
+          className={cn(
+            'flex-1 rounded border px-2 py-0.5 text-[10px]',
+            separator === null
+              ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+              : 'border-slate-200 text-slate-500 hover:border-slate-300'
+          )}
         >
           Stacked
         </button>
         <button
           type='button'
           onClick={() => onSeparatorChange(separator ?? ', ')}
-          className={cn('flex-1 rounded border px-2 py-0.5 text-[10px]', separator !== null ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300')}
+          className={cn(
+            'flex-1 rounded border px-2 py-0.5 text-[10px]',
+            separator !== null
+              ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+              : 'border-slate-200 text-slate-500 hover:border-slate-300'
+          )}
         >
           Inline
         </button>
@@ -9489,7 +12274,9 @@ function InlineDisplaySection({
             <button
               type='button'
               title={entry.line_break ? 'Remove line break' : 'Start new line before this field'}
-              onClick={() => onChange(entries.map((e, j) => j === i ? { ...e, line_break: !e.line_break } : e))}
+              onClick={() =>
+                onChange(entries.map((e, j) => (j === i ? { ...e, line_break: !e.line_break } : e)))
+              }
               className={cn(
                 'flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border transition-colors',
                 entry.line_break
@@ -9505,7 +12292,9 @@ function InlineDisplaySection({
             <div className='flex-1 min-w-0'>
               <Combobox
                 value={entry.field}
-                onChange={(v) => onChange(entries.map((e, j) => (j === i ? { ...e, field: v } : e)))}
+                onChange={(v) =>
+                  onChange(entries.map((e, j) => (j === i ? { ...e, field: v } : e)))
+                }
                 options={fieldOptions}
                 placeholder='Field…'
               />
@@ -9524,7 +12313,9 @@ function InlineDisplaySection({
               value={entry.label ?? ''}
               placeholder='Label…'
               onChange={(e) =>
-                onChange(entries.map((en, j) => (j === i ? { ...en, label: e.target.value || null } : en)))
+                onChange(
+                  entries.map((en, j) => (j === i ? { ...en, label: e.target.value || null } : en))
+                )
               }
               className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
             />
@@ -9533,7 +12324,9 @@ function InlineDisplaySection({
               onChange={(e) =>
                 onChange(
                   entries.map((en, j) =>
-                    j === i ? { ...en, format: e.target.value === 'text' ? null : e.target.value } : en
+                    j === i
+                      ? { ...en, format: e.target.value === 'text' ? null : e.target.value }
+                      : en
                   )
                 )
               }
@@ -9560,7 +12353,17 @@ function InlineDisplaySection({
   )
 }
 
-function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'grouped' }: { tableName: string; dbColumns?: Array<{ name: string; data_type: string }>; layoutId: number | null; layoutType?: 'grouped' | 'table' | 'addendum' }) {
+function FieldGroupsTab({
+  tableName,
+  dbColumns = [],
+  layoutId,
+  layoutType = 'grouped'
+}: {
+  tableName: string
+  dbColumns?: Array<{ name: string; data_type: string }>
+  layoutId: number | null
+  layoutType?: 'grouped' | 'table' | 'addendum'
+}) {
   const qc = useQueryClient()
 
   const { data: groups = [], isLoading: groupsLoading } = useQuery<FieldGroup[]>({
@@ -9576,7 +12379,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', tableName],
-    queryFn: () => api.get(`/collections/${tableName}`).then(r => r.data.data),
+    queryFn: () => api.get(`/collections/${tableName}`).then((r) => r.data.data),
     enabled: !!tableName,
     staleTime: 30_000
   })
@@ -9585,22 +12388,22 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     queryKey: ['field-config', tableName, layoutId],
     queryFn: () =>
       api
-        .get<{ data: Array<{
-          field: string
-          group_key: string | null
-          sort: number | null
-          label: string | null
-          note: string | null
-          hidden: boolean
-          readonly: boolean
-          required: boolean
-          interface: string | null
-          options: Record<string, unknown> | null
-          dependency_config: string | null
-        }>; ungrouped_sort: number | null }>(
-          `/field-config/${tableName}`,
-          { params: layoutId ? { layout_id: layoutId } : {} }
-        )
+        .get<{
+          data: Array<{
+            field: string
+            group_key: string | null
+            sort: number | null
+            label: string | null
+            note: string | null
+            hidden: boolean
+            readonly: boolean
+            required: boolean
+            interface: string | null
+            options: Record<string, unknown> | null
+            dependency_config: string | null
+          }>
+          ungrouped_sort: number | null
+        }>(`/field-config/${tableName}`, { params: layoutId ? { layout_id: layoutId } : {} })
         .then((r) => r.data),
     enabled: !!tableName,
     staleTime: 30_000
@@ -9608,23 +12411,38 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
   const fieldConfig = fieldConfigResult?.data ?? []
   const ungroupedSortFromServer: number | null = fieldConfigResult?.ungrouped_sort ?? null
-  const { data: availableWidgets = [] } = useQuery<Array<{ id: number; name: string; widget_type: string; inputs: unknown }>>({
+  const { data: availableWidgets = [] } = useQuery<
+    Array<{ id: number; name: string; widget_type: string; inputs: unknown }>
+  >({
     queryKey: ['widgets-internal'],
-    queryFn: () => api.get('/widgets-internal').then(r => r.data.data),
+    queryFn: () => api.get('/widgets-internal').then((r) => r.data.data),
     staleTime: 60_000
   })
   const [addingWidget, setAddingWidget] = useState(false)
-  const relations: Array<{ many_field: string; many_collection?: string; one_collection: string | null; one_field?: string | null; junction_field: string | null }> = colMeta?.relations ?? []
+  const relations: Array<{
+    many_field: string
+    many_collection?: string
+    one_collection: string | null
+    one_field?: string | null
+    junction_field: string | null
+  }> = colMeta?.relations ?? []
   // Memoized — new array reference every render would fire the init effect infinitely
   const allFields = useMemo(() => {
-    const base: Array<{ field: string; type?: string; options?: string | null }> = colMeta?.fields ?? []
+    const base: Array<{ field: string; type?: string; options?: string | null }> =
+      colMeta?.fields ?? []
     const seenO2m = new Set<string>()
     const o2mVirtuals = (colMeta?.relations ?? [])
-      .filter((r: { one_field?: string | null; junction_field: string | null; many_collection?: string }) => {
-        if (!r.one_field || r.junction_field !== null) return false
-        const effectiveName = r.one_field === 'id' ? (r.many_collection ?? '') : r.one_field
-        return effectiveName && !base.find((f) => f.field === effectiveName)
-      })
+      .filter(
+        (r: {
+          one_field?: string | null
+          junction_field: string | null
+          many_collection?: string
+        }) => {
+          if (!r.one_field || r.junction_field !== null) return false
+          const effectiveName = r.one_field === 'id' ? (r.many_collection ?? '') : r.one_field
+          return effectiveName && !base.find((f) => f.field === effectiveName)
+        }
+      )
       .map((r: { one_field: string; many_collection?: string }) => ({
         field: r.one_field === 'id' ? (r.many_collection ?? r.one_field) : r.one_field,
         type: 'o2m' as const
@@ -9638,13 +12456,22 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     // else fall back to many_collection (junction table name) for legacy one_field='id' rows
     const seenM2m = new Set<string>()
     const m2mVirtuals = (colMeta?.relations ?? [])
-      .filter((r: { one_field?: string | null; junction_field: string | null; many_collection?: string }) => {
-        if (!r.junction_field) return false
-        const name = (r.one_field && r.one_field !== 'id') ? r.one_field : (r.many_collection ?? '')
-        return !!name && !base.find((f) => f.field === name)
-      })
+      .filter(
+        (r: {
+          one_field?: string | null
+          junction_field: string | null
+          many_collection?: string
+        }) => {
+          if (!r.junction_field) return false
+          const name = r.one_field && r.one_field !== 'id' ? r.one_field : (r.many_collection ?? '')
+          return !!name && !base.find((f) => f.field === name)
+        }
+      )
       .map((r: { one_field?: string | null; many_collection?: string }) => ({
-        field: (r.one_field && r.one_field !== 'id') ? r.one_field! : (r.many_collection ?? r.one_field ?? ''),
+        field:
+          r.one_field && r.one_field !== 'id'
+            ? r.one_field!
+            : (r.many_collection ?? r.one_field ?? ''),
         type: 'm2m' as const
       }))
       .filter((v: { field: string; type: 'm2m' }) => {
@@ -9661,59 +12488,109 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   // field → relation kind label
   const relKind = (fieldName: string): string | null => {
     // Virtual M2M field — match by one_field, or by many_collection when one_field='id'
-    const m2m = relations.find(r =>
-      r.junction_field !== null &&
-      ((r.one_field && r.one_field !== 'id' && r.one_field === fieldName) ||
-       ((!r.one_field || r.one_field === 'id') && r.many_collection === fieldName))
+    const m2m = relations.find(
+      (r) =>
+        r.junction_field !== null &&
+        ((r.one_field && r.one_field !== 'id' && r.one_field === fieldName) ||
+          ((!r.one_field || r.one_field === 'id') && r.many_collection === fieldName))
     )
     if (m2m) return 'M2M'
     // Virtual O2M field
-    const o2m = relations.find(r =>
-      r.junction_field === null &&
-      (r.one_field === fieldName || (r.one_field === 'id' && r.many_collection === fieldName))
+    const o2m = relations.find(
+      (r) =>
+        r.junction_field === null &&
+        (r.one_field === fieldName || (r.one_field === 'id' && r.many_collection === fieldName))
     )
     if (o2m) return 'O2M'
     // M2O FK column on this collection
-    const r = relations.find(r => r.many_field === fieldName)
+    const r = relations.find((r) => r.many_field === fieldName)
     if (!r) return null
     return r.one_collection ? 'M2O' : null
   }
 
   const DB_TYPE_LABELS: Record<string, string> = {
-    nvarchar: 'text', varchar: 'text', ntext: 'text', text: 'text',
-    int: 'num', bigint: 'bigint', tinyint: 'bool',
-    bit: 'bool', float: 'float', real: 'float',
-    decimal: 'decimal', numeric: 'decimal', money: 'money',
-    date: 'date', datetime: 'datetime', datetime2: 'datetime', time: 'time',
-    uniqueidentifier: 'uuid',
+    nvarchar: 'text',
+    varchar: 'text',
+    ntext: 'text',
+    text: 'text',
+    int: 'num',
+    bigint: 'bigint',
+    tinyint: 'bool',
+    bit: 'bool',
+    float: 'float',
+    real: 'float',
+    decimal: 'decimal',
+    numeric: 'decimal',
+    money: 'money',
+    date: 'date',
+    datetime: 'datetime',
+    datetime2: 'datetime',
+    time: 'time',
+    uniqueidentifier: 'uuid'
   }
   const ABSTRACT_TYPE_LABELS: Record<string, string> = {
-    string: 'text', text: 'text', integer: 'num', bigInteger: 'bigint',
-    float: 'float', decimal: 'decimal', boolean: 'bool',
-    date: 'date', datetime: 'datetime', uuid: 'uuid', json: 'json',
+    string: 'text',
+    text: 'text',
+    integer: 'num',
+    bigInteger: 'bigint',
+    float: 'float',
+    decimal: 'decimal',
+    boolean: 'bool',
+    date: 'date',
+    datetime: 'datetime',
+    uuid: 'uuid',
+    json: 'json'
   }
   const friendlyType = (abstractType?: string, fieldName?: string): string | undefined => {
     // Prefer actual DB column type when available
     if (fieldName) {
-      const col = dbColumns.find(c => c.name === fieldName)
+      const col = dbColumns.find((c) => c.name === fieldName)
       if (col) return DB_TYPE_LABELS[col.data_type.toLowerCase()] ?? col.data_type
     }
     return abstractType ? (ABSTRACT_TYPE_LABELS[abstractType] ?? abstractType) : undefined
   }
 
   // ── Local optimistic state ──
-  const [localGroupOrder, setLocalGroupOrder] = useState<(number | '__ungrouped__' | SlotKey | string)[]>([])
-  type WidgetSlotMeta = { widget_id: number; name: string; label_override: string | null; is_visible: boolean; input_bindings: Array<{ key: string; binding_type: string; binding_value: string }> }
+  const [localGroupOrder, setLocalGroupOrder] = useState<
+    (number | '__ungrouped__' | SlotKey | string)[]
+  >([])
+  type WidgetSlotMeta = {
+    widget_id: number
+    name: string
+    label_override: string | null
+    is_visible: boolean
+    input_bindings: Array<{ key: string; binding_type: string; binding_value: string }>
+  }
   const [widgetSlotMeta, setWidgetSlotMeta] = useState<Record<string, WidgetSlotMeta>>({})
-  type HeaderFieldMeta = { label_override: string | null; display_format: string; color?: string; weight?: string; display_as?: string }
-  const [headerFieldDisplayMeta, setHeaderFieldDisplayMeta] = useState<Record<string, HeaderFieldMeta>>({})
+  type HeaderFieldMeta = {
+    label_override: string | null
+    display_format: string
+    color?: string
+    weight?: string
+    display_as?: string
+  }
+  const [headerFieldDisplayMeta, setHeaderFieldDisplayMeta] = useState<
+    Record<string, HeaderFieldMeta>
+  >({})
   const [localAssignments, setLocalAssignments] = useState<Record<string, string | null>>({})
   const [localColSpans, setLocalColSpans] = useState<Record<string, number | null>>({})
   const [localRowRevisions, setLocalRowRevisions] = useState<Record<string, boolean>>({})
-  const [localAllowRevisionRestore, setLocalAllowRevisionRestore] = useState<Record<string, boolean>>({})
-  const [localLockConditions, setLocalLockConditions] = useState<Record<string, Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>>>({})
-  const [inlineDisplayMeta, setInlineDisplayMeta] = useState<Record<string, InlineDisplayConfig>>({})
-  const [subtitleConfig, setSubtitleConfig] = useState<{ fields: SubtitleField[]; separator: string } | null>(null)
+  const [localAllowRevisionRestore, setLocalAllowRevisionRestore] = useState<
+    Record<string, boolean>
+  >({})
+  const [localLockConditions, setLocalLockConditions] = useState<
+    Record<
+      string,
+      Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+    >
+  >({})
+  const [inlineDisplayMeta, setInlineDisplayMeta] = useState<Record<string, InlineDisplayConfig>>(
+    {}
+  )
+  const [subtitleConfig, setSubtitleConfig] = useState<{
+    fields: SubtitleField[]
+    separator: string
+  } | null>(null)
   const [subtitlePickerOpen, setSubtitlePickerOpen] = useState(false)
   const [subtitleStyleOpen, setSubtitleStyleOpen] = useState<number | null>(null)
   const [localOverrides, setLocalOverrides] = useState<Record<string, Record<string, unknown>>>({})
@@ -9721,16 +12598,42 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
   const [poolSearch, setPoolSearch] = useState('')
-  const [poolCategory, setPoolCategory] = useState<'all' | 'fields' | 'relations' | 'widgets'>('all')
+  const [poolCategory, setPoolCategory] = useState<'all' | 'fields' | 'relations' | 'widgets'>(
+    'all'
+  )
 
   // ── Page slot state ──
   // Special panels (pipeline/comments/tasks) persisted as sentinel assignments.
   // sort = position relative to groups/ungrouped; label_override only for comments/tasks.
   const [slots, setSlots] = useState<Record<SlotKey, SlotState>>(() => ({
-    __pipeline__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
-    __comments__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
-    __tasks__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
-    __addendums__: { sort: 0, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
+    __pipeline__: {
+      sort: 0,
+      label_override: null,
+      is_visible: true,
+      default_expanded: true,
+      show_approval_chain: false
+    },
+    __comments__: {
+      sort: 0,
+      label_override: null,
+      is_visible: true,
+      default_expanded: true,
+      show_approval_chain: false
+    },
+    __tasks__: {
+      sort: 0,
+      label_override: null,
+      is_visible: true,
+      default_expanded: true,
+      show_approval_chain: false
+    },
+    __addendums__: {
+      sort: 0,
+      label_override: null,
+      is_visible: true,
+      default_expanded: true,
+      show_approval_chain: false
+    }
   }))
   const [editingSlot, setEditingSlot] = useState<SlotKey | null>(null)
   const [slotLabelDraft, setSlotLabelDraft] = useState('')
@@ -9752,34 +12655,65 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     // Unsaved local changes pending — a refetch landing now (e.g. from a previous save)
     // must not clobber them or cancel the pending debounced save
     if (hasLocalChangeRef.current) return
-    const ungroupedIdx = ungroupedSortFromServer !== null ? Math.min(ungroupedSortFromServer, groups.length) : groups.length
-    const baseOrder: (number | '__ungrouped__' | SlotKey | string)[] = groups.map(g => g.id)
+    const ungroupedIdx =
+      ungroupedSortFromServer !== null
+        ? Math.min(ungroupedSortFromServer, groups.length)
+        : groups.length
+    const baseOrder: (number | '__ungrouped__' | SlotKey | string)[] = groups.map((g) => g.id)
     baseOrder.splice(ungroupedIdx, 0, '__ungrouped__')
     // Interleave slot keys at their saved positions (after groups/ungrouped are placed)
     for (const key of SLOT_KEYS) {
-      const row = fieldConfig.find(fc => fc.field === key) as Record<string, unknown> | undefined
-      const slotSort = row ? (typeof row.sort === 'number' ? row.sort : baseOrder.length) : baseOrder.length + SLOT_KEYS.indexOf(key)
+      const row = fieldConfig.find((fc) => fc.field === key) as Record<string, unknown> | undefined
+      const slotSort = row
+        ? typeof row.sort === 'number'
+          ? row.sort
+          : baseOrder.length
+        : baseOrder.length + SLOT_KEYS.indexOf(key)
       const insertAt = Math.min(Math.max(0, slotSort), baseOrder.length)
       baseOrder.splice(insertAt, 0, key)
     }
     // Interleave widget slots at their saved positions
-    const widgetRows = fieldConfig.filter(fc => typeof fc.field === 'string' && (fc.field as string).startsWith('__widget_') && (fc.field as string).endsWith('__') && (fc as Record<string, unknown>).widget_id) as Array<Record<string, unknown>>
-    const nextWidgetMeta: Record<string, { widget_id: number; name: string; label_override: string | null; is_visible: boolean; input_bindings: Array<{ key: string; binding_type: string; binding_value: string }> }> = {}
+    const widgetRows = fieldConfig.filter(
+      (fc) =>
+        typeof fc.field === 'string' &&
+        (fc.field as string).startsWith('__widget_') &&
+        (fc.field as string).endsWith('__') &&
+        (fc as Record<string, unknown>).widget_id
+    ) as Array<Record<string, unknown>>
+    const nextWidgetMeta: Record<
+      string,
+      {
+        widget_id: number
+        name: string
+        label_override: string | null
+        is_visible: boolean
+        input_bindings: Array<{ key: string; binding_type: string; binding_value: string }>
+      }
+    > = {}
     for (const row of widgetRows) {
       const key = row.field as string
       const wid = row.widget_id as number
-      const wDef = availableWidgets.find(w => w.id === wid)
+      const wDef = availableWidgets.find((w) => w.id === wid)
       nextWidgetMeta[key] = {
         widget_id: wid,
         name: wDef?.name ?? `Widget ${wid}`,
         label_override: (row.label_override as string | null) ?? null,
-        is_visible: row.is_visible === undefined || row.is_visible === null ? true : !!row.is_visible,
-        input_bindings: (() => { try { return typeof row.input_bindings === 'string' ? JSON.parse(row.input_bindings as string) : [] } catch { return [] } })(),
+        is_visible:
+          row.is_visible === undefined || row.is_visible === null ? true : !!row.is_visible,
+        input_bindings: (() => {
+          try {
+            return typeof row.input_bindings === 'string'
+              ? JSON.parse(row.input_bindings as string)
+              : []
+          } catch {
+            return []
+          }
+        })()
       }
     }
     setWidgetSlotMeta(nextWidgetMeta)
     // Initialize header field display meta from saved assignments
-    const headerFieldRows = fieldConfig.filter(fc => {
+    const headerFieldRows = fieldConfig.filter((fc) => {
       const f = fc.field as string
       const gk = (fc as Record<string, unknown>).group_key as string | null
       return f && !f.startsWith('__') && gk === '__header__'
@@ -9790,29 +12724,49 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       let displayFormat = 'text'
       try {
         const raw = (row as Record<string, unknown>).input_bindings
-        const parsed: Array<{ key: string; binding_type: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
-        const fmt = parsed.find(b => b.key === '__display_format__')
+        const parsed: Array<{ key: string; binding_type: string; binding_value: string }> =
+          typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? raw : []
+        const fmt = parsed.find((b) => b.key === '__display_format__')
         if (fmt?.binding_value) displayFormat = fmt.binding_value
-      } catch { /* noop */ }
+      } catch {
+        /* noop */
+      }
       const rawBindings2 = (row as Record<string, unknown>).input_bindings
-      const parsedBindings2: Array<{ key: string; binding_value: string }> = (() => { try { return typeof rawBindings2 === 'string' ? JSON.parse(rawBindings2) : Array.isArray(rawBindings2) ? rawBindings2 : [] } catch { return [] } })()
+      const parsedBindings2: Array<{ key: string; binding_value: string }> = (() => {
+        try {
+          return typeof rawBindings2 === 'string'
+            ? JSON.parse(rawBindings2)
+            : Array.isArray(rawBindings2)
+              ? rawBindings2
+              : []
+        } catch {
+          return []
+        }
+      })()
       nextHeaderFieldMeta[f] = {
         label_override: ((row as Record<string, unknown>).label_override as string | null) ?? null,
         display_format: displayFormat,
-        color: parsedBindings2.find(b => b.key === '__color__')?.binding_value || undefined,
-        weight: parsedBindings2.find(b => b.key === '__weight__')?.binding_value || undefined,
-        display_as: parsedBindings2.find(b => b.key === '__display_as__')?.binding_value || undefined,
+        color: parsedBindings2.find((b) => b.key === '__color__')?.binding_value || undefined,
+        weight: parsedBindings2.find((b) => b.key === '__weight__')?.binding_value || undefined,
+        display_as:
+          parsedBindings2.find((b) => b.key === '__display_as__')?.binding_value || undefined
       }
     }
     setHeaderFieldDisplayMeta(nextHeaderFieldMeta)
     setLocalGroupOrder(baseOrder)
     const assignments: Record<string, string | null> = {}
     // __pool__ = Fields List (always contains ALL fields); __unassigned__ = Ungrouped zone
-    const fieldOrder: Record<string, string[]> = { __pool__: [], __unassigned__: [], __apply_values__: [], __create_with_defaults__: [], __header__: [] }
+    const fieldOrder: Record<string, string[]> = {
+      __pool__: [],
+      __unassigned__: [],
+      __apply_values__: [],
+      __create_with_defaults__: [],
+      __header__: []
+    }
     for (const g of groups) fieldOrder[g.key] = []
     const sorted = [...allFields].sort((a, b) => {
-      const as_ = fieldConfig.find(fc => fc.field === a.field)?.sort ?? 9999
-      const bs_ = fieldConfig.find(fc => fc.field === b.field)?.sort ?? 9999
+      const as_ = fieldConfig.find((fc) => fc.field === a.field)?.sort ?? 9999
+      const bs_ = fieldConfig.find((fc) => fc.field === b.field)?.sort ?? 9999
       return as_ - bs_
     })
     // __pool__ always has every field — it's a static Fields List palette
@@ -9826,12 +12780,24 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       if (!(fc as Record<string, unknown>).layout_assigned) continue
       const gk = fc.group_key ?? null
       const f = fc.field
-      if (!f || f === '__ungrouped_pos__' || (typeof f === 'string' && f.startsWith('__') && f.endsWith('__') && f !== '__unassigned__' && f !== OWNERS_FIELD && f !== PDF_FIELD && !f.startsWith('__widget_'))) continue
+      if (
+        !f ||
+        f === '__ungrouped_pos__' ||
+        (typeof f === 'string' &&
+          f.startsWith('__') &&
+          f.endsWith('__') &&
+          f !== '__unassigned__' &&
+          f !== OWNERS_FIELD &&
+          f !== PDF_FIELD &&
+          !f.startsWith('__widget_'))
+      )
+        continue
       assignments[f] = gk
       if (gk === '__apply_values__') {
         if (!fieldOrder.__apply_values__.includes(f)) fieldOrder.__apply_values__.push(f)
       } else if (gk === '__create_with_defaults__') {
-        if (!fieldOrder.__create_with_defaults__.includes(f)) fieldOrder.__create_with_defaults__.push(f)
+        if (!fieldOrder.__create_with_defaults__.includes(f))
+          fieldOrder.__create_with_defaults__.push(f)
       } else if (gk === '__header__') {
         if (!fieldOrder.__header__.includes(f)) fieldOrder.__header__.push(f)
       } else if (gk && fieldOrder[gk] !== undefined) {
@@ -9849,17 +12815,33 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     const overrides: Record<string, Record<string, unknown>> = {}
     const rowRevisions: Record<string, boolean> = {}
     const allowRevisionRestore: Record<string, boolean> = {}
-    const lockConditions: Record<string, Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>> = {}
+    const lockConditions: Record<
+      string,
+      Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
+    > = {}
     for (const f of sorted) {
-      const fc = fieldConfig.find(fc => fc.field === f.field)
+      const fc = fieldConfig.find((fc) => fc.field === f.field)
       const opts = fc?.options
-      const parsed = (() => { try { return typeof opts === 'string' ? JSON.parse(opts) : opts } catch { return null } })()
+      const parsed = (() => {
+        try {
+          return typeof opts === 'string' ? JSON.parse(opts) : opts
+        } catch {
+          return null
+        }
+      })()
       const span = parsed?.col_span
       colSpans[f.field] = typeof span === 'number' ? span : null
       rowRevisions[f.field] = !!parsed?.show_row_revisions
       allowRevisionRestore[f.field] = parsed?.allow_revision_restore !== false
       if (parsed?.lock_conditions) {
-        try { lockConditions[f.field] = typeof parsed.lock_conditions === 'string' ? JSON.parse(parsed.lock_conditions) : parsed.lock_conditions } catch { /* noop */ }
+        try {
+          lockConditions[f.field] =
+            typeof parsed.lock_conditions === 'string'
+              ? JSON.parse(parsed.lock_conditions)
+              : parsed.lock_conditions
+        } catch {
+          /* noop */
+        }
       }
       const raw = (fc as Record<string, unknown> | undefined)?._overrides
       if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -9878,16 +12860,20 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       if (!fname || fname.startsWith('__')) continue
       try {
         const raw = (fc as Record<string, unknown>).input_bindings
-        const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
+        const parsed: Array<{ key: string; binding_value: string }> =
+          typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? raw : []
         const entry = parsed.find((b) => b.key === '__inline_display__')
         if (entry?.binding_value) {
           const data = JSON.parse(entry.binding_value)
           const isArr = Array.isArray(data)
           const entries = isArr ? data : (data.fields ?? [])
           const separator: string | null = isArr ? null : (data.separator ?? null)
-          if (Array.isArray(entries) && entries.length) nextInlineDisplay[fname] = { entries, separator }
+          if (Array.isArray(entries) && entries.length)
+            nextInlineDisplay[fname] = { entries, separator }
         }
-      } catch { /* noop */ }
+      } catch {
+        /* noop */
+      }
     }
     setInlineDisplayMeta(nextInlineDisplay)
     setLocalAssignments(assignments)
@@ -9895,44 +12881,92 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
     // ── Parse page slot sentinels from the same assignments payload ──
     const nextSlots: Record<SlotKey, SlotState> = {
-      __pipeline__: { sort: groups.length + 1, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
-      __comments__: { sort: groups.length + 2, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
-      __tasks__: { sort: groups.length + 3, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
-      __addendums__: { sort: groups.length + 4, label_override: null, is_visible: true, default_expanded: true, show_approval_chain: false },
+      __pipeline__: {
+        sort: groups.length + 1,
+        label_override: null,
+        is_visible: true,
+        default_expanded: true,
+        show_approval_chain: false
+      },
+      __comments__: {
+        sort: groups.length + 2,
+        label_override: null,
+        is_visible: true,
+        default_expanded: true,
+        show_approval_chain: false
+      },
+      __tasks__: {
+        sort: groups.length + 3,
+        label_override: null,
+        is_visible: true,
+        default_expanded: true,
+        show_approval_chain: false
+      },
+      __addendums__: {
+        sort: groups.length + 4,
+        label_override: null,
+        is_visible: true,
+        default_expanded: true,
+        show_approval_chain: false
+      }
     }
     for (const key of SLOT_KEYS) {
-      const row = fieldConfig.find(fc => fc.field === key) as Record<string, unknown> | undefined
+      const row = fieldConfig.find((fc) => fc.field === key) as Record<string, unknown> | undefined
       if (!row) continue
       nextSlots[key] = {
         sort: typeof row.sort === 'number' ? row.sort : nextSlots[key].sort,
         label_override: (row.label_override as string | null | undefined) ?? null,
-        is_visible: row.is_visible === undefined || row.is_visible === null ? true : !!row.is_visible,
-        default_expanded: row.default_expanded === undefined || row.default_expanded === null ? true : !!row.default_expanded,
-        show_approval_chain: !!row.show_approval_chain,
+        is_visible:
+          row.is_visible === undefined || row.is_visible === null ? true : !!row.is_visible,
+        default_expanded:
+          row.default_expanded === undefined || row.default_expanded === null
+            ? true
+            : !!row.default_expanded,
+        show_approval_chain: !!row.show_approval_chain
       }
     }
     setSlots(nextSlots)
     // ── Parse subtitle sentinel ──
-    const subtitleRow = fieldConfig.find(fc => fc.field === '__subtitle__') as Record<string, unknown> | undefined
+    const subtitleRow = fieldConfig.find((fc) => fc.field === '__subtitle__') as
+      | Record<string, unknown>
+      | undefined
     if (subtitleRow) {
       try {
         const raw = subtitleRow.input_bindings
-        const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
-        const entry = parsed.find(b => b.key === '__subtitle_config__')
+        const parsed: Array<{ key: string; binding_value: string }> =
+          typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? raw : []
+        const entry = parsed.find((b) => b.key === '__subtitle_config__')
         if (entry?.binding_value) {
           const data = JSON.parse(entry.binding_value)
           if (data.fields && Array.isArray(data.fields) && data.fields.length > 0) {
             setSubtitleConfig({ fields: data.fields, separator: data.separator ?? ' | ' })
-          } else { setSubtitleConfig(null) }
-        } else { setSubtitleConfig(null) }
-      } catch { setSubtitleConfig(null) }
-    } else { setSubtitleConfig(null) }
+          } else {
+            setSubtitleConfig(null)
+          }
+        } else {
+          setSubtitleConfig(null)
+        }
+      } catch {
+        setSubtitleConfig(null)
+      }
+    } else {
+      setSubtitleConfig(null)
+    }
   }, [groups, fieldConfig, allFields, ungroupedSortFromServer])
 
   // ── Mutations ──
-  const invalidateGroups = useCallback(() => qc.invalidateQueries({ queryKey: ['field-groups', tableName] }), [qc, tableName])
-  const invalidateFieldConfig = useCallback(() => qc.invalidateQueries({ queryKey: ['field-config', tableName] }), [qc, tableName])
-  const invalidateMeta = useCallback(() => qc.invalidateQueries({ queryKey: ['collection-meta', tableName] }), [qc, tableName])
+  const invalidateGroups = useCallback(
+    () => qc.invalidateQueries({ queryKey: ['field-groups', tableName] }),
+    [qc, tableName]
+  )
+  const invalidateFieldConfig = useCallback(
+    () => qc.invalidateQueries({ queryKey: ['field-config', tableName] }),
+    [qc, tableName]
+  )
+  const invalidateMeta = useCallback(
+    () => qc.invalidateQueries({ queryKey: ['collection-meta', tableName] }),
+    [qc, tableName]
+  )
 
   // Debounced layout save — watches state directly (no stale-ref risk)
   // Must be declared after invalidateFieldConfig to avoid TDZ error
@@ -9943,53 +12977,145 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       const seq = changeSeqRef.current
       const ungroupedPos = localGroupOrder.indexOf('__ungrouped__')
       // Build assignments from localFieldOrder directly — __pool__ is the static Fields List, skip it
-      const fieldAssignments: Array<{ field: string; group_key: string | null; sort: number; label_override?: string | null; is_visible?: boolean; col_span?: number | null; overrides?: Record<string, unknown> | null; show_row_revisions?: boolean; allow_revision_restore?: boolean | null; lock_conditions?: string | null; widget_id?: number; input_bindings?: Array<{ key: string; binding_type: string; binding_value: string }> | null }> = []
+      const fieldAssignments: Array<{
+        field: string
+        group_key: string | null
+        sort: number
+        label_override?: string | null
+        is_visible?: boolean
+        col_span?: number | null
+        overrides?: Record<string, unknown> | null
+        show_row_revisions?: boolean
+        allow_revision_restore?: boolean | null
+        lock_conditions?: string | null
+        widget_id?: number
+        input_bindings?: Array<{ key: string; binding_type: string; binding_value: string }> | null
+      }> = []
       for (const [container, fields] of Object.entries(localFieldOrder)) {
         if (container === '__pool__') continue
         const gk = container === '__unassigned__' ? null : container
         fields.forEach((f, idx) => {
           if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
             const wMeta = widgetSlotMeta[f]
-            if (wMeta) fieldAssignments.push({ field: f, group_key: gk, sort: idx, label_override: wMeta.label_override, is_visible: wMeta.is_visible, widget_id: wMeta.widget_id, input_bindings: wMeta.input_bindings.length > 0 ? wMeta.input_bindings : null })
+            if (wMeta)
+              fieldAssignments.push({
+                field: f,
+                group_key: gk,
+                sort: idx,
+                label_override: wMeta.label_override,
+                is_visible: wMeta.is_visible,
+                widget_id: wMeta.widget_id,
+                input_bindings: wMeta.input_bindings.length > 0 ? wMeta.input_bindings : null
+              })
           } else if (gk === '__header__') {
             const hMeta = headerFieldDisplayMeta[f]
-            const styleBindings: Array<{ key: string; binding_type: 'static'; binding_value: string }> = []
-            if (hMeta?.display_format && hMeta.display_format !== 'text') styleBindings.push({ key: '__display_format__', binding_type: 'static', binding_value: hMeta.display_format })
-            if (hMeta?.color) styleBindings.push({ key: '__color__', binding_type: 'static', binding_value: hMeta.color })
-            if (hMeta?.weight) styleBindings.push({ key: '__weight__', binding_type: 'static', binding_value: hMeta.weight })
-            if (hMeta?.display_as) styleBindings.push({ key: '__display_as__', binding_type: 'static', binding_value: hMeta.display_as })
-            fieldAssignments.push({ field: f, group_key: gk, sort: idx, label_override: hMeta?.label_override ?? null, input_bindings: styleBindings.length > 0 ? styleBindings : null })
+            const styleBindings: Array<{
+              key: string
+              binding_type: 'static'
+              binding_value: string
+            }> = []
+            if (hMeta?.display_format && hMeta.display_format !== 'text')
+              styleBindings.push({
+                key: '__display_format__',
+                binding_type: 'static',
+                binding_value: hMeta.display_format
+              })
+            if (hMeta?.color)
+              styleBindings.push({
+                key: '__color__',
+                binding_type: 'static',
+                binding_value: hMeta.color
+              })
+            if (hMeta?.weight)
+              styleBindings.push({
+                key: '__weight__',
+                binding_type: 'static',
+                binding_value: hMeta.weight
+              })
+            if (hMeta?.display_as)
+              styleBindings.push({
+                key: '__display_as__',
+                binding_type: 'static',
+                binding_value: hMeta.display_as
+              })
+            fieldAssignments.push({
+              field: f,
+              group_key: gk,
+              sort: idx,
+              label_override: hMeta?.label_override ?? null,
+              input_bindings: styleBindings.length > 0 ? styleBindings : null
+            })
           } else {
             const ov = localOverrides[f]
             const config = inlineDisplayMeta[f]
-            const inlineBinding = config && config.entries.length > 0
-              ? [{ key: '__inline_display__', binding_type: 'static' as const, binding_value: JSON.stringify({ fields: config.entries, separator: config.separator }) }]
-              : null
+            const inlineBinding =
+              config && config.entries.length > 0
+                ? [
+                    {
+                      key: '__inline_display__',
+                      binding_type: 'static' as const,
+                      binding_value: JSON.stringify({
+                        fields: config.entries,
+                        separator: config.separator
+                      })
+                    }
+                  ]
+                : null
             const lc = localLockConditions[f]
-            fieldAssignments.push({ field: f, group_key: gk, sort: idx, col_span: localColSpans[f] ?? null, overrides: ov && Object.keys(ov).length > 0 ? ov : null, show_row_revisions: localRowRevisions[f] ?? false, allow_revision_restore: localAllowRevisionRestore[f] ?? true, lock_conditions: lc?.length ? JSON.stringify(lc) : null, input_bindings: inlineBinding })
+            fieldAssignments.push({
+              field: f,
+              group_key: gk,
+              sort: idx,
+              col_span: localColSpans[f] ?? null,
+              overrides: ov && Object.keys(ov).length > 0 ? ov : null,
+              show_row_revisions: localRowRevisions[f] ?? false,
+              allow_revision_restore: localAllowRevisionRestore[f] ?? true,
+              lock_conditions: lc?.length ? JSON.stringify(lc) : null,
+              input_bindings: inlineBinding
+            })
           }
         })
       }
       const assignments = [
         ...fieldAssignments,
-        { field: '__ungrouped_pos__', group_key: null, sort: ungroupedPos >= 0 ? ungroupedPos : localGroupOrder.length },
+        {
+          field: '__ungrouped_pos__',
+          group_key: null,
+          sort: ungroupedPos >= 0 ? ungroupedPos : localGroupOrder.length
+        },
         // Page slot sentinels — sort derived from position in localGroupOrder
-        ...SLOT_KEYS.map(key => ({
+        ...SLOT_KEYS.map((key) => ({
           field: key,
           group_key: null,
-          sort: localGroupOrder.indexOf(key as SlotKey) >= 0 ? localGroupOrder.indexOf(key as SlotKey) : localGroupOrder.length,
+          sort:
+            localGroupOrder.indexOf(key as SlotKey) >= 0
+              ? localGroupOrder.indexOf(key as SlotKey)
+              : localGroupOrder.length,
           label_override: slots[key].label_override,
           is_visible: slots[key].is_visible,
           default_expanded: slots[key].default_expanded,
-          show_approval_chain: slots[key].show_approval_chain,
+          show_approval_chain: slots[key].show_approval_chain
         })),
         // Subtitle sentinel
-        ...(subtitleConfig ? [{
-          field: '__subtitle__',
-          group_key: null,
-          sort: 0,
-          input_bindings: [{ key: '__subtitle_config__', binding_type: 'static', binding_value: JSON.stringify({ fields: subtitleConfig.fields, separator: subtitleConfig.separator }) }],
-        }] : []),
+        ...(subtitleConfig
+          ? [
+              {
+                field: '__subtitle__',
+                group_key: null,
+                sort: 0,
+                input_bindings: [
+                  {
+                    key: '__subtitle_config__',
+                    binding_type: 'static',
+                    binding_value: JSON.stringify({
+                      fields: subtitleConfig.fields,
+                      separator: subtitleConfig.separator
+                    })
+                  }
+                ]
+              }
+            ]
+          : [])
       ]
       // Keep group sorts in sync with slot sorts: slot sort = position in localGroupOrder,
       // so group sort must also = position in localGroupOrder; otherwise a group.sort from
@@ -10000,9 +13126,12 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
         .filter((x): x is { id: number; pos: number } => typeof x.id === 'number')
         .map(({ id, pos }) => ({ id, sort: pos }))
       if (groupSortUpdates.length > 0) {
-        api.post('/field-groups/reorder', { collection: tableName, order: groupSortUpdates }).catch(() => {})
+        api
+          .post('/field-groups/reorder', { collection: tableName, order: groupSortUpdates })
+          .catch(() => {})
       }
-      api.put(`/collection-layouts/${layoutId}/assignments`, { assignments })
+      api
+        .put(`/collection-layouts/${layoutId}/assignments`, { assignments })
         .then(() => {
           // Clear the dirty flag only if no newer local change arrived while this PUT was
           // in flight. Do NOT refetch on success: local state already equals what was
@@ -10017,33 +13146,73 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
           invalidateFieldConfig()
         })
     }, 400)
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [localAssignments, localColSpans, localRowRevisions, localOverrides, localFieldOrder, localGroupOrder, slots, widgetSlotMeta, headerFieldDisplayMeta, inlineDisplayMeta, subtitleConfig, layoutId, invalidateFieldConfig])
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    }
+  }, [
+    localAssignments,
+    localColSpans,
+    localRowRevisions,
+    localOverrides,
+    localFieldOrder,
+    localGroupOrder,
+    slots,
+    widgetSlotMeta,
+    headerFieldDisplayMeta,
+    inlineDisplayMeta,
+    subtitleConfig,
+    layoutId,
+    invalidateFieldConfig
+  ])
 
   const createMut = useMutation({
-    mutationFn: (body: { collection: string; key: string; label: string; type: 'section' | 'tab' | 'metadata' | 'container' }) =>
-      api.post('/field-groups', { ...body, layout_id: layoutId }),
-    onSuccess: () => { invalidateGroups(); setAdding(false); setNewKey(''); setNewLabel(''); toast.success('Group created') },
+    mutationFn: (body: {
+      collection: string
+      key: string
+      label: string
+      type: 'section' | 'tab' | 'metadata' | 'container'
+    }) => api.post('/field-groups', { ...body, layout_id: layoutId }),
+    onSuccess: () => {
+      invalidateGroups()
+      setAdding(false)
+      setNewKey('')
+      setNewLabel('')
+      toast.success('Group created')
+    },
     onError: () => toast.error('Failed to create group')
   })
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => api.delete(`/field-groups/${id}`),
-    onSuccess: () => { invalidateGroups(); invalidateFieldConfig(); toast.success('Group deleted') }
+    onSuccess: () => {
+      invalidateGroups()
+      invalidateFieldConfig()
+      toast.success('Group deleted')
+    }
   })
 
   const patchTypeMut = useMutation({
-    mutationFn: ({ id, type, tab_mode }: { id: number; type: 'section' | 'tab' | 'metadata' | 'container'; tab_mode?: 'tabs' | 'steps' | null }) => api.patch(`/field-groups/${id}`, { type, tab_mode }),
+    mutationFn: ({
+      id,
+      type,
+      tab_mode
+    }: {
+      id: number
+      type: 'section' | 'tab' | 'metadata' | 'container'
+      tab_mode?: 'tabs' | 'steps' | null
+    }) => api.patch(`/field-groups/${id}`, { type, tab_mode }),
     onSuccess: () => invalidateGroups()
   })
 
   const renameMut = useMutation({
-    mutationFn: ({ id, label }: { id: number; label: string }) => api.patch(`/field-groups/${id}`, { label }),
+    mutationFn: ({ id, label }: { id: number; label: string }) =>
+      api.patch(`/field-groups/${id}`, { label }),
     onSuccess: () => invalidateGroups()
   })
 
   const iconMut = useMutation({
-    mutationFn: ({ id, icon }: { id: number; icon: string | null }) => api.patch(`/field-groups/${id}`, { icon }),
+    mutationFn: ({ id, icon }: { id: number; icon: string | null }) =>
+      api.patch(`/field-groups/${id}`, { icon }),
     onSuccess: () => invalidateGroups()
   })
 
@@ -10080,86 +13249,142 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
   })
 
   // Keys that are per-layout overrides (not global field settings)
-  const LAYOUT_OVERRIDE_KEYS = ['label', 'interface', 'note', 'placeholder', 'required', 'hidden', 'readonly', 'options', 'inline_relation', 'max_values', 'drilldown']
+  const LAYOUT_OVERRIDE_KEYS = [
+    'label',
+    'interface',
+    'note',
+    'placeholder',
+    'required',
+    'hidden',
+    'readonly',
+    'options',
+    'inline_relation',
+    'max_values',
+    'drilldown'
+  ]
 
   // Option keys inside `options` JSON that are scoped to a specific layout and must NOT
   // be written to nivaro_fields (global). They live in layout_field_assignments.overrides.options.
-  const LAYOUT_LOCAL_OPTION_KEYS = ['layout_id', 'layout_slug', 'save_mode', 'show_line_numbers', 'enable_reorder', 'parent_cascades', 'row_rules', 'parent_context_fields', 'unique_by', 'sort_field', 'sort_dir']
+  const LAYOUT_LOCAL_OPTION_KEYS = [
+    'layout_id',
+    'layout_slug',
+    'save_mode',
+    'show_line_numbers',
+    'enable_reorder',
+    'parent_cascades',
+    'row_rules',
+    'parent_context_fields',
+    'unique_by',
+    'sort_field',
+    'sort_dir'
+  ]
 
-  const patchField = useCallback((field: string, patch: Record<string, unknown>) => {
-    if (layoutId && ('group_key' in patch || 'sort' in patch)) {
-      // State update triggers the debounced save effect — just mark dirty
-      hasLocalChangeRef.current = true
-      changeSeqRef.current++
-    } else if (layoutId && 'col_span' in patch) {
-      // col_span is per-layout — store in localColSpans and let debounced assignment save handle it
-      const span = patch.col_span as number | null
-      setLocalColSpans(prev => ({ ...prev, [field]: span }))
-      hasLocalChangeRef.current = true
-      changeSeqRef.current++
-    } else if (layoutId && Object.keys(patch).some(k => LAYOUT_OVERRIDE_KEYS.includes(k))) {
-      const { options: rawOptions, dependency_config: rawDepConfig, ...layoutPatch } = patch
-
-      // Split options: layout-local keys (layout_id, save_mode, etc.) go into localOverrides;
-      // global keys (format, currency, etc.) go to nivaro_fields.options.
-      let globalOptions: Record<string, unknown> | null = null
-      let localOptionsMerge: Record<string, unknown> | null = null
-      if (rawOptions !== undefined) {
-        let parsed: Record<string, unknown> = {}
-        try { parsed = typeof rawOptions === 'string' ? JSON.parse(rawOptions) : (rawOptions as Record<string, unknown>) ?? {} } catch { /* noop */ }
-        for (const [k, v] of Object.entries(parsed)) {
-          if (LAYOUT_LOCAL_OPTION_KEYS.includes(k)) {
-            localOptionsMerge = localOptionsMerge ?? {}
-            localOptionsMerge[k] = v
-          } else {
-            globalOptions = globalOptions ?? {}
-            globalOptions[k] = v
-          }
-        }
-      }
-
-      // Send only global options + dependency_config to nivaro_fields
-      if (globalOptions !== null || rawDepConfig !== undefined) {
-        const directPatch: Record<string, unknown> = {}
-        if (globalOptions !== null) directPatch.options = JSON.stringify(globalOptions)
-        if (rawDepConfig !== undefined) directPatch.dependency_config = rawDepConfig
-        api.patch(`/field-config/${tableName}/${field}`, directPatch)
-          .then(() => { invalidateFieldConfig(); invalidateMeta() })
-          .catch(() => { toast.error(`Failed to save settings for field "${field}"`) })
-      }
-
-      // Merge layout-local option keys + other override fields into localOverrides
-      const hasLayoutLocalOpts = localOptionsMerge !== null
-      const hasLayoutPatchKeys = Object.keys(layoutPatch).some(k => LAYOUT_OVERRIDE_KEYS.includes(k))
-      if (hasLayoutLocalOpts || hasLayoutPatchKeys) {
-        setLocalOverrides(prev => {
-          const existing = prev[field] ?? {}
-          const patched = { ...existing }
-          // Layout-local option keys go into overrides.options
-          if (localOptionsMerge) {
-            patched.options = { ...(typeof patched.options === 'object' && patched.options ? patched.options : {}), ...localOptionsMerge } as Record<string, unknown>
-          }
-          // Flatten inline_relation / max_values into the options sub-object; all other keys are top-level overrides
-          const optionKeys = ['inline_relation', 'max_values']
-          for (const [k, v] of Object.entries(layoutPatch)) {
-            if (!LAYOUT_OVERRIDE_KEYS.includes(k)) continue
-            if (optionKeys.includes(k)) {
-              patched.options = { ...(typeof patched.options === 'object' && patched.options ? patched.options : {}), [k]: v } as Record<string, unknown>
-            } else {
-              patched[k] = v
-            }
-          }
-          return { ...prev, [field]: patched }
-        })
+  const patchField = useCallback(
+    (field: string, patch: Record<string, unknown>) => {
+      if (layoutId && ('group_key' in patch || 'sort' in patch)) {
+        // State update triggers the debounced save effect — just mark dirty
         hasLocalChangeRef.current = true
         changeSeqRef.current++
+      } else if (layoutId && 'col_span' in patch) {
+        // col_span is per-layout — store in localColSpans and let debounced assignment save handle it
+        const span = patch.col_span as number | null
+        setLocalColSpans((prev) => ({ ...prev, [field]: span }))
+        hasLocalChangeRef.current = true
+        changeSeqRef.current++
+      } else if (layoutId && Object.keys(patch).some((k) => LAYOUT_OVERRIDE_KEYS.includes(k))) {
+        const { options: rawOptions, dependency_config: rawDepConfig, ...layoutPatch } = patch
+
+        // Split options: layout-local keys (layout_id, save_mode, etc.) go into localOverrides;
+        // global keys (format, currency, etc.) go to nivaro_fields.options.
+        let globalOptions: Record<string, unknown> | null = null
+        let localOptionsMerge: Record<string, unknown> | null = null
+        if (rawOptions !== undefined) {
+          let parsed: Record<string, unknown> = {}
+          try {
+            parsed =
+              typeof rawOptions === 'string'
+                ? JSON.parse(rawOptions)
+                : ((rawOptions as Record<string, unknown>) ?? {})
+          } catch {
+            /* noop */
+          }
+          for (const [k, v] of Object.entries(parsed)) {
+            if (LAYOUT_LOCAL_OPTION_KEYS.includes(k)) {
+              localOptionsMerge = localOptionsMerge ?? {}
+              localOptionsMerge[k] = v
+            } else {
+              globalOptions = globalOptions ?? {}
+              globalOptions[k] = v
+            }
+          }
+        }
+
+        // Send only global options + dependency_config to nivaro_fields
+        if (globalOptions !== null || rawDepConfig !== undefined) {
+          const directPatch: Record<string, unknown> = {}
+          if (globalOptions !== null) directPatch.options = JSON.stringify(globalOptions)
+          if (rawDepConfig !== undefined) directPatch.dependency_config = rawDepConfig
+          api
+            .patch(`/field-config/${tableName}/${field}`, directPatch)
+            .then(() => {
+              invalidateFieldConfig()
+              invalidateMeta()
+            })
+            .catch(() => {
+              toast.error(`Failed to save settings for field "${field}"`)
+            })
+        }
+
+        // Merge layout-local option keys + other override fields into localOverrides
+        const hasLayoutLocalOpts = localOptionsMerge !== null
+        const hasLayoutPatchKeys = Object.keys(layoutPatch).some((k) =>
+          LAYOUT_OVERRIDE_KEYS.includes(k)
+        )
+        if (hasLayoutLocalOpts || hasLayoutPatchKeys) {
+          setLocalOverrides((prev) => {
+            const existing = prev[field] ?? {}
+            const patched = { ...existing }
+            // Layout-local option keys go into overrides.options
+            if (localOptionsMerge) {
+              patched.options = {
+                ...(typeof patched.options === 'object' && patched.options ? patched.options : {}),
+                ...localOptionsMerge
+              } as Record<string, unknown>
+            }
+            // Flatten inline_relation / max_values into the options sub-object; all other keys are top-level overrides
+            const optionKeys = ['inline_relation', 'max_values']
+            for (const [k, v] of Object.entries(layoutPatch)) {
+              if (!LAYOUT_OVERRIDE_KEYS.includes(k)) continue
+              if (optionKeys.includes(k)) {
+                patched.options = {
+                  ...(typeof patched.options === 'object' && patched.options
+                    ? patched.options
+                    : {}),
+                  [k]: v
+                } as Record<string, unknown>
+              } else {
+                patched[k] = v
+              }
+            }
+            return { ...prev, [field]: patched }
+          })
+          hasLocalChangeRef.current = true
+          changeSeqRef.current++
+        }
+      } else {
+        api
+          .patch(`/field-config/${tableName}/${field}`, patch)
+          .then(() => {
+            invalidateFieldConfig()
+            invalidateMeta()
+          })
+          .catch(() => {
+            toast.error(`Failed to save settings for field "${field}"`)
+          })
       }
-    } else {
-      api.patch(`/field-config/${tableName}/${field}`, patch)
-        .then(() => { invalidateFieldConfig(); invalidateMeta() })
-        .catch(() => { toast.error(`Failed to save settings for field "${field}"`) })
-    }
-  }, [tableName, layoutId, invalidateFieldConfig, invalidateMeta])
+    },
+    [tableName, layoutId, invalidateFieldConfig, invalidateMeta]
+  )
 
   // ── Add group form ──
   const [adding, setAdding] = useState(false)
@@ -10175,11 +13400,14 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
   // orderedItems includes '__ungrouped__' sentinel at its saved position
   const orderedItems = useMemo(
-    () => localGroupOrder.map(id => {
-      if (id === '__ungrouped__') return '__ungrouped__'
-      if (SLOT_KEYS.includes(id as SlotKey)) return id as SlotKey
-      return groups.find(g => g.id === id) ?? null
-    }).filter(Boolean) as (FieldGroup | '__ungrouped__' | SlotKey)[],
+    () =>
+      localGroupOrder
+        .map((id) => {
+          if (id === '__ungrouped__') return '__ungrouped__'
+          if (SLOT_KEYS.includes(id as SlotKey)) return id as SlotKey
+          return groups.find((g) => g.id === id) ?? null
+        })
+        .filter(Boolean) as (FieldGroup | '__ungrouped__' | SlotKey)[],
     [localGroupOrder, groups]
   )
   const orderedGroups = useMemo(
@@ -10213,7 +13441,8 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     if (!over) return
     const activeId = String(active.id)
     const overId = String(over.id)
-    if (activeId.startsWith('group:') || overId.startsWith('drop:') || overId.startsWith('group:')) return
+    if (activeId.startsWith('group:') || overId.startsWith('drop:') || overId.startsWith('group:'))
+      return
 
     const fromContainer = findContainer(activeId)
     const toContainer = findContainer(overId)
@@ -10228,7 +13457,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     // dnd-kit fires onDragOver faster than React re-renders; if fromIdx/toIdx were
     // computed from the closure, a second call before re-render would apply wrong
     // indices to the already-updated prev state and flip the order back.
-    setLocalFieldOrder(prev => {
+    setLocalFieldOrder((prev) => {
       const fields = prev[fromContainer] ?? []
       const af = parseSortableId(activeId).fieldName
       const of_ = parseSortableId(overId).fieldName
@@ -10248,17 +13477,24 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
     // ── Group / slot reorder (includes __ungrouped__ and slot sentinels) ──
     if (activeId.startsWith('group:') || activeId.startsWith('slot:')) {
-      const activeKey = activeId.startsWith('slot:') ? activeId.replace('slot:', '') : activeId.replace('group:', '')
-      const overKey = overId.startsWith('slot:') ? overId.replace('slot:', '') : overId.replace('group:', '')
+      const activeKey = activeId.startsWith('slot:')
+        ? activeId.replace('slot:', '')
+        : activeId.replace('group:', '')
+      const overKey = overId.startsWith('slot:')
+        ? overId.replace('slot:', '')
+        : overId.replace('group:', '')
       const resolveKey = (id: number | '__ungrouped__' | SlotKey | string): string => {
         if (id === '__ungrouped__') return '__ungrouped__'
         if (typeof id === 'string') return id
-        return groups.find(g => g.id === id)?.key ?? ''
+        return groups.find((g) => g.id === id)?.key ?? ''
       }
-      const activeIdx = localGroupOrder.findIndex(id => resolveKey(id) === activeKey)
-      const overIdx = localGroupOrder.findIndex(id => resolveKey(id) === overKey)
+      const activeIdx = localGroupOrder.findIndex((id) => resolveKey(id) === activeKey)
+      const overIdx = localGroupOrder.findIndex((id) => resolveKey(id) === overKey)
       if (activeIdx === -1 || overIdx === -1 || activeIdx === overIdx) return
-      if (layoutId) { hasLocalChangeRef.current = true; changeSeqRef.current++ }
+      if (layoutId) {
+        hasLocalChangeRef.current = true
+        changeSeqRef.current++
+      }
       const newOrder = arrayMove(localGroupOrder, activeIdx, overIdx)
       setLocalGroupOrder(newOrder)
       reorderGroupsMut.mutate(
@@ -10270,8 +13506,11 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       // Persist ungrouped position to DB immediately — reorderGroupsMut only updates group sort values
       if (layoutId) {
         const ungroupedPos = newOrder.indexOf('__ungrouped__')
-        api.patch(`/collection-layouts/${layoutId}/ungrouped-sort`, { ungrouped_sort: ungroupedPos })
-          .catch(() => {/* non-fatal */})
+        api
+          .patch(`/collection-layouts/${layoutId}/ungrouped-sort`, { ungrouped_sort: ungroupedPos })
+          .catch(() => {
+            /* non-fatal */
+          })
       }
       return
     }
@@ -10290,16 +13529,19 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     if (!toContainer) return
 
     if (fromContainer === toContainer) {
-      if (fromContainer === '__pool__') return  // pool is unsortable
+      if (fromContainer === '__pool__') return // pool is unsortable
       // Already sorted in onDragOver; mark dirty and nudge state so save effect re-runs
       if (layoutId) {
         hasLocalChangeRef.current = true
         changeSeqRef.current++
-        setLocalFieldOrder(prev => ({ ...prev }))
+        setLocalFieldOrder((prev) => ({ ...prev }))
       } else {
         const fields = localFieldOrder[fromContainer] ?? []
         fields.forEach((f, idx) => {
-          api.patch(`/field-config/${tableName}/${f}`, { sort: idx, group_key: localAssignments[f] ?? null })
+          api.patch(`/field-config/${tableName}/${f}`, {
+            sort: idx,
+            group_key: localAssignments[f] ?? null
+          })
         })
         invalidateFieldConfig()
       }
@@ -10309,14 +13551,16 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     // ── Cross-container drop ──
     // __pool__ = Fields List (static palette) — dragging FROM it copies, never removes
     const activeFN = parseSortableId(activeId).fieldName
-    const newGroupKey = (toContainer === '__unassigned__' || toContainer === '__pool__') ? null : toContainer
-    setLocalAssignments(prev => ({ ...prev, [activeFN]: newGroupKey }))
-    setLocalFieldOrder(prev => {
-      const fromFields = fromContainer === '__pool__'
-        ? (prev[fromContainer] ?? [])  // copy: leave pool unchanged
-        : (prev[fromContainer] ?? []).filter(f => f !== activeFN)  // move: remove from source
+    const newGroupKey =
+      toContainer === '__unassigned__' || toContainer === '__pool__' ? null : toContainer
+    setLocalAssignments((prev) => ({ ...prev, [activeFN]: newGroupKey }))
+    setLocalFieldOrder((prev) => {
+      const fromFields =
+        fromContainer === '__pool__'
+          ? (prev[fromContainer] ?? []) // copy: leave pool unchanged
+          : (prev[fromContainer] ?? []).filter((f) => f !== activeFN) // move: remove from source
       const toFields = (prev[toContainer] ?? []).includes(activeFN)
-        ? (prev[toContainer] ?? [])  // already there (multi-group), skip duplicate
+        ? (prev[toContainer] ?? []) // already there (multi-group), skip duplicate
         : [...(prev[toContainer] ?? []), activeFN]
       return { ...prev, [fromContainer]: fromFields, [toContainer]: toFields }
     })
@@ -10326,81 +13570,122 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     } else {
       patchField(activeFN, {
         group_key: newGroupKey,
-        sort: (localFieldOrder[toContainer] ?? []).length,
+        sort: (localFieldOrder[toContainer] ?? []).length
       })
     }
   }
 
-  const getColSpan = useCallback((f: string) => {
-    if (layoutId) {
-      const span = localColSpans[f]
-      return span != null ? span : 12
-    }
-    const field = allFields.find(af => af.field === f)
-    return parseColSpan(field?.options)
-  }, [allFields, layoutId, localColSpans])
+  const getColSpan = useCallback(
+    (f: string) => {
+      if (layoutId) {
+        const span = localColSpans[f]
+        return span != null ? span : 12
+      }
+      const field = allFields.find((af) => af.field === f)
+      return parseColSpan(field?.options)
+    },
+    [allFields, layoutId, localColSpans]
+  )
 
-  const getFieldSettings = useCallback((f: string): FieldSettings => {
-    const fc = fieldConfig.find(c => c.field === f)
-    const rawOpts = (fc as Record<string, unknown> | undefined)?.options
-    let opts: Record<string, unknown> = {}
-    try {
-      opts = typeof rawOpts === 'string' ? JSON.parse(rawOpts) : ((rawOpts as Record<string, unknown>) ?? {})
-    } catch { /* noop */ }
+  const getFieldSettings = useCallback(
+    (f: string): FieldSettings => {
+      const fc = fieldConfig.find((c) => c.field === f)
+      const rawOpts = (fc as Record<string, unknown> | undefined)?.options
+      let opts: Record<string, unknown> = {}
+      try {
+        opts =
+          typeof rawOpts === 'string'
+            ? JSON.parse(rawOpts)
+            : ((rawOpts as Record<string, unknown>) ?? {})
+      } catch {
+        /* noop */
+      }
 
-    // Merge per-layout overrides optimistically (local state, not yet saved)
-    const ov = localOverrides[f] ?? {}
-    const ovOpts = typeof ov.options === 'object' && ov.options ? (ov.options as Record<string, unknown>) : {}
-    const mergedOpts = { ...opts, ...ovOpts }
+      // Merge per-layout overrides optimistically (local state, not yet saved)
+      const ov = localOverrides[f] ?? {}
+      const ovOpts =
+        typeof ov.options === 'object' && ov.options ? (ov.options as Record<string, unknown>) : {}
+      const mergedOpts = { ...opts, ...ovOpts }
 
-    return {
-      label: (ov.label !== undefined ? ov.label : fc?.label) as string | null ?? null,
-      interface: (ov.interface !== undefined ? ov.interface : fc?.interface) as string | null ?? null,
-      note: (ov.note !== undefined ? ov.note : fc?.note) as string | null ?? null,
-      placeholder: (ov.placeholder !== undefined ? ov.placeholder : (fc as Record<string, unknown> | undefined)?.placeholder) as string | null ?? null,
-      required: ov.required !== undefined ? !!ov.required : !!fc?.required,
-      hidden: ov.hidden !== undefined ? !!ov.hidden : !!fc?.hidden,
-      readonly: ov.readonly !== undefined ? !!ov.readonly : !!fc?.readonly,
-      inline_relation: mergedOpts.inline_relation === true,
-      max_values: typeof mergedOpts.max_values === 'number' ? mergedOpts.max_values : null,
-      options: Object.keys(mergedOpts).length > 0 ? JSON.stringify(mergedOpts) : null,
-      drilldown:
-        (ov.drilldown as FieldSettings['drilldown']) ??
-        ((fc as Record<string, unknown> | undefined)?._overrides as Record<string, unknown> | null | undefined)?.drilldown as FieldSettings['drilldown'] ??
-        null,
-    }
-  }, [fieldConfig, localOverrides])
+      return {
+        label: ((ov.label !== undefined ? ov.label : fc?.label) as string | null) ?? null,
+        interface:
+          ((ov.interface !== undefined ? ov.interface : fc?.interface) as string | null) ?? null,
+        note: ((ov.note !== undefined ? ov.note : fc?.note) as string | null) ?? null,
+        placeholder:
+          ((ov.placeholder !== undefined
+            ? ov.placeholder
+            : (fc as Record<string, unknown> | undefined)?.placeholder) as string | null) ?? null,
+        required: ov.required !== undefined ? !!ov.required : !!fc?.required,
+        hidden: ov.hidden !== undefined ? !!ov.hidden : !!fc?.hidden,
+        readonly: ov.readonly !== undefined ? !!ov.readonly : !!fc?.readonly,
+        inline_relation: mergedOpts.inline_relation === true,
+        max_values: typeof mergedOpts.max_values === 'number' ? mergedOpts.max_values : null,
+        options: Object.keys(mergedOpts).length > 0 ? JSON.stringify(mergedOpts) : null,
+        drilldown:
+          (ov.drilldown as FieldSettings['drilldown']) ??
+          ((
+            (fc as Record<string, unknown> | undefined)?._overrides as
+              | Record<string, unknown>
+              | null
+              | undefined
+          )?.drilldown as FieldSettings['drilldown']) ??
+          null
+      }
+    },
+    [fieldConfig, localOverrides]
+  )
 
   // Base settings for pool chips — reads raw nivaro_fields data, never applies layout overrides
-  const getBaseFieldSettings = useCallback((f: string): FieldSettings => {
-    // colMeta.fields = raw nivaro_fields rows; label here is never overridden by a layout
-    const raw = (colMeta?.fields as Array<Record<string, unknown>> | undefined)?.find(r => r.field === f)
-    const rawOpts = raw?.options
-    let opts: Record<string, unknown> = {}
-    try { opts = typeof rawOpts === 'string' ? JSON.parse(rawOpts as string) : ((rawOpts as Record<string, unknown>) ?? {}) } catch { /* noop */ }
-    return {
-      label: (raw?.label as string | null) ?? null,
-      interface: (raw?.interface as string | null) ?? null,
-      note: (raw?.note as string | null) ?? null,
-      placeholder: (raw?.placeholder as string | null) ?? null,
-      required: !!(raw?.required),
-      hidden: !!(raw?.hidden),
-      readonly: !!(raw?.readonly),
-      inline_relation: opts.inline_relation === true,
-      max_values: typeof opts.max_values === 'number' ? opts.max_values : null,
-      options: typeof rawOpts === 'string' ? rawOpts as string : (rawOpts ? JSON.stringify(rawOpts) : null),
-    }
-  }, [colMeta])
+  const getBaseFieldSettings = useCallback(
+    (f: string): FieldSettings => {
+      // colMeta.fields = raw nivaro_fields rows; label here is never overridden by a layout
+      const raw = (colMeta?.fields as Array<Record<string, unknown>> | undefined)?.find(
+        (r) => r.field === f
+      )
+      const rawOpts = raw?.options
+      let opts: Record<string, unknown> = {}
+      try {
+        opts =
+          typeof rawOpts === 'string'
+            ? JSON.parse(rawOpts as string)
+            : ((rawOpts as Record<string, unknown>) ?? {})
+      } catch {
+        /* noop */
+      }
+      return {
+        label: (raw?.label as string | null) ?? null,
+        interface: (raw?.interface as string | null) ?? null,
+        note: (raw?.note as string | null) ?? null,
+        placeholder: (raw?.placeholder as string | null) ?? null,
+        required: !!raw?.required,
+        hidden: !!raw?.hidden,
+        readonly: !!raw?.readonly,
+        inline_relation: opts.inline_relation === true,
+        max_values: typeof opts.max_values === 'number' ? opts.max_values : null,
+        options:
+          typeof rawOpts === 'string'
+            ? (rawOpts as string)
+            : rawOpts
+              ? JSON.stringify(rawOpts)
+              : null
+      }
+    },
+    [colMeta]
+  )
 
-  const handleFieldSettings = useCallback((f: string, patch: Partial<FieldSettings> & { dependency_config?: string }) => {
-    patchField(f, patch)
-  }, [patchField])
+  const handleFieldSettings = useCallback(
+    (f: string, patch: Partial<FieldSettings> & { dependency_config?: string }) => {
+      patchField(f, patch)
+    },
+    [patchField]
+  )
 
   const handleUnassign = useCallback((f: string, containerKey: string) => {
     if (containerKey === '__pool__') return
-    setLocalFieldOrder(prev => ({
+    setLocalFieldOrder((prev) => ({
       ...prev,
-      [containerKey]: (prev[containerKey] ?? []).filter(x => x !== f),
+      [containerKey]: (prev[containerKey] ?? []).filter((x) => x !== f)
       // __pool__ (Fields List) always keeps all fields — no change needed
     }))
     hasLocalChangeRef.current = true
@@ -10415,21 +13700,21 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       toast.error('Pick a field on a related collection (at least one hop)')
       return
     }
-    setLocalFieldOrder(prev => {
+    setLocalFieldOrder((prev) => {
       if ((prev.__unassigned__ ?? []).includes(path)) return prev
       return { ...prev, __unassigned__: [...(prev.__unassigned__ ?? []), path] }
     })
-    setLocalAssignments(a => ({ ...a, [path]: null }))
+    setLocalAssignments((a) => ({ ...a, [path]: null }))
     hasLocalChangeRef.current = true
     changeSeqRef.current++
   }, [])
 
   // Bulk: move every field from the Unassigned pool into the Ungrouped zone
   const handleAddAllToUngrouped = useCallback(() => {
-    setLocalFieldOrder(prev => {
+    setLocalFieldOrder((prev) => {
       const pool = prev.__pool__ ?? []
       if (pool.length === 0) return prev
-      setLocalAssignments(a => {
+      setLocalAssignments((a) => {
         const next = { ...a }
         for (const f of pool) next[f] = null
         return next
@@ -10437,7 +13722,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       return {
         ...prev,
         __pool__: [],
-        __unassigned__: [...(prev.__unassigned__ ?? []), ...pool],
+        __unassigned__: [...(prev.__unassigned__ ?? []), ...pool]
       }
     })
     hasLocalChangeRef.current = true
@@ -10446,10 +13731,10 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
 
   // Bulk: move every field from the Ungrouped zone back into the Unassigned pool
   const handleReturnAllToPool = useCallback(() => {
-    setLocalFieldOrder(prev => {
+    setLocalFieldOrder((prev) => {
       const ungrouped = prev.__unassigned__ ?? []
       if (ungrouped.length === 0) return prev
-      setLocalAssignments(a => {
+      setLocalAssignments((a) => {
         const next = { ...a }
         for (const f of ungrouped) next[f] = null
         return next
@@ -10457,7 +13742,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
       return {
         ...prev,
         __unassigned__: [],
-        __pool__: [...(prev.__pool__ ?? []), ...ungrouped],
+        __pool__: [...(prev.__pool__ ?? []), ...ungrouped]
       }
     })
     hasLocalChangeRef.current = true
@@ -10471,220 +13756,143 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     changeSeqRef.current++
   }, [layoutId])
 
-  const getExtraControls = useCallback((f: string, opts?: { isM2O?: boolean; relatedCollection?: string | null }): React.ReactNode => {
-    if (f === PDF_FIELD) {
-      const attachField = (localOverrides[f]?.attach_to_field as string | null) ?? null
-      const filenameTemplate = (localOverrides[f]?.filename_template as string | null) ?? null
-      return (
-        <PdfFieldConfigButton
-          tableName={tableName}
-          value={attachField}
-          filenameTemplate={filenameTemplate}
-          onChange={v => {
-            setLocalOverrides(prev => ({ ...prev, [f]: { ...prev[f], attach_to_field: v } }))
-            hasLocalChangeRef.current = true
-            changeSeqRef.current++
-          }}
-          onFilenameChange={v => {
-            setLocalOverrides(prev => ({ ...prev, [f]: { ...prev[f], filename_template: v } }))
-            hasLocalChangeRef.current = true
-            changeSeqRef.current++
-          }}
-        />
-      )
-    }
-    if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
-      const meta = widgetSlotMeta[f]
-      if (!meta) return undefined
-      const wDef = availableWidgets.find(w => w.id === meta.widget_id)
-      const declaredInputs = (wDef?.inputs as Array<{ key: string; label: string; type: string; required?: boolean }> | null) ?? []
-      const derivedInputs: Array<{ key: string; label: string; type: string }> = (() => {
-        if (declaredInputs.length > 0) return []
-        const cfg = ((wDef as unknown as Record<string, unknown>)?.config as Record<string, unknown> | null) ?? {}
-        const pb = (cfg.param_bindings as Array<{ param?: string; input_key?: string }> | null) ?? []
-        const seen = new Set<string>()
-        const out: Array<{ key: string; label: string; type: string }> = []
-        for (const b of pb) {
-          const k = b.input_key
-          if (k && !seen.has(k)) { seen.add(k); out.push({ key: k, label: k, type: 'string' }) }
-        }
-        return out
-      })()
-      const wInputs = declaredInputs.length > 0 ? declaredInputs : derivedInputs
-      const updateBinding = (inputKey: string, patch: Partial<{ binding_type: string; binding_value: string }>) => {
-        setWidgetSlotMeta(prev => {
-          const prevMeta = prev[f]
-          const existing = prevMeta.input_bindings.find(b => b.key === inputKey)
-          const updated = { key: inputKey, binding_type: (patch.binding_type ?? existing?.binding_type ?? 'item_field') as 'item_field' | 'static' | 'url_param', binding_value: patch.binding_value ?? existing?.binding_value ?? '' }
-          const next = prevMeta.input_bindings.filter(b => b.key !== inputKey)
-          next.push(updated)
-          return { ...prev, [f]: { ...prevMeta, input_bindings: next } }
-        })
-        hasLocalChangeRef.current = true
-        changeSeqRef.current++
+  const getExtraControls = useCallback(
+    (f: string, opts?: { isM2O?: boolean; relatedCollection?: string | null }): React.ReactNode => {
+      if (f === PDF_FIELD) {
+        const attachField = (localOverrides[f]?.attach_to_field as string | null) ?? null
+        const filenameTemplate = (localOverrides[f]?.filename_template as string | null) ?? null
+        return (
+          <PdfFieldConfigButton
+            tableName={tableName}
+            value={attachField}
+            filenameTemplate={filenameTemplate}
+            onChange={(v) => {
+              setLocalOverrides((prev) => ({ ...prev, [f]: { ...prev[f], attach_to_field: v } }))
+              hasLocalChangeRef.current = true
+              changeSeqRef.current++
+            }}
+            onFilenameChange={(v) => {
+              setLocalOverrides((prev) => ({ ...prev, [f]: { ...prev[f], filename_template: v } }))
+              hasLocalChangeRef.current = true
+              changeSeqRef.current++
+            }}
+          />
+        )
       }
-      return (
-        <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5'>
-          <div className='flex items-center gap-1.5'>
-            <input
-              type='text'
-              placeholder='Label override'
-              defaultValue={meta.label_override ?? ''}
-              onBlur={e => {
-                const v = e.target.value.trim() || null
-                setWidgetSlotMeta(prev => ({ ...prev, [f]: { ...prev[f], label_override: v } }))
-                hasLocalChangeRef.current = true
-                changeSeqRef.current++
-              }}
-              className='w-32 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
-            />
-            <button
-              type='button'
-              title='Remove widget'
-              onClick={() => {
-                setWidgetSlotMeta(prev => { const n = { ...prev }; delete n[f]; return n })
-                setLocalFieldOrder(prev => {
-                  const next: Record<string, string[]> = {}
-                  for (const [k, v] of Object.entries(prev)) next[k] = v.filter(x => x !== f)
-                  return next
-                })
-                hasLocalChangeRef.current = true
-                changeSeqRef.current++
-              }}
-              className='text-[10px] text-slate-300 hover:text-red-400'
-            >✕ Remove</button>
-          </div>
-          {wInputs.length > 0 && (
-            <div className='space-y-1'>
-              <p className='text-[10px] font-medium text-slate-400'>Bindings</p>
-              {wInputs.map(inp => {
-                const binding = meta.input_bindings.find(b => b.key === inp.key) ?? { key: inp.key, binding_type: 'item_field' as const, binding_value: '' }
-                return (
-                  <div key={inp.key} className='space-y-0.5'>
-                    <div className='flex items-center gap-1'>
-                      <span className='w-16 shrink-0 truncate font-mono text-[9px] text-slate-400'>{inp.label || inp.key}</span>
-                      <select
-                        value={binding.binding_type}
-                        onChange={e => updateBinding(inp.key, { binding_type: e.target.value, binding_value: '' })}
-                        className='w-20 shrink-0 rounded border border-slate-200 bg-white px-1 py-px text-[9px]'
-                      >
-                        <option value='item_field'>Field</option>
-                        <option value='static'>Static</option>
-                        <option value='url_param'>URL Param</option>
-                      </select>
-                    </div>
-                    {binding.binding_type === 'item_field' ? (
-                      <FieldPicker
-                        collection={tableName}
-                        fields={allFields}
-                        relations={relations as CMSRelation[]}
-                        value={binding.binding_value}
-                        onChange={(picked) => updateBinding(inp.key, { binding_value: picked.path.join('.') })}
-                        onClear={() => updateBinding(inp.key, { binding_value: '' })}
-                        placeholder='Select field…'
-                      />
-                    ) : (
-                      <input
-                        type='text'
-                        value={binding.binding_value}
-                        placeholder={binding.binding_type === 'url_param' ? 'param name' : 'value'}
-                        onChange={e => updateBinding(inp.key, { binding_value: e.target.value })}
-                        className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-px text-[9px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-                      />
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      )
-    }
-    return undefined
-  }, [tableName, localOverrides, widgetSlotMeta, availableWidgets])
-
-  const FORMAT_OPTIONS = [
-    { value: 'text', label: 'Text (default)' },
-    { value: 'currency', label: 'Currency ($)' },
-    { value: 'integer', label: 'Integer' },
-    { value: 'decimal', label: 'Decimal' },
-    { value: 'percent', label: 'Percent' },
-    { value: 'date', label: 'Date' },
-    { value: 'datetime', label: 'Date & Time' },
-  ]
-
-  const getHeaderFieldExtraControls = useCallback((f: string): React.ReactNode => {
-    const isWidgetSlot = typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')
-
-    if (isWidgetSlot) {
-      const wMeta = widgetSlotMeta[f]
-      if (!wMeta) return undefined
-      const wDef = availableWidgets.find(w => w.id === wMeta.widget_id)
-      const declaredInputs = (wDef?.inputs as Array<{ key: string; label: string; type: string; required?: boolean }> | null) ?? []
-      const derivedInputs: Array<{ key: string; label: string; type: string }> = (() => {
-        if (declaredInputs.length > 0) return []
-        const cfg = ((wDef as unknown as Record<string, unknown>)?.config as Record<string, unknown> | null) ?? {}
-        const pb = (cfg.param_bindings as Array<{ param?: string; input_key?: string }> | null) ?? []
-        const seen = new Set<string>()
-        const out: Array<{ key: string; label: string; type: string }> = []
-        for (const b of pb) {
-          const k = b.input_key
-          if (k && !seen.has(k)) { seen.add(k); out.push({ key: k, label: k, type: 'string' }) }
-        }
-        return out
-      })()
-      const wInputs = declaredInputs.length > 0 ? declaredInputs : derivedInputs
-      const updateBinding = (inputKey: string, patch: Partial<{ binding_type: string; binding_value: string }>) => {
-        setWidgetSlotMeta(prev => {
-          const prevMeta = prev[f]
-          const existing = prevMeta.input_bindings.find(b => b.key === inputKey)
-          const updated = {
-            key: inputKey,
-            binding_type: (patch.binding_type ?? existing?.binding_type ?? 'item_field') as 'item_field' | 'static' | 'url_param',
-            binding_value: patch.binding_value ?? existing?.binding_value ?? ''
+      if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
+        const meta = widgetSlotMeta[f]
+        if (!meta) return undefined
+        const wDef = availableWidgets.find((w) => w.id === meta.widget_id)
+        const declaredInputs =
+          (wDef?.inputs as Array<{
+            key: string
+            label: string
+            type: string
+            required?: boolean
+          }> | null) ?? []
+        const derivedInputs: Array<{ key: string; label: string; type: string }> = (() => {
+          if (declaredInputs.length > 0) return []
+          const cfg =
+            ((wDef as unknown as Record<string, unknown>)?.config as Record<
+              string,
+              unknown
+            > | null) ?? {}
+          const pb =
+            (cfg.param_bindings as Array<{ param?: string; input_key?: string }> | null) ?? []
+          const seen = new Set<string>()
+          const out: Array<{ key: string; label: string; type: string }> = []
+          for (const b of pb) {
+            const k = b.input_key
+            if (k && !seen.has(k)) {
+              seen.add(k)
+              out.push({ key: k, label: k, type: 'string' })
+            }
           }
-          const next = prevMeta.input_bindings.filter(b => b.key !== inputKey)
-          next.push(updated)
-          return { ...prev, [f]: { ...prevMeta, input_bindings: next } }
-        })
-        hasLocalChangeRef.current = true
-        changeSeqRef.current++
-      }
-      return (
-        <Popover>
-          <PopoverTrigger asChild>
-            <button type='button' className='ml-0.5 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600' onClick={e => e.stopPropagation()}>
-              <Settings2 className='h-3 w-3' />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className='w-52 p-2 space-y-2' side='bottom' align='start' onClick={e => e.stopPropagation()}>
-            <div className='space-y-1'>
-              <p className='text-[10px] font-medium text-slate-400'>Label override</p>
+          return out
+        })()
+        const wInputs = declaredInputs.length > 0 ? declaredInputs : derivedInputs
+        const updateBinding = (
+          inputKey: string,
+          patch: Partial<{ binding_type: string; binding_value: string }>
+        ) => {
+          setWidgetSlotMeta((prev) => {
+            const prevMeta = prev[f]
+            const existing = prevMeta.input_bindings.find((b) => b.key === inputKey)
+            const updated = {
+              key: inputKey,
+              binding_type: (patch.binding_type ?? existing?.binding_type ?? 'item_field') as
+                | 'item_field'
+                | 'static'
+                | 'url_param',
+              binding_value: patch.binding_value ?? existing?.binding_value ?? ''
+            }
+            const next = prevMeta.input_bindings.filter((b) => b.key !== inputKey)
+            next.push(updated)
+            return { ...prev, [f]: { ...prevMeta, input_bindings: next } }
+          })
+          hasLocalChangeRef.current = true
+          changeSeqRef.current++
+        }
+        return (
+          <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5'>
+            <div className='flex items-center gap-1.5'>
               <input
                 type='text'
-                placeholder='Use default'
-                defaultValue={wMeta.label_override ?? ''}
-                onBlur={e => {
+                placeholder='Label override'
+                defaultValue={meta.label_override ?? ''}
+                onBlur={(e) => {
                   const v = e.target.value.trim() || null
-                  setWidgetSlotMeta(prev => ({ ...prev, [f]: { ...prev[f], label_override: v } }))
+                  setWidgetSlotMeta((prev) => ({ ...prev, [f]: { ...prev[f], label_override: v } }))
                   hasLocalChangeRef.current = true
                   changeSeqRef.current++
                 }}
-                className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+                className='w-32 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
               />
+              <button
+                type='button'
+                title='Remove widget'
+                onClick={() => {
+                  setWidgetSlotMeta((prev) => {
+                    const n = { ...prev }
+                    delete n[f]
+                    return n
+                  })
+                  setLocalFieldOrder((prev) => {
+                    const next: Record<string, string[]> = {}
+                    for (const [k, v] of Object.entries(prev)) next[k] = v.filter((x) => x !== f)
+                    return next
+                  })
+                  hasLocalChangeRef.current = true
+                  changeSeqRef.current++
+                }}
+                className='text-[10px] text-slate-300 hover:text-red-400'
+              >
+                ✕ Remove
+              </button>
             </div>
             {wInputs.length > 0 && (
-              <div className='space-y-1.5'>
+              <div className='space-y-1'>
                 <p className='text-[10px] font-medium text-slate-400'>Bindings</p>
-                {wInputs.map(inp => {
-                  const binding = wMeta.input_bindings.find(b => b.key === inp.key) ?? { key: inp.key, binding_type: 'item_field' as const, binding_value: '' }
+                {wInputs.map((inp) => {
+                  const binding = meta.input_bindings.find((b) => b.key === inp.key) ?? {
+                    key: inp.key,
+                    binding_type: 'item_field' as const,
+                    binding_value: ''
+                  }
                   return (
                     <div key={inp.key} className='space-y-0.5'>
                       <div className='flex items-center gap-1'>
-                        <span className='w-16 shrink-0 truncate font-mono text-[9px] text-slate-400'>{inp.label || inp.key}</span>
+                        <span className='w-16 shrink-0 truncate font-mono text-[9px] text-slate-400'>
+                          {inp.label || inp.key}
+                        </span>
                         <select
                           value={binding.binding_type}
-                          onChange={e => updateBinding(inp.key, { binding_type: e.target.value, binding_value: '' })}
+                          onChange={(e) =>
+                            updateBinding(inp.key, {
+                              binding_type: e.target.value,
+                              binding_value: ''
+                            })
+                          }
                           className='w-20 shrink-0 rounded border border-slate-200 bg-white px-1 py-px text-[9px]'
                         >
                           <option value='item_field'>Field</option>
@@ -10698,7 +13906,9 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                           fields={allFields}
                           relations={relations as CMSRelation[]}
                           value={binding.binding_value}
-                          onChange={(picked) => updateBinding(inp.key, { binding_value: picked.path.join('.') })}
+                          onChange={(picked) =>
+                            updateBinding(inp.key, { binding_value: picked.path.join('.') })
+                          }
                           onClear={() => updateBinding(inp.key, { binding_value: '' })}
                           placeholder='Select field…'
                         />
@@ -10706,8 +13916,12 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                         <input
                           type='text'
                           value={binding.binding_value}
-                          placeholder={binding.binding_type === 'url_param' ? 'param name' : 'value'}
-                          onChange={e => updateBinding(inp.key, { binding_value: e.target.value })}
+                          placeholder={
+                            binding.binding_type === 'url_param' ? 'param name' : 'value'
+                          }
+                          onChange={(e) =>
+                            updateBinding(inp.key, { binding_value: e.target.value })
+                          }
                           className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-px text-[9px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
                         />
                       )}
@@ -10716,147 +13930,404 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                 })}
               </div>
             )}
+          </div>
+        )
+      }
+      return undefined
+    },
+    [tableName, localOverrides, widgetSlotMeta, availableWidgets]
+  )
+
+  const FORMAT_OPTIONS = [
+    { value: 'text', label: 'Text (default)' },
+    { value: 'currency', label: 'Currency ($)' },
+    { value: 'integer', label: 'Integer' },
+    { value: 'decimal', label: 'Decimal' },
+    { value: 'percent', label: 'Percent' },
+    { value: 'date', label: 'Date' },
+    { value: 'datetime', label: 'Date & Time' }
+  ]
+
+  const getHeaderFieldExtraControls = useCallback(
+    (f: string): React.ReactNode => {
+      const isWidgetSlot = typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')
+
+      if (isWidgetSlot) {
+        const wMeta = widgetSlotMeta[f]
+        if (!wMeta) return undefined
+        const wDef = availableWidgets.find((w) => w.id === wMeta.widget_id)
+        const declaredInputs =
+          (wDef?.inputs as Array<{
+            key: string
+            label: string
+            type: string
+            required?: boolean
+          }> | null) ?? []
+        const derivedInputs: Array<{ key: string; label: string; type: string }> = (() => {
+          if (declaredInputs.length > 0) return []
+          const cfg =
+            ((wDef as unknown as Record<string, unknown>)?.config as Record<
+              string,
+              unknown
+            > | null) ?? {}
+          const pb =
+            (cfg.param_bindings as Array<{ param?: string; input_key?: string }> | null) ?? []
+          const seen = new Set<string>()
+          const out: Array<{ key: string; label: string; type: string }> = []
+          for (const b of pb) {
+            const k = b.input_key
+            if (k && !seen.has(k)) {
+              seen.add(k)
+              out.push({ key: k, label: k, type: 'string' })
+            }
+          }
+          return out
+        })()
+        const wInputs = declaredInputs.length > 0 ? declaredInputs : derivedInputs
+        const updateBinding = (
+          inputKey: string,
+          patch: Partial<{ binding_type: string; binding_value: string }>
+        ) => {
+          setWidgetSlotMeta((prev) => {
+            const prevMeta = prev[f]
+            const existing = prevMeta.input_bindings.find((b) => b.key === inputKey)
+            const updated = {
+              key: inputKey,
+              binding_type: (patch.binding_type ?? existing?.binding_type ?? 'item_field') as
+                | 'item_field'
+                | 'static'
+                | 'url_param',
+              binding_value: patch.binding_value ?? existing?.binding_value ?? ''
+            }
+            const next = prevMeta.input_bindings.filter((b) => b.key !== inputKey)
+            next.push(updated)
+            return { ...prev, [f]: { ...prevMeta, input_bindings: next } }
+          })
+          hasLocalChangeRef.current = true
+          changeSeqRef.current++
+        }
+        return (
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type='button'
+                className='ml-0.5 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Settings2 className='h-3 w-3' />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              className='w-52 p-2 space-y-2'
+              side='bottom'
+              align='start'
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className='space-y-1'>
+                <p className='text-[10px] font-medium text-slate-400'>Label override</p>
+                <input
+                  type='text'
+                  placeholder='Use default'
+                  defaultValue={wMeta.label_override ?? ''}
+                  onBlur={(e) => {
+                    const v = e.target.value.trim() || null
+                    setWidgetSlotMeta((prev) => ({
+                      ...prev,
+                      [f]: { ...prev[f], label_override: v }
+                    }))
+                    hasLocalChangeRef.current = true
+                    changeSeqRef.current++
+                  }}
+                  className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+                />
+              </div>
+              {wInputs.length > 0 && (
+                <div className='space-y-1.5'>
+                  <p className='text-[10px] font-medium text-slate-400'>Bindings</p>
+                  {wInputs.map((inp) => {
+                    const binding = wMeta.input_bindings.find((b) => b.key === inp.key) ?? {
+                      key: inp.key,
+                      binding_type: 'item_field' as const,
+                      binding_value: ''
+                    }
+                    return (
+                      <div key={inp.key} className='space-y-0.5'>
+                        <div className='flex items-center gap-1'>
+                          <span className='w-16 shrink-0 truncate font-mono text-[9px] text-slate-400'>
+                            {inp.label || inp.key}
+                          </span>
+                          <select
+                            value={binding.binding_type}
+                            onChange={(e) =>
+                              updateBinding(inp.key, {
+                                binding_type: e.target.value,
+                                binding_value: ''
+                              })
+                            }
+                            className='w-20 shrink-0 rounded border border-slate-200 bg-white px-1 py-px text-[9px]'
+                          >
+                            <option value='item_field'>Field</option>
+                            <option value='static'>Static</option>
+                            <option value='url_param'>URL Param</option>
+                          </select>
+                        </div>
+                        {binding.binding_type === 'item_field' ? (
+                          <FieldPicker
+                            collection={tableName}
+                            fields={allFields}
+                            relations={relations as CMSRelation[]}
+                            value={binding.binding_value}
+                            onChange={(picked) =>
+                              updateBinding(inp.key, { binding_value: picked.path.join('.') })
+                            }
+                            onClear={() => updateBinding(inp.key, { binding_value: '' })}
+                            placeholder='Select field…'
+                          />
+                        ) : (
+                          <input
+                            type='text'
+                            value={binding.binding_value}
+                            placeholder={
+                              binding.binding_type === 'url_param' ? 'param name' : 'value'
+                            }
+                            onChange={(e) =>
+                              updateBinding(inp.key, { binding_value: e.target.value })
+                            }
+                            className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-px text-[9px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+        )
+      }
+
+      const meta = headerFieldDisplayMeta[f] ?? { label_override: null, display_format: 'text' }
+      const update = (patch: Partial<HeaderFieldMeta>) => {
+        setHeaderFieldDisplayMeta((prev) => ({ ...prev, [f]: { ...meta, ...patch } }))
+        hasLocalChangeRef.current = true
+        changeSeqRef.current++
+      }
+      return (
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type='button'
+              className='ml-0.5 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Settings2 className='h-3 w-3' />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            className='w-52 p-2 space-y-2'
+            side='bottom'
+            align='start'
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className='space-y-1'>
+              <p className='text-[10px] text-slate-400 font-medium'>Label override</p>
+              <input
+                type='text'
+                placeholder='Use default'
+                defaultValue={meta.label_override ?? ''}
+                onBlur={(e) => update({ label_override: e.target.value.trim() || null })}
+                className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+              />
+            </div>
+            <div className='space-y-1'>
+              <p className='text-[10px] text-slate-400 font-medium'>Display format</p>
+              <select
+                value={meta.display_format}
+                onChange={(e) => update({ display_format: e.target.value })}
+                className='w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+              >
+                {FORMAT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className='space-y-1'>
+              <p className='text-[10px] text-slate-400 font-medium'>Color</p>
+              <div className='flex flex-wrap gap-1'>
+                {(['default', 'cyan', 'blue', 'green', 'amber', 'red', 'purple'] as const).map(
+                  (c) => (
+                    <button
+                      key={c}
+                      type='button'
+                      onClick={() => update({ color: c === 'default' ? undefined : c })}
+                      className={[
+                        'w-5 h-5 rounded-full border-2 transition-all',
+                        meta.color === c || (!meta.color && c === 'default')
+                          ? 'border-nvr-cyan scale-110'
+                          : 'border-transparent',
+                        c === 'default'
+                          ? 'bg-slate-300'
+                          : c === 'cyan'
+                            ? 'bg-nvr-cyan'
+                            : c === 'blue'
+                              ? 'bg-blue-500'
+                              : c === 'green'
+                                ? 'bg-emerald-500'
+                                : c === 'amber'
+                                  ? 'bg-amber-500'
+                                  : c === 'red'
+                                    ? 'bg-red-500'
+                                    : 'bg-purple-500'
+                      ].join(' ')}
+                    />
+                  )
+                )}
+              </div>
+            </div>
+            <div className='space-y-1'>
+              <p className='text-[10px] text-slate-400 font-medium'>Weight</p>
+              <div className='flex gap-1'>
+                {(['normal', 'medium', 'semibold', 'bold'] as const).map((w) => (
+                  <button
+                    key={w}
+                    type='button'
+                    onClick={() => update({ weight: w === 'normal' ? undefined : w })}
+                    className={[
+                      'rounded px-1.5 py-0.5 text-[10px] border transition-colors',
+                      meta.weight === w || (!meta.weight && w === 'normal')
+                        ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
+                        : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                    ].join(' ')}
+                  >
+                    {w[0].toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className='space-y-1'>
+              <p className='text-[10px] text-slate-400 font-medium'>Display as</p>
+              <div className='flex gap-1'>
+                {(['text', 'pill', 'tag'] as const).map((d) => (
+                  <button
+                    key={d}
+                    type='button'
+                    onClick={() => update({ display_as: d === 'text' ? undefined : d })}
+                    className={[
+                      'rounded px-1.5 py-0.5 text-[10px] border transition-colors',
+                      meta.display_as === d || (!meta.display_as && d === 'text')
+                        ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
+                        : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                    ].join(' ')}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            </div>
           </PopoverContent>
         </Popover>
       )
-    }
+    },
+    [headerFieldDisplayMeta, widgetSlotMeta, availableWidgets, tableName, allFields, relations]
+  )
 
-    const meta = headerFieldDisplayMeta[f] ?? { label_override: null, display_format: 'text' }
-    const update = (patch: Partial<HeaderFieldMeta>) => {
-      setHeaderFieldDisplayMeta(prev => ({ ...prev, [f]: { ...meta, ...patch } }))
-      hasLocalChangeRef.current = true
-      changeSeqRef.current++
-    }
-    return (
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type='button'
-            className='ml-0.5 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600'
-            onClick={e => e.stopPropagation()}
-          >
-            <Settings2 className='h-3 w-3' />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className='w-52 p-2 space-y-2' side='bottom' align='start' onClick={e => e.stopPropagation()}>
-          <div className='space-y-1'>
-            <p className='text-[10px] text-slate-400 font-medium'>Label override</p>
-            <input
-              type='text'
-              placeholder='Use default'
-              defaultValue={meta.label_override ?? ''}
-              onBlur={e => update({ label_override: e.target.value.trim() || null })}
-              className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
-            />
-          </div>
-          <div className='space-y-1'>
-            <p className='text-[10px] text-slate-400 font-medium'>Display format</p>
-            <select
-              value={meta.display_format}
-              onChange={e => update({ display_format: e.target.value })}
-              className='w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-            >
-              {FORMAT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-          <div className='space-y-1'>
-            <p className='text-[10px] text-slate-400 font-medium'>Color</p>
-            <div className='flex flex-wrap gap-1'>
-              {(['default','cyan','blue','green','amber','red','purple'] as const).map(c => (
-                <button key={c} type='button'
-                  onClick={() => update({ color: c === 'default' ? undefined : c })}
-                  className={['w-5 h-5 rounded-full border-2 transition-all', meta.color === c || (!meta.color && c === 'default') ? 'border-nvr-cyan scale-110' : 'border-transparent', c === 'default' ? 'bg-slate-300' : c === 'cyan' ? 'bg-nvr-cyan' : c === 'blue' ? 'bg-blue-500' : c === 'green' ? 'bg-emerald-500' : c === 'amber' ? 'bg-amber-500' : c === 'red' ? 'bg-red-500' : 'bg-purple-500'].join(' ')}
-                />
-              ))}
-            </div>
-          </div>
-          <div className='space-y-1'>
-            <p className='text-[10px] text-slate-400 font-medium'>Weight</p>
-            <div className='flex gap-1'>
-              {(['normal','medium','semibold','bold'] as const).map(w => (
-                <button key={w} type='button'
-                  onClick={() => update({ weight: w === 'normal' ? undefined : w })}
-                  className={['rounded px-1.5 py-0.5 text-[10px] border transition-colors', meta.weight === w || (!meta.weight && w === 'normal') ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300'].join(' ')}
-                >{w[0].toUpperCase()}</button>
-              ))}
-            </div>
-          </div>
-          <div className='space-y-1'>
-            <p className='text-[10px] text-slate-400 font-medium'>Display as</p>
-            <div className='flex gap-1'>
-              {(['text','pill','tag'] as const).map(d => (
-                <button key={d} type='button'
-                  onClick={() => update({ display_as: d === 'text' ? undefined : d })}
-                  className={['rounded px-1.5 py-0.5 text-[10px] border transition-colors', meta.display_as === d || (!meta.display_as && d === 'text') ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300'].join(' ')}
-                >{d}</button>
-              ))}
-            </div>
-          </div>
-        </PopoverContent>
-      </Popover>
-    )
-  }, [headerFieldDisplayMeta, widgetSlotMeta, availableWidgets, tableName, allFields, relations])
-
-  const updateSlot = useCallback((key: SlotKey, patch: Partial<SlotState>) => {
-    setSlots(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }))
-    markSlotDirty()
-  }, [markSlotDirty])
+  const updateSlot = useCallback(
+    (key: SlotKey, patch: Partial<SlotState>) => {
+      setSlots((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
+      markSlotDirty()
+    },
+    [markSlotDirty]
+  )
 
   // Move a slot up/down within the combined ordering of groups + ungrouped + slots.
   // We only renumber the slots' sort values; group/ungrouped positions are untouched.
-  const moveSlot = useCallback((key: SlotKey, dir: -1 | 1) => {
-    setSlots(prev => {
-      const ordered = [...SLOT_KEYS].sort((a, b) => prev[a].sort - prev[b].sort)
-      const idx = ordered.indexOf(key)
-      const swapIdx = idx + dir
-      if (swapIdx < 0 || swapIdx >= ordered.length) return prev
-      const other = ordered[swapIdx]
-      return {
-        ...prev,
-        [key]: { ...prev[key], sort: prev[other].sort },
-        [other]: { ...prev[other], sort: prev[key].sort }
-      }
-    })
-    markSlotDirty()
-  }, [markSlotDirty])
+  const moveSlot = useCallback(
+    (key: SlotKey, dir: -1 | 1) => {
+      setSlots((prev) => {
+        const ordered = [...SLOT_KEYS].sort((a, b) => prev[a].sort - prev[b].sort)
+        const idx = ordered.indexOf(key)
+        const swapIdx = idx + dir
+        if (swapIdx < 0 || swapIdx >= ordered.length) return prev
+        const other = ordered[swapIdx]
+        return {
+          ...prev,
+          [key]: { ...prev[key], sort: prev[other].sort },
+          [other]: { ...prev[other], sort: prev[key].sort }
+        }
+      })
+      markSlotDirty()
+    },
+    [markSlotDirty]
+  )
 
-  const slotLabel = useCallback((key: SlotKey) => slots[key].label_override?.trim() || SLOT_META[key].defaultLabel, [slots])
-  const orderedSlots = useMemo(() => [...SLOT_KEYS].sort((a, b) => slots[a].sort - slots[b].sort), [slots])
+  const slotLabel = useCallback(
+    (key: SlotKey) => slots[key].label_override?.trim() || SLOT_META[key].defaultLabel,
+    [slots]
+  )
+  const orderedSlots = useMemo(
+    () => [...SLOT_KEYS].sort((a, b) => slots[a].sort - slots[b].sort),
+    [slots]
+  )
 
   // M2O helpers for cascade filter editor
-  const getM2OFields = useCallback((): CascadeParentField[] =>
-    allFields
-      .filter(f => relKind(f.field) === 'M2O' || relKind(f.field) === 'M2M')
-      .map(f => ({
-        field: f.field,
-        label: getFieldSettings(f.field).label ?? titleCase(f.field),
-        kind: relKind(f.field) as 'M2O' | 'M2M',
-      }))
-  , [allFields, relKind, getFieldSettings])
+  const getM2OFields = useCallback(
+    (): CascadeParentField[] =>
+      allFields
+        .filter((f) => relKind(f.field) === 'M2O' || relKind(f.field) === 'M2M')
+        .map((f) => ({
+          field: f.field,
+          label: getFieldSettings(f.field).label ?? titleCase(f.field),
+          kind: relKind(f.field) as 'M2O' | 'M2M'
+        })),
+    [allFields, relKind, getFieldSettings]
+  )
 
-  const getDependencyConfig = useCallback((f: string): Record<string, unknown> | null =>
-    (fieldConfig.find(c => c.field === f)?.dependency_config ?? null) as Record<string, unknown> | null
-  , [fieldConfig])
+  const getDependencyConfig = useCallback(
+    (f: string): Record<string, unknown> | null =>
+      (fieldConfig.find((c) => c.field === f)?.dependency_config ?? null) as Record<
+        string,
+        unknown
+      > | null,
+    [fieldConfig]
+  )
 
   // Returns the far-end related collection for M2O or M2M fields (used for filter_column suggestions)
-  const getRelatedCollection = useCallback((fieldName: string): string | null => {
-    const kind = relKind(fieldName)
-    if (kind === 'M2O') {
-      return relations.find(r => r.many_field === fieldName)?.one_collection ?? null
-    }
-    if (kind === 'M2M') {
-      const junction = relations.find(r => r.one_field === fieldName && r.junction_field !== null)
-      if (!junction) return null
-      return relations.find(r => r.many_collection === junction.many_collection && r.many_field === junction.junction_field && r.one_field !== fieldName)?.one_collection ?? null
-    }
-    if (kind === 'O2M') {
-      const rel = relations.find(r => !r.junction_field && (r.one_field === fieldName || (r.one_field === 'id' && r.many_collection === fieldName)))
-      return rel?.many_collection ?? null
-    }
-    return null
-  }, [relations, relKind])
+  const getRelatedCollection = useCallback(
+    (fieldName: string): string | null => {
+      const kind = relKind(fieldName)
+      if (kind === 'M2O') {
+        return relations.find((r) => r.many_field === fieldName)?.one_collection ?? null
+      }
+      if (kind === 'M2M') {
+        const junction = relations.find(
+          (r) => r.one_field === fieldName && r.junction_field !== null
+        )
+        if (!junction) return null
+        return (
+          relations.find(
+            (r) =>
+              r.many_collection === junction.many_collection &&
+              r.many_field === junction.junction_field &&
+              r.one_field !== fieldName
+          )?.one_collection ?? null
+        )
+      }
+      if (kind === 'O2M') {
+        const rel = relations.find(
+          (r) =>
+            !r.junction_field &&
+            (r.one_field === fieldName || (r.one_field === 'id' && r.many_collection === fieldName))
+        )
+        return rel?.many_collection ?? null
+      }
+      return null
+    },
+    [relations, relKind]
+  )
 
-  const activeFieldData = activeFieldId ? allFields.find(f => f.field === activeFieldId) : null
+  const activeFieldData = activeFieldId ? allFields.find((f) => f.field === activeFieldId) : null
 
   return (
     <DndContext
@@ -10878,198 +14349,234 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
     >
       <div className='flex gap-4 items-start'>
         {/* Left sidebar — unassigned field pool; also a drop target so dragging chips back here unassigns them */}
-        <div className='w-60 shrink-0 self-start sticky' style={{ top: 100, height: 'calc(100dvh - 220px)' }}>
+        <div
+          className='w-60 shrink-0 self-start sticky'
+          style={{ top: 100, height: 'calc(100dvh - 220px)' }}
+        >
           <DroppableFieldZone containerId='__pool__' className='h-full'>
-          <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card flex flex-col h-full overflow-hidden'>
-            {/* Header */}
-            <div className='shrink-0 border-b border-slate-100 dark:border-border px-3 pt-2.5 pb-2 space-y-2'>
-              <div className='flex items-center justify-between'>
-                <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>Fields</span>
-                <span className='rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-px text-[10px] font-medium text-slate-500 dark:text-slate-400 tabular-nums'>
-                  {(localFieldOrder.__pool__ ?? []).length}
-                </span>
-              </div>
-              {/* Search */}
-              <div className='relative'>
-                <Search className='absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-400 pointer-events-none' />
-                <input
-                  type='text'
-                  value={poolSearch}
-                  onChange={e => setPoolSearch(e.target.value)}
-                  placeholder='Search fields…'
-                  className='w-full rounded-md border border-slate-200 dark:border-border bg-slate-50 dark:bg-slate-900 pl-6 pr-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 placeholder:text-slate-400 outline-none focus:border-nvr-cyan focus:ring-1 focus:ring-nvr-cyan/30'
-                />
-                {poolSearch && (
-                  <button
-                    type='button'
-                    onClick={() => setPoolSearch('')}
-                    className='absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600'
-                  >
-                    <X className='h-2.5 w-2.5' />
-                  </button>
-                )}
-              </div>
-              {/* Relation-path field: pull a field from a related collection (any depth) */}
-              <div className='mt-1.5'>
-                <CollectionFieldPicker
-                  collection={tableName}
-                  value=''
-                  onChange={handleAddRelationPath}
-                  placeholder='＋ Related field…'
-                />
-              </div>
-              {/* Category filter pills */}
-              {(() => {
-                const all = localFieldOrder.__pool__ ?? []
-                const wk = all.filter(f => typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__'))
-                const nw = all.filter(f => !wk.includes(f))
-                const rl = nw.filter(f => relKind(f) !== null)
-                const pl = nw.filter(f => relKind(f) === null)
-                const cats: Array<{ id: typeof poolCategory; label: string; count: number }> = [
-                  { id: 'all', label: 'All', count: all.length },
-                  { id: 'fields', label: 'Fields', count: pl.length },
-                  { id: 'relations', label: 'Relations', count: rl.length },
-                  ...(wk.length > 0 ? [{ id: 'widgets' as const, label: 'Widgets', count: wk.length }] : []),
-                ]
-                return (
-                  <div className='flex gap-1'>
-                    {cats.map(c => (
-                      <button
-                        key={c.id}
-                        type='button'
-                        onClick={() => setPoolCategory(c.id)}
-                        className={cn(
-                          'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
-                          poolCategory === c.id
-                            ? 'bg-nvr-cyan/10 text-nvr-cyan'
-                            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
-                        )}
-                      >
-                        {c.label}
-                      </button>
-                    ))}
-                  </div>
-                )
-              })()}
-            </div>
-            {/* Field list */}
-            <div className='flex-1 min-h-0 overflow-y-auto'>
-              {(() => {
-                const all = localFieldOrder.__pool__ ?? []
-                const getLabel = (f: string) => titleCase(f)
-                const widgetKeys = all.filter(f => typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__'))
-                const nonWidgets = all.filter(f => !widgetKeys.includes(f))
-                const relFields = nonWidgets.filter(f => relKind(f) !== null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
-                const plainFields = nonWidgets.filter(f => relKind(f) === null).sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
-
-                const applySearch = (fields: string[]) =>
-                  poolSearch.trim()
-                    ? fields.filter(f => getLabel(f).toLowerCase().includes(poolSearch.toLowerCase()))
-                    : fields
-
-                const visiblePlain = poolCategory === 'all' || poolCategory === 'fields' ? applySearch(plainFields) : []
-                const visibleRel = poolCategory === 'all' || poolCategory === 'relations' ? applySearch(relFields) : []
-                const visibleWidgets = poolCategory === 'all' || poolCategory === 'widgets' ? applySearch(widgetKeys) : []
-                const totalVisible = visiblePlain.length + visibleRel.length + visibleWidgets.length
-
-                const renderRow = (f: string) => {
-                  if (f === OWNERS_FIELD) {
-                    return (
-                      <SortableFieldChip
-                        key={f}
-                        sortableId={`f::__pool__::${f}`}
-                        fieldName={f}
-                        displayName='Owners'
-                        fieldType='owners'
-                        colSpan={12}
-                        compact
-                      />
-                    )
-                  }
-                  if (f === PDF_FIELD) {
-                    return (
-                      <SortableFieldChip
-                        key={f}
-                        sortableId={`f::__pool__::${f}`}
-                        fieldName={f}
-                        displayName='PDF Button'
-                        fieldType='pdf'
-                        colSpan={12}
-                        compact
-                      />
-                    )
-                  }
-                  if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
-                    const meta = widgetSlotMeta[f]
-                    return (
-                      <SortableFieldChip
-                        key={f}
-                        sortableId={`f::__pool__::${f}`}
-                        fieldName={f}
-                        displayName={meta?.label_override || meta?.name || 'Widget'}
-                        fieldType='widget'
-                        colSpan={12}
-                        compact
-                      />
-                    )
-                  }
-                  const ft = allFields.find(af => af.field === f)
-                  const kind = relKind(f)
-                  return (
-                    <SortableFieldChip
-                      key={f}
-                      sortableId={`f::__pool__::${f}`}
-                      fieldName={f}
-                      displayName={titleCase(f)}
-                      fieldType={kind ?? friendlyType(ft?.type, f)}
-                      abstractType={kind ? kind.toLowerCase() : ft?.type}
-                      isM2O={kind === 'M2O'}
-                      isM2M={kind === 'M2M'}
-                      colSpan={12}
-                      compact
-                    />
+            <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card flex flex-col h-full overflow-hidden'>
+              {/* Header */}
+              <div className='shrink-0 border-b border-slate-100 dark:border-border px-3 pt-2.5 pb-2 space-y-2'>
+                <div className='flex items-center justify-between'>
+                  <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                    Fields
+                  </span>
+                  <span className='rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-px text-[10px] font-medium text-slate-500 dark:text-slate-400 tabular-nums'>
+                    {(localFieldOrder.__pool__ ?? []).length}
+                  </span>
+                </div>
+                {/* Search */}
+                <div className='relative'>
+                  <Search className='absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-400 pointer-events-none' />
+                  <input
+                    type='text'
+                    value={poolSearch}
+                    onChange={(e) => setPoolSearch(e.target.value)}
+                    placeholder='Search fields…'
+                    className='w-full rounded-md border border-slate-200 dark:border-border bg-slate-50 dark:bg-slate-900 pl-6 pr-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 placeholder:text-slate-400 outline-none focus:border-nvr-cyan focus:ring-1 focus:ring-nvr-cyan/30'
+                  />
+                  {poolSearch && (
+                    <button
+                      type='button'
+                      onClick={() => setPoolSearch('')}
+                      className='absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600'
+                    >
+                      <X className='h-2.5 w-2.5' />
+                    </button>
+                  )}
+                </div>
+                {/* Relation-path field: pull a field from a related collection (any depth) */}
+                <div className='mt-1.5'>
+                  <CollectionFieldPicker
+                    collection={tableName}
+                    value=''
+                    onChange={handleAddRelationPath}
+                    placeholder='＋ Related field…'
+                  />
+                </div>
+                {/* Category filter pills */}
+                {(() => {
+                  const all = localFieldOrder.__pool__ ?? []
+                  const wk = all.filter(
+                    (f) => typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')
                   )
-                }
-
-                if (totalVisible === 0) {
+                  const nw = all.filter((f) => !wk.includes(f))
+                  const rl = nw.filter((f) => relKind(f) !== null)
+                  const pl = nw.filter((f) => relKind(f) === null)
+                  const cats: Array<{ id: typeof poolCategory; label: string; count: number }> = [
+                    { id: 'all', label: 'All', count: all.length },
+                    { id: 'fields', label: 'Fields', count: pl.length },
+                    { id: 'relations', label: 'Relations', count: rl.length },
+                    ...(wk.length > 0
+                      ? [{ id: 'widgets' as const, label: 'Widgets', count: wk.length }]
+                      : [])
+                  ]
                   return (
-                    <div className='px-3 py-6 text-center text-[11px] text-slate-400'>
-                      {poolSearch ? `No fields matching "${poolSearch}"` : 'All fields assigned'}
+                    <div className='flex gap-1'>
+                      {cats.map((c) => (
+                        <button
+                          key={c.id}
+                          type='button'
+                          onClick={() => setPoolCategory(c.id)}
+                          className={cn(
+                            'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                            poolCategory === c.id
+                              ? 'bg-nvr-cyan/10 text-nvr-cyan'
+                              : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          )}
+                        >
+                          {c.label}
+                        </button>
+                      ))}
                     </div>
                   )
-                }
+                })()}
+              </div>
+              {/* Field list */}
+              <div className='flex-1 min-h-0 overflow-y-auto'>
+                {(() => {
+                  const all = localFieldOrder.__pool__ ?? []
+                  const getLabel = (f: string) => titleCase(f)
+                  const widgetKeys = all.filter(
+                    (f) => typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')
+                  )
+                  const nonWidgets = all.filter((f) => !widgetKeys.includes(f))
+                  const relFields = nonWidgets
+                    .filter((f) => relKind(f) !== null)
+                    .sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
+                  const plainFields = nonWidgets
+                    .filter((f) => relKind(f) === null)
+                    .sort((a, b) => getLabel(a).localeCompare(getLabel(b)))
 
-                return (
-                  <div className='py-1'>
-                    {visiblePlain.length > 0 && (poolCategory === 'all' || poolCategory === 'fields') && (
-                      <div>
-                        {poolCategory === 'all' && (
-                          <p className='px-3 pt-2 pb-0.5 text-[10px] font-semibold text-slate-400 dark:text-slate-500'>Fields</p>
-                        )}
-                        {visiblePlain.map(renderRow)}
+                  const applySearch = (fields: string[]) =>
+                    poolSearch.trim()
+                      ? fields.filter((f) =>
+                          getLabel(f).toLowerCase().includes(poolSearch.toLowerCase())
+                        )
+                      : fields
+
+                  const visiblePlain =
+                    poolCategory === 'all' || poolCategory === 'fields'
+                      ? applySearch(plainFields)
+                      : []
+                  const visibleRel =
+                    poolCategory === 'all' || poolCategory === 'relations'
+                      ? applySearch(relFields)
+                      : []
+                  const visibleWidgets =
+                    poolCategory === 'all' || poolCategory === 'widgets'
+                      ? applySearch(widgetKeys)
+                      : []
+                  const totalVisible =
+                    visiblePlain.length + visibleRel.length + visibleWidgets.length
+
+                  const renderRow = (f: string) => {
+                    if (f === OWNERS_FIELD) {
+                      return (
+                        <SortableFieldChip
+                          key={f}
+                          sortableId={`f::__pool__::${f}`}
+                          fieldName={f}
+                          displayName='Owners'
+                          fieldType='owners'
+                          colSpan={12}
+                          compact
+                        />
+                      )
+                    }
+                    if (f === PDF_FIELD) {
+                      return (
+                        <SortableFieldChip
+                          key={f}
+                          sortableId={`f::__pool__::${f}`}
+                          fieldName={f}
+                          displayName='PDF Button'
+                          fieldType='pdf'
+                          colSpan={12}
+                          compact
+                        />
+                      )
+                    }
+                    if (typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')) {
+                      const meta = widgetSlotMeta[f]
+                      return (
+                        <SortableFieldChip
+                          key={f}
+                          sortableId={`f::__pool__::${f}`}
+                          fieldName={f}
+                          displayName={meta?.label_override || meta?.name || 'Widget'}
+                          fieldType='widget'
+                          colSpan={12}
+                          compact
+                        />
+                      )
+                    }
+                    const ft = allFields.find((af) => af.field === f)
+                    const kind = relKind(f)
+                    return (
+                      <SortableFieldChip
+                        key={f}
+                        sortableId={`f::__pool__::${f}`}
+                        fieldName={f}
+                        displayName={titleCase(f)}
+                        fieldType={kind ?? friendlyType(ft?.type, f)}
+                        abstractType={kind ? kind.toLowerCase() : ft?.type}
+                        isM2O={kind === 'M2O'}
+                        isM2M={kind === 'M2M'}
+                        colSpan={12}
+                        compact
+                      />
+                    )
+                  }
+
+                  if (totalVisible === 0) {
+                    return (
+                      <div className='px-3 py-6 text-center text-[11px] text-slate-400'>
+                        {poolSearch ? `No fields matching "${poolSearch}"` : 'All fields assigned'}
                       </div>
-                    )}
-                    {visibleRel.length > 0 && (poolCategory === 'all' || poolCategory === 'relations') && (
-                      <div>
-                        {poolCategory === 'all' && (
-                          <p className='px-3 pt-2 pb-0.5 text-[10px] font-semibold text-slate-400 dark:text-slate-500'>Relations</p>
+                    )
+                  }
+
+                  return (
+                    <div className='py-1'>
+                      {visiblePlain.length > 0 &&
+                        (poolCategory === 'all' || poolCategory === 'fields') && (
+                          <div>
+                            {poolCategory === 'all' && (
+                              <p className='px-3 pt-2 pb-0.5 text-[10px] font-semibold text-slate-400 dark:text-slate-500'>
+                                Fields
+                              </p>
+                            )}
+                            {visiblePlain.map(renderRow)}
+                          </div>
                         )}
-                        {visibleRel.map(renderRow)}
-                      </div>
-                    )}
-                    {visibleWidgets.length > 0 && (poolCategory === 'all' || poolCategory === 'widgets') && (
-                      <div>
-                        {poolCategory === 'all' && (
-                          <p className='px-3 pt-2 pb-0.5 text-[10px] font-semibold text-slate-400 dark:text-slate-500'>Widgets</p>
+                      {visibleRel.length > 0 &&
+                        (poolCategory === 'all' || poolCategory === 'relations') && (
+                          <div>
+                            {poolCategory === 'all' && (
+                              <p className='px-3 pt-2 pb-0.5 text-[10px] font-semibold text-slate-400 dark:text-slate-500'>
+                                Relations
+                              </p>
+                            )}
+                            {visibleRel.map(renderRow)}
+                          </div>
                         )}
-                        {visibleWidgets.map(renderRow)}
-                      </div>
-                    )}
-                  </div>
-                )
-              })()}
+                      {visibleWidgets.length > 0 &&
+                        (poolCategory === 'all' || poolCategory === 'widgets') && (
+                          <div>
+                            {poolCategory === 'all' && (
+                              <p className='px-3 pt-2 pb-0.5 text-[10px] font-semibold text-slate-400 dark:text-slate-500'>
+                                Widgets
+                              </p>
+                            )}
+                            {visibleWidgets.map(renderRow)}
+                          </div>
+                        )}
+                    </div>
+                  )
+                })()}
+              </div>
             </div>
-          </div>
           </DroppableFieldZone>
         </div>
 
@@ -11092,7 +14599,7 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className='w-56 p-1' align='end'>
-                      {availableWidgets.map(w => {
+                      {availableWidgets.map((w) => {
                         const key = `__widget_${w.id}__`
                         const alreadyAdded = widgetSlotMeta[key] !== undefined
                         return (
@@ -11102,11 +14609,20 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                             disabled={alreadyAdded}
                             onClick={() => {
                               if (alreadyAdded) return
-                              setWidgetSlotMeta(prev => ({ ...prev, [key]: { widget_id: w.id, name: w.name, label_override: null, is_visible: true, input_bindings: [] } }))
-                              setLocalFieldOrder(prev => ({
+                              setWidgetSlotMeta((prev) => ({
+                                ...prev,
+                                [key]: {
+                                  widget_id: w.id,
+                                  name: w.name,
+                                  label_override: null,
+                                  is_visible: true,
+                                  input_bindings: []
+                                }
+                              }))
+                              setLocalFieldOrder((prev) => ({
                                 ...prev,
                                 __pool__: [...(prev.__pool__ ?? []), key],
-                                __unassigned__: [...(prev.__unassigned__ ?? []), key],
+                                __unassigned__: [...(prev.__unassigned__ ?? []), key]
                               }))
                               hasLocalChangeRef.current = true
                               changeSeqRef.current++
@@ -11115,14 +14631,21 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                             className='flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 disabled:opacity-40'
                           >
                             <span className='flex-1'>{w.name}</span>
-                            <span className='rounded bg-nvr-cyan/10 px-1 py-px text-[10px] text-nvr-cyan'>{w.widget_type}</span>
+                            <span className='rounded bg-nvr-cyan/10 px-1 py-px text-[10px] text-nvr-cyan'>
+                              {w.widget_type}
+                            </span>
                           </button>
                         )
                       })}
                     </PopoverContent>
                   </Popover>
                 )}
-                <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding(true)}>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='h-7 text-[12px]'
+                  onClick={() => setAdding(true)}
+                >
                   <Plus className='mr-1 h-3 w-3' />
                   Add Group
                 </Button>
@@ -11130,310 +14653,740 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
             )}
           </div>
 
-        {/* Subtitle config */}
-        {layoutType !== 'table' && layoutId && (
-          <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-            <div className='flex items-center justify-between border-b border-slate-100 dark:border-border px-3 py-2'>
-              <p className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>Header Subtitle</p>
-              <input type='checkbox' checked={!!subtitleConfig} onChange={(e) => {
-                hasLocalChangeRef.current = true
-                changeSeqRef.current++
-                setSubtitleConfig(e.target.checked ? { fields: [], separator: ' | ' } : null)
-              }} className='h-3.5 w-3.5 rounded accent-nvr-cyan' />
-            </div>
-            {!!subtitleConfig && (
-              <div className='p-3 space-y-2'>
-                <p className='text-[10px] text-slate-400'>Fields shown inline below the item title in the form header.</p>
-                <div className='flex items-center gap-2'>
-                  <span className='text-[10px] text-slate-400 shrink-0'>Separator</span>
-                  <input type='text' value={subtitleConfig.separator}
-                    onChange={(e) => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(c => c ? { ...c, separator: e.target.value } : null) }}
-                    className='w-24 h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-700 dark:border-border dark:bg-background dark:text-slate-300' />
-                </div>
-                <div className='flex flex-wrap gap-1.5'>
-                  {subtitleConfig.fields.map((sf, i) => (
-                    <span key={i} className='relative inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] text-nvr-navy dark:text-nvr-cyan'>
-                      {sf.label ?? sf.field}
-                      <button type='button' onClick={() => setSubtitleStyleOpen(subtitleStyleOpen === i ? null : i)} className='hover:text-nvr-cyan ml-0.5 opacity-50 hover:opacity-100'>⚙</button>
-                      <button type='button' onClick={() => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(c => c ? { ...c, fields: c.fields.filter((_, j) => j !== i) } : null) }} className='hover:text-red-500 opacity-50 hover:opacity-100'>✕</button>
-                      {subtitleStyleOpen === i && (
-                        <>
-                          <div className='fixed inset-0 z-40' onClick={() => setSubtitleStyleOpen(null)} />
-                          <div className='absolute left-0 top-full z-50 mt-1 w-44 rounded-lg border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card p-2 space-y-2'>
-                            <div className='space-y-1'>
-                              <p className='text-[10px] font-medium text-slate-400'>Color</p>
-                              <div className='flex flex-wrap gap-1'>
-                                {(['default','cyan','blue','green','amber','red','purple'] as const).map(c => (
-                                  <button key={c} type='button'
-                                    onClick={() => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(cfg => cfg ? { ...cfg, fields: cfg.fields.map((f, j) => j === i ? { ...f, color: c === 'default' ? undefined : c } : f) } : null) }}
-                                    className={['w-5 h-5 rounded-full border-2 transition-all', sf.color === c || (!sf.color && c === 'default') ? 'border-nvr-cyan scale-110' : 'border-transparent', c === 'default' ? 'bg-slate-300' : c === 'cyan' ? 'bg-nvr-cyan' : c === 'blue' ? 'bg-blue-500' : c === 'green' ? 'bg-emerald-500' : c === 'amber' ? 'bg-amber-500' : c === 'red' ? 'bg-red-500' : 'bg-purple-500'].join(' ')}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                            <div className='space-y-1'>
-                              <p className='text-[10px] font-medium text-slate-400'>Weight</p>
-                              <div className='flex gap-1'>
-                                {(['normal','medium','semibold','bold'] as const).map(w => (
-                                  <button key={w} type='button'
-                                    onClick={() => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(cfg => cfg ? { ...cfg, fields: cfg.fields.map((f, j) => j === i ? { ...f, weight: w === 'normal' ? undefined : w } : f) } : null) }}
-                                    className={['rounded px-1.5 py-0.5 text-[10px] border transition-colors', sf.weight === w || (!sf.weight && w === 'normal') ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300'].join(' ')}
-                                  >{w[0].toUpperCase()}</button>
-                                ))}
-                              </div>
-                            </div>
-                            <div className='space-y-1'>
-                              <p className='text-[10px] font-medium text-slate-400'>Display as</p>
-                              <div className='flex gap-1'>
-                                {(['text','pill','tag'] as const).map(d => (
-                                  <button key={d} type='button'
-                                    onClick={() => { hasLocalChangeRef.current = true; changeSeqRef.current++; setSubtitleConfig(cfg => cfg ? { ...cfg, fields: cfg.fields.map((f, j) => j === i ? { ...f, display_as: d === 'text' ? undefined : d } : f) } : null) }}
-                                    className={['rounded px-1.5 py-0.5 text-[10px] border transition-colors', sf.display_as === d || (!sf.display_as && d === 'text') ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan' : 'border-slate-200 text-slate-500 hover:border-slate-300'].join(' ')}
-                                  >{d}</button>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        </>
-                      )}
-                    </span>
-                  ))}
-                </div>
-                <div className='relative'>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-6 w-full justify-start text-[11px] font-normal text-slate-500 border-dashed'
-                    onClick={() => setSubtitlePickerOpen(v => !v)}
-                  >
-                    <Plus className='mr-1 h-3 w-3' />
-                    Add field…
-                  </Button>
-                  {subtitlePickerOpen && (
-                    <>
-                      <div className='fixed inset-0 z-40' onClick={() => setSubtitlePickerOpen(false)} />
-                      <div className='absolute left-0 top-full z-50 mt-1'>
-                        <FieldPickerPanel
-                          collection={tableName}
-                          fields={allFields.filter(f => !f.field.startsWith('__') && !subtitleConfig.fields.some(sf => sf.field === f.field)) as CMSField[]}
-                          relations={relations as CMSRelation[]}
-                          onSelect={(picked) => {
-                            hasLocalChangeRef.current = true; changeSeqRef.current++
-                            setSubtitleConfig(c => c ? { ...c, fields: [...c.fields, { field: picked.path.join('.'), label: picked.pathLabels.join(' › ') }] } : null)
-                            setSubtitlePickerOpen(false)
-                          }}
-                        />
-                      </div>
-                    </>
-                  )}
-                </div>
+          {/* Subtitle config */}
+          {layoutType !== 'table' && layoutId && (
+            <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+              <div className='flex items-center justify-between border-b border-slate-100 dark:border-border px-3 py-2'>
+                <p className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                  Header Subtitle
+                </p>
+                <input
+                  type='checkbox'
+                  checked={!!subtitleConfig}
+                  onChange={(e) => {
+                    hasLocalChangeRef.current = true
+                    changeSeqRef.current++
+                    setSubtitleConfig(e.target.checked ? { fields: [], separator: ' | ' } : null)
+                  }}
+                  className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                />
               </div>
-            )}
-          </div>
-        )}
-
-        {/* Header zone — widgets dragged here render in the ItemEdit page header */}
-        {layoutType !== 'table' && (
-          <div className='rounded-lg border border-slate-200 bg-white'>
-            <div className='flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2'>
-              <span className='text-[11px] font-medium text-slate-500'>Item Header</span>
-              <span className='text-[10px] text-slate-300'>— items dropped here appear in a strip below the header bar</span>
+              {!!subtitleConfig && (
+                <div className='p-3 space-y-2'>
+                  <p className='text-[10px] text-slate-400'>
+                    Fields shown inline below the item title in the form header.
+                  </p>
+                  <div className='flex items-center gap-2'>
+                    <span className='text-[10px] text-slate-400 shrink-0'>Separator</span>
+                    <input
+                      type='text'
+                      value={subtitleConfig.separator}
+                      onChange={(e) => {
+                        hasLocalChangeRef.current = true
+                        changeSeqRef.current++
+                        setSubtitleConfig((c) => (c ? { ...c, separator: e.target.value } : null))
+                      }}
+                      className='w-24 h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-700 dark:border-border dark:bg-background dark:text-slate-300'
+                    />
+                  </div>
+                  <div className='flex flex-wrap gap-1.5'>
+                    {subtitleConfig.fields.map((sf, i) => (
+                      <span
+                        key={i}
+                        className='relative inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] text-nvr-navy dark:text-nvr-cyan'
+                      >
+                        {sf.label ?? sf.field}
+                        <button
+                          type='button'
+                          onClick={() => setSubtitleStyleOpen(subtitleStyleOpen === i ? null : i)}
+                          className='hover:text-nvr-cyan ml-0.5 opacity-50 hover:opacity-100'
+                        >
+                          ⚙
+                        </button>
+                        <button
+                          type='button'
+                          onClick={() => {
+                            hasLocalChangeRef.current = true
+                            changeSeqRef.current++
+                            setSubtitleConfig((c) =>
+                              c ? { ...c, fields: c.fields.filter((_, j) => j !== i) } : null
+                            )
+                          }}
+                          className='hover:text-red-500 opacity-50 hover:opacity-100'
+                        >
+                          ✕
+                        </button>
+                        {subtitleStyleOpen === i && (
+                          <>
+                            <div
+                              className='fixed inset-0 z-40'
+                              onClick={() => setSubtitleStyleOpen(null)}
+                            />
+                            <div className='absolute left-0 top-full z-50 mt-1 w-44 rounded-lg border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card p-2 space-y-2'>
+                              <div className='space-y-1'>
+                                <p className='text-[10px] font-medium text-slate-400'>Color</p>
+                                <div className='flex flex-wrap gap-1'>
+                                  {(
+                                    [
+                                      'default',
+                                      'cyan',
+                                      'blue',
+                                      'green',
+                                      'amber',
+                                      'red',
+                                      'purple'
+                                    ] as const
+                                  ).map((c) => (
+                                    <button
+                                      key={c}
+                                      type='button'
+                                      onClick={() => {
+                                        hasLocalChangeRef.current = true
+                                        changeSeqRef.current++
+                                        setSubtitleConfig((cfg) =>
+                                          cfg
+                                            ? {
+                                                ...cfg,
+                                                fields: cfg.fields.map((f, j) =>
+                                                  j === i
+                                                    ? {
+                                                        ...f,
+                                                        color: c === 'default' ? undefined : c
+                                                      }
+                                                    : f
+                                                )
+                                              }
+                                            : null
+                                        )
+                                      }}
+                                      className={[
+                                        'w-5 h-5 rounded-full border-2 transition-all',
+                                        sf.color === c || (!sf.color && c === 'default')
+                                          ? 'border-nvr-cyan scale-110'
+                                          : 'border-transparent',
+                                        c === 'default'
+                                          ? 'bg-slate-300'
+                                          : c === 'cyan'
+                                            ? 'bg-nvr-cyan'
+                                            : c === 'blue'
+                                              ? 'bg-blue-500'
+                                              : c === 'green'
+                                                ? 'bg-emerald-500'
+                                                : c === 'amber'
+                                                  ? 'bg-amber-500'
+                                                  : c === 'red'
+                                                    ? 'bg-red-500'
+                                                    : 'bg-purple-500'
+                                      ].join(' ')}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                              <div className='space-y-1'>
+                                <p className='text-[10px] font-medium text-slate-400'>Weight</p>
+                                <div className='flex gap-1'>
+                                  {(['normal', 'medium', 'semibold', 'bold'] as const).map((w) => (
+                                    <button
+                                      key={w}
+                                      type='button'
+                                      onClick={() => {
+                                        hasLocalChangeRef.current = true
+                                        changeSeqRef.current++
+                                        setSubtitleConfig((cfg) =>
+                                          cfg
+                                            ? {
+                                                ...cfg,
+                                                fields: cfg.fields.map((f, j) =>
+                                                  j === i
+                                                    ? {
+                                                        ...f,
+                                                        weight: w === 'normal' ? undefined : w
+                                                      }
+                                                    : f
+                                                )
+                                              }
+                                            : null
+                                        )
+                                      }}
+                                      className={[
+                                        'rounded px-1.5 py-0.5 text-[10px] border transition-colors',
+                                        sf.weight === w || (!sf.weight && w === 'normal')
+                                          ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
+                                          : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                                      ].join(' ')}
+                                    >
+                                      {w[0].toUpperCase()}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className='space-y-1'>
+                                <p className='text-[10px] font-medium text-slate-400'>Display as</p>
+                                <div className='flex gap-1'>
+                                  {(['text', 'pill', 'tag'] as const).map((d) => (
+                                    <button
+                                      key={d}
+                                      type='button'
+                                      onClick={() => {
+                                        hasLocalChangeRef.current = true
+                                        changeSeqRef.current++
+                                        setSubtitleConfig((cfg) =>
+                                          cfg
+                                            ? {
+                                                ...cfg,
+                                                fields: cfg.fields.map((f, j) =>
+                                                  j === i
+                                                    ? {
+                                                        ...f,
+                                                        display_as: d === 'text' ? undefined : d
+                                                      }
+                                                    : f
+                                                )
+                                              }
+                                            : null
+                                        )
+                                      }}
+                                      className={[
+                                        'rounded px-1.5 py-0.5 text-[10px] border transition-colors',
+                                        sf.display_as === d || (!sf.display_as && d === 'text')
+                                          ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
+                                          : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                                      ].join(' ')}
+                                    >
+                                      {d}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                  <div className='relative'>
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='h-6 w-full justify-start text-[11px] font-normal text-slate-500 border-dashed'
+                      onClick={() => setSubtitlePickerOpen((v) => !v)}
+                    >
+                      <Plus className='mr-1 h-3 w-3' />
+                      Add field…
+                    </Button>
+                    {subtitlePickerOpen && (
+                      <>
+                        <div
+                          className='fixed inset-0 z-40'
+                          onClick={() => setSubtitlePickerOpen(false)}
+                        />
+                        <div className='absolute left-0 top-full z-50 mt-1'>
+                          <FieldPickerPanel
+                            collection={tableName}
+                            fields={
+                              allFields.filter(
+                                (f) =>
+                                  !f.field.startsWith('__') &&
+                                  !subtitleConfig.fields.some((sf) => sf.field === f.field)
+                              ) as CMSField[]
+                            }
+                            relations={relations as CMSRelation[]}
+                            onSelect={(picked) => {
+                              hasLocalChangeRef.current = true
+                              changeSeqRef.current++
+                              setSubtitleConfig((c) =>
+                                c
+                                  ? {
+                                      ...c,
+                                      fields: [
+                                        ...c.fields,
+                                        {
+                                          field: picked.path.join('.'),
+                                          label: picked.pathLabels.join(' › ')
+                                        }
+                                      ]
+                                    }
+                                  : null
+                              )
+                              setSubtitlePickerOpen(false)
+                            }}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-            <DroppableFieldZone containerId='__header__'>
-              <SortableContext items={(localFieldOrder.__header__ ?? []).map(f => toSortableId('__header__', f))} strategy={rectSortingStrategy}>
-                <div className={cn('min-h-[44px] p-2', (localFieldOrder.__header__ ?? []).length === 0 ? 'flex items-center justify-center' : 'flex flex-wrap gap-2')}>
-                  {(localFieldOrder.__header__ ?? []).length === 0
-                    ? <p className='text-[11px] text-slate-300'>Drop widgets or fields here</p>
-                    : (localFieldOrder.__header__ ?? []).map(f => {
-                        const isWidget = typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')
+          )}
+
+          {/* Header zone — widgets dragged here render in the ItemEdit page header */}
+          {layoutType !== 'table' && (
+            <div className='rounded-lg border border-slate-200 bg-white'>
+              <div className='flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2'>
+                <span className='text-[11px] font-medium text-slate-500'>Item Header</span>
+                <span className='text-[10px] text-slate-300'>
+                  — items dropped here appear in a strip below the header bar
+                </span>
+              </div>
+              <DroppableFieldZone containerId='__header__'>
+                <SortableContext
+                  items={(localFieldOrder.__header__ ?? []).map((f) =>
+                    toSortableId('__header__', f)
+                  )}
+                  strategy={rectSortingStrategy}
+                >
+                  <div
+                    className={cn(
+                      'min-h-[44px] p-2',
+                      (localFieldOrder.__header__ ?? []).length === 0
+                        ? 'flex items-center justify-center'
+                        : 'flex flex-wrap gap-2'
+                    )}
+                  >
+                    {(localFieldOrder.__header__ ?? []).length === 0 ? (
+                      <p className='text-[11px] text-slate-300'>Drop widgets or fields here</p>
+                    ) : (
+                      (localFieldOrder.__header__ ?? []).map((f) => {
+                        const isWidget =
+                          typeof f === 'string' && f.startsWith('__widget_') && f.endsWith('__')
                         const meta = isWidget ? widgetSlotMeta[f] : undefined
-                        const fieldMeta = !isWidget ? allFields.find(af => af.field === f) : undefined
+                        const fieldMeta = !isWidget
+                          ? allFields.find((af) => af.field === f)
+                          : undefined
                         return (
                           <SortableFieldChip
                             key={toSortableId('__header__', f)}
                             sortableId={toSortableId('__header__', f)}
                             fieldName={f}
-                            displayName={isWidget
-                              ? (meta?.label_override || meta?.name || 'Widget')
-                              : (headerFieldDisplayMeta[f]?.label_override
-                                || (f === '__owners__' ? 'Owners' : f === '__pdf__' ? 'PDF' : null)
-                                || titleCase(fieldConfig.find(fc => fc.field === f)?.label ?? f))
+                            displayName={
+                              isWidget
+                                ? meta?.label_override || meta?.name || 'Widget'
+                                : headerFieldDisplayMeta[f]?.label_override ||
+                                  (f === '__owners__'
+                                    ? 'Owners'
+                                    : f === '__pdf__'
+                                      ? 'PDF'
+                                      : null) ||
+                                  titleCase(fieldConfig.find((fc) => fc.field === f)?.label ?? f)
                             }
-                            fieldType={isWidget ? 'widget' : (fieldMeta?.interface ?? fieldMeta?.type ?? 'text')}
+                            fieldType={
+                              isWidget
+                                ? 'widget'
+                                : (fieldMeta?.interface ?? fieldMeta?.type ?? 'text')
+                            }
                             colSpan={12}
                             onUnassign={() => {
-                              setLocalFieldOrder(prev => ({ ...prev, __header__: (prev.__header__ ?? []).filter(x => x !== f), __unassigned__: [...(prev.__unassigned__ ?? []), f] }))
+                              setLocalFieldOrder((prev) => ({
+                                ...prev,
+                                __header__: (prev.__header__ ?? []).filter((x) => x !== f),
+                                __unassigned__: [...(prev.__unassigned__ ?? []), f]
+                              }))
                               hasLocalChangeRef.current = true
                               changeSeqRef.current++
                             }}
-                            extraControls={f === PDF_FIELD ? getExtraControls(f) : getHeaderFieldExtraControls(f)}
+                            extraControls={
+                              f === PDF_FIELD ? getExtraControls(f) : getHeaderFieldExtraControls(f)
+                            }
                             inGrid={false}
                           />
                         )
                       })
-                  }
-                </div>
-              </SortableContext>
-            </DroppableFieldZone>
-          </div>
-        )}
-
-        {/* Groups + Ungrouped — unified sortable list */}
-        {adding && layoutType !== 'table' && (
-          <div className='rounded-lg border border-slate-200 bg-white p-4 space-y-3'>
-            <p className='text-[12px] font-medium text-slate-700'>New Group</p>
-            <div className='grid grid-cols-3 gap-3'>
-              <div>
-                <Label className='mb-1 block text-[11px]'>Key (slug)</Label>
-                <Input value={newKey} onChange={e => setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))} placeholder='details' className='h-7 font-mono text-[12px]' />
-              </div>
-              <div>
-                <Label className='mb-1 block text-[11px]'>Label</Label>
-                <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder='Details' className='h-7 text-[12px]' />
-              </div>
-              <div>
-                <Label className='mb-1 block text-[11px]'>Type</Label>
-                <Sel value={newType} onChange={v => setNewType(v as 'section' | 'tab' | 'metadata' | 'container')} options={[{ value: 'section', label: 'Section' }, { value: 'tab', label: 'Tab' }, { value: 'metadata', label: 'Record Info (read-only)' }, { value: 'container', label: 'Container (tabs/steps)' }]} />
-              </div>
-            </div>
-            <div className='flex justify-end gap-2'>
-              <Button type='button' variant='outline' size='sm' className='h-7 text-[12px]' onClick={() => setAdding(false)}>Cancel</Button>
-              <Button type='button' size='sm' className='h-7 bg-nvr-cyan text-[12px] text-white' disabled={!newKey.trim() || !newLabel.trim() || createMut.isPending}
-                onClick={() => createMut.mutate({ collection: tableName, key: newKey.trim(), label: newLabel.trim(), type: newType })}>
-                Create
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {groupsLoading ? (
-          <div className='space-y-2'>{[1,2].map(k => <Skeleton key={k} className='h-24 w-full rounded-lg' />)}</div>
-        ) : (
-          <SortableContext items={orderedItems.map(x => x === '__ungrouped__' ? 'group:__ungrouped__' : SLOT_KEYS.includes(x as SlotKey) ? `slot:${x}` : `group:${(x as FieldGroup).key}`)} strategy={verticalListSortingStrategy}>
-            <div className='space-y-3'>
-              {orderedItems.map(item => {
-                if (item === '__ungrouped__') return (
-                  <SortableUngroupedZone key='__ungrouped__' localFieldOrder={localFieldOrder} allFields={allFields} getColSpan={getColSpan} patchField={patchField} getFieldSettings={getFieldSettings} handleFieldSettings={handleFieldSettings} relKind={relKind} friendlyType={friendlyType} getM2OFields={getM2OFields} getDependencyConfig={getDependencyConfig} getRelatedCollection={getRelatedCollection} onUnassign={handleUnassign} isTableMode={layoutType === 'table'} getExtraControls={getExtraControls} widgetSlotMeta={widgetSlotMeta} getInlineDisplay={(f) => inlineDisplayMeta[f]} onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }} getLockConditions={f => localLockConditions[f] ?? []} onLockConditions={(f, v) => { setLocalLockConditions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }} collection={tableName} getPrefillFromParent={layoutType === 'addendum' ? f => (localOverrides[f]?.prefill_from_parent as boolean | undefined) ?? true : undefined} onPrefillFromParent={layoutType === 'addendum' ? (f, v) => { setLocalOverrides(prev => ({ ...prev, [f]: { ...(prev[f] ?? {}), prefill_from_parent: v } })); hasLocalChangeRef.current = true; changeSeqRef.current++ } : undefined} />
-                )
-                if (layoutType === 'table') return null
-                if (SLOT_KEYS.includes(item as SlotKey)) return (
-                  <SortableSlotCard key={item as SlotKey} slotKey={item as SlotKey} slots={slots} updateSlot={updateSlot}
-                    editingSlot={editingSlot} setEditingSlot={setEditingSlot} slotLabelDraft={slotLabelDraft} setSlotLabelDraft={setSlotLabelDraft} tableName={tableName} />
-                )
-                const g = item as FieldGroup
-                // Skip tabs nested inside a container — container card renders them
-                if (g.type === 'tab' && g.container_id) return null
-                const childTabs = g.type === 'container'
-                  ? groups.filter(ch => ch.container_id === g.id).sort((a, b) => a.sort - b.sort)
-                  : []
-                return (
-                  <div key={g.id} className='space-y-1.5'>
-                    <SortableGroupCard
-                      group={g}
-                      fieldNames={localFieldOrder[g.key] ?? []}
-                      allFields={allFields}
-                      getColSpan={getColSpan}
-                      onColSpan={(f, span) => patchField(f, { col_span: span })}
-                      onToggleType={() => patchTypeMut.mutate({ id: g.id, type: g.type === 'section' ? 'tab' : g.type === 'tab' ? 'metadata' : g.type === 'metadata' ? 'container' : 'section' })}
-                      onDelete={() => { if (confirm(`Delete "${g.label}"? Fields will be unassigned.`)) deleteMut.mutate(g.id) }}
-                      onRename={(label) => renameMut.mutate({ id: g.id, label })}
-                      onIconChange={(icon) => iconMut.mutate({ id: g.id, icon })}
-                      getRelKind={relKind}
-                      getFriendlyType={friendlyType}
-                      getFieldSettings={getFieldSettings}
-                      onFieldSettings={handleFieldSettings}
-                      getM2OFields={getM2OFields}
-                      getDependencyConfig={getDependencyConfig}
-                      getRelatedCollection={getRelatedCollection}
-                      onUnassign={handleUnassign}
-                    onPatchTabMode={(id, tab_mode) => patchTabModeMut.mutate({ id, tab_mode })}
-                    containerGroups={groups.filter(cg => cg.type === 'container')}
-                    onSetContainer={(id, container_id) => setContainerMut.mutate({ id, container_id })}
-                    onToggleCollapsed={(id) => patchCollapsedMut.mutate({ id, is_collapsed: !groups.find(g => g.id === id)?.is_collapsed })}
-                    onGroupSettings={(id, patch) => patchGroupSettingsMut.mutate({ id, patch })}
-                    getRowRevisions={f => localRowRevisions[f] ?? false}
-                    onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
-                    getAllowRevisionRestore={f => localAllowRevisionRestore[f] ?? true}
-                    onAllowRevisionRestore={(f, v) => { setLocalAllowRevisionRestore(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
-                    getLockConditions={f => localLockConditions[f] ?? []}
-                    onLockConditions={(f, v) => { setLocalLockConditions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
-                    getExtraControls={getExtraControls}
-                    widgetSlotMeta={widgetSlotMeta}
-                    getInlineDisplay={(f) => inlineDisplayMeta[f]}
-                    onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
-                    collection={tableName}
-                    getPrefillFromParent={layoutType === 'addendum' ? f => (localOverrides[f]?.prefill_from_parent as boolean | undefined) ?? true : undefined}
-                    onPrefillFromParent={layoutType === 'addendum' ? (f, v) => { setLocalOverrides(prev => ({ ...prev, [f]: { ...(prev[f] ?? {}), prefill_from_parent: v } })); hasLocalChangeRef.current = true; changeSeqRef.current++ } : undefined}
-                    />
-                    {childTabs.length > 0 && (
-                      <div className='ml-4 border-l-2 border-slate-200 pl-3 space-y-1.5'>
-                        {childTabs.map(ch => (
-                          <SortableGroupCard
-                            key={ch.id}
-                            group={ch}
-                            fieldNames={localFieldOrder[ch.key] ?? []}
-                            allFields={allFields}
-                            getColSpan={getColSpan}
-                            onColSpan={(f, span) => patchField(f, { col_span: span })}
-                            onToggleType={() => {}}
-                            onDelete={() => { if (confirm(`Delete "${ch.label}"?`)) deleteMut.mutate(ch.id) }}
-                            onRename={(label) => renameMut.mutate({ id: ch.id, label })}
-                            onIconChange={(icon) => iconMut.mutate({ id: ch.id, icon })}
-                            getRelKind={relKind}
-                            getFriendlyType={friendlyType}
-                            getFieldSettings={getFieldSettings}
-                            onFieldSettings={handleFieldSettings}
-                            getM2OFields={getM2OFields}
-                            getDependencyConfig={getDependencyConfig}
-                            getRelatedCollection={getRelatedCollection}
-                            onUnassign={handleUnassign}
-                            containerGroups={groups.filter(cg => cg.type === 'container')}
-                            onSetContainer={(id, container_id) => setContainerMut.mutate({ id, container_id })}
-                            onToggleCollapsed={(id) => patchCollapsedMut.mutate({ id, is_collapsed: !groups.find(g => g.id === id)?.is_collapsed })}
-                            onGroupSettings={(id, patch) => patchGroupSettingsMut.mutate({ id, patch })}
-                            getRowRevisions={f => localRowRevisions[f] ?? false}
-                            onRowRevisions={(f, v) => { setLocalRowRevisions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
-                            getAllowRevisionRestore={f => localAllowRevisionRestore[f] ?? true}
-                            onAllowRevisionRestore={(f, v) => { setLocalAllowRevisionRestore(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
-                            getLockConditions={f => localLockConditions[f] ?? []}
-                            onLockConditions={(f, v) => { setLocalLockConditions(prev => ({ ...prev, [f]: v })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
-                            getExtraControls={getExtraControls}
-                            widgetSlotMeta={widgetSlotMeta}
-                            getInlineDisplay={(f) => inlineDisplayMeta[f]}
-                            onInlineDisplayChange={(f, config) => { setInlineDisplayMeta((prev) => ({ ...prev, [f]: config })); hasLocalChangeRef.current = true; changeSeqRef.current++ }}
-                            collection={tableName}
-                            getPrefillFromParent={layoutType === 'addendum' ? f => (localOverrides[f]?.prefill_from_parent as boolean | undefined) ?? true : undefined}
-                            onPrefillFromParent={layoutType === 'addendum' ? (f, v) => { setLocalOverrides(prev => ({ ...prev, [f]: { ...(prev[f] ?? {}), prefill_from_parent: v } })); hasLocalChangeRef.current = true; changeSeqRef.current++ } : undefined}
-                          />
-                        ))}
-                      </div>
                     )}
                   </div>
-                )
-              })}
-              {orderedItems.length === 0 && !adding && (
-                <div className='rounded-lg border border-dashed border-slate-200 py-8 text-center text-[12px] text-slate-400'>
-                  No groups yet. Add a group to organize form fields.
-                </div>
-              )}
+                </SortableContext>
+              </DroppableFieldZone>
             </div>
-          </SortableContext>
-        )}
+          )}
 
-        {/* Table-mode special zones */}
-        {layoutType === 'table' && (
-          <div className='space-y-3 mt-3'>
-            <div className='rounded-lg border border-slate-200 bg-white'>
-              <div className='border-b border-slate-100 bg-slate-50 px-3 py-2'>
-                <p className='text-[12px] font-medium text-slate-700'>Apply Values</p>
-                <p className='text-[10px] text-slate-400 mt-0.5'>Fields shown in the "apply to all rows" form</p>
+          {/* Groups + Ungrouped — unified sortable list */}
+          {adding && layoutType !== 'table' && (
+            <div className='rounded-lg border border-slate-200 bg-white p-4 space-y-3'>
+              <p className='text-[12px] font-medium text-slate-700'>New Group</p>
+              <div className='grid grid-cols-3 gap-3'>
+                <div>
+                  <Label className='mb-1 block text-[11px]'>Key (slug)</Label>
+                  <Input
+                    value={newKey}
+                    onChange={(e) =>
+                      setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))
+                    }
+                    placeholder='details'
+                    className='h-7 font-mono text-[12px]'
+                  />
+                </div>
+                <div>
+                  <Label className='mb-1 block text-[11px]'>Label</Label>
+                  <Input
+                    value={newLabel}
+                    onChange={(e) => setNewLabel(e.target.value)}
+                    placeholder='Details'
+                    className='h-7 text-[12px]'
+                  />
+                </div>
+                <div>
+                  <Label className='mb-1 block text-[11px]'>Type</Label>
+                  <Sel
+                    value={newType}
+                    onChange={(v) => setNewType(v as 'section' | 'tab' | 'metadata' | 'container')}
+                    options={[
+                      { value: 'section', label: 'Section' },
+                      { value: 'tab', label: 'Tab' },
+                      { value: 'metadata', label: 'Record Info (read-only)' },
+                      { value: 'container', label: 'Container (tabs/steps)' }
+                    ]}
+                  />
+                </div>
               </div>
-              <DroppableFieldZone containerId='__apply_values__'>
-                <SortableContext items={(localFieldOrder['__apply_values__'] ?? []).map(f => toSortableId('__apply_values__', f))} strategy={rectSortingStrategy}>
-                  <div className={cn('min-h-[48px] p-3', (localFieldOrder['__apply_values__'] ?? []).length === 0 ? 'flex items-center justify-center' : 'grid grid-cols-12 gap-2 auto-rows-auto')}>
-                    {(localFieldOrder['__apply_values__'] ?? []).length === 0
-                      ? <p className='text-[11px] text-slate-300'>Drop fields here</p>
-                      : (localFieldOrder['__apply_values__'] ?? []).map(f => {
+              <div className='flex justify-end gap-2'>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  className='h-7 text-[12px]'
+                  onClick={() => setAdding(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type='button'
+                  size='sm'
+                  className='h-7 bg-nvr-cyan text-[12px] text-white'
+                  disabled={!newKey.trim() || !newLabel.trim() || createMut.isPending}
+                  onClick={() =>
+                    createMut.mutate({
+                      collection: tableName,
+                      key: newKey.trim(),
+                      label: newLabel.trim(),
+                      type: newType
+                    })
+                  }
+                >
+                  Create
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {groupsLoading ? (
+            <div className='space-y-2'>
+              {[1, 2].map((k) => (
+                <Skeleton key={k} className='h-24 w-full rounded-lg' />
+              ))}
+            </div>
+          ) : (
+            <SortableContext
+              items={orderedItems.map((x) =>
+                x === '__ungrouped__'
+                  ? 'group:__ungrouped__'
+                  : SLOT_KEYS.includes(x as SlotKey)
+                    ? `slot:${x}`
+                    : `group:${(x as FieldGroup).key}`
+              )}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className='space-y-3'>
+                {orderedItems.map((item) => {
+                  if (item === '__ungrouped__')
+                    return (
+                      <SortableUngroupedZone
+                        key='__ungrouped__'
+                        localFieldOrder={localFieldOrder}
+                        allFields={allFields}
+                        getColSpan={getColSpan}
+                        patchField={patchField}
+                        getFieldSettings={getFieldSettings}
+                        handleFieldSettings={handleFieldSettings}
+                        relKind={relKind}
+                        friendlyType={friendlyType}
+                        getM2OFields={getM2OFields}
+                        getDependencyConfig={getDependencyConfig}
+                        getRelatedCollection={getRelatedCollection}
+                        onUnassign={handleUnassign}
+                        isTableMode={layoutType === 'table'}
+                        getExtraControls={getExtraControls}
+                        widgetSlotMeta={widgetSlotMeta}
+                        getInlineDisplay={(f) => inlineDisplayMeta[f]}
+                        onInlineDisplayChange={(f, config) => {
+                          setInlineDisplayMeta((prev) => ({ ...prev, [f]: config }))
+                          hasLocalChangeRef.current = true
+                          changeSeqRef.current++
+                        }}
+                        getLockConditions={(f) => localLockConditions[f] ?? []}
+                        onLockConditions={(f, v) => {
+                          setLocalLockConditions((prev) => ({ ...prev, [f]: v }))
+                          hasLocalChangeRef.current = true
+                          changeSeqRef.current++
+                        }}
+                        collection={tableName}
+                        getPrefillFromParent={
+                          layoutType === 'addendum'
+                            ? (f) =>
+                                (localOverrides[f]?.prefill_from_parent as boolean | undefined) ??
+                                true
+                            : undefined
+                        }
+                        onPrefillFromParent={
+                          layoutType === 'addendum'
+                            ? (f, v) => {
+                                setLocalOverrides((prev) => ({
+                                  ...prev,
+                                  [f]: { ...(prev[f] ?? {}), prefill_from_parent: v }
+                                }))
+                                hasLocalChangeRef.current = true
+                                changeSeqRef.current++
+                              }
+                            : undefined
+                        }
+                      />
+                    )
+                  if (layoutType === 'table') return null
+                  if (SLOT_KEYS.includes(item as SlotKey))
+                    return (
+                      <SortableSlotCard
+                        key={item as SlotKey}
+                        slotKey={item as SlotKey}
+                        slots={slots}
+                        updateSlot={updateSlot}
+                        editingSlot={editingSlot}
+                        setEditingSlot={setEditingSlot}
+                        slotLabelDraft={slotLabelDraft}
+                        setSlotLabelDraft={setSlotLabelDraft}
+                        tableName={tableName}
+                      />
+                    )
+                  const g = item as FieldGroup
+                  // Skip tabs nested inside a container — container card renders them
+                  if (g.type === 'tab' && g.container_id) return null
+                  const childTabs =
+                    g.type === 'container'
+                      ? groups
+                          .filter((ch) => ch.container_id === g.id)
+                          .sort((a, b) => a.sort - b.sort)
+                      : []
+                  return (
+                    <div key={g.id} className='space-y-1.5'>
+                      <SortableGroupCard
+                        group={g}
+                        fieldNames={localFieldOrder[g.key] ?? []}
+                        allFields={allFields}
+                        getColSpan={getColSpan}
+                        onColSpan={(f, span) => patchField(f, { col_span: span })}
+                        onToggleType={() =>
+                          patchTypeMut.mutate({
+                            id: g.id,
+                            type:
+                              g.type === 'section'
+                                ? 'tab'
+                                : g.type === 'tab'
+                                  ? 'metadata'
+                                  : g.type === 'metadata'
+                                    ? 'container'
+                                    : 'section'
+                          })
+                        }
+                        onDelete={() => {
+                          if (confirm(`Delete "${g.label}"? Fields will be unassigned.`))
+                            deleteMut.mutate(g.id)
+                        }}
+                        onRename={(label) => renameMut.mutate({ id: g.id, label })}
+                        onIconChange={(icon) => iconMut.mutate({ id: g.id, icon })}
+                        getRelKind={relKind}
+                        getFriendlyType={friendlyType}
+                        getFieldSettings={getFieldSettings}
+                        onFieldSettings={handleFieldSettings}
+                        getM2OFields={getM2OFields}
+                        getDependencyConfig={getDependencyConfig}
+                        getRelatedCollection={getRelatedCollection}
+                        onUnassign={handleUnassign}
+                        onPatchTabMode={(id, tab_mode) => patchTabModeMut.mutate({ id, tab_mode })}
+                        containerGroups={groups.filter((cg) => cg.type === 'container')}
+                        onSetContainer={(id, container_id) =>
+                          setContainerMut.mutate({ id, container_id })
+                        }
+                        onToggleCollapsed={(id) =>
+                          patchCollapsedMut.mutate({
+                            id,
+                            is_collapsed: !groups.find((g) => g.id === id)?.is_collapsed
+                          })
+                        }
+                        onGroupSettings={(id, patch) => patchGroupSettingsMut.mutate({ id, patch })}
+                        getRowRevisions={(f) => localRowRevisions[f] ?? false}
+                        onRowRevisions={(f, v) => {
+                          setLocalRowRevisions((prev) => ({ ...prev, [f]: v }))
+                          hasLocalChangeRef.current = true
+                          changeSeqRef.current++
+                        }}
+                        getAllowRevisionRestore={(f) => localAllowRevisionRestore[f] ?? true}
+                        onAllowRevisionRestore={(f, v) => {
+                          setLocalAllowRevisionRestore((prev) => ({ ...prev, [f]: v }))
+                          hasLocalChangeRef.current = true
+                          changeSeqRef.current++
+                        }}
+                        getLockConditions={(f) => localLockConditions[f] ?? []}
+                        onLockConditions={(f, v) => {
+                          setLocalLockConditions((prev) => ({ ...prev, [f]: v }))
+                          hasLocalChangeRef.current = true
+                          changeSeqRef.current++
+                        }}
+                        getExtraControls={getExtraControls}
+                        widgetSlotMeta={widgetSlotMeta}
+                        getInlineDisplay={(f) => inlineDisplayMeta[f]}
+                        onInlineDisplayChange={(f, config) => {
+                          setInlineDisplayMeta((prev) => ({ ...prev, [f]: config }))
+                          hasLocalChangeRef.current = true
+                          changeSeqRef.current++
+                        }}
+                        collection={tableName}
+                        getPrefillFromParent={
+                          layoutType === 'addendum'
+                            ? (f) =>
+                                (localOverrides[f]?.prefill_from_parent as boolean | undefined) ??
+                                true
+                            : undefined
+                        }
+                        onPrefillFromParent={
+                          layoutType === 'addendum'
+                            ? (f, v) => {
+                                setLocalOverrides((prev) => ({
+                                  ...prev,
+                                  [f]: { ...(prev[f] ?? {}), prefill_from_parent: v }
+                                }))
+                                hasLocalChangeRef.current = true
+                                changeSeqRef.current++
+                              }
+                            : undefined
+                        }
+                      />
+                      {childTabs.length > 0 && (
+                        <div className='ml-4 border-l-2 border-slate-200 pl-3 space-y-1.5'>
+                          {childTabs.map((ch) => (
+                            <SortableGroupCard
+                              key={ch.id}
+                              group={ch}
+                              fieldNames={localFieldOrder[ch.key] ?? []}
+                              allFields={allFields}
+                              getColSpan={getColSpan}
+                              onColSpan={(f, span) => patchField(f, { col_span: span })}
+                              onToggleType={() => {}}
+                              onDelete={() => {
+                                if (confirm(`Delete "${ch.label}"?`)) deleteMut.mutate(ch.id)
+                              }}
+                              onRename={(label) => renameMut.mutate({ id: ch.id, label })}
+                              onIconChange={(icon) => iconMut.mutate({ id: ch.id, icon })}
+                              getRelKind={relKind}
+                              getFriendlyType={friendlyType}
+                              getFieldSettings={getFieldSettings}
+                              onFieldSettings={handleFieldSettings}
+                              getM2OFields={getM2OFields}
+                              getDependencyConfig={getDependencyConfig}
+                              getRelatedCollection={getRelatedCollection}
+                              onUnassign={handleUnassign}
+                              containerGroups={groups.filter((cg) => cg.type === 'container')}
+                              onSetContainer={(id, container_id) =>
+                                setContainerMut.mutate({ id, container_id })
+                              }
+                              onToggleCollapsed={(id) =>
+                                patchCollapsedMut.mutate({
+                                  id,
+                                  is_collapsed: !groups.find((g) => g.id === id)?.is_collapsed
+                                })
+                              }
+                              onGroupSettings={(id, patch) =>
+                                patchGroupSettingsMut.mutate({ id, patch })
+                              }
+                              getRowRevisions={(f) => localRowRevisions[f] ?? false}
+                              onRowRevisions={(f, v) => {
+                                setLocalRowRevisions((prev) => ({ ...prev, [f]: v }))
+                                hasLocalChangeRef.current = true
+                                changeSeqRef.current++
+                              }}
+                              getAllowRevisionRestore={(f) => localAllowRevisionRestore[f] ?? true}
+                              onAllowRevisionRestore={(f, v) => {
+                                setLocalAllowRevisionRestore((prev) => ({ ...prev, [f]: v }))
+                                hasLocalChangeRef.current = true
+                                changeSeqRef.current++
+                              }}
+                              getLockConditions={(f) => localLockConditions[f] ?? []}
+                              onLockConditions={(f, v) => {
+                                setLocalLockConditions((prev) => ({ ...prev, [f]: v }))
+                                hasLocalChangeRef.current = true
+                                changeSeqRef.current++
+                              }}
+                              getExtraControls={getExtraControls}
+                              widgetSlotMeta={widgetSlotMeta}
+                              getInlineDisplay={(f) => inlineDisplayMeta[f]}
+                              onInlineDisplayChange={(f, config) => {
+                                setInlineDisplayMeta((prev) => ({ ...prev, [f]: config }))
+                                hasLocalChangeRef.current = true
+                                changeSeqRef.current++
+                              }}
+                              collection={tableName}
+                              getPrefillFromParent={
+                                layoutType === 'addendum'
+                                  ? (f) =>
+                                      (localOverrides[f]?.prefill_from_parent as
+                                        | boolean
+                                        | undefined) ?? true
+                                  : undefined
+                              }
+                              onPrefillFromParent={
+                                layoutType === 'addendum'
+                                  ? (f, v) => {
+                                      setLocalOverrides((prev) => ({
+                                        ...prev,
+                                        [f]: { ...(prev[f] ?? {}), prefill_from_parent: v }
+                                      }))
+                                      hasLocalChangeRef.current = true
+                                      changeSeqRef.current++
+                                    }
+                                  : undefined
+                              }
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+                {orderedItems.length === 0 && !adding && (
+                  <div className='rounded-lg border border-dashed border-slate-200 py-8 text-center text-[12px] text-slate-400'>
+                    No groups yet. Add a group to organize form fields.
+                  </div>
+                )}
+              </div>
+            </SortableContext>
+          )}
+
+          {/* Table-mode special zones */}
+          {layoutType === 'table' && (
+            <div className='space-y-3 mt-3'>
+              <div className='rounded-lg border border-slate-200 bg-white'>
+                <div className='border-b border-slate-100 bg-slate-50 px-3 py-2'>
+                  <p className='text-[12px] font-medium text-slate-700'>Apply Values</p>
+                  <p className='text-[10px] text-slate-400 mt-0.5'>
+                    Fields shown in the "apply to all rows" form
+                  </p>
+                </div>
+                <DroppableFieldZone containerId='__apply_values__'>
+                  <SortableContext
+                    items={(localFieldOrder['__apply_values__'] ?? []).map((f) =>
+                      toSortableId('__apply_values__', f)
+                    )}
+                    strategy={rectSortingStrategy}
+                  >
+                    <div
+                      className={cn(
+                        'min-h-[48px] p-3',
+                        (localFieldOrder['__apply_values__'] ?? []).length === 0
+                          ? 'flex items-center justify-center'
+                          : 'grid grid-cols-12 gap-2 auto-rows-auto'
+                      )}
+                    >
+                      {(localFieldOrder['__apply_values__'] ?? []).length === 0 ? (
+                        <p className='text-[11px] text-slate-300'>Drop fields here</p>
+                      ) : (
+                        (localFieldOrder['__apply_values__'] ?? []).map((f) => {
                           const settings = getFieldSettings(f)
                           return (
                             <SortableFieldChip
@@ -11443,28 +15396,44 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                               displayName={settings.label || titleCase(f)}
                               colSpan={12}
                               fieldSettings={settings}
-                              onSettings={patch => handleFieldSettings(f, patch)}
+                              onSettings={(patch) => handleFieldSettings(f, patch)}
                               onUnassign={() => handleUnassign(f, '__apply_values__')}
                               inGrid
                             />
                           )
-                        })}
-                  </div>
-                </SortableContext>
-              </DroppableFieldZone>
-            </div>
-
-            <div className='rounded-lg border border-slate-200 bg-white'>
-              <div className='border-b border-slate-100 bg-slate-50 px-3 py-2'>
-                <p className='text-[12px] font-medium text-slate-700'>Create with Defaults</p>
-                <p className='text-[10px] text-slate-400 mt-0.5'>Fields shown in the "with defaults" form when bulk-adding rows</p>
+                        })
+                      )}
+                    </div>
+                  </SortableContext>
+                </DroppableFieldZone>
               </div>
-              <DroppableFieldZone containerId='__create_with_defaults__'>
-                <SortableContext items={(localFieldOrder['__create_with_defaults__'] ?? []).map(f => toSortableId('__create_with_defaults__', f))} strategy={rectSortingStrategy}>
-                  <div className={cn('min-h-[48px] p-3', (localFieldOrder['__create_with_defaults__'] ?? []).length === 0 ? 'flex items-center justify-center' : 'grid grid-cols-12 gap-2 auto-rows-auto')}>
-                    {(localFieldOrder['__create_with_defaults__'] ?? []).length === 0
-                      ? <p className='text-[11px] text-slate-300'>Drop fields here</p>
-                      : (localFieldOrder['__create_with_defaults__'] ?? []).map(f => {
+
+              <div className='rounded-lg border border-slate-200 bg-white'>
+                <div className='border-b border-slate-100 bg-slate-50 px-3 py-2'>
+                  <p className='text-[12px] font-medium text-slate-700'>Create with Defaults</p>
+                  <p className='text-[10px] text-slate-400 mt-0.5'>
+                    Fields shown in the "with defaults" form when bulk-adding rows
+                  </p>
+                </div>
+                <DroppableFieldZone containerId='__create_with_defaults__'>
+                  <SortableContext
+                    items={(localFieldOrder['__create_with_defaults__'] ?? []).map((f) =>
+                      toSortableId('__create_with_defaults__', f)
+                    )}
+                    strategy={rectSortingStrategy}
+                  >
+                    <div
+                      className={cn(
+                        'min-h-[48px] p-3',
+                        (localFieldOrder['__create_with_defaults__'] ?? []).length === 0
+                          ? 'flex items-center justify-center'
+                          : 'grid grid-cols-12 gap-2 auto-rows-auto'
+                      )}
+                    >
+                      {(localFieldOrder['__create_with_defaults__'] ?? []).length === 0 ? (
+                        <p className='text-[11px] text-slate-300'>Drop fields here</p>
+                      ) : (
+                        (localFieldOrder['__create_with_defaults__'] ?? []).map((f) => {
                           const settings = getFieldSettings(f)
                           return (
                             <SortableFieldChip
@@ -11474,53 +15443,73 @@ function FieldGroupsTab({ tableName, dbColumns = [], layoutId, layoutType = 'gro
                               displayName={settings.label || titleCase(f)}
                               colSpan={12}
                               fieldSettings={settings}
-                              onSettings={patch => handleFieldSettings(f, patch)}
+                              onSettings={(patch) => handleFieldSettings(f, patch)}
                               onUnassign={() => handleUnassign(f, '__create_with_defaults__')}
                               inGrid
                             />
                           )
-                        })}
-                  </div>
-                </SortableContext>
-              </DroppableFieldZone>
+                        })
+                      )}
+                    </div>
+                  </SortableContext>
+                </DroppableFieldZone>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
+        {/* end main area */}
+      </div>
+      {/* end flex row */}
 
-
-        </div>{/* end main area */}
-      </div>{/* end flex row */}
-
-      <DragOverlay dropAnimation={{ duration: 150, easing: 'ease' }} modifiers={[snapLeftEdgeToCursor]}>
+      <DragOverlay
+        dropAnimation={{ duration: 150, easing: 'ease' }}
+        modifiers={[snapLeftEdgeToCursor]}
+      >
         {activeFieldId && (
           <FieldChip
             fieldName={activeFieldId}
-            displayName={activeFieldId === OWNERS_FIELD ? 'Owners' : activeFieldId === PDF_FIELD ? 'PDF Button' : undefined}
-            fieldType={activeFieldId === OWNERS_FIELD ? 'owners' : activeFieldId === PDF_FIELD ? 'pdf' : activeFieldData?.type}
+            displayName={
+              activeFieldId === OWNERS_FIELD
+                ? 'Owners'
+                : activeFieldId === PDF_FIELD
+                  ? 'PDF Button'
+                  : undefined
+            }
+            fieldType={
+              activeFieldId === OWNERS_FIELD
+                ? 'owners'
+                : activeFieldId === PDF_FIELD
+                  ? 'pdf'
+                  : activeFieldData?.type
+            }
             colSpan={getColSpan(activeFieldId)}
             isDragging
           />
         )}
-        {activeGroupId && (() => {
-          if (activeGroupId.startsWith('slot:')) {
-            const key = activeGroupId.replace('slot:', '') as SlotKey
-            const label = slots[key].label_override?.trim() || SLOT_META[key].defaultLabel
+        {activeGroupId &&
+          (() => {
+            if (activeGroupId.startsWith('slot:')) {
+              const key = activeGroupId.replace('slot:', '') as SlotKey
+              const label = slots[key].label_override?.trim() || SLOT_META[key].defaultLabel
+              return (
+                <div className='flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-md text-[12px] font-medium text-slate-700 w-48'>
+                  <GripVertical className='h-3.5 w-3.5 text-slate-300 shrink-0' />
+                  {label}
+                </div>
+              )
+            }
+            const key = activeGroupId.replace('group:', '')
+            const label =
+              key === '__ungrouped__'
+                ? 'Ungrouped'
+                : (groups.find((g) => g.key === key)?.label ?? key)
             return (
               <div className='flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-md text-[12px] font-medium text-slate-700 w-48'>
                 <GripVertical className='h-3.5 w-3.5 text-slate-300 shrink-0' />
                 {label}
               </div>
             )
-          }
-          const key = activeGroupId.replace('group:', '')
-          const label = key === '__ungrouped__' ? 'Ungrouped' : (groups.find(g => g.key === key)?.label ?? key)
-          return (
-            <div className='flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-md text-[12px] font-medium text-slate-700 w-48'>
-              <GripVertical className='h-3.5 w-3.5 text-slate-300 shrink-0' />
-              {label}
-            </div>
-          )
-        })()}
+          })()}
       </DragOverlay>
     </DndContext>
   )
@@ -12855,7 +16844,16 @@ function ContentTab({
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-type Tab = 'fields' | 'relations' | 'attributes' | 'groups' | 'behavior' | 'rules' | 'tree' | 'content' | 'settings'
+type Tab =
+  | 'fields'
+  | 'relations'
+  | 'attributes'
+  | 'groups'
+  | 'behavior'
+  | 'rules'
+  | 'tree'
+  | 'content'
+  | 'settings'
 
 export function TableEditorPage() {
   const { table } = useParams<{ table: string }>()
@@ -12940,36 +16938,37 @@ export function TableEditorPage() {
           <div className='flex items-center gap-2'>
             {tableData && (
               <>
-                {!isSystem && (tableData.registered ? (
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-7 text-[12px]'
-                    disabled={unregisterMutation.isPending}
-                    onClick={() => {
-                      if (
-                        confirm(
-                          'Unregister this table? This removes CMS metadata but does not drop the table.'
-                        )
-                      ) {
-                        unregisterMutation.mutate()
-                      }
-                    }}
-                  >
-                    <EyeOff className='mr-1.5 h-3 w-3' />
-                    Unregister
-                  </Button>
-                ) : (
-                  <Button
-                    size='sm'
-                    className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan-dark'
-                    disabled={registerMutation.isPending}
-                    onClick={() => registerMutation.mutate()}
-                  >
-                    <Eye className='mr-1.5 h-3 w-3' />
-                    Register
-                  </Button>
-                ))}
+                {!isSystem &&
+                  (tableData.registered ? (
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='h-7 text-[12px]'
+                      disabled={unregisterMutation.isPending}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            'Unregister this table? This removes CMS metadata but does not drop the table.'
+                          )
+                        ) {
+                          unregisterMutation.mutate()
+                        }
+                      }}
+                    >
+                      <EyeOff className='mr-1.5 h-3 w-3' />
+                      Unregister
+                    </Button>
+                  ) : (
+                    <Button
+                      size='sm'
+                      className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan-dark'
+                      disabled={registerMutation.isPending}
+                      onClick={() => registerMutation.mutate()}
+                    >
+                      <Eye className='mr-1.5 h-3 w-3' />
+                      Register
+                    </Button>
+                  ))}
                 {!isSystem && (
                   <Button
                     size='sm'
@@ -12988,10 +16987,19 @@ export function TableEditorPage() {
 
         {/* Tabs */}
         <div className='mt-3 flex gap-0.5'>
-          {(
-            (isSystem
-              ? ['fields', 'relations'] as const
-              : ['fields', 'relations', 'groups', 'behavior', 'rules', 'tree', 'content', 'attributes', 'settings'] as const)
+          {(isSystem
+            ? (['fields', 'relations'] as const)
+            : ([
+                'fields',
+                'relations',
+                'groups',
+                'behavior',
+                'rules',
+                'tree',
+                'content',
+                'attributes',
+                'settings'
+              ] as const)
           ).map((t) => (
             <button
               key={t}
@@ -13046,7 +17054,9 @@ export function TableEditorPage() {
                 onRefresh={() => refetch()}
               />
             )}
-            {tab === 'groups' && <LayoutsTab tableName={table ?? ''} dbColumns={tableData?.columns ?? []} />}
+            {tab === 'groups' && (
+              <LayoutsTab tableName={table ?? ''} dbColumns={tableData?.columns ?? []} />
+            )}
             {tab === 'behavior' && <BehaviorTab tableName={table ?? ''} tableData={tableData} />}
             {tab === 'content' && (
               <ContentTab
