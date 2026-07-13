@@ -18,6 +18,7 @@ import { formatFileSize, formatRelative } from '@/lib/utils'
 interface Recording {
   id: string
   user: string
+  app: string | null
   user_name: string | null
   started_at: string
   ended_at: string | null
@@ -174,6 +175,11 @@ export function SessionReplaysPage() {
                   <div className='min-w-0 flex-1'>
                     <div className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
                       {rec.user_name || rec.user.slice(0, 8)}
+                      {rec.app && (
+                        <Badge variant='outline' className='ml-2 h-4 px-1.5 text-[10px]'>
+                          {rec.app}
+                        </Badge>
+                      )}
                       {rec.truncated && (
                         <Badge
                           variant='outline'

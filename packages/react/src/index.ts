@@ -80,6 +80,8 @@ export {
 export { useNivaroForm } from './hooks/useNivaroForm'
 export type { RelationOption } from './hooks/useRelationOptions'
 export { useRelationOptions } from './hooks/useRelationOptions'
+export type { SessionRecorderOptions } from './hooks/useSessionRecorder'
+export { useSessionRecorder } from './hooks/useSessionRecorder'
 // Types
 export type {
   ComponentOverrides,

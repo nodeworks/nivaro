@@ -37,19 +37,25 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     return reply.send({ data: { enabled: await recordingEnabled() } })
   })
 
-  app.post('/start', { preHandler: requireAuth }, async (req, reply) => {
-    if (!(await recordingEnabled())) {
-      return reply.code(409).send({ error: 'Session recording is disabled' })
+  app.post<{ Body: { app?: string } }>(
+    '/start',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      if (!(await recordingEnabled())) {
+        return reply.code(409).send({ error: 'Session recording is disabled' })
+      }
+      const id = randomUUID()
+      const appLabel = typeof req.body?.app === 'string' ? req.body.app.slice(0, 100) : null
+      await db('nivaro_session_recordings').insert({
+        id,
+        user: req.user!.id,
+        app: appLabel,
+        started_at: new Date(),
+        last_event_at: new Date()
+      })
+      return reply.send({ data: { id } })
     }
-    const id = randomUUID()
-    await db('nivaro_session_recordings').insert({
-      id,
-      user: req.user!.id,
-      started_at: new Date(),
-      last_event_at: new Date()
-    })
-    return reply.send({ data: { id } })
-  })
+  )
 
   app.post<{ Params: { id: string }; Body: { seq?: number; events?: unknown[] } }>(
     '/:id/events',
@@ -130,6 +136,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         .select(
           'r.id',
           'r.user',
+          'r.app',
           'r.started_at',
           'r.ended_at',
           'r.last_event_at',

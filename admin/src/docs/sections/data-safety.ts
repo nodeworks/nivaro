@@ -183,6 +183,28 @@ export const sessionReplayDocs: DocSection = {
         'Tell your team before enabling — this records their screens.'
       ]
     },
+    { type: 'h2', id: 'session-replay-headless', text: 'Recording your own frontends' },
+    {
+      type: 'p',
+      text: 'Apps built on the headless API record themselves with one hook from @nivaro/react (rrweb is an optional peer dependency — install it in the host app):'
+    },
+    {
+      type: 'pre',
+      code: `import { NivaroProvider, useSessionRecorder } from '@nivaro/react'
+
+function App() {
+  useSessionRecorder({ app: 'customer-portal' })
+  return <Routes />
+}`
+    },
+    {
+      type: 'ul',
+      items: [
+        'The hook no-ops unless the instance toggle is on AND rrweb is installed — safe to ship always-on.',
+        'Recordings attribute to the authenticated SDK identity (usually your service token user); the app label tells frontends apart in the replay list.',
+        'Raw SDK commands exist too: sessionRecordingEnabled, startSessionRecording(app), appendSessionRecordingEvents, endSessionRecording.'
+      ]
+    },
     {
       type: 'note',
       text: 'Journey Trail (page breadcrumbs) covers most debugging needs without recording anything visual — reach for replay when you need the pixels.'

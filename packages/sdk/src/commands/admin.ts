@@ -587,3 +587,57 @@ export function readPipelineReplay(
 }> {
   return cmd('GET', `/pipelines/${templateId}/replay`, days ? { days } : undefined)
 }
+
+// ─── Session recording (rrweb) ────────────────────────────────────────────────
+
+export interface SessionRecording {
+  id: UUID
+  user: UUID
+  app: string | null
+  user_name?: string | null
+  started_at: ISODate
+  ended_at: ISODate | null
+  last_event_at: ISODate | null
+  event_count: number
+  byte_size: number
+  truncated: boolean
+}
+
+/** Is session recording enabled instance-wide? (Recorders no-op when false.) */
+export function sessionRecordingEnabled(): Command<{ data: { enabled: boolean } }> {
+  return cmd('GET', '/session-recordings/enabled')
+}
+
+/** Open a recording. `app` labels which frontend it came from. */
+export function startSessionRecording(app?: string): Command<{ data: { id: UUID } }> {
+  return cmd('POST', '/session-recordings/start', undefined, app ? { app } : {})
+}
+
+/** Append an ordered chunk of rrweb events to an open recording. */
+export function appendSessionRecordingEvents(
+  id: UUID,
+  seq: number,
+  events: unknown[]
+): Command<{ data: { ok: boolean } }> {
+  return cmd('POST', `/session-recordings/${id}/events`, undefined, { seq, events })
+}
+
+/** Close a recording. */
+export function endSessionRecording(id: UUID): Command<{ data: { ended: boolean } }> {
+  return cmd('POST', `/session-recordings/${id}/end`)
+}
+
+/** List recordings (admin only). */
+export function listSessionRecordings(user?: UUID): Command<{ data: SessionRecording[] }> {
+  return cmd('GET', '/session-recordings/', user ? { user } : undefined)
+}
+
+/** Full concatenated rrweb event stream for a recording (admin only). */
+export function readSessionRecordingEvents(id: UUID): Command<{ data: { events: unknown[] } }> {
+  return cmd('GET', `/session-recordings/${id}/events`)
+}
+
+/** Delete a recording (admin only). */
+export function deleteSessionRecording(id: UUID): Command<{ data: { deleted: boolean } }> {
+  return cmd('DELETE', `/session-recordings/${id}`)
+}
