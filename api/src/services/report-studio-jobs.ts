@@ -5,6 +5,7 @@ import { sendRawMail } from './mail.js'
 import { notifyUser } from './notification-channels.js'
 import {
   type DateRange,
+  esc,
   parseJson,
   renderReportEmailHtml,
   resolveWidgetData,
@@ -127,10 +128,10 @@ export async function runReportAlertChecks(app: FastifyInstance): Promise<{
             to: creator.email,
             subject: `Report alert: ${alert.name}`,
             html: `<div style="font-family:system-ui,sans-serif;max-width:560px">
-              <h2 style="color:#172940;font-size:16px">${alert.name}</h2>
-              <p style="font-size:13px;color:#111827">"${widget.title}" crossed your threshold.</p>
-              <p style="font-size:13px;color:#6b7280">${summary}</p>
-              <p><a href="${config.ADMIN_URL}/report-studio/${alert.report}" style="color:#00ceff;font-size:12px">Open the report →</a></p>
+              <h2 style="color:#172940;font-size:16px">${esc(alert.name)}</h2>
+              <p style="font-size:13px;color:#111827">"${esc(widget.title)}" crossed your threshold.</p>
+              <p style="font-size:13px;color:#6b7280">${esc(summary)}</p>
+              <p><a href="${esc(config.ADMIN_URL)}/report-studio/${esc(alert.report)}" style="color:#00ceff;font-size:12px">Open the report →</a></p>
             </div>`
           }).catch(() => {})
         }

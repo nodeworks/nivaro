@@ -340,7 +340,7 @@ export async function resolveWidgetData(
 
 // ─── Email rendering — inline-styled HTML, mail-client-safe ──────────────────
 
-function esc(s: unknown): string {
+export function esc(s: unknown): string {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
