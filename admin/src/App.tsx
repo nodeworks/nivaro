@@ -102,6 +102,7 @@ const WallboardPage = lazy(() =>
 const BlueprintsPage = lazy(() =>
   import('@/pages/Blueprints').then((m) => ({ default: m.BlueprintsPage }))
 )
+const TrashPage = lazy(() => import('@/pages/Trash').then((m) => ({ default: m.TrashPage })))
 const ErdViewPage = lazy(() => import('@/pages/ErdView').then((m) => ({ default: m.ErdViewPage })))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
@@ -369,6 +370,7 @@ export default function App() {
                   <Route path='schema-snapshot' element={<SchemaSnapshotPage />} />
                   <Route path='content-promotion' element={<ContentPromotionPage />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
+                  <Route path='trash' element={<TrashPage />} />
                   <Route path='pulse' element={<PulsePage />} />
                   <Route path='scheduled-reports' element={<ScheduledReportsPage />} />
                   <Route path='blackout-dates' element={<BlackoutDatesPage />} />

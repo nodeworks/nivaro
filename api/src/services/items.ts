@@ -10,6 +10,7 @@ import type { CMSRelation, ItemsQuery, User } from '../types.js'
 import { getCollection, getFields, getRelations } from './collections.js'
 import { decryptItemFields, encryptItemFields } from './encryption.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
+import { writeTrashRow } from './trash.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
 import { isPathMaintained } from './tree-path.js'
@@ -91,7 +92,16 @@ async function getActualColumns(table: string): Promise<Set<string>> {
 }
 
 function filterToActualColumns(payload: Record<string, unknown>, cols: Set<string>) {
-  return Object.fromEntries(Object.entries(payload).filter(([k]) => cols.has(k)))
+  return Object.fromEntries(
+    Object.entries(payload)
+      .filter(([k]) => cols.has(k))
+      .map(([k, v]) => [
+        k,
+        Array.isArray(v) || (v !== null && typeof v === 'object' && !(v instanceof Date))
+          ? JSON.stringify(v)
+          : v
+      ])
+  )
 }
 
 // ─── Row-level workspace isolation ────────────────────────────────────────────
@@ -1399,13 +1409,29 @@ export async function readItems(
   clearRelCache()
   const rels = await getRelsForCollection(collection)
 
+  // Strip O2M virtual field names — they have no physical column (e.g. 'report_widgets'
+  // on report_definitions). Selecting them causes MSSQL "Invalid column name" errors.
+  if (selectFields[0] !== '*') {
+    const o2mVirtual = new Set(
+      rels
+        .filter((r) => r.one_collection === collection && r.one_field != null && !r.junction_field)
+        .map((r) => r.one_field as string)
+    )
+    if (o2mVirtual.size > 0) {
+      selectFields = selectFields.filter((f) => !o2mVirtual.has(f))
+    }
+  }
+
   // For each related collection referenced in the filter or sort, pre-load their
   // relations into the cache so the synchronous applyFilters can access them.
   await primeRelCacheForFilter(filter, collection, rels)
 
+  // limit=-1 is Directus convention for "all records". Passing -1 to Knex MSSQL
+  // generates SELECT TOP(-1) which is invalid SQL — treat as 1000-row cap instead.
+  const effectiveLimit = limit > 0 ? Math.min(limit, 1000) : 1000
   const q = db(collection)
     .select(selectFields as string[])
-    .limit(Math.min(limit, 1000))
+    .limit(effectiveLimit)
     .offset(effectiveOffset)
 
   if (Object.keys(filter).length) applyFilters(q, filter, collection, rels)
@@ -1548,11 +1574,15 @@ async function primeRelCacheForFilter(
       if (!relCache.has(manyCol)) {
         const manyRels = await getRelations(manyCol)
         relCache.set(manyCol, manyRels)
-        const inner =
-          (value as Record<string, unknown>)['_some'] ?? (value as Record<string, unknown>)['_none']
-        if (inner && typeof inner === 'object') {
-          await primeRelCacheForFilter(inner as Record<string, unknown>, manyCol, manyRels)
-        }
+      }
+      const manyRels = relCache.get(manyCol) as CMSRelation[]
+      // Recurse into _some/_none wrapper, or implicit-some (value IS the inner filter)
+      const inner =
+        (value as Record<string, unknown>)['_some'] ??
+        (value as Record<string, unknown>)['_none'] ??
+        value
+      if (inner && typeof inner === 'object') {
+        await primeRelCacheForFilter(inner as Record<string, unknown>, manyCol, manyRels)
       }
       continue
     }
@@ -1831,6 +1861,9 @@ export async function deleteOne(
   await applyWorkspaceScope(delQ, collection, workspaceId)
   if (rowFilter) applyRowFilter(delQ, rowFilter, user)
   await delQ.delete()
+
+  // Trash safety net — full-row snapshot, restorable for 30 days
+  if (previousData) void writeTrashRow(collection, previousData, user.id)
 
   await hooks.trigger('after', { ...ctx, previousData })
 }
