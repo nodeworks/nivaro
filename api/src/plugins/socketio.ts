@@ -79,7 +79,6 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     }
   }
 
-
   io.on('connection', (socket) => {
     app.log.debug({ socketId: socket.id }, 'Socket connected')
 
@@ -225,6 +224,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.on('page:at', (payload: { path?: string }) => {
       const user = authenticatedUser
       if (!user || typeof payload?.path !== 'string') return
+      // Same-origin absolute path only — never persist something that could
+      // later render as a javascript:/protocol-relative link in the admin.
+      if (!/^\/(?!\/)[A-Za-z0-9/_\-?=&.%~]*$/.test(payload.path)) return
       const path = payload.path.slice(0, 200)
       const existing = pagePresence.get(socket.id)
       const changed = existing?.path !== path

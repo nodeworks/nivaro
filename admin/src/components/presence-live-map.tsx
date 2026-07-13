@@ -20,6 +20,10 @@ interface PresenceEntry {
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
+function safePath(path: string): string | null {
+  return path.startsWith('/') && !path.startsWith('//') && !path.includes(':') ? path : null
+}
+
 function pageLabel(path: string): string {
   if (path === '/') return 'Dashboard'
   const parts = path.split('/').filter(Boolean)
@@ -111,12 +115,18 @@ export function PresenceLiveMap() {
               className='rounded-lg border border-slate-100 bg-slate-50/60 p-3 dark:border-border dark:bg-muted/40'
             >
               <div className='flex items-center justify-between'>
-                <Link
-                  to={path}
-                  className='text-[12.5px] font-medium text-slate-800 hover:text-nvr-navy hover:underline dark:text-foreground dark:hover:text-nvr-cyan'
-                >
-                  {pageLabel(path)}
-                </Link>
+                {safePath(path) ? (
+                  <Link
+                    to={safePath(path) as string}
+                    className='text-[12.5px] font-medium text-slate-800 hover:text-nvr-navy hover:underline dark:text-foreground dark:hover:text-nvr-cyan'
+                  >
+                    {pageLabel(path)}
+                  </Link>
+                ) : (
+                  <span className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
+                    {pageLabel(path)}
+                  </span>
+                )}
                 <code className='font-mono text-[10px] text-slate-400'>{path}</code>
               </div>
               <div className='mt-2 flex flex-wrap gap-1.5'>

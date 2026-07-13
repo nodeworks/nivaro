@@ -23,6 +23,10 @@ interface JourneySession {
   steps: JourneyStep[]
 }
 
+function safePath(path: string): string | null {
+  return path.startsWith('/') && !path.startsWith('//') && !path.includes(':') ? path : null
+}
+
 function pageLabel(path: string): string {
   if (path === '/') return 'Dashboard'
   const parts = path.split('/').filter(Boolean)
@@ -116,12 +120,18 @@ export function JourneyTrail({ userId }: { userId: string }) {
                   <li key={`${step.entered_at}-${i}`} className='relative py-1 pl-4'>
                     <span className='absolute -left-[3.5px] top-[13px] h-1.5 w-1.5 rounded-full bg-[#00ceff]' />
                     <div className='flex items-baseline gap-2'>
-                      <Link
-                        to={step.path}
-                        className='truncate text-[12.5px] text-slate-700 hover:text-nvr-navy hover:underline dark:text-slate-300 dark:hover:text-nvr-cyan'
-                      >
-                        {pageLabel(step.path)}
-                      </Link>
+                      {safePath(step.path) ? (
+                        <Link
+                          to={safePath(step.path) as string}
+                          className='truncate text-[12.5px] text-slate-700 hover:text-nvr-navy hover:underline dark:text-slate-300 dark:hover:text-nvr-cyan'
+                        >
+                          {pageLabel(step.path)}
+                        </Link>
+                      ) : (
+                        <span className='truncate text-[12.5px] text-slate-700 dark:text-slate-300'>
+                          {pageLabel(step.path)}
+                        </span>
+                      )}
                       <span className='shrink-0 text-[10.5px] tabular-nums text-slate-400'>
                         {new Date(step.entered_at).toLocaleTimeString(undefined, {
                           hour: '2-digit',
