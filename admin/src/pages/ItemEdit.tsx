@@ -14,6 +14,7 @@ import {
   Check,
   ChevronsUpDown,
   EyeOff,
+  History,
   Loader2,
   Network,
   Play,
@@ -25,6 +26,7 @@ import { toast } from 'sonner'
 import { ApprovalPanel } from '@/components/approval-panel'
 import { ErpStatusBadge } from '@/components/erp-status-badge'
 import { RecordDrilldownSheet } from '@/components/record-drilldown-sheet'
+import { TimelineSheet } from '@/components/timeline-sheet'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -358,6 +360,7 @@ export function ItemEditPage() {
   const isNew = id === 'new'
 
   const [summarizing, setSummarizing] = useState(false)
+  const [timelineOpen, setTimelineOpen] = useState(false)
   const [summary, setSummary] = useState<string | null>(null)
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
 
@@ -807,6 +810,17 @@ export function ItemEditPage() {
                         triggerClassName='rounded-none -ml-px first:ml-0'
                       />
                     )}
+                    {id && !isNew && (
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        onClick={() => setTimelineOpen(true)}
+                        title='Timeline — full record history'
+                        className='rounded-none -ml-px first:ml-0'
+                      >
+                        <History className='h-3.5 w-3.5' />
+                      </Button>
+                    )}
                     {user?.is_admin && layoutAiEnabled && id && !isNew && (
                       <Button
                         variant='outline'
@@ -854,6 +868,14 @@ export function ItemEditPage() {
           </DrilldownContext.Provider>
         </ItemEditAuthContext.Provider>
       </NavigationContext.Provider>
+      {id && !isNew && collection && (
+        <TimelineSheet
+          collection={collection}
+          item={id}
+          open={timelineOpen}
+          onOpenChange={setTimelineOpen}
+        />
+      )}
     </NivaroProvider>
   )
 }
