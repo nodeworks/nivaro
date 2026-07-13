@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query'
-import { Loader2, Send, Sparkles, Wrench } from 'lucide-react'
+import { Loader2, Mic, Send, Sparkles, Volume2, VolumeX, Wrench } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -198,6 +198,72 @@ export function AskPage() {
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  // ── Voice: dictation in, optional spoken replies out ──────────────────────
+  const [listening, setListening] = useState(false)
+  const [speakReplies, setSpeakReplies] = useState(false)
+  const recognitionRef = useRef<{ stop: () => void } | null>(null)
+  type SpeechRecognitionCtor = new () => {
+    lang: string
+    interimResults: boolean
+    continuous: boolean
+    onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void
+    onend: () => void
+    onerror: () => void
+    start: () => void
+    stop: () => void
+  }
+  const SpeechRec =
+    typeof window !== 'undefined'
+      ? (((window as unknown as Record<string, unknown>).SpeechRecognition as
+          | SpeechRecognitionCtor
+          | undefined) ??
+        ((window as unknown as Record<string, unknown>).webkitSpeechRecognition as
+          | SpeechRecognitionCtor
+          | undefined))
+      : undefined
+
+  function toggleListening() {
+    if (listening) {
+      recognitionRef.current?.stop()
+      return
+    }
+    if (!SpeechRec) {
+      toast.message('Voice input is not supported in this browser')
+      return
+    }
+    const rec = new SpeechRec()
+    rec.lang = navigator.language || 'en-US'
+    rec.interimResults = true
+    rec.continuous = false
+    rec.onresult = (e) => {
+      const transcript = Array.from(
+        { length: e.results.length },
+        (_, i) => e.results[i][0].transcript
+      ).join(' ')
+      setInput(transcript)
+    }
+    rec.onend = () => {
+      setListening(false)
+      recognitionRef.current = null
+    }
+    rec.onerror = () => setListening(false)
+    recognitionRef.current = rec
+    setListening(true)
+    rec.start()
+  }
+
+  function speak(text: string) {
+    if (!speakReplies || typeof window === 'undefined' || !('speechSynthesis' in window)) return
+    // Strip markdown noise for the readback
+    const plain = text
+      .replace(/\|/g, ' ')
+      .replace(/[#*`_>-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .slice(0, 600)
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(plain))
+  }
+
   const send = useMutation({
     mutationFn: (history: ChatTurn[]) =>
       api
@@ -213,6 +279,7 @@ export function AskPage() {
         ...prev,
         { role: 'assistant', content: data.reply, trace: data.trace, proposals: data.proposals }
       ])
+      speak(data.reply)
     },
     onError: (err: unknown) => {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
@@ -354,6 +421,32 @@ export function AskPage() {
             placeholder='e.g. How many workflows are waiting on manager approval?'
             className='max-h-32 flex-1 resize-none rounded-lg border border-slate-200 px-3 py-2 text-[13px] focus:outline-none focus:ring-1 focus:ring-[#00ceff] dark:border-border dark:bg-background'
           />
+          <Button
+            size='sm'
+            variant={listening ? 'default' : 'outline'}
+            onClick={toggleListening}
+            title={listening ? 'Stop listening' : 'Dictate your question'}
+            className={listening ? 'animate-pulse' : ''}
+          >
+            <Mic className='h-3.5 w-3.5' />
+          </Button>
+          <Button
+            size='sm'
+            variant='outline'
+            onClick={() => {
+              setSpeakReplies((v) => {
+                if (v) window.speechSynthesis?.cancel()
+                return !v
+              })
+            }}
+            title={speakReplies ? 'Stop speaking replies' : 'Speak replies aloud'}
+          >
+            {speakReplies ? (
+              <Volume2 className='h-3.5 w-3.5 text-nvr-cyan' />
+            ) : (
+              <VolumeX className='h-3.5 w-3.5' />
+            )}
+          </Button>
           <Button size='sm' disabled={!input.trim() || send.isPending} onClick={() => submit()}>
             <Send className='h-3.5 w-3.5' />
           </Button>
