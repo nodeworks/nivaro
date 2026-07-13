@@ -10,10 +10,13 @@ export async function findOrCreateFromOIDC(profile: {
   family_name: string | null
   groups?: string[] // Azure AD group IDs from OIDC claims
 }): Promise<User> {
-  const existing = await db<User>('nivaro_users')
-    .where({ external_id: profile.sub })
-    .orWhere({ email: profile.email })
-    .first()
+  // Match by the immutable subject first; email only links a pre-provisioned
+  // user on their FIRST login (external_id gets stamped immediately below,
+  // so subsequent logins always hit the sub match).
+  let existing = await db<User>('nivaro_users').where({ external_id: profile.sub }).first()
+  if (!existing && profile.email) {
+    existing = await db<User>('nivaro_users').where({ email: profile.email }).first()
+  }
 
   const adRole = await resolveRoleFromAdGroups(profile.groups ?? [])
 
