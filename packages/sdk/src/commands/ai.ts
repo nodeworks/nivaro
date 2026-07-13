@@ -143,3 +143,22 @@ export function updateAiSettings(
 ): Command<{ data: AiCollectionSettings }> {
   return cmd('PATCH', `/ai-settings/${collection}`, undefined, body)
 }
+
+
+// ─── Ask-your-data chat ───────────────────────────────────────────────────────
+
+export interface AiChatTraceEntry {
+  tool: string
+  input: Record<string, unknown>
+  summary: string
+}
+
+/**
+ * Multi-turn ask-your-data chat. Pass the full conversation each call; every
+ * tool call runs permission-checked as the requesting user (RBAC + RLS).
+ */
+export function aiChat(
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+): Command<{ data: { reply: string; trace: AiChatTraceEntry[] } }> {
+  return cmd('POST', '/ai/chat', undefined, { messages })
+}

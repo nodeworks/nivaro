@@ -350,3 +350,98 @@ export function reportClientError(input: {
 }): Command<void> {
   return cmd('POST', '/issues/client', undefined, input)
 }
+
+
+// ─── Pipeline simulator ───────────────────────────────────────────────────────
+
+export interface PipelineSimulation {
+  template: string
+  has_instance: boolean
+  current_state: string | null
+  states: Array<{
+    id: string
+    key: string
+    label: string
+    color: string | null
+    is_initial: boolean
+    is_terminal: boolean
+    is_current: boolean
+    owners: Array<{ id: string; email: string; first_name: string | null; last_name: string | null }>
+    sla_rule: { name: string; duration_hours: number; warning_threshold_pct: number; business_hours_only: boolean } | null
+  }>
+  transitions: Array<{
+    id: string
+    label: string
+    from_state: string | null
+    to_state: string
+    from_ok: boolean
+    conditions_pass: boolean
+    role_pass: boolean
+    available: boolean
+    required_roles: string[]
+    condition_rules: Array<{ field: string; op: string; value: unknown; record_value: unknown; passed: boolean }>
+  }>
+}
+
+/** Dry-run a record through its pipeline: owners per state, transition availability with reasons, SLA per state. */
+export function simulatePipeline(
+  collection: string,
+  itemId: string | number
+): Command<{ data: PipelineSimulation | null }> {
+  return cmd('POST', '/pipelines/simulate', undefined, { collection, item_id: itemId })
+}
+
+// ─── Field impact analysis ────────────────────────────────────────────────────
+
+/** What references this field? Layouts, queues, templates, formulas, rules, views… Admin only. */
+export function readFieldImpact(
+  collection: string,
+  field: string
+): Command<{ data: Array<{ source: string; label: string; detail: string; link: string | null }>; total: number }> {
+  return cmd('GET', `/data-model/${collection}/fields/${field}/impact`)
+}
+
+// ─── Scheduled reports ────────────────────────────────────────────────────────
+
+export interface ScheduledReport {
+  id: number
+  name: string
+  report_type: 'collection' | 'queue'
+  collection: string | null
+  queue_id: string | null
+  filters: unknown
+  fields: string[] | null
+  recipients: string[]
+  cron_schedule: string
+  orientation: string
+  row_limit: number
+  is_active: boolean
+  last_run_at: ISODate | null
+  last_run_status: string | null
+}
+
+export function listScheduledReports(): Command<{ data: ScheduledReport[] }> {
+  return cmd('GET', '/scheduled-reports/')
+}
+
+export function createScheduledReport(
+  data: Partial<ScheduledReport> & { name: string; cron_schedule: string; recipients: string[] }
+): Command<{ data: ScheduledReport }> {
+  return cmd('POST', '/scheduled-reports/', undefined, data)
+}
+
+export function updateScheduledReport(
+  id: number,
+  data: Partial<ScheduledReport>
+): Command<{ data: ScheduledReport }> {
+  return cmd('PATCH', `/scheduled-reports/${id}`, undefined, data)
+}
+
+export function deleteScheduledReport(id: number): Command<void> {
+  return cmd('DELETE', `/scheduled-reports/${id}`)
+}
+
+/** Render and email the report immediately. */
+export function runScheduledReport(id: number): Command<{ data: { sent: number } }> {
+  return cmd('POST', `/scheduled-reports/${id}/run`)
+}

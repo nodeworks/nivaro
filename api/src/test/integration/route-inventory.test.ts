@@ -75,6 +75,15 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   // Auth — session + ws token (socket clients)
   { method: 'GET', path: '/api/auth/ws-token' },
 
+  // Batch 2 (2026-07): simulator, chat, reports, forms, SSO discovery
+  { method: 'POST', path: '/api/pipelines/simulate' },
+  { method: 'POST', path: '/api/ai/chat' },
+  { method: 'GET', path: '/api/data-model/:table/fields/:field/impact' },
+  { method: 'GET', path: '/api/scheduled-reports/' },
+  { method: 'POST', path: '/api/scheduled-reports/:id/run' },
+  { method: 'GET', path: '/api/auth/providers' },
+  { method: 'GET', path: '/api/submission-forms/public/:token' },
+
   // Operations tooling (2026-07 batch)
   { method: 'GET', path: '/api/files/:id/usage' },
   { method: 'GET', path: '/api/files/usage/orphans' },

@@ -137,6 +137,8 @@ describe('resolveCollectionSource — state_values filters the full match set, n
       if (table === 'nivaro_workflow_states') return makeDbChain([])
       if (table === 'nivaro_workflow_history') return makeDbChain([])
       if (table === 'nivaro_at_risk_rules') return makeDbChain([])
+      // business-hours schedule cache reads settings when SLA math runs
+      if (table === 'nivaro_settings') return makeDbChain([])
       if (table === 'nivaro_fields') return makeDbChain([{ field: 'id' }])
       if (table === 'nivaro_pipeline_owner_groups') return makeDbChain([])
       if (table === 'nivaro_pipeline_instance_owners as io') return makeDbChain([])
