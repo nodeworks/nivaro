@@ -83,9 +83,15 @@ function ReplayPlayer({ recordingId }: { recordingId: string }) {
       if (!rep || !host) return
       const w = rep.iframe.offsetWidth || 1280
       const h = rep.iframe.offsetHeight || 720
-      const scale = Math.min(host.clientWidth / w, 520 / h, 1)
+      // Width budget from the sheet itself — the host div can be mid-animation
+      // (or grown by the giant iframe), so never trust host.clientWidth alone.
+      const sheetW = window.innerWidth * 0.85 - 56
+      const budget = Math.min(host.parentElement?.clientWidth || sheetW, sheetW)
+      // Fill the sheet: scale up as well as down, bounded by width and viewport height
+      const scale = Math.min(budget / w, (window.innerHeight - 170) / h)
       rep.wrapper.style.transform = `scale(${scale})`
       rep.wrapper.style.transformOrigin = 'top left'
+      host.style.width = `${Math.ceil(w * scale)}px`
       host.style.height = `${Math.ceil(h * scale)}px`
     }
 
@@ -114,6 +120,8 @@ function ReplayPlayer({ recordingId }: { recordingId: string }) {
         setTotal(replayer.getMetaData().totalTime)
         replayer.on('fullsnapshot-rebuilded', rescale)
         replayer.on('resize', rescale)
+        // Sheet slide-in animation settles ~300ms after mount — re-measure after
+        for (const delay of [100, 400, 800]) setTimeout(rescale, delay)
         replayer.on('finish', () => {
           playingRef.current = false
           setPlaying(false)
@@ -179,7 +187,7 @@ function ReplayPlayer({ recordingId }: { recordingId: string }) {
       <div
         ref={frameRef}
         className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
-        style={{ minHeight: 200 }}
+        style={{ minHeight: 400 }}
       />
       {ready && (
         <div className='mt-2 flex items-center gap-3'>
@@ -356,7 +364,7 @@ export function SessionReplaysPage() {
       </div>
 
       <Sheet open={!!playing} onOpenChange={(o) => !o && setPlaying(null)}>
-        <SheetContent className='w-[1000px] overflow-y-auto sm:max-w-[1000px]'>
+        <SheetContent className='w-[85%] overflow-y-auto sm:max-w-[85%]'>
           <SheetHeader>
             <SheetTitle className='flex items-center gap-2 text-[15px]'>
               <Clapperboard className='h-4 w-4 text-nvr-cyan' />
