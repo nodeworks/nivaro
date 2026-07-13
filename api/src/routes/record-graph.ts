@@ -143,10 +143,16 @@ export async function recordGraphRoutes(app: FastifyInstance) {
           c.one_collection
       )
       const target = companion ? String(companion.one_collection) : null
-      if (!target || !canRead(target) || target.startsWith('nivaro_')) {
-        if (target !== 'nivaro_files') continue
-      }
-      const targetCollection = target as string
+      if (!target) continue
+      // nivaro_files is the ONLY permitted system target: attachment labels
+      // are already visible to any authenticated user with read access to the
+      // parent record (the Files field and the authenticate-only /files
+      // routes expose the same data). Every other nivaro_/directus_ table is
+      // blocked outright, and business targets require read permission.
+      const isFiles = target === 'nivaro_files'
+      if (!isFiles && (target.startsWith('nivaro_') || target.startsWith('directus_'))) continue
+      if (!isFiles && !canRead(target)) continue
+      const targetCollection = target
       try {
         const links = (await db(junction)
           .where({ [parentCol]: id })
