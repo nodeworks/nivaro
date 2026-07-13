@@ -4,6 +4,7 @@ import {
   Check,
   Clock,
   Database,
+  Download,
   Globe,
   Mail,
   MessageSquare,
@@ -132,6 +133,7 @@ type Section =
   | 'content'
   | 'email'
   | 'sms'
+  | 'backups'
 
 const NAV: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'project', label: 'Project', icon: <Settings2 className='h-3.5 w-3.5' /> },
@@ -142,7 +144,8 @@ const NAV: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'sla', label: 'SLA', icon: <Clock className='h-3.5 w-3.5' /> },
   { id: 'content', label: 'Content', icon: <Database className='h-3.5 w-3.5' /> },
   { id: 'email', label: 'Email', icon: <Mail className='h-3.5 w-3.5' /> },
-  { id: 'sms', label: 'SMS', icon: <MessageSquare className='h-3.5 w-3.5' /> }
+  { id: 'sms', label: 'SMS', icon: <MessageSquare className='h-3.5 w-3.5' /> },
+  { id: 'backups', label: 'Backups', icon: <Download className='h-3.5 w-3.5' /> }
 ]
 
 const AI_MODELS = [
@@ -184,6 +187,70 @@ function SectionWrap({
         <div className='mt-7 border-t border-slate-100 pt-5 dark:border-border'>
           <Button size='sm' onClick={onSave} disabled={saving}>
             {saving ? 'Saving…' : 'Save changes'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Backups section ──────────────────────────────────────────────────────────
+
+function BackupsSection() {
+  const [includeSystem, setIncludeSystem] = useState(false)
+  const { data: manifest } = useQuery({
+    queryKey: ['backup-manifest', includeSystem],
+    queryFn: () =>
+      api
+        .get<{ data: { business: string[]; system: string[]; excluded: string[] } }>(
+          '/backups/manifest',
+          { params: { include_system: includeSystem } }
+        )
+        .then((r) => r.data.data),
+    staleTime: 60_000
+  })
+
+  return (
+    <div className='p-8'>
+      <div className='max-w-lg'>
+        <h2 className='mb-2 text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+          Backups
+        </h2>
+        <p className='mb-6 text-[12px] text-muted-foreground'>
+          Download a logical backup of this instance — a gzip stream of newline-delimited JSON,
+          one record per row, restorable with standard tooling. Files on disk/object storage are
+          not included.
+        </p>
+        <div className='space-y-4'>
+          <label className='flex items-start gap-2 text-[13px] text-slate-700 dark:text-slate-300'>
+            <input
+              type='checkbox'
+              checked={includeSystem}
+              onChange={(e) => setIncludeSystem(e.target.checked)}
+              className='mt-0.5'
+            />
+            <span>
+              Include system configuration tables
+              <span className='block text-[11px] text-muted-foreground'>
+                Schema registry, roles, policies, workflows, layouts… Volatile tables (sessions,
+                logs, caches, embeddings) are always excluded.
+              </span>
+            </span>
+          </label>
+          {manifest && (
+            <p className='text-[12px] text-muted-foreground'>
+              {manifest.business.length} business collection{manifest.business.length !== 1 ? 's' : ''}
+              {includeSystem ? ` + ${manifest.system.length} system tables` : ''} will be exported.
+            </p>
+          )}
+          <Button
+            size='sm'
+            onClick={() =>
+              window.open(`/api/backups/export?include_system=${includeSystem}`, '_blank')
+            }
+          >
+            <Download className='mr-1.5 h-3.5 w-3.5' />
+            Download backup
           </Button>
         </div>
       </div>
@@ -1266,6 +1333,8 @@ export function SettingsPage() {
                     </SectionWrap>
                   )
                 })()}
+
+              {activeSection === 'backups' && <BackupsSection />}
             </>
           )}
         </div>

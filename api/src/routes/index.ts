@@ -61,6 +61,7 @@ import { presetsRoutes } from './presets.js'
 import { queuesRoutes } from './queues.js'
 import { recordTemplatesRoutes } from './record-templates.js'
 import { reportsRoutes } from './reports.js'
+import { backupsRoutes } from './backups.js'
 import { retentionRoutes } from './retention.js'
 import { revisionsRoutes } from './revisions.js'
 import { rolesRoutes } from './roles.js'
@@ -150,6 +151,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(treePermissionsRoutes)
   await app.register(atRiskRoutes, { prefix: '/at-risk' })
   await app.register(retentionRoutes, { prefix: '/retention' })
+  await app.register(backupsRoutes, { prefix: '/backups' })
   await app.register(bulkActionsRoutes)
   await app.register(itemActionsRoutes)
   await app.register(extensionRegistryRoutes)
