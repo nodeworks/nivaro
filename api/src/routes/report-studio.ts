@@ -5,7 +5,9 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
   type DateRange,
+  type EntityFilter,
   parseJson,
+  physicalColumns,
   resolveWidgetData,
   type WidgetQueryConfig,
   type WidgetRow
@@ -207,7 +209,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const incoming = Array.isArray(req.body?.widgets) ? req.body.widgets : []
     if (incoming.length > 40) return reply.code(400).send({ error: 'Max 40 widgets per report' })
 
-    const VALID_TYPES = new Set(['kpi', 'bar', 'line', 'donut', 'table', 'divider'])
+    const VALID_TYPES = new Set(['kpi', 'kpi_group', 'bar', 'line', 'donut', 'table', 'divider'])
     const rows = incoming.map((w, i) => ({
       id: w.id && /^[0-9a-f-]{36}$/i.test(w.id) ? w.id : randomUUID(),
       report: report.id,
@@ -234,7 +236,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string; widgetId: string }
-    Body: { date_range?: DateRange | null }
+    Body: { date_range?: DateRange | null; entity_filters?: EntityFilter[] }
   }>('/:id/widgets/:widgetId/data', { preHandler: requireAuth }, async (req, reply) => {
     const report = await loadReport(req.params.id)
     if (!report) return reply.code(404).send({ error: 'Report not found' })
@@ -247,7 +249,9 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       const data = await resolveWidgetData(
         req.user!,
         { type: widget.type, collection: widget.collection, config: parseJson(widget.config) },
-        req.body?.date_range ?? (parseJson<{ date_range?: DateRange }>(report.global_filters)?.date_range ?? null)
+        req.body?.date_range ??
+          (parseJson<{ date_range?: DateRange }>(report.global_filters)?.date_range ?? null),
+        Array.isArray(req.body?.entity_filters) ? req.body.entity_filters : []
       )
       return reply.send({ data })
     } catch (err) {
@@ -265,6 +269,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       collection?: string | null
       config?: WidgetQueryConfig | null
       date_range?: DateRange | null
+      entity_filters?: EntityFilter[]
     }
   }>('/preview', { preHandler: requireAuth }, async (req, reply) => {
     try {
@@ -275,7 +280,8 @@ export async function reportStudioRoutes(app: FastifyInstance) {
           collection: req.body?.collection ?? null,
           config: req.body?.config ?? null
         },
-        req.body?.date_range ?? null
+        req.body?.date_range ?? null,
+        Array.isArray(req.body?.entity_filters) ? req.body.entity_filters : []
       )
       return reply.send({ data })
     } catch (err) {
@@ -490,6 +496,187 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       }
       await db('nivaro_report_alerts').where({ id: alert.id }).del()
       return reply.send({ data: { deleted: true } })
+    }
+  )
+
+  // ── Filter bar support — distinct values for a field across the report ─────
+
+  app.get<{ Params: { id: string }; Querystring: { field?: string } }>(
+    '/:id/filter-options',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const field = String(req.query.field ?? '')
+      if (!/^[a-zA-Z0-9_]+$/.test(field)) return reply.code(400).send({ error: 'Invalid field' })
+
+      const widgets = (await db('nivaro_report_widgets')
+        .where({ report: report.id })
+        .whereNotNull('collection')) as WidgetRow[]
+      const collections = [...new Set(widgets.map((w) => w.collection as string))]
+      const seen = new Map<string, string>()
+      for (const col of collections) {
+        try {
+          const valid = await physicalColumns(col)
+          if (!valid.has(field)) continue
+          const rows = (await db(col)
+            .distinct(field)
+            .whereNotNull(field)
+            .limit(100)) as Array<Record<string, unknown>>
+          // FK? resolve labels
+          const rel = (await db('nivaro_relations')
+            .where({ many_collection: col, many_field: field })
+            .whereNull('junction_field')
+            .first()) as { one_collection: string | null } | undefined
+          if (rel?.one_collection && !rel.one_collection.startsWith('nivaro_')) {
+            const ids = rows.map((r) => r[field]).filter((v) => v != null)
+            const related = (await db(rel.one_collection).whereIn(
+              'id',
+              ids as Array<string | number>
+            )) as Array<Record<string, unknown>>
+            for (const r of related) {
+              seen.set(
+                String(r.id),
+                String(r.title ?? r.name ?? r.label ?? r.subject ?? r.id).slice(0, 60)
+              )
+            }
+          } else {
+            for (const r of rows) {
+              const v = r[field]
+              if (v != null) seen.set(String(v), String(v).slice(0, 60))
+            }
+          }
+        } catch {
+          /* skip mismatched collections */
+        }
+        if (seen.size >= 100) break
+      }
+      return reply.send({
+        data: [...seen.entries()]
+          .map(([value, label]) => ({ value, label }))
+          .sort((a, b) => a.label.localeCompare(b.label))
+      })
+    }
+  )
+
+  // ── AI: compose a report from a prompt / set filters from prose ────────────
+
+  app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
+    '/:id/ai-build',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canEditReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const prompt = String(req.body?.prompt ?? '').trim()
+      if (!prompt) return reply.code(400).send({ error: 'prompt is required' })
+
+      const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+      const client = await getAiClient()
+      if (!client) return reply.code(503).send({ error: 'AI is not configured' })
+      const { model } = await getAiModelSettings()
+
+      // Catalog: registered collections + their numeric/date fields
+      const collections = (await db('nivaro_collections')
+        .whereNot('collection', 'like', 'nivaro\_%')
+        .select('collection', 'display_name')
+        .limit(80)) as Array<{ collection: string; display_name: string | null }>
+      const fields = (await db('nivaro_fields')
+        .whereIn(
+          'collection',
+          collections.map((c) => c.collection)
+        )
+        .whereIn('type', ['integer', 'bigInteger', 'decimal', 'float', 'number', 'date', 'datetime', 'string'])
+        .select('collection', 'field', 'type')) as Array<{
+        collection: string
+        field: string
+        type: string
+      }>
+      const catalog = collections
+        .map((c) => {
+          const fs = fields.filter((f) => f.collection === c.collection).slice(0, 25)
+          return `${c.collection}: ${fs.map((f) => `${f.field}(${f.type})`).join(', ')}`
+        })
+        .join('\n')
+
+      const system = `You compose report widgets for a reporting tool. Available widget types: kpi (one aggregate), kpi_group (metrics array of up to 4 tiles), bar, line (needs dimension; use bucket day|week|month for date fields), donut, table (columns array), divider (section heading). Aggregates: count, sum, avg, min, max (non-count needs a numeric field). Grid is 12 columns; kpi w=3 h=2, kpi_group w=12 h=2, charts w=6 h=3, tables w=12 h=3, divider w=12 h=1.
+Collections and fields available:
+${catalog}
+Respond ONLY with JSON: {"widgets":[{"type","title","collection","config":{...},"x","y","w","h"}]}. Use ONLY listed collections/fields. 4-8 widgets. Lay them out top-to-bottom without overlaps.`
+
+      try {
+        const msg = await client.messages.create({
+          model,
+          max_tokens: 2500,
+          system,
+          messages: [{ role: 'user', content: prompt }]
+        })
+        const text = msg.content
+          .map((b) => (b.type === 'text' ? b.text : ''))
+          .filter(Boolean)
+          .join('')
+        const jsonMatch = text.match(/\{[\s\S]*\}/)
+        if (!jsonMatch) return reply.code(422).send({ error: 'AI returned no usable layout' })
+        const parsed = JSON.parse(jsonMatch[0]) as { widgets?: unknown[] }
+        if (!Array.isArray(parsed.widgets) || parsed.widgets.length === 0) {
+          return reply.code(422).send({ error: 'AI returned no widgets' })
+        }
+        await logActivity({
+          action: 'report-ai-build',
+          collection: 'nivaro_report_defs',
+          item: report.id,
+          user: req.user!.id,
+          comment: prompt.slice(0, 200)
+        })
+        return reply.send({ data: { widgets: parsed.widgets.slice(0, 12) } })
+      } catch (err) {
+        return reply
+          .code(502)
+          .send({ error: err instanceof Error ? err.message.slice(0, 200) : 'AI call failed' })
+      }
+    }
+  )
+
+  app.post<{ Params: { id: string }; Body: { prompt?: string; fields?: string[] } }>(
+    '/:id/ai-filters',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const prompt = String(req.body?.prompt ?? '').trim()
+      if (!prompt) return reply.code(400).send({ error: 'prompt is required' })
+
+      const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+      const client = await getAiClient()
+      if (!client) return reply.code(503).send({ error: 'AI is not configured' })
+      const { model } = await getAiModelSettings()
+      const fieldList = (req.body?.fields ?? []).filter((f) => /^[a-zA-Z0-9_]+$/.test(f))
+
+      const system = `Turn the user's prose into report filters. Respond ONLY with JSON:
+{"date_range": {"preset": one of this_month|last_30_days|last_3_months|last_6_months|last_12_months|ytd|custom, "start"?: "YYYY-MM-DD", "end"?: "YYYY-MM-DD"} | null, "entity_filters": [{"field": string, "values": [string]}]}
+Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available — return empty entity_filters)'}. Today is ${new Date().toISOString().slice(0, 10)}.`
+
+      try {
+        const msg = await client.messages.create({
+          model,
+          max_tokens: 500,
+          system,
+          messages: [{ role: 'user', content: prompt }]
+        })
+        const text = msg.content
+          .map((b) => (b.type === 'text' ? b.text : ''))
+          .filter(Boolean)
+          .join('')
+        const jsonMatch = text.match(/\{[\s\S]*\}/)
+        if (!jsonMatch) return reply.code(422).send({ error: 'Could not parse the request' })
+        return reply.send({ data: JSON.parse(jsonMatch[0]) })
+      } catch (err) {
+        return reply
+          .code(502)
+          .send({ error: err instanceof Error ? err.message.slice(0, 200) : 'AI call failed' })
+      }
     }
   )
 }

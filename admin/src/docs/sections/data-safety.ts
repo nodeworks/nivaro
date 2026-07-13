@@ -228,7 +228,10 @@ export const reportStudioDocs: DocSection = {
         'Everything resolves server-side as the viewer — collection read permissions apply per widget, field names validate against the physical schema.',
         'Group-by on a relation (M2O) field resolves display labels from the related collection automatically.',
         'The report date range (this month, last 30 days, last N months, YTD) applies to each widget through its configured date field; widgets without one ignore it.',
-        'Share a report with everyone or scope it to a role; clone, export and import as JSON.'
+        'Share a report with everyone or scope it to a role; clone, export and import as JSON.',
+        'KPI Group widgets pack up to 6 stat tiles (each its own collection + aggregate) into one card; charts and KPIs can compare against the previous period or the same window last year (delta chips, dashed prior series).',
+        'The global filter bar holds entity filters — pick fields onto the bar, then multi-select live values (FK values resolve to labels); filters apply to every widget whose collection has the field.',
+        'Build with AI composes a whole layout from a prompt; the Ask-AI filter input turns prose like "last 6 months" into filters. Every widget shows its freshness and a one-click refresh.'
       ]
     },
     { type: 'h2', id: 'report-studio-subs', text: 'Subscriptions & alerts' },

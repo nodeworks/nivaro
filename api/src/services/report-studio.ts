@@ -19,6 +19,17 @@ export interface WidgetFilter {
   value?: unknown
 }
 
+export interface KpiMetricConfig {
+  label: string
+  collection: string
+  aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'
+  field?: string
+  filters?: WidgetFilter[]
+  date_field?: string | null
+  format?: { prefix?: string; suffix?: string; decimals?: number }
+  color?: string
+}
+
 export interface WidgetQueryConfig {
   metric?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string }
   dimension?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
@@ -28,6 +39,15 @@ export interface WidgetQueryConfig {
   columns?: string[] // table type
   sort?: string // table type; '-field' = desc
   format?: { prefix?: string; suffix?: string; decimals?: number }
+  /** compare against the immediately-previous window or the same window last year */
+  compare?: 'previous_period' | 'previous_year' | null
+  orientation?: 'horizontal' | 'vertical' // bar type, client-side
+  metrics?: KpiMetricConfig[] // kpi_group type
+}
+
+export interface EntityFilter {
+  field: string
+  values: Array<string | number>
 }
 
 export interface DateRange {
@@ -205,9 +225,39 @@ async function labelizeDimension(
 
 export interface WidgetData {
   value?: number | null
+  prev_value?: number | null
+  change_pct?: number | null
   rows?: Array<Record<string, unknown>>
-  series?: Array<{ dim: string; value: number }>
+  series?: Array<{ dim: string; value: number; prev?: number }>
   row_count?: number
+  tiles?: Array<{
+    label: string
+    value: number | null
+    prev_value?: number | null
+    change_pct?: number | null
+    format?: KpiMetricConfig['format']
+    color?: string
+  }>
+}
+
+function previousRange(
+  range: { start: Date; end: Date },
+  mode: 'previous_period' | 'previous_year'
+): { start: Date; end: Date } {
+  if (mode === 'previous_year') {
+    const s = new Date(range.start)
+    const e = new Date(range.end)
+    s.setFullYear(s.getFullYear() - 1)
+    e.setFullYear(e.getFullYear() - 1)
+    return { start: s, end: e }
+  }
+  const span = range.end.getTime() - range.start.getTime()
+  return { start: new Date(range.start.getTime() - span), end: new Date(range.start.getTime() - 1) }
+}
+
+function pctChange(now: number | null, prev: number | null): number | null {
+  if (now == null || prev == null || prev === 0) return null
+  return Math.round(((now - prev) / Math.abs(prev)) * 1000) / 10
 }
 
 /**
@@ -217,9 +267,47 @@ export interface WidgetData {
 export async function resolveWidgetData(
   user: User,
   widget: { type: string; collection: string | null; config: WidgetQueryConfig | null },
-  dateRange: DateRange | null
+  dateRange: DateRange | null,
+  entityFilters: EntityFilter[] = []
 ): Promise<WidgetData> {
   if (widget.type === 'divider') return {}
+
+  // Multi-KPI summary — each tile is its own collection + aggregate
+  if (widget.type === 'kpi_group') {
+    const metrics = (widget.config?.metrics ?? []).slice(0, 6)
+    const tiles: WidgetData['tiles'] = []
+    for (const m of metrics) {
+      try {
+        const sub = await resolveWidgetData(
+          user,
+          {
+            type: 'kpi',
+            collection: m.collection,
+            config: {
+              metric: { aggregate: m.aggregate, field: m.field },
+              filters: m.filters,
+              date_field: m.date_field,
+              compare: widget.config?.compare
+            }
+          },
+          dateRange,
+          entityFilters
+        )
+        tiles.push({
+          label: m.label,
+          value: sub.value ?? null,
+          prev_value: sub.prev_value,
+          change_pct: sub.change_pct,
+          format: m.format,
+          color: m.color
+        })
+      } catch {
+        tiles.push({ label: m.label, value: null, format: m.format, color: m.color })
+      }
+    }
+    return { tiles }
+  }
+
   const collection = widget.collection ?? ''
   if (!(await isRegisteredBusinessCollection(collection))) {
     throw Object.assign(new Error('Unknown collection'), { statusCode: 400 })
@@ -236,10 +324,17 @@ export async function resolveWidgetData(
     throw Object.assign(new Error(`${aggregate} needs a valid metric field`), { statusCode: 400 })
   }
 
-  const base = () => {
+  // Report-level entity filters apply wherever the widget's collection has
+  // the column; widgets without it are simply unaffected (EFP semantics).
+  const entityAsFilters: WidgetFilter[] = entityFilters
+    .filter((f) => valid.has(f.field) && f.values.length > 0)
+    .map((f) => ({ field: f.field, op: 'in', value: f.values.join(',') }))
+
+  const base = (rangeOverride?: { start: Date; end: Date } | null) => {
     const q = db(collection)
     applyFilters(q, cfg.filters, valid)
-    const range = resolveDateRange(dateRange)
+    applyFilters(q, entityAsFilters, valid)
+    const range = rangeOverride !== undefined ? rangeOverride : resolveDateRange(dateRange)
     if (range && cfg.date_field && valid.has(cfg.date_field)) {
       q.where(cfg.date_field, '>=', range.start).where(cfg.date_field, '<=', range.end)
     }
@@ -257,10 +352,18 @@ export async function resolveWidgetData(
   if (widget.type === 'kpi') {
     const row = (await aggSelect(base()).first()) as { value: number | string | null } | undefined
     const count = (await base().count({ n: '*' }).first()) as { n: number | string } | undefined
-    return {
-      value: row?.value != null ? Number(row.value) : null,
-      row_count: Number(count?.n ?? 0)
+    const value = row?.value != null ? Number(row.value) : null
+    let prev_value: number | null | undefined
+    let change_pct: number | null | undefined
+    const range = resolveDateRange(dateRange)
+    if (cfg.compare && range && cfg.date_field && valid.has(cfg.date_field)) {
+      const prevRow = (await aggSelect(base(previousRange(range, cfg.compare))).first()) as
+        | { value: number | string | null }
+        | undefined
+      prev_value = prevRow?.value != null ? Number(prevRow.value) : null
+      change_pct = pctChange(value, prev_value)
     }
+    return { value, prev_value, change_pct, row_count: Number(count?.n ?? 0) }
   }
 
   if (widget.type === 'table') {
@@ -275,6 +378,35 @@ export async function resolveWidgetData(
     const rows = (await q.limit(Math.min(100, Math.max(1, cfg.limit ?? 10)))) as Array<
       Record<string, unknown>
     >
+    // Resolve FK columns to display labels so tables read like the source app
+    const shown = columns.length > 0 ? columns : Object.keys(rows[0] ?? {})
+    const rels = (await db('nivaro_relations')
+      .where({ many_collection: collection })
+      .whereNull('junction_field')
+      .whereIn('many_field', shown)) as Array<{ many_field: string; one_collection: string }>
+    for (const rel of rels) {
+      if (!rel.one_collection || rel.one_collection.startsWith('nivaro_')) continue
+      const ids = [...new Set(rows.map((r) => r[rel.many_field]).filter((v) => v != null))]
+      if (ids.length === 0) continue
+      try {
+        const related = (await db(rel.one_collection).whereIn(
+          'id',
+          ids as Array<string | number>
+        )) as Array<Record<string, unknown>>
+        const label = new Map(
+          related.map((r) => [
+            String(r.id),
+            String(r.title ?? r.name ?? r.label ?? r.subject ?? r.id).slice(0, 60)
+          ])
+        )
+        for (const r of rows) {
+          const v = r[rel.many_field]
+          if (v != null) r[rel.many_field] = label.get(String(v)) ?? v
+        }
+      } catch {
+        /* label resolution is best-effort */
+      }
+    }
     return { rows, row_count: rows.length }
   }
 
@@ -319,11 +451,46 @@ export async function resolveWidgetData(
           .orderBy('dim', 'asc')
       )) as never
     }
-    return {
-      series: rows
+    const series: Array<{ dim: string; value: number; prev?: number }> = rows
+      .filter((r) => r.dim != null)
+      .map((r) => ({ dim: String(r.dim), value: Number(r.value) }))
+    const range = resolveDateRange(dateRange)
+    if (cfg.compare && range && cfg.date_field && valid.has(cfg.date_field)) {
+      const prevQ = base(previousRange(range, cfg.compare))
+      let prevRows: Array<{ dim: unknown; value: number | string }>
+      if (fmt) {
+        prevRows = (await aggSelect(
+          prevQ
+            .select(db.raw(`FORMAT(??, '${fmt}') as dim`, [dim.field]))
+            .groupBy(db.raw(`FORMAT(??, '${fmt}')`, [dim.field]))
+            .orderBy('dim', 'asc')
+        )) as never
+      } else {
+        prevRows = (await aggSelect(
+          prevQ
+            .select(
+              db.raw(
+                `CONCAT(YEAR(??), '-W', RIGHT('0' + CAST(DATEPART(iso_week, ??) AS varchar), 2)) as dim`,
+                [dim.field, dim.field]
+              )
+            )
+            .groupBy(
+              db.raw(
+                `CONCAT(YEAR(??), '-W', RIGHT('0' + CAST(DATEPART(iso_week, ??) AS varchar), 2))`,
+                [dim.field, dim.field]
+              )
+            )
+            .orderBy('dim', 'asc')
+        )) as never
+      }
+      // align by position — same bucket count, shifted window
+      prevRows
         .filter((r) => r.dim != null)
-        .map((r) => ({ dim: String(r.dim), value: Number(r.value) }))
+        .forEach((r, i) => {
+          if (series[i]) series[i].prev = Number(r.value)
+        })
     }
+    return { series }
   }
 
   const limit = Math.min(50, Math.max(1, cfg.limit ?? 12))
