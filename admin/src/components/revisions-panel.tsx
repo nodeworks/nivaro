@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Clock, RotateCcw } from 'lucide-react'
-import { useState } from 'react'
+import { ChevronDown, ChevronRight, Clock, History, RotateCcw } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -221,15 +221,17 @@ function O2MEventView({ comment, action }: { comment: string | null | undefined;
       <div className='flex items-center gap-2 text-[11px] text-slate-500'>
         <span className='font-medium text-slate-700 capitalize'>{verb}</span>
         {child_collection && (
-          <span className='font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[10.5px]'>{child_collection}</span>
+          <span className='font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[10.5px]'>
+            {child_collection}
+          </span>
         )}
-        {child_id != null && (
-          <span className='text-slate-400'>#{String(child_id)}</span>
-        )}
+        {child_id != null && <span className='text-slate-400'>#{String(child_id)}</span>}
       </div>
       {snapshot && Object.keys(snapshot).length > 0 && (
         <div>
-          <p className='text-[10px] font-medium text-slate-400 mb-1 uppercase tracking-wide'>Snapshot</p>
+          <p className='text-[10px] font-medium text-slate-400 mb-1 uppercase tracking-wide'>
+            Snapshot
+          </p>
           <SnapshotDataView data={snapshot} />
         </div>
       )}
@@ -389,16 +391,186 @@ function RevisionRow({
   )
 }
 
+// ─── Time travel — scrub through snapshots with a slider ─────────────────────
+
+function snapshotOf(rev: Revision): Record<string, unknown> {
+  const d = rev.data
+  if (!d) return {}
+  if (typeof d === 'string') {
+    try {
+      return JSON.parse(d) as Record<string, unknown>
+    } catch {
+      return {}
+    }
+  }
+  return d as Record<string, unknown>
+}
+
+function cellText(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function TimeTravelView({
+  collection,
+  item,
+  revisions,
+  onRollback
+}: {
+  collection: string
+  item: string
+  revisions: Revision[]
+  onRollback?: () => void
+}) {
+  // oldest → newest for a left-to-right timeline
+  const ordered = useMemo(() => [...revisions].reverse(), [revisions])
+  const [index, setIndex] = useState(Math.max(0, ordered.length - 1))
+  const [confirming, setConfirming] = useState(false)
+
+  const selected = ordered[index]
+  const current = ordered[ordered.length - 1]
+  const snapshot = useMemo(() => (selected ? snapshotOf(selected) : {}), [selected])
+  const latest = useMemo(() => (current ? snapshotOf(current) : {}), [current])
+
+  const fields = useMemo(() => {
+    const keys = new Set([...Object.keys(latest), ...Object.keys(snapshot)])
+    keys.delete('id')
+    return [...keys].sort()
+  }, [latest, snapshot])
+
+  const restoreMut = useMutation({
+    mutationFn: () => api.post(`/revisions/${selected.id}/rollback`),
+    onSuccess: () => {
+      toast.success('Record restored to this point in time')
+      setConfirming(false)
+      onRollback?.()
+    },
+    onError: () => toast.error('Failed to restore')
+  })
+
+  if (ordered.length === 0) {
+    return <p className='pt-4 text-[13px] text-slate-400'>No revisions recorded yet.</p>
+  }
+  if (!selected) return null
+
+  const atLatest = index === ordered.length - 1
+  const changedCount = fields.filter((f) => cellText(snapshot[f]) !== cellText(latest[f])).length
+
+  return (
+    <div className='pt-3'>
+      {/* Scrubber */}
+      <div className='rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-border dark:bg-card'>
+        <input
+          type='range'
+          min={0}
+          max={ordered.length - 1}
+          value={index}
+          onChange={(e) => {
+            setIndex(Number(e.target.value))
+            setConfirming(false)
+          }}
+          className='w-full accent-[#00ceff]'
+          aria-label='Revision timeline'
+        />
+        <div className='mt-1 flex items-center justify-between text-[11px] text-slate-400'>
+          <span>{formatRelative(ordered[0].timestamp ?? '')}</span>
+          <span className='font-medium text-slate-600 dark:text-slate-300'>
+            {index + 1} / {ordered.length} · {revisionUserName(selected)} ·{' '}
+            {formatRelative(selected.timestamp ?? '')}
+          </span>
+          <span>{formatRelative(ordered[ordered.length - 1].timestamp ?? '')}</span>
+        </div>
+      </div>
+
+      {/* Restore action */}
+      <div className='mt-2 flex items-center justify-between'>
+        <p className='text-[11.5px] text-slate-400'>
+          {atLatest
+            ? 'Viewing the latest snapshot.'
+            : `${changedCount} field${changedCount === 1 ? '' : 's'} differ from now.`}
+        </p>
+        {!atLatest &&
+          (confirming ? (
+            <div className='flex gap-1.5'>
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-7 text-[11.5px]'
+                onClick={() => setConfirming(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size='sm'
+                className='h-7 text-[11.5px]'
+                disabled={restoreMut.isPending}
+                onClick={() => restoreMut.mutate()}
+              >
+                {restoreMut.isPending ? 'Restoring…' : 'Confirm restore'}
+              </Button>
+            </div>
+          ) : (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 gap-1.5 text-[11.5px]'
+              onClick={() => setConfirming(true)}
+            >
+              <RotateCcw className='h-3 w-3' /> Restore to here
+            </Button>
+          ))}
+      </div>
+
+      {/* Snapshot fields, changed-vs-now highlighted */}
+      <table className='mt-3 w-full text-[12px]'>
+        <tbody>
+          {fields.map((f) => {
+            const then = cellText(snapshot[f])
+            const now = cellText(latest[f])
+            const changed = then !== now
+            return (
+              <tr
+                key={f}
+                className={cn(
+                  'border-t border-slate-100 dark:border-border',
+                  changed && 'bg-amber-50 dark:bg-amber-500/10'
+                )}
+              >
+                <td className='w-2/5 py-1.5 pr-3 pl-1 align-top font-mono text-slate-500'>{f}</td>
+                <td className='break-all py-1.5 pr-1 align-top text-slate-700 dark:text-slate-300'>
+                  {then === '' ? <span className='italic text-slate-400'>empty</span> : then}
+                  {changed && now !== then && (
+                    <span className='ml-2 text-[10.5px] text-slate-400 line-through'>
+                      {now === '' ? 'empty' : now.slice(0, 40)}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      <p className='mt-2 text-[10.5px] text-slate-400'>
+        Struck-through values show the field now. Restore applies this snapshot through the normal
+        update path.
+      </p>
+    </div>
+  )
+}
+
 const SKELETON_ROWS = [1, 2, 3, 4]
 
 function RevisionsList({
   collection,
   item,
-  onRollback
+  onRollback,
+  mode
 }: {
   collection: string
   item: string
   onRollback?: () => void
+  mode: 'list' | 'travel'
 }) {
   const { data, isLoading } = useQuery({
     queryKey: ['revisions', collection, item],
@@ -423,6 +595,17 @@ function RevisionsList({
 
   if (count === 0) {
     return <p className='text-[13px] text-slate-400 pt-4'>No revisions recorded yet.</p>
+  }
+
+  if (mode === 'travel') {
+    return (
+      <TimeTravelView
+        collection={collection}
+        item={item}
+        revisions={data ?? []}
+        onRollback={onRollback}
+      />
+    )
   }
 
   // Newest first — the "before" snapshot of a revision is the next (older) entry's data
@@ -451,6 +634,7 @@ export function RevisionsPanel({
   onRollback?: () => void
   triggerClassName?: string
 }) {
+  const [mode, setMode] = useState<'list' | 'travel'>('list')
   return (
     <Sheet>
       <SheetTrigger asChild>
@@ -461,12 +645,38 @@ export function RevisionsPanel({
       </SheetTrigger>
       <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
         <SheetHeader>
-          <SheetTitle className='flex items-center gap-2 text-base'>
-            <Clock className='h-4 w-4 text-slate-400' />
-            Revision History
+          <SheetTitle className='flex items-center justify-between gap-2 pr-6 text-base'>
+            <span className='flex items-center gap-2'>
+              <Clock className='h-4 w-4 text-slate-400' />
+              Revision History
+            </span>
+            <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+              <button
+                type='button'
+                onClick={() => setMode('list')}
+                className={cn(
+                  'rounded px-2 py-0.5 text-[11px] font-medium',
+                  mode === 'list' ? 'bg-accent text-nvr-navy dark:text-nvr-cyan' : 'text-slate-400'
+                )}
+              >
+                List
+              </button>
+              <button
+                type='button'
+                onClick={() => setMode('travel')}
+                className={cn(
+                  'flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium',
+                  mode === 'travel'
+                    ? 'bg-accent text-nvr-navy dark:text-nvr-cyan'
+                    : 'text-slate-400'
+                )}
+              >
+                <History className='h-3 w-3' /> Time travel
+              </button>
+            </span>
           </SheetTitle>
         </SheetHeader>
-        <RevisionsList collection={collection} item={item} onRollback={onRollback} />
+        <RevisionsList collection={collection} item={item} onRollback={onRollback} mode={mode} />
       </SheetContent>
     </Sheet>
   )
