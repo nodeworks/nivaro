@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, CornerDownLeft, FileText, Plus, Search } from 'lucide-react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { ArrowRight, CornerDownLeft, FileText, Plus, Search, Sparkles } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { toast } from 'sonner'
 import {
   Command,
   CommandEmpty,
@@ -170,6 +171,24 @@ export function CommandPalette() {
     navigate(path)
   }
 
+  // Natural-language mode: route prose to the right collection, then let the
+  // browser's existing AI query translate it to filters (?ai= param).
+  const aiNavigate = useMutation({
+    mutationFn: (prompt: string) =>
+      api
+        .post<{ data: { collection: string | null } }>('/ai/navigate', { prompt })
+        .then((r) => r.data.data),
+    onSuccess: (res, prompt) => {
+      if (!res.collection) {
+        toast.message('Could not match that to a collection')
+        return
+      }
+      go(`/collections/${res.collection}?ai=${encodeURIComponent(prompt)}`)
+    },
+    onError: () => toast.error('AI navigation failed')
+  })
+  const showAiRow = q.length >= 10 && q.split(/\s+/).length >= 3
+
   const hasResults =
     pageMatches.length > 0 ||
     records.length > 0 ||
@@ -192,6 +211,19 @@ export function CommandPalette() {
           <CommandList className='max-h-[380px]'>
             {!hasResults && (
               <CommandEmpty>{isFetching ? 'Searching…' : 'No results found.'}</CommandEmpty>
+            )}
+
+            {showAiRow && (
+              <CommandGroup heading='Ask AI'>
+                <CommandItem
+                  value={`ai-${q}`}
+                  onSelect={() => aiNavigate.mutate(q)}
+                  className='text-[13px]'
+                >
+                  <Sparkles className='mr-2 h-4 w-4 text-nvr-cyan' />
+                  {aiNavigate.isPending ? 'Thinking…' : <>Find records: “{q}”</>}
+                </CommandItem>
+              </CommandGroup>
             )}
 
             {pageMatches.length > 0 && (

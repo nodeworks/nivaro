@@ -861,4 +861,59 @@ export async function aiRoutes(app: FastifyInstance) {
       return reply.code(502).send({ error: 'AI request failed' })
     }
   })
+
+  // ─── POST /navigate — command-bar routing: prose → target collection ──────
+  app.post('/navigate', { preHandler: authenticate }, async (req, reply) => {
+    const client = await getClient()
+    if (!client) {
+      return reply
+        .code(503)
+        .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+    }
+    const { prompt } = req.body as { prompt?: string }
+    if (!prompt?.trim()) return reply.code(400).send({ error: 'prompt is required' })
+
+    const cols = (await db('nivaro_collections')
+      .whereNot('collection', 'like', 'nivaro_%')
+      .select('collection', 'display_name')) as Array<{
+      collection: string
+      display_name: string | null
+    }>
+    const readable: string[] = []
+    for (const c of cols) {
+      if (await can(req.user!, 'read', c.collection)) {
+        readable.push(
+          c.display_name ? `${c.collection} (${c.display_name})` : c.collection
+        )
+      }
+    }
+    if (readable.length === 0) return reply.code(403).send({ error: 'No readable collections' })
+
+    const settings = await getAiSettings()
+    try {
+      const response = await client.messages.create({
+        model: settings.model,
+        max_tokens: 120,
+        messages: [
+          {
+            role: 'user',
+            content: `Which ONE collection is this query about?\n\nQuery: ${prompt.slice(0, 300)}\n\nCollections:\n${readable.join('\n')}\n\nAnswer with JSON only: {"collection": "<name>"} — use the machine name before any parenthesis. If none fits, {"collection": null}.`
+          }
+        ]
+      })
+      const text = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('')
+      const parsed = extractJson(text) as { collection?: string | null }
+      const target = parsed?.collection
+      if (!target || !readable.some((r) => r === target || r.startsWith(`${target} (`))) {
+        return reply.send({ data: { collection: null } })
+      }
+      return reply.send({ data: { collection: target } })
+    } catch (err) {
+      req.log.error({ err }, 'AI navigate failed')
+      return reply.code(502).send({ error: 'AI request failed' })
+    }
+  })
 }

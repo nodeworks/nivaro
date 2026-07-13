@@ -20,7 +20,7 @@ import {
   X
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { BulkActionBar } from '@/components/bulk-action-bar'
 import { ColumnPicker } from '@/components/column-picker'
@@ -191,7 +191,10 @@ export function CollectionBrowserPage() {
   const [isImporting, setIsImporting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [displayColumns, setDisplayColumns] = useState<string[]>([])
-  const [viewMode, setViewMode] = usePersistedTab<'table' | 'tree'>(`nvr_viewmode_${collection ?? ''}`, 'table')
+  const [viewMode, setViewMode] = usePersistedTab<'table' | 'tree'>(
+    `nvr_viewmode_${collection ?? ''}`,
+    'table'
+  )
   const [movingNodeId, setMovingNodeId] = useState<string | number | null>(null)
   const presetsInitialized = useRef(false)
   const [hierarchyScopeParentId, setHierarchyScopeParentId] = useState<string | number | null>(null)
@@ -203,6 +206,19 @@ export function CollectionBrowserPage() {
   // AI query bar — overlay result mode (does not mutate filter state)
   const [aiOpen, setAiOpen] = useState(false)
   const [aiPrompt, setAiPrompt] = useState('')
+  // Command-palette handoff: /collections/:col?ai=<prose> auto-runs the AI query
+  const [searchParams, setSearchParams] = useSearchParams()
+  const aiParamRan = useRef(false)
+  useEffect(() => {
+    const prompt = searchParams.get('ai')
+    if (!prompt || aiParamRan.current) return
+    aiParamRan.current = true
+    setAiPrompt(prompt)
+    aiQuery.mutate(prompt)
+    searchParams.delete('ai')
+    setSearchParams(searchParams, { replace: true })
+    // biome-ignore lint/correctness/useExhaustiveDependencies: run-once handoff
+  }, [searchParams])
   const [aiPage, setAiPage] = useState(1)
   const [aiResult, setAiResult] = useState<{
     rows: Record<string, unknown>[]
@@ -801,10 +817,7 @@ export function CollectionBrowserPage() {
               }}
             />
             {!colMeta?.singleton && (
-              <Button
-                size='sm'
-                onClick={() => navigate(`/collections/${collection}/new`)}
-              >
+              <Button size='sm' onClick={() => navigate(`/collections/${collection}/new`)}>
                 <Plus className='mr-1.5 h-3.5 w-3.5' />
                 New item
               </Button>
@@ -1155,7 +1168,11 @@ export function CollectionBrowserPage() {
             <button
               type='button'
               onClick={async () => {
-                await api.post('/picker-exclusions/bulk', { collection, ids: selectedIds, exclude: true })
+                await api.post('/picker-exclusions/bulk', {
+                  collection,
+                  ids: selectedIds,
+                  exclude: true
+                })
                 toast.success(`${selectedIds.length} record(s) excluded from pickers`)
                 setSelectedIds([])
               }}
@@ -1167,7 +1184,11 @@ export function CollectionBrowserPage() {
             <button
               type='button'
               onClick={async () => {
-                await api.post('/picker-exclusions/bulk', { collection, ids: selectedIds, exclude: false })
+                await api.post('/picker-exclusions/bulk', {
+                  collection,
+                  ids: selectedIds,
+                  exclude: false
+                })
                 toast.success(`${selectedIds.length} record(s) re-enabled in pickers`)
                 setSelectedIds([])
               }}
