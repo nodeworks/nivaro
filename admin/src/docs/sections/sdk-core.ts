@@ -692,7 +692,7 @@ import '@nivaro/react/styles.css'`
     { type: 'h3', text: 'Report Studio viewer' },
     {
       type: 'p',
-      text: '`<ReportView reportId="…" />` renders a read-only Report Studio report in your own app: it fetches the definition and resolves every widget (KPIs, KPI groups, bar/line/donut charts, tables) as the client identity — collection read permissions apply server-side. Charts are inline SVG, so it adds no charting dependency; style the shell with `className`/`style`.'
+      text: '`<ReportView reportId="…" />` renders a fully-styled, interactive Report Studio report in your own app — same as `QueueWorklist` / `ItemEditForm`: bring the styles via `@nivaro/react/full.css` (or the Tailwind preset). It fetches the definition and resolves every widget (KPIs, KPI groups, bar/line/donut charts via recharts, tables) as the client identity — collection read permissions apply server-side. Interactive: a global filter bar (date-range switcher + live entity-filter chips) and per-widget refresh. Read-only (no drag/resize edit surface).'
     },
     {
       type: 'pre',
@@ -701,8 +701,9 @@ import '@nivaro/react/styles.css'`
 <ReportView
   reportId="…"
   refetchInterval={60_000}          // live-refresh; omit for one-shot
-  dateRange={{ preset: 'last_3_months' }}   // override the saved range (optional)
-  entityFilters={[{ field: 'division', values: [1, 2] }]}  // optional
+  showFilterBar                              // date range + entity chips (default true)
+  dateRange={{ preset: 'last_3_months' }}    // override the saved range (optional)
+  initialEntityFilters={[{ field: 'division', values: [1, 2] }]}
 />`
     },
     {

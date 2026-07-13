@@ -475,6 +475,9 @@ importers:
       react-dom:
         specifier: '>=18.0.0'
         version: 19.2.7(react@19.2.7)
+      recharts:
+        specifier: ^3.8.1
+        version: 3.8.1(@types/react@19.2.16)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)
       sonner:
         specifier: ^1
         version: 1.7.4(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -618,6 +621,9 @@ importers:
       react:
         specifier: ^18 || ^19
         version: 19.2.7
+      recharts:
+        specifier: ^3.8.1
+        version: 3.8.1(@types/react@19.2.16)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)
       sonner:
         specifier: ^1
         version: 1.7.4(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
