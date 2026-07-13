@@ -198,6 +198,16 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
   static getDerivedStateFromError(error: Error) {
     return { error }
   }
+  componentDidCatch(error: Error, info: { componentStack?: string | null }) {
+    // Report to the issue log (deduped server-side); never block rendering
+    api
+      .post('/issues/client', {
+        message: error.message,
+        stack: [error.stack, info.componentStack].filter(Boolean).join('\n---\n').slice(0, 6000),
+        url: window.location.pathname
+      })
+      .catch(() => {})
+  }
   render() {
     if (this.state.error) {
       return (

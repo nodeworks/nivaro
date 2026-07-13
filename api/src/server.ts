@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { STATUS_CODES } from 'node:http'
 import { join } from 'node:path'
 import fastifyCors from '@fastify/cors'
 import fastifyMultipart from '@fastify/multipart'
@@ -10,6 +11,7 @@ import { db } from './db/index.js'
 import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
+import { trackError } from './services/error-tracking.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
@@ -122,6 +124,26 @@ export async function buildServer() {
     const { registerResponseConventions } = await import('./plugins/response-conventions.js')
     registerResponseConventions(app)
   }
+
+  // ─── Error tracking: 5xx → nivaro_issues (deduped, fire-and-forget) ───────
+  app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
+    const status = err.statusCode ?? 500
+    if (status >= 500 && req.url.startsWith('/api/')) {
+      trackError({
+        source: 'server',
+        route: `${req.method} ${req.routeOptions?.url ?? req.url}`,
+        message: err.message,
+        stack: err.stack,
+        userId: req.user?.id ?? null
+      }).catch(() => {})
+    }
+    req.log.error(err)
+    reply.code(status).send({
+      statusCode: status,
+      error: STATUS_CODES[status] ?? 'Error',
+      message: err.message
+    })
+  })
 
   // ─── Routes ───────────────────────────────────────────────────────────────
   await app.register(presencePublicRoutes, { prefix: '/api/presence' })

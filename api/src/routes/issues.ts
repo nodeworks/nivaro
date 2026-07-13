@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
+import { trackError } from '../services/error-tracking.js'
 import { can } from '../services/permissions.js'
 
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const
@@ -47,6 +48,21 @@ async function notifyAssignment(
 }
 
 export async function issuesRoutes(app: FastifyInstance) {
+  // POST /issues/client — React error boundary reports. Deduped by
+  // fingerprint via trackError; severity fixed to 'high'.
+  app.post('/client', { preHandler: requireAuth }, async (req, reply) => {
+    const body = req.body as { message?: string; stack?: string; url?: string }
+    if (!body.message?.trim()) return reply.code(400).send({ error: 'message is required' })
+    await trackError({
+      source: 'client',
+      route: String(body.url ?? 'unknown').slice(0, 300),
+      message: body.message,
+      stack: body.stack ?? null,
+      userId: req.user?.id ?? null
+    })
+    return reply.code(204).send()
+  })
+
   // GET /issues?collection=&item=&status=&severity=&assigned_to=me
   app.get('/', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item, status, severity, assigned_to } = req.query as {
