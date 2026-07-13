@@ -39,51 +39,188 @@ function duration(rec: Recording): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
+function fmtClock(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+const SPEEDS = [1, 2, 4, 8]
+
+/**
+ * Minimal player on rrweb's own Replayer engine. (rrweb-player 2.x ships a
+ * broken build — its bundle never constructs a Replayer — so the controls
+ * live here: play/pause, scrubber, speed, auto-scaled viewport.)
+ */
 function ReplayPlayer({ recordingId }: { recordingId: string }) {
-  const containerRef = useRef<HTMLDivElement>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
+  const replayerRef = useRef<{
+    play: (t?: number) => void
+    pause: (t?: number) => void
+    getCurrentTime: () => number
+    getMetaData: () => { totalTime: number }
+    setConfig: (c: { speed?: number }) => void
+    on: (ev: string, cb: () => void) => void
+    destroy?: () => void
+    wrapper: HTMLElement
+    iframe: HTMLIFrameElement
+  } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [ready, setReady] = useState(false)
+  const [playing, setPlaying] = useState(false)
+  const [speed, setSpeed] = useState(1)
+  const [time, setTime] = useState(0)
+  const [total, setTotal] = useState(0)
+  const playingRef = useRef(false)
+  playingRef.current = playing
 
   useEffect(() => {
-    let player: { $destroy?: () => void } | null = null
     let cancelled = false
+    let raf = 0
+
+    function rescale() {
+      const rep = replayerRef.current
+      const host = frameRef.current
+      if (!rep || !host) return
+      const w = rep.iframe.offsetWidth || 1280
+      const h = rep.iframe.offsetHeight || 720
+      const scale = Math.min(host.clientWidth / w, 520 / h, 1)
+      rep.wrapper.style.transform = `scale(${scale})`
+      rep.wrapper.style.transformOrigin = 'top left'
+      host.style.height = `${Math.ceil(h * scale)}px`
+    }
+
     async function load() {
       try {
         const r = await api.get<{ data: { events: unknown[] } }>(
           `/session-recordings/${recordingId}/events`
         )
-        if (cancelled || !containerRef.current) return
+        if (cancelled || !frameRef.current) return
         const events = r.data.data.events
         if (events.length < 2) {
           setError('Not enough events to replay this session.')
           return
         }
-        const { default: Player } = await import('rrweb-player')
-        await import('rrweb-player/dist/style.css')
-        if (cancelled || !containerRef.current) return
-        containerRef.current.replaceChildren()
-        player = new Player({
-          target: containerRef.current,
-          props: {
-            events: events as never[],
-            width: 920,
-            height: 560,
-            autoPlay: true,
-            skipInactive: true
+        const rrweb = await import('rrweb')
+        await import('rrweb/dist/style.css')
+        if (cancelled || !frameRef.current) return
+        frameRef.current.replaceChildren()
+        const replayer = new rrweb.Replayer(events as never[], {
+          root: frameRef.current,
+          skipInactive: true,
+          speed: 1,
+          mouseTail: { strokeStyle: '#00ceff' }
+        }) as unknown as NonNullable<typeof replayerRef.current>
+        replayerRef.current = replayer
+        setTotal(replayer.getMetaData().totalTime)
+        replayer.on('fullsnapshot-rebuilded', rescale)
+        replayer.on('resize', rescale)
+        replayer.on('finish', () => {
+          playingRef.current = false
+          setPlaying(false)
+        })
+        setReady(true)
+        replayer.play()
+        setPlaying(true)
+        const tick = () => {
+          if (replayerRef.current && playingRef.current) {
+            setTime(
+              Math.min(replayerRef.current.getCurrentTime(), total || Number.MAX_SAFE_INTEGER)
+            )
           }
-        }) as { $destroy?: () => void }
-      } catch {
+          raf = requestAnimationFrame(tick)
+        }
+        raf = requestAnimationFrame(tick)
+        window.addEventListener('resize', rescale)
+      } catch (err) {
+        console.warn('replay load failed', err)
         setError('Could not load this recording.')
       }
     }
     void load()
     return () => {
       cancelled = true
-      player?.$destroy?.()
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', rescale)
+      replayerRef.current?.pause()
+      replayerRef.current?.destroy?.()
+      replayerRef.current = null
     }
   }, [recordingId])
 
+  function togglePlay() {
+    const rep = replayerRef.current
+    if (!rep) return
+    if (playing) {
+      rep.pause()
+      setPlaying(false)
+    } else {
+      rep.play(time >= total ? 0 : time)
+      setPlaying(true)
+    }
+  }
+
+  function seek(ms: number) {
+    const rep = replayerRef.current
+    if (!rep) return
+    setTime(ms)
+    if (playing) rep.play(ms)
+    else rep.pause(ms)
+  }
+
+  function changeSpeed(v: number) {
+    setSpeed(v)
+    replayerRef.current?.setConfig({ speed: v })
+  }
+
   if (error) return <p className='py-10 text-center text-[13px] text-slate-400'>{error}</p>
-  return <div ref={containerRef} className='nvr-no-record mt-3 [&_.rr-player]:mx-auto' />
+
+  return (
+    <div className='nvr-no-record mt-3'>
+      <div
+        ref={frameRef}
+        className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
+        style={{ minHeight: 200 }}
+      />
+      {ready && (
+        <div className='mt-2 flex items-center gap-3'>
+          <Button size='sm' variant='outline' className='h-7 w-16 text-[12px]' onClick={togglePlay}>
+            {playing ? 'Pause' : time >= total && total > 0 ? 'Replay' : 'Play'}
+          </Button>
+          <span className='w-10 text-right font-mono text-[11px] tabular-nums text-slate-500'>
+            {fmtClock(time)}
+          </span>
+          <input
+            type='range'
+            min={0}
+            max={Math.max(1, total)}
+            value={Math.min(time, total)}
+            onChange={(e) => seek(Number(e.target.value))}
+            className='flex-1 accent-[#00ceff]'
+            aria-label='Replay position'
+          />
+          <span className='w-10 font-mono text-[11px] tabular-nums text-slate-500'>
+            {fmtClock(total)}
+          </span>
+          <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+            {SPEEDS.map((v) => (
+              <button
+                key={v}
+                type='button'
+                onClick={() => changeSpeed(v)}
+                className={
+                  speed === v
+                    ? 'rounded bg-accent px-1.5 py-0.5 text-[10.5px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                    : 'rounded px-1.5 py-0.5 text-[10.5px] text-slate-400'
+                }
+              >
+                {v}x
+              </button>
+            ))}
+          </span>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function SessionReplaysPage() {
