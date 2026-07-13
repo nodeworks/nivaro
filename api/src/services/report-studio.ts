@@ -264,6 +264,48 @@ function pctChange(now: number | null, prev: number | null): number | null {
  * Execute one widget. Throws statusCode-tagged errors for bad configs;
  * checks read permission for the viewer.
  */
+/**
+ * Accept lenient/AI-ish config dialects: a string dimension, top-level
+ * aggregate/field/bucket, tiles without a collection. Normalizing here keeps
+ * every producer (builder UI, AI, JSON import) working against one engine.
+ */
+export function normalizeWidgetConfig(
+  raw: (WidgetQueryConfig & { aggregate?: string; field?: string; bucket?: string }) | null,
+  widgetCollection: string | null
+): WidgetQueryConfig | null {
+  if (!raw) return raw
+  const cfg: WidgetQueryConfig & { aggregate?: string; field?: string; bucket?: string } = {
+    ...raw
+  }
+  if (typeof cfg.dimension === 'string') {
+    cfg.dimension = { field: cfg.dimension }
+  }
+  if (cfg.bucket && cfg.dimension && !cfg.dimension.bucket) {
+    const b = cfg.bucket
+    if (b === 'day' || b === 'week' || b === 'month') cfg.dimension = { ...cfg.dimension, bucket: b }
+  }
+  if (!cfg.metric && cfg.aggregate) {
+    const a = cfg.aggregate
+    if (['count', 'sum', 'avg', 'min', 'max'].includes(a)) {
+      cfg.metric = { aggregate: a as never, field: cfg.field }
+    }
+  }
+  if (cfg.metrics) {
+    cfg.metrics = cfg.metrics.map((m) => ({
+      ...m,
+      collection: m.collection || (widgetCollection ?? '')
+    }))
+  }
+  // date-bucketed dimension doubles as the date field unless one is set
+  if (!cfg.date_field && cfg.dimension?.bucket && cfg.dimension.field) {
+    cfg.date_field = cfg.dimension.field
+  }
+  delete cfg.aggregate
+  delete cfg.field
+  delete cfg.bucket
+  return cfg
+}
+
 export async function resolveWidgetData(
   user: User,
   widget: { type: string; collection: string | null; config: WidgetQueryConfig | null },
@@ -271,6 +313,10 @@ export async function resolveWidgetData(
   entityFilters: EntityFilter[] = []
 ): Promise<WidgetData> {
   if (widget.type === 'divider') return {}
+  widget = {
+    ...widget,
+    config: normalizeWidgetConfig(widget.config as never, widget.collection)
+  }
 
   // Multi-KPI summary — each tile is its own collection + aggregate
   if (widget.type === 'kpi_group') {

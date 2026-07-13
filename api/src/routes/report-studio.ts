@@ -603,7 +603,12 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       const system = `You compose report widgets for a reporting tool. Available widget types: kpi (one aggregate), kpi_group (metrics array of up to 4 tiles), bar, line (needs dimension; use bucket day|week|month for date fields), donut, table (columns array), divider (section heading). Aggregates: count, sum, avg, min, max (non-count needs a numeric field). Grid is 12 columns; kpi w=3 h=2, kpi_group w=12 h=2, charts w=6 h=3, tables w=12 h=3, divider w=12 h=1.
 Collections and fields available:
 ${catalog}
-Respond ONLY with JSON: {"widgets":[{"type","title","collection","config":{...},"x","y","w","h"}]}. Use ONLY listed collections/fields. 4-8 widgets. Lay them out top-to-bottom without overlaps.`
+Config schema (follow EXACTLY):
+- kpi:       {"metric":{"aggregate":"count|sum|avg|min|max","field":"<numeric>"},"date_field":"<date col or omit>","format":{"prefix":"$"}}
+- kpi_group: {"metrics":[{"label":"...","collection":"<collection>","aggregate":"count","field":"<numeric for non-count>"}]}
+- bar/line/donut: {"metric":{"aggregate":"count"},"dimension":{"field":"<column>","bucket":"month"},"date_field":"<same date col for bucketed>"} — bucket ONLY for date columns (day|week|month); omit bucket to group by a value column
+- table:     {"columns":["a","b"],"sort":"-created_at","limit":10}
+Respond ONLY with JSON: {"widgets":[{"type":"...","title":"...","collection":"...","config":{...},"x":0,"y":0,"w":6,"h":3}]}. Use ONLY listed collections/fields. 4-8 widgets. Lay them out top-to-bottom without overlaps.`
 
       try {
         const msg = await client.messages.create({
