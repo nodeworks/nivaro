@@ -98,6 +98,7 @@ import {
   journeyTrailDocs,
   mergeDocs,
   schemaGraphDocs,
+  sessionReplayDocs,
   spreadsheetDocs,
   timeTravelDocs,
   trashDocs
@@ -711,6 +712,7 @@ export const navSections: NavGroup[] = [
       recordGraphDocs,
       bugReporterDocs,
       journeyTrailDocs,
+      sessionReplayDocs,
       obsHealthDashboard,
       obsDataQuality,
       obsIssueLog,

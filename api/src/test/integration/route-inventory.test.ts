@@ -114,6 +114,11 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/dashboard-links/public/:token' },
   { method: 'GET', path: '/api/journeys/user/:id' },
   { method: 'GET', path: '/api/journeys/days/:id' },
+  { method: 'GET', path: '/api/session-recordings/enabled' },
+  { method: 'POST', path: '/api/session-recordings/start' },
+  { method: 'POST', path: '/api/session-recordings/:id/events' },
+  { method: 'GET', path: '/api/session-recordings/' },
+  { method: 'GET', path: '/api/session-recordings/:id/events' },
 
   // Operations tooling (2026-07 batch)
   { method: 'GET', path: '/api/files/:id/usage' },

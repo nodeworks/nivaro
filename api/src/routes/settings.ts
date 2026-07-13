@@ -34,6 +34,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       'ad_group_role_map',
       'anthropic_api_key',
       'presence_session_ttl',
+      'session_recording_enabled',
       'presence_sweep_interval',
       'presence_ping_interval',
       'ai_model',

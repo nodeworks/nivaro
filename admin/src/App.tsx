@@ -103,6 +103,9 @@ const BlueprintsPage = lazy(() =>
   import('@/pages/Blueprints').then((m) => ({ default: m.BlueprintsPage }))
 )
 const TrashPage = lazy(() => import('@/pages/Trash').then((m) => ({ default: m.TrashPage })))
+const SessionReplaysPage = lazy(() =>
+  import('@/pages/SessionReplays').then((m) => ({ default: m.SessionReplaysPage }))
+)
 const PublicDashboardPage = lazy(() =>
   import('@/pages/PublicDashboard').then((m) => ({ default: m.PublicDashboardPage }))
 )
@@ -386,6 +389,7 @@ export default function App() {
                   <Route path='content-promotion' element={<ContentPromotionPage />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
                   <Route path='trash' element={<TrashPage />} />
+                  <Route path='session-replays' element={<SessionReplaysPage />} />
                   <Route path='pulse' element={<PulsePage />} />
                   <Route path='scheduled-reports' element={<ScheduledReportsPage />} />
                   <Route path='blackout-dates' element={<BlackoutDatesPage />} />

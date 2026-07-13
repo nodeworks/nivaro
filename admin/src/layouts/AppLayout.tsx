@@ -14,6 +14,7 @@ import {
   CalendarOff,
   Check,
   CheckSquare,
+  Clapperboard,
   Clock,
   Code2,
   Database,
@@ -74,6 +75,7 @@ import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
 import { useT } from '@/lib/i18n'
 import { usePagePresence } from '@/lib/use-page-presence'
+import { useSessionRecorder } from '@/lib/use-session-recorder'
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
@@ -179,6 +181,7 @@ export const navCategories: NavCategory[] = [
       { icon: PuzzleIcon, label: 'Extensions', to: '/extensions' },
       { icon: BarChart2, label: 'Analytics', to: '/analytics' },
       { icon: Wifi, label: 'Presence', to: '/presence' },
+      { icon: Clapperboard, label: 'Session Replays', to: '/session-replays' },
       { icon: KeyRound, label: 'API Keys', to: '/api-keys' },
       { icon: Terminal, label: 'Playground', to: '/playground' },
       { icon: Braces, label: 'Persisted Queries', to: '/persisted-queries' },
@@ -346,6 +349,7 @@ function PanelNavItem({ icon: Icon, label, to }: NavItem) {
 export function AppLayout() {
   const t = useT()
   usePagePresence()
+  useSessionRecorder()
   const { user } = useAuth()
   const { data: settings } = useSettings()
   useQuery({

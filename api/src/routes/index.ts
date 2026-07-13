@@ -68,6 +68,7 @@ import { blueprintsRoutes } from './blueprints.js'
 import { dashboardLinkRoutes } from './dashboard-links.js'
 import { journeyRoutes } from './journeys.js'
 import { mergeRoutes } from './merge.js'
+import { sessionRecordingRoutes } from './session-recordings.js'
 import { pushRoutes } from './push.js'
 import { recordGraphRoutes } from './record-graph.js'
 import { trashRoutes } from './trash.js'
@@ -174,6 +175,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(mergeRoutes, { prefix: '/merge' })
   await app.register(dashboardLinkRoutes, { prefix: '/dashboard-links' })
   await app.register(journeyRoutes, { prefix: '/journeys' })
+  await app.register(sessionRecordingRoutes, { prefix: '/session-recordings' })
   await app.register(bulkActionsRoutes)
   await app.register(itemActionsRoutes)
   await app.register(extensionRegistryRoutes)

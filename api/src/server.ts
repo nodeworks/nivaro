@@ -9,6 +9,7 @@ import { registerSession } from './auth/session.js'
 import { config } from './config.js'
 import { db } from './db/index.js'
 import { purgeExpiredTrash } from './services/trash.js'
+import { purgeExpiredRecordings } from './routes/session-recordings.js'
 import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
@@ -245,6 +246,7 @@ export async function buildServer() {
           }
         }
         await purgeExpiredTrash()
+        await purgeExpiredRecordings().catch(() => {})
         await db('nivaro_admin_journeys')
           .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
           .del()

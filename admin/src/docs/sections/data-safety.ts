@@ -163,3 +163,29 @@ GET /api/journeys/days/:id                   # which of the last 30 days have da
     }
   ]
 }
+
+export const sessionReplayDocs: DocSection = {
+  id: 'session-replay',
+  label: 'Session Replay',
+  content: [
+    { type: 'h1', id: 'session-replay', text: 'Session Replay' },
+    {
+      type: 'p',
+      text: 'Full rrweb screen recording of admin sessions: watch exactly what a user saw and did, scrubbed like video. Off by default — flip the switch on the Session Replays page and every admin session starts recording.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Privacy: every input is masked client-side before events leave the browser; add the nvr-no-record class to block any element entirely.',
+        'Events batch every 10 seconds; a full DOM snapshot every 60 seconds keeps replays seekable.',
+        'Recordings cap at 15MB (then mark truncated) and purge after 7 days.',
+        'Watching, listing and deleting are admin-only; a recording can only be appended to by its own user.',
+        'Tell your team before enabling — this records their screens.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Journey Trail (page breadcrumbs) covers most debugging needs without recording anything visual — reach for replay when you need the pixels.'
+    }
+  ]
+}
