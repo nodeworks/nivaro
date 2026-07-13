@@ -904,6 +904,83 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     })
   })
 
+  // Replay — daily state distribution reconstruction for the time-lapse.
+  // Baseline = each instance's state at window start (aggregated in SQL);
+  // then transition events sweep forward as +1/-1 deltas per day.
+  app.get('/:id/replay', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const days = Math.min(365, Math.max(7, Number((req.query as { days?: string }).days) || 90))
+    const start = new Date(Date.now() - days * 86_400_000)
+    start.setHours(0, 0, 0, 0)
+
+    const states = (await db<WorkflowState>('nivaro_workflow_states')
+      .where({ template: id })
+      .orderBy('sort')) as WorkflowState[]
+    if (states.length === 0) return reply.send({ data: { states: [], days: [] } })
+    const stateIds = new Set(states.map((s) => s.id))
+
+    // Baseline: latest transition per instance BEFORE the window → state counts
+    const baseline = (await db.raw(
+      `SELECT h.to_state AS state, COUNT(*) AS n FROM (
+         SELECT instance, to_state,
+                ROW_NUMBER() OVER (PARTITION BY instance ORDER BY timestamp DESC) AS rn
+         FROM nivaro_workflow_history
+         WHERE timestamp < ? AND instance IN (
+           SELECT id FROM nivaro_workflow_instances WHERE template = ?
+         )
+       ) h WHERE h.rn = 1 GROUP BY h.to_state`,
+      [start, id]
+    )) as Array<{ state: string; n: number | string }>
+
+    // Events inside the window (chronological)
+    const events = (await db.raw(
+      `SELECT h.from_state, h.to_state, h.timestamp
+       FROM nivaro_workflow_history h
+       JOIN nivaro_workflow_instances wi ON wi.id = h.instance
+       WHERE wi.template = ? AND h.timestamp >= ?
+       ORDER BY h.timestamp ASC`,
+      [id, start]
+    )) as Array<{ from_state: string | null; to_state: string | null; timestamp: Date }>
+
+    const counts = new Map<string, number>()
+    for (const b of baseline) {
+      if (stateIds.has(b.state)) counts.set(b.state, Number(b.n))
+    }
+
+    const dayMs = 86_400_000
+    const result: Array<{ date: string; counts: Record<string, number> }> = []
+    let ei = 0
+    for (let d = 0; d <= days; d++) {
+      const dayEnd = start.getTime() + (d + 1) * dayMs
+      while (ei < events.length && new Date(events[ei].timestamp).getTime() < dayEnd) {
+        const ev = events[ei]
+        if (ev.from_state && stateIds.has(ev.from_state)) {
+          counts.set(ev.from_state, Math.max(0, (counts.get(ev.from_state) ?? 0) - 1))
+        }
+        if (ev.to_state && stateIds.has(ev.to_state)) {
+          counts.set(ev.to_state, (counts.get(ev.to_state) ?? 0) + 1)
+        }
+        ei++
+      }
+      result.push({
+        date: new Date(start.getTime() + d * dayMs).toISOString().slice(0, 10),
+        counts: Object.fromEntries(counts)
+      })
+    }
+
+    return reply.send({
+      data: {
+        states: states.map((st) => ({
+          id: st.id,
+          label: st.label,
+          color: st.color,
+          is_terminal: coerceBool(st.is_terminal)
+        })),
+        days: result
+      }
+    })
+  })
+
   // Simulate — dry-run a record through its pipeline: every transition with
   // per-rule condition results and role checks, resolved owners for every
   // state, and the SLA rule that would arm in each. Read-only.

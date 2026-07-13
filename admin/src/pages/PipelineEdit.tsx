@@ -2748,6 +2748,9 @@ export function PipelineEditPage() {
 
         {/* Flow map */}
         <PipelineFlowMapCard templateId={id!} />
+
+        {/* Time-lapse replay */}
+        <PipelineReplayCard templateId={id!} />
       </div>
     </>
   )
@@ -3166,6 +3169,192 @@ function PipelineFlowMapCard({ templateId }: { templateId: string }) {
           {hover.back ? ' (send-back)' : ''}
         </p>
       )}
+    </div>
+  )
+}
+
+// ─── Time-lapse replay — watch the period happen ──────────────────────────────
+
+interface ReplayState {
+  id: string
+  label: string
+  color: string | null
+  is_terminal: boolean
+}
+
+function PipelineReplayCard({ templateId }: { templateId: string }) {
+  const [days, setDays] = useState(90)
+  const [frame, setFrame] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const [hideTerminal, setHideTerminal] = useState(true)
+
+  const { data } = useQuery({
+    queryKey: ['pipeline-replay', templateId, days],
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            states: ReplayState[]
+            days: Array<{ date: string; counts: Record<string, number> }>
+          }
+        }>(`/pipelines/${templateId}/replay`, { params: { days } })
+        .then((r) => r.data.data),
+    staleTime: 5 * 60_000
+  })
+
+  const frames = data?.days ?? []
+  const states = (data?.states ?? []).filter((st) => !hideTerminal || !st.is_terminal)
+
+  useEffect(() => {
+    setFrame(0)
+    setPlaying(false)
+  }, [])
+
+  useEffect(() => {
+    if (!playing || frames.length === 0) return
+    const t = setInterval(() => {
+      setFrame((f) => {
+        if (f + 1 >= frames.length) {
+          setPlaying(false)
+          return f
+        }
+        return f + 1
+      })
+    }, 120)
+    return () => clearInterval(t)
+  }, [playing, frames.length])
+
+  const current = frames[Math.min(frame, frames.length - 1)]
+  const counts = current?.counts ?? {}
+  const visibleTotal = states.reduce((sum, st) => sum + (counts[st.id] ?? 0), 0)
+  const maxAcross = Math.max(
+    1,
+    ...frames.map((d) => states.reduce((sum, st) => sum + (d.counts[st.id] ?? 0), 0))
+  )
+
+  if (frames.length === 0) return null
+
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4'>
+      <div className='flex items-center justify-between'>
+        <div>
+          <h2 className='text-[13px] font-semibold text-slate-800'>Time-lapse</h2>
+          <p className='text-[12px] text-slate-400'>
+            Replay the state distribution day by day — watch the period happen.
+          </p>
+        </div>
+        <div className='flex items-center gap-2'>
+          <label className='flex items-center gap-1.5 text-[11px] text-slate-500'>
+            <input
+              type='checkbox'
+              checked={hideTerminal}
+              onChange={(e) => setHideTerminal(e.target.checked)}
+            />
+            Hide terminal states
+          </label>
+          <div className='flex items-center rounded-lg border border-slate-200 p-0.5'>
+            {[30, 90, 365].map((d) => (
+              <button
+                key={d}
+                type='button'
+                onClick={() => {
+                  setDays(d)
+                  setFrame(0)
+                  setPlaying(false)
+                }}
+                className={cn(
+                  'h-6 rounded-md px-2 text-[11px] font-medium',
+                  days === d ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-700'
+                )}
+              >
+                {d}d
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Big date + total */}
+      <div className='flex items-baseline gap-4'>
+        <p className='w-36 font-mono text-[20px] font-bold tabular-nums text-slate-900'>
+          {current?.date}
+        </p>
+        <p className='text-[13px] text-slate-500'>
+          <strong className='text-slate-800'>{visibleTotal.toLocaleString()}</strong> records in
+          view
+        </p>
+      </div>
+
+      {/* Stacked bar for the current frame */}
+      <div className='flex h-10 w-full overflow-hidden rounded-lg border border-slate-100'>
+        {states.map((st) => {
+          const v = counts[st.id] ?? 0
+          if (v === 0) return null
+          return (
+            <div
+              key={st.id}
+              className='h-full transition-all duration-150'
+              style={{
+                width: `${(v / Math.max(1, visibleTotal)) * 100}%`,
+                background: st.color ?? '#94a3b8'
+              }}
+              title={`${st.label}: ${v.toLocaleString()}`}
+            />
+          )
+        })}
+      </div>
+
+      {/* Per-state rows with animated widths (scale fixed across frames) */}
+      <div className='space-y-1.5'>
+        {states.map((st) => {
+          const v = counts[st.id] ?? 0
+          return (
+            <div key={st.id} className='flex items-center gap-3'>
+              <span className='w-56 truncate text-[11.5px] text-slate-600'>{st.label}</span>
+              <div className='h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100'>
+                <div
+                  className='h-full rounded-full transition-all duration-150'
+                  style={{
+                    width: `${(v / maxAcross) * 100}%`,
+                    background: st.color ?? '#94a3b8'
+                  }}
+                />
+              </div>
+              <span className='w-14 text-right font-mono text-[11px] tabular-nums text-slate-500'>
+                {v.toLocaleString()}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Controls */}
+      <div className='flex items-center gap-3'>
+        <Button
+          size='sm'
+          variant='outline'
+          onClick={() => {
+            if (frame >= frames.length - 1) setFrame(0)
+            setPlaying((p) => !p)
+          }}
+        >
+          {playing ? 'Pause' : frame >= frames.length - 1 ? 'Replay' : 'Play'}
+        </Button>
+        <input
+          type='range'
+          min={0}
+          max={frames.length - 1}
+          value={frame}
+          onChange={(e) => {
+            setPlaying(false)
+            setFrame(Number(e.target.value))
+          }}
+          className='flex-1 accent-[#00ceff]'
+        />
+        <span className='w-20 text-right text-[11px] text-slate-400'>
+          day {frame + 1}/{frames.length}
+        </span>
+      </div>
     </div>
   )
 }
