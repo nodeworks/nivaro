@@ -43,6 +43,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Switch } from '@/components/ui/switch'
 import { api, type CMSField } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { useRecordPresence } from '@/lib/use-record-presence'
 import { cn, titleCase } from '@/lib/utils'
 
 // ─── Local types ──────────────────────────────────────────────────────────────
@@ -362,6 +363,7 @@ export function ItemEditPage() {
 
   const [summarizing, setSummarizing] = useState(false)
   const [timelineOpen, setTimelineOpen] = useState(false)
+  const presence = useRecordPresence(collection, !isNew && id ? id : undefined)
   const [summary, setSummary] = useState<string | null>(null)
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
 
@@ -828,6 +830,50 @@ export function ItemEditPage() {
                         item={id}
                         triggerClassName='rounded-none -ml-px first:ml-0'
                       />
+                    )}
+                    {presence.viewers.length > 0 && (
+                      <div
+                        className='ml-2 flex items-center'
+                        title={presence.viewers.map((v) => v.name).join(', ')}
+                      >
+                        {presence.viewers.slice(0, 4).map((v, i) => (
+                          <span
+                            key={v.id}
+                            className='-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-nvr-navy text-[9px] font-bold text-nvr-cyan first:ml-0 dark:border-card'
+                            style={{ zIndex: 10 - i }}
+                          >
+                            {v.name
+                              .split(' ')
+                              .map((p) => p[0])
+                              .join('')
+                              .slice(0, 2)
+                              .toUpperCase()}
+                          </span>
+                        ))}
+                        {presence.viewers.length > 4 && (
+                          <span className='-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-slate-200 text-[9px] font-semibold text-slate-600 dark:border-card'>
+                            +{presence.viewers.length - 4}
+                          </span>
+                        )}
+                        <span className='ml-2 hidden text-[11px] text-slate-400 lg:inline'>
+                          viewing now
+                        </span>
+                      </div>
+                    )}
+                    {Object.keys(presence.editing).length > 0 && (
+                      <div className='ml-2 flex flex-wrap items-center gap-1'>
+                        {Object.entries(presence.editing)
+                          .slice(0, 3)
+                          .map(([field, v]) => (
+                            <span
+                              key={field}
+                              className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
+                            >
+                              <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400' />
+                              {v.name} editing {field.replace(/_/g, ' ')}
+                            </span>
+                          ))}
+                      </div>
                     )}
                     {user?.is_admin && layoutAiEnabled && id && !isNew && (
                       <Button

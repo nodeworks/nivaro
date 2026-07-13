@@ -204,3 +204,26 @@
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: hsl(210 14% 86%); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: hsl(210 10% 68%); }
+
+/* Presence v2 — a colleague is editing this field right now */
+[data-field].nvr-remote-editing {
+  position: relative;
+  outline: 2px solid rgb(251 191 36 / 0.6);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+[data-field].nvr-remote-editing::after {
+  content: attr(data-remote-editor);
+  position: absolute;
+  top: -9px;
+  right: 6px;
+  background: rgb(251 191 36);
+  color: #422006;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 20;
+}

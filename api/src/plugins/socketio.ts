@@ -31,6 +31,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   const subClient = new Redis(app.redis.options)
 
   io.adapter(createAdapter(pubClient, subClient))
+  // record room → socketId → viewer (presence v2)
+  const recordViewers = new Map<string, Map<string, { id: string; name: string }>>()
+
 
   io.on('connection', (socket) => {
     app.log.debug({ socketId: socket.id }, 'Socket connected')
@@ -112,7 +115,71 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         socket.leave(`collection:${collection}`)
       }
     })
+    // ── Record presence v2 — viewer avatars + field editing indicators ──────
+    // Room per record; viewer lists live in a module-level map (single-node
+    // fidelity — with the Redis adapter, cross-node lists degrade gracefully
+    // to per-node views, same accepted limitation as presence:join rooms).
+    let joinedRecordRoom: string | null = null
+    const displayName = (u: User) =>
+      [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+
+    const broadcastViewers = (room: string) => {
+      const viewers = [...(recordViewers.get(room)?.values() ?? [])]
+      io.to(room).emit('record:viewers', { viewers })
+    }
+    const leaveRecordRoom = () => {
+      if (!joinedRecordRoom) return
+      const room = joinedRecordRoom
+      joinedRecordRoom = null
+      socket.leave(room)
+      const map = recordViewers.get(room)
+      if (map) {
+        map.delete(socket.id)
+        if (map.size === 0) recordViewers.delete(room)
+      }
+      broadcastViewers(room)
+    }
+
+    socket.on('record:join', async (payload: { collection?: string; item?: string }) => {
+      const { collection, item } = payload ?? {}
+      const user = authenticatedUser
+      if (!user || typeof collection !== 'string' || !collection || item == null) return
+      try {
+        if (!(await can(user, 'read', collection))) return
+      } catch {
+        return
+      }
+      leaveRecordRoom()
+      const room = `record:${collection}:${String(item)}`
+      joinedRecordRoom = room
+      socket.join(room)
+      let map = recordViewers.get(room)
+      if (!map) {
+        map = new Map()
+        recordViewers.set(room, map)
+      }
+      map.set(socket.id, { id: user.id, name: displayName(user) })
+      broadcastViewers(room)
+    })
+    socket.on('record:leave', () => leaveRecordRoom())
+
+    // Field editing indicator — fan out inside the record room only.
+    socket.on('field:focus', (payload: { field?: string }) => {
+      const user = authenticatedUser
+      if (!user || !joinedRecordRoom || typeof payload?.field !== 'string') return
+      socket.to(joinedRecordRoom).emit('field:editing', {
+        field: payload.field,
+        user: { id: user.id, name: displayName(user) }
+      })
+    })
+    socket.on('field:blur', (payload: { field?: string }) => {
+      const user = authenticatedUser
+      if (!user || !joinedRecordRoom || typeof payload?.field !== 'string') return
+      socket.to(joinedRecordRoom).emit('field:editing', { field: payload.field, user: null })
+    })
+
     socket.on('disconnect', () => {
+      leaveRecordRoom()
       app.log.debug({ socketId: socket.id }, 'Socket disconnected')
     })
   })
