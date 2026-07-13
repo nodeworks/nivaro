@@ -162,3 +162,14 @@ export function aiChat(
 ): Command<{ data: { reply: string; trace: AiChatTraceEntry[] } }> {
   return cmd('POST', '/ai/chat', undefined, { messages })
 }
+
+
+/** Approve an AI action proposal (proposer only; executes through the items service). */
+export function approveAiProposal(id: string): Command<{ data: { status: string; result: Record<string, unknown> } }> {
+  return cmd('POST', `/ai/proposals/${id}/approve`)
+}
+
+/** Reject an AI action proposal. */
+export function rejectAiProposal(id: string): Command<void> {
+  return cmd('POST', `/ai/proposals/${id}/reject`)
+}

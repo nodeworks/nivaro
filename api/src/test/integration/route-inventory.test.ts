@@ -84,6 +84,16 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/auth/providers' },
   { method: 'GET', path: '/api/submission-forms/public/:token' },
 
+  // Batch 3 (2026-07): timeline, share links, blueprints, AI proposals
+  { method: 'GET', path: '/api/timeline/:collection/:item' },
+  { method: 'POST', path: '/api/share-links/' },
+  { method: 'GET', path: '/api/share-links/for/:collection/:item' },
+  { method: 'POST', path: '/api/blueprints/export' },
+  { method: 'POST', path: '/api/blueprints/install' },
+  { method: 'POST', path: '/api/ai/proposals/:id/approve' },
+  { method: 'POST', path: '/api/ai/proposals/:id/reject' },
+  { method: 'POST', path: '/api/ai/navigate' },
+
   // Operations tooling (2026-07 batch)
   { method: 'GET', path: '/api/files/:id/usage' },
   { method: 'GET', path: '/api/files/usage/orphans' },

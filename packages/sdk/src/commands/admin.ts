@@ -445,3 +445,63 @@ export function deleteScheduledReport(id: number): Command<void> {
 export function runScheduledReport(id: number): Command<{ data: { sent: number } }> {
   return cmd('POST', `/scheduled-reports/${id}/run`)
 }
+
+
+// ─── Record timeline ──────────────────────────────────────────────────────────
+
+export interface TimelineEvent {
+  id: string
+  type: 'activity' | 'revision' | 'workflow' | 'comment' | 'task' | 'addendum'
+  timestamp: ISODate
+  user: { id: string; name: string } | null
+  title: string
+  detail: string | null
+}
+
+/** Unified chronological history for one record. */
+export function readTimeline(collection: string, item: string | number): Command<{ data: TimelineEvent[] }> {
+  return cmd('GET', `/timeline/${collection}/${item}`)
+}
+
+// ─── Share links ──────────────────────────────────────────────────────────────
+
+export interface ShareLink {
+  id: UUID
+  collection: string
+  item: string
+  token: string
+  url: string
+  layout_id: number | null
+  expires_at: ISODate | null
+  is_active: boolean
+  view_count: number
+}
+
+export function createShareLink(data: {
+  collection: string
+  item: string | number
+  layout_id?: number | null
+  expires_in_days?: number | null
+}): Command<{ data: ShareLink }> {
+  return cmd('POST', '/share-links/', undefined, data)
+}
+
+export function listShareLinks(collection: string, item: string | number): Command<{ data: ShareLink[] }> {
+  return cmd('GET', `/share-links/for/${collection}/${item}`)
+}
+
+export function revokeShareLink(id: UUID): Command<void> {
+  return cmd('DELETE', `/share-links/${id}`)
+}
+
+// ─── Blueprints ───────────────────────────────────────────────────────────────
+
+/** Export a schema+workflow+layout+queue bundle for a collection set. Admin only. */
+export function exportBlueprint(name: string, collections: string[]): Command<{ data: Record<string, unknown> }> {
+  return cmd('POST', '/blueprints/export', undefined, { name, collections })
+}
+
+/** Install a blueprint artifact idempotently. Admin only. */
+export function installBlueprint(blueprint: Record<string, unknown>): Command<{ data: Record<string, unknown> }> {
+  return cmd('POST', '/blueprints/install', undefined, { blueprint })
+}

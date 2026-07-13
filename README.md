@@ -117,6 +117,13 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Embeddable Widget SDK** — token-gated public list/form widgets via a one-line script tag; XSS-safe, no iframes
 - **Zapier / Make Integration** — REST-hook triggers, create/update actions, and discovery endpoints under `/api/zapier`, authenticated with `nvk_` API keys
 - **Public API Docs Site** — static `www/api-reference.html` explorer regenerated from any instance via `pnpm docs:api`
+- **AI Actions with Approval Gates** — the chat proposes bulk updates or record creation; you approve or reject a preview card, nothing executes on its own
+- **Record Timeline** — one chronological feed per record: changes, transitions, comments, tasks, addendums
+- **Record Share Links** — expiring read-only record views for external parties, rendered through your layouts
+- **Predictive SLA** — flags records whose time-in-state exceeds the historical 80th percentile, before hard SLA thresholds trip
+- **Live Presence** — viewer avatars and "who's editing this field" indicators on records
+- **App Blueprints** — export/install schema + workflows + layouts + queues + rules as one artifact
+- **Calendar & Gantt Views** — any collection with date fields gets month-grid and timeline views
 - **Ask Your Data** — permission-checked AI chat over your collections (aggregate, query, semantic search) with a visible tool trace
 - **Scheduled Reports** — PDF snapshots of collections or queues emailed on a cron
 - **Pipeline Simulator** — dry-run any record: owners per state, transition availability with reasons, SLA arming
