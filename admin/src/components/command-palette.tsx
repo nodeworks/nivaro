@@ -68,6 +68,7 @@ interface SearchRecord {
 
 interface GlobalSearchResponse {
   records: SearchRecord[]
+  semantic?: SearchRecord[]
   pages: { label: string; path: string }[]
   actions: { label: string; path: string }[]
 }
@@ -154,6 +155,7 @@ export function CommandPalette() {
   const pageMatches = q ? PAGES.filter((p) => matchesQuery(p, q)).slice(0, 8) : PAGES.slice(0, 8)
   const records = debouncedQuery.length >= 2 ? (searchData?.records ?? []) : []
   const serverActions = debouncedQuery.length >= 2 ? (searchData?.actions ?? []) : []
+  const semantic = debouncedQuery.length >= 4 ? (searchData?.semantic ?? []) : []
 
   const newItemActions = q
     ? (collections ?? [])
@@ -192,6 +194,7 @@ export function CommandPalette() {
   const hasResults =
     pageMatches.length > 0 ||
     records.length > 0 ||
+    semantic.length > 0 ||
     newItemActions.length > 0 ||
     serverActions.length > 0
 
@@ -262,6 +265,29 @@ export function CommandPalette() {
                             {r.snippet}
                           </div>
                         )}
+                      </div>
+                      <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
+                        {titleCase(r.collection)}
+                      </span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </>
+            )}
+
+            {semantic.length > 0 && (
+              <>
+                <CommandSeparator />
+                <CommandGroup heading='Similar meaning'>
+                  {semantic.map((r) => (
+                    <CommandItem
+                      key={`sem-${r.collection}-${r.id}`}
+                      value={`sem-${r.collection}-${r.id}`}
+                      onSelect={() => go(`/collections/${r.collection}/${r.id}`)}
+                    >
+                      <Sparkles className='mr-2 h-3.5 w-3.5 text-purple-500' />
+                      <div className='min-w-0 flex-1'>
+                        <div className='truncate text-[13px]'>{r.label || String(r.id)}</div>
                       </div>
                       <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
                         {titleCase(r.collection)}

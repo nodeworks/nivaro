@@ -186,6 +186,49 @@ export async function globalSearchRoutes(app: FastifyInstance) {
 
     const records = recordGroups.flat().slice(0, Math.max(0, 40 - pages.length - actions.length))
 
-    return reply.send({ data: { records, pages, actions } })
+    // Semantic hits — meaning-based matches from the embeddings index, deduped
+    // against keyword records. Only collections that are both indexed and
+    // readable are searched; label resolution goes through a direct id read.
+    let semantic: Array<{ collection: string; id: unknown; label: string; snippet: string }> = []
+    if (q.length >= 4) {
+      try {
+        const { embedText, searchEmbeddings } = await import('../services/embeddings.js')
+        const indexed = (await db('nivaro_embeddings')
+          .distinct('collection')
+          .limit(5)) as Array<{ collection: string }>
+        const targets = indexed
+          .map((r) => r.collection)
+          .filter((c) => readable.includes(c))
+        if (targets.length > 0) {
+          const vec = await embedText(q)
+          const seen = new Set(records.map((r) => `${r.collection}:${String(r.id)}`))
+          for (const collection of targets) {
+            const hits = (await searchEmbeddings(collection, vec, 4)).filter((h) => h.score > 0.15)
+            if (hits.length === 0) continue
+            const fields = pickSearchFields(byCollection.get(collection) ?? [])
+            const labelField = fields[0] ?? 'id'
+            const rows = (await db(collection)
+              .select(['id', labelField])
+              .whereIn('id', hits.map((h) => h.item))) as Array<Record<string, unknown>>
+            for (const row of rows) {
+              const key = `${collection}:${String(row.id)}`
+              if (seen.has(key)) continue
+              seen.add(key)
+              semantic.push({
+                collection,
+                id: row.id,
+                label: String(row[labelField] ?? row.id).slice(0, 80),
+                snippet: 'semantic match'
+              })
+            }
+          }
+          semantic = semantic.slice(0, 8)
+        }
+      } catch {
+        semantic = []
+      }
+    }
+
+    return reply.send({ data: { records, pages, actions, semantic } })
   })
 }
