@@ -21,6 +21,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Share2,
   ShieldCheck,
   Table2,
   Trash2,
@@ -1044,14 +1045,19 @@ export function DataModelPage() {
               </span>
             )}
           </div>
-          <Button
-            size='sm'
-            onClick={() => {
-              setIsCreating(true)
-            }}
-          >
-            <Plus className='mr-1.5 h-3.5 w-3.5' /> Create Table
-          </Button>
+          <div className='flex items-center gap-2'>
+            <Button size='sm' variant='outline' onClick={() => navigate('/data-model/erd')}>
+              <Share2 className='mr-1.5 h-3.5 w-3.5' /> ERD
+            </Button>
+            <Button
+              size='sm'
+              onClick={() => {
+                setIsCreating(true)
+              }}
+            >
+              <Plus className='mr-1.5 h-3.5 w-3.5' /> Create Table
+            </Button>
+          </div>
         </div>
       </div>
 

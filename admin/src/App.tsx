@@ -90,6 +90,7 @@ const CustomQueriesPage = lazy(() =>
 const CustomQueryEditPage = lazy(() =>
   import('@/pages/CustomQueryEdit').then((m) => ({ default: m.CustomQueryEditPage }))
 )
+const ErdViewPage = lazy(() => import('@/pages/ErdView').then((m) => ({ default: m.ErdViewPage })))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
 )
@@ -329,6 +330,7 @@ export default function App() {
                 <Route path='activity' element={<ActivityPage />} />
                 <Route path='activity/:id' element={<ActivityDetailPage />} />
                 <Route path='data-model' element={<DataModelPage />} />
+                <Route path='data-model/erd' element={<ErdViewPage />} />
                 <Route path='data-model/:table' element={<TableEditorPage />} />
                 <Route path='pipelines' element={<PipelinesPage />} />
                 <Route path='pipelines/:id' element={<PipelineEditPage />} />
