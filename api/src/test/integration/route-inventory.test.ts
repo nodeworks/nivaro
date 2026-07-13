@@ -75,6 +75,17 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   // Auth — session + ws token (socket clients)
   { method: 'GET', path: '/api/auth/ws-token' },
 
+  // Operations tooling (2026-07 batch)
+  { method: 'GET', path: '/api/files/:id/usage' },
+  { method: 'GET', path: '/api/files/usage/orphans' },
+  { method: 'POST', path: '/api/roles/:id/simulate' },
+  { method: 'GET', path: '/api/backups/export' },
+  { method: 'GET', path: '/api/backups/manifest' },
+  { method: 'POST', path: '/api/promotion/export' },
+  { method: 'POST', path: '/api/promotion/preview' },
+  { method: 'POST', path: '/api/promotion/apply' },
+  { method: 'POST', path: '/api/issues/client' },
+
   // Comments / tasks — panels
   { method: 'GET', path: '/api/comments/' },
   { method: 'POST', path: '/api/comments/' },
