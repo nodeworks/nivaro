@@ -331,6 +331,8 @@ export function SettingsPage() {
   const [slaStart, setSlaStart] = useState(9)
   const [slaEnd, setSlaEnd] = useState(17)
   const [slaBusinessDays, setSlaBusinessDays] = useState<number[]>([1, 2, 3, 4, 5])
+  const [slaHolidays, setSlaHolidays] = useState<string[]>([])
+  const [newHoliday, setNewHoliday] = useState('')
   const [fileMaxMb, setFileMaxMb] = useState(50)
   const [collectionPageSize, setCollectionPageSize] = useState(25)
   const [activityRetentionDays, setActivityRetentionDays] = useState<number | ''>('')
@@ -370,6 +372,12 @@ export function SettingsPage() {
     setAiMaxSummarize(settings.ai_max_tokens_summarize ?? 200)
     setSlaStart(settings.sla_business_day_start ?? 9)
     setSlaEnd(settings.sla_business_day_end ?? 17)
+    try {
+      const h = settings.sla_holidays ? JSON.parse(String(settings.sla_holidays)) : []
+      setSlaHolidays(Array.isArray(h) ? h : [])
+    } catch {
+      setSlaHolidays([])
+    }
     setSlaBusinessDays(
       (settings.sla_business_days ?? '1,2,3,4,5').split(',').map(Number).filter(Boolean)
     )
@@ -527,7 +535,8 @@ export function SettingsPage() {
     mutation.mutate({
       sla_business_day_start: slaStart,
       sla_business_day_end: slaEnd,
-      sla_business_days: slaBusinessDays.join(',')
+      sla_business_days: slaBusinessDays.join(','),
+      sla_holidays: JSON.stringify(slaHolidays)
     })
   }
 
@@ -997,6 +1006,53 @@ export function SettingsPage() {
                     </div>
                     <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
                       Used for business-hours SLA elapsed time calculations.
+                    </p>
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+                      Holidays
+                    </Label>
+                    <div className='flex items-center gap-2'>
+                      <Input
+                        type='date'
+                        value={newHoliday}
+                        onChange={(e) => setNewHoliday(e.target.value)}
+                        className='h-8 w-40 text-[13px]'
+                      />
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        disabled={!newHoliday || slaHolidays.includes(newHoliday)}
+                        onClick={() => {
+                          setSlaHolidays((prev) => [...prev, newHoliday].sort())
+                          setNewHoliday('')
+                        }}
+                      >
+                        <Plus className='mr-1 h-3.5 w-3.5' /> Add
+                      </Button>
+                    </div>
+                    {slaHolidays.length > 0 && (
+                      <div className='flex flex-wrap gap-1.5 pt-1'>
+                        {slaHolidays.map((d) => (
+                          <span
+                            key={d}
+                            className='inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+                          >
+                            {d}
+                            <button
+                              type='button'
+                              onClick={() => setSlaHolidays((prev) => prev.filter((x) => x !== d))}
+                              className='text-slate-400 hover:text-red-500'
+                              aria-label={`Remove ${d}`}
+                            >
+                              <X className='h-3 w-3' />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+                      Holiday dates count zero business hours regardless of weekday.
                     </p>
                   </div>
                 </SectionWrap>

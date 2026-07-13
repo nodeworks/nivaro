@@ -170,6 +170,7 @@ export type CMSSettings = {
   sla_business_day_start: number | null
   sla_business_day_end: number | null
   sla_business_days: string | null
+  sla_holidays?: string | null
   file_max_size_mb: number | null
   collection_page_size: number | null
   activity_retention_days: number | null

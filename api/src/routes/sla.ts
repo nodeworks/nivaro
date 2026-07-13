@@ -33,19 +33,10 @@ function formatRule(row: SlaRule): SlaRule {
   }
 }
 
-export function businessHoursElapsed(from: Date, to: Date): number {
-  let hours = 0
-  const current = new Date(from)
-  while (current < to) {
-    const day = current.getDay() // 0=Sun, 6=Sat
-    const hour = current.getHours()
-    if (day >= 1 && day <= 5 && hour >= 9 && hour < 17) {
-      hours++
-    }
-    current.setHours(current.getHours() + 1)
-  }
-  return hours
-}
+// Schedule-aware business hours — settings-driven (days/hours/holidays).
+// Re-exported for queue-materialization-read's sync per-row math.
+import { businessHoursElapsed, getSlaSchedule } from '../services/business-hours.js'
+export { businessHoursElapsed }
 
 async function computeStatus(collection: string, item: string) {
   // Find the current workflow instance for this collection+item
@@ -95,7 +86,7 @@ async function computeStatus(collection: string, item: string) {
   const now = new Date()
 
   const elapsedHours = rule.business_hours_only
-    ? businessHoursElapsed(enteredAt, now)
+    ? businessHoursElapsed(enteredAt, now, await getSlaSchedule())
     : (now.getTime() - enteredAt.getTime()) / (1000 * 60 * 60)
 
   const pctUsed = (elapsedHours / rule.duration_hours) * 100
@@ -223,6 +214,7 @@ export async function computeStatusBatch(
   }
 
   const now = new Date()
+  const schedule = await getSlaSchedule()
   for (const inst of candidates) {
     const stateKey = keyOf(inst.current_state)
     const rule = ruleFor(inst.template, stateKey)
@@ -230,7 +222,7 @@ export async function computeStatusBatch(
     if (!entered) continue
 
     const elapsedHours = rule?.business_hours_only
-      ? businessHoursElapsed(entered, now)
+      ? businessHoursElapsed(entered, now, schedule)
       : (now.getTime() - entered.getTime()) / (1000 * 60 * 60)
 
     const pctUsed = rule ? (elapsedHours / rule.duration_hours) * 100 : null

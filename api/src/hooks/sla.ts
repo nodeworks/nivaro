@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { businessHoursElapsed, getSlaSchedule } from '../services/business-hours.js'
 import { hooks } from './registry.js'
 
 let _app: FastifyInstance | null = null
@@ -9,39 +10,6 @@ export function setApp(app: FastifyInstance) {
   _app = app
 }
 
-let _slaCfg: { start: number; end: number; days: Set<number>; cachedAt: number } | null = null
-
-async function getSlaCfg() {
-  const now = Date.now()
-  if (_slaCfg && now - _slaCfg.cachedAt < 60_000) return _slaCfg
-  const row = await db('nivaro_settings')
-    .first('sla_business_day_start', 'sla_business_day_end', 'sla_business_days')
-    .catch(() => null)
-  const days = ((row?.sla_business_days as string | null) ?? '1,2,3,4,5')
-    .split(',')
-    .map(Number)
-    .filter((n) => !Number.isNaN(n))
-  _slaCfg = {
-    start: (row?.sla_business_day_start as number | null) ?? 9,
-    end: (row?.sla_business_day_end as number | null) ?? 17,
-    days: new Set(days),
-    cachedAt: now
-  }
-  return _slaCfg
-}
-
-async function businessHoursElapsed(from: Date, to: Date): Promise<number> {
-  const cfg = await getSlaCfg()
-  let hours = 0
-  const current = new Date(from)
-  while (current < to) {
-    const day = current.getDay()
-    const hour = current.getHours()
-    if (cfg.days.has(day) && hour >= cfg.start && hour < cfg.end) hours++
-    current.setHours(current.getHours() + 1)
-  }
-  return hours
-}
 
 /**
  * Called after a workflow state transition — checks SLA immediately.
@@ -84,7 +52,7 @@ export async function checkSlaForInstance(
     const now = new Date()
 
     const elapsedHours = rule.business_hours_only
-      ? await businessHoursElapsed(enteredAt, now)
+      ? businessHoursElapsed(enteredAt, now, await getSlaSchedule())
       : (now.getTime() - enteredAt.getTime()) / (1000 * 60 * 60)
 
     const pctUsed = (elapsedHours / rule.duration_hours) * 100

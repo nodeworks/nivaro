@@ -42,6 +42,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       'sla_business_day_start',
       'sla_business_day_end',
       'sla_business_days',
+      'sla_holidays',
       'file_max_size_mb',
       'collection_page_size',
       'activity_retention_days',
