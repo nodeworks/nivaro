@@ -263,3 +263,90 @@ export function listRegisteredFlowTriggers(): Command<{ data: unknown[] }> {
 export function sendTestMail(to: string): Command<{ data: { sent: boolean } }> {
   return cmd('POST', '/mail/test', undefined, { to })
 }
+
+
+// ─── Permission simulator ─────────────────────────────────────────────────────
+
+export interface PermissionSimulation {
+  allowed: boolean
+  reason: string
+  admin_access: boolean
+  fields: string[] | null
+  row_filter: Array<{ field: string; op: string; value?: unknown }> | null
+  tree_permission: { result: boolean | null; note: string } | null
+  ui_disabled_routes: string[]
+}
+
+/** Evaluate what a user with a role could do — same checks the API enforces. Admin only. */
+export function simulatePermissions(
+  roleId: UUID,
+  input: {
+    collection: string
+    action: 'create' | 'read' | 'update' | 'delete'
+    item_id?: string | null
+    user_id?: string | null
+  }
+): Command<{ data: PermissionSimulation }> {
+  return cmd('POST', `/roles/${roleId}/simulate`, undefined, input)
+}
+
+// ─── Backups ──────────────────────────────────────────────────────────────────
+
+/** What a backup export would include. Admin only. */
+export function readBackupManifest(
+  options: { include_system?: boolean } = {}
+): Command<{ data: { business: string[]; system: string[]; excluded: string[] } }> {
+  return cmd('GET', '/backups/manifest', {
+    include_system: options.include_system ? 'true' : 'false'
+  })
+}
+
+/** Path streaming the gzip NDJSON logical backup (combine with client.url; admin only). */
+export function backupExportPath(options: { include_system?: boolean } = {}): string {
+  return `/api/backups/export?include_system=${options.include_system ? 'true' : 'false'}`
+}
+
+// ─── Content promotion ────────────────────────────────────────────────────────
+
+export interface ContentBundle {
+  type: 'nivaro-content-bundle'
+  version: 1
+  exported_at: string
+  collections: Record<string, Array<Record<string, unknown>>>
+}
+
+export type PromotionPreview = Record<
+  string,
+  { create: number; update: number; unchanged: number; missing_ids: number; error?: string }
+>
+
+export type PromotionApplyResult = Record<
+  string,
+  { created: number; updated: number; skipped: number; errors: string[] }
+>
+
+/** Package collections from this instance into a portable content bundle. Admin only. */
+export function exportContentBundle(collections: string[]): Command<{ data: ContentBundle }> {
+  return cmd('POST', '/promotion/export', undefined, { collections })
+}
+
+/** Diff a bundle against this instance — no writes. Admin only. */
+export function previewContentBundle(bundle: ContentBundle): Command<{ data: PromotionPreview }> {
+  return cmd('POST', '/promotion/preview', undefined, { bundle })
+}
+
+/** Apply a bundle: id-keyed upsert, never deletes. Admin only. */
+export function applyContentBundle(bundle: ContentBundle): Command<{ data: PromotionApplyResult }> {
+  return cmd('POST', '/promotion/apply', undefined, { bundle })
+}
+
+// ─── Error reporting ──────────────────────────────────────────────────────────
+
+/** Report a client-side error into the issue log (deduped server-side by route+message). */
+export function reportClientError(input: {
+  message: string
+  stack?: string
+  url?: string
+}): Command<void> {
+  return cmd('POST', '/issues/client', undefined, input)
+}

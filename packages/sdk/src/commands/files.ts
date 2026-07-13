@@ -54,11 +54,34 @@ export function deleteFile(id: string): Command<void> {
   return cmd('DELETE', `/files/${id}`)
 }
 
+// ─── Usage tracking ───────────────────────────────────────────────────────────
+
+export interface FileUsageEntry {
+  table: string
+  column: string
+  count: number
+}
+
+/** Where is this file referenced? FK-driven scan of every column pointing at nivaro_files. */
+export function readFileUsage(id: string): Command<{ data: { usages: FileUsageEntry[]; total: number } }> {
+  return cmd('GET', `/files/${id}/usage`)
+}
+
+/** Files referenced by nothing — safe-to-delete candidates (admin only). */
+export function listOrphanFiles(
+  options: { limit?: number; offset?: number } = {}
+): Command<{ data: FileRecord[]; total: number }> {
+  return cmd('GET', '/files/usage/orphans', {
+    ...(options.limit != null ? { limit: String(options.limit) } : {}),
+    ...(options.offset != null ? { offset: String(options.offset) } : {})
+  })
+}
+
 // ─── URL builders (for <img src>, downloads — combine with client.url) ────────
 
-/** Path serving the file bytes with content-disposition download headers. */
-export function fileDownloadPath(id: string): string {
-  return `/api/files/${id}`
+/** Path serving the file bytes; pass download=true for an attachment disposition. */
+export function fileDownloadPath(id: string, options: { download?: boolean } = {}): string {
+  return `/api/files/${id}${options.download ? '?download=1' : ''}`
 }
 
 /** Path serving an on-the-fly image transform (cached server-side). */
