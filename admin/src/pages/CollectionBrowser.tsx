@@ -23,6 +23,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { BulkActionBar } from '@/components/bulk-action-bar'
+import { CollectionCalendar } from '@/components/collection-calendar'
+import { CollectionGantt } from '@/components/collection-gantt'
 import { ColumnPicker } from '@/components/column-picker'
 import { DataTable } from '@/components/data-table'
 import { FieldPicker } from '@/components/field-picker'
@@ -191,7 +193,7 @@ export function CollectionBrowserPage() {
   const [isImporting, setIsImporting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [displayColumns, setDisplayColumns] = useState<string[]>([])
-  const [viewMode, setViewMode] = usePersistedTab<'table' | 'tree'>(
+  const [viewMode, setViewMode] = usePersistedTab<'table' | 'tree' | 'calendar' | 'gantt'>(
     `nvr_viewmode_${collection ?? ''}`,
     'table'
   )
@@ -546,6 +548,9 @@ export function CollectionBrowserPage() {
   const displayName = colMeta?.display_name ?? titleCase(collection ?? '')
   const allNonHiddenFields: CMSField[] =
     (colMeta?.fields as CMSField[] | undefined)?.filter((f) => !f.hidden) ?? []
+  const dateFields = ((colMeta?.fields as CMSField[] | undefined) ?? [])
+    .filter((f) => ['date', 'datetime', 'timestamp'].includes(String(f.type)))
+    .map((f) => ({ field: f.field, label: f.label || f.field }))
   const relations: CMSRelation[] = colMeta?.relations ?? []
 
   const errorMessage =
@@ -777,7 +782,7 @@ export function CollectionBrowserPage() {
             <code className='ml-0.5 font-mono text-[11px] text-slate-400'>({collection})</code>
           </div>
           <div className='flex items-center gap-2'>
-            {treeConfig && (
+            {
               <div className='flex rounded-md border border-slate-200 dark:border-border overflow-hidden'>
                 <button
                   type='button'
@@ -791,20 +796,50 @@ export function CollectionBrowserPage() {
                 >
                   Table
                 </button>
-                <button
-                  type='button'
-                  className={cn(
-                    'px-2.5 py-1 text-[12px] transition-colors border-l border-slate-200 dark:border-border',
-                    viewMode === 'tree'
-                      ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
-                      : 'bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:bg-slate-50'
-                  )}
-                  onClick={() => setViewMode('tree')}
-                >
-                  Tree
-                </button>
+                {treeConfig && (
+                  <button
+                    type='button'
+                    className={cn(
+                      'px-2.5 py-1 text-[12px] transition-colors border-l border-slate-200 dark:border-border',
+                      viewMode === 'tree'
+                        ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                        : 'bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:bg-slate-50'
+                    )}
+                    onClick={() => setViewMode('tree')}
+                  >
+                    Tree
+                  </button>
+                )}
+                {dateFields.length > 0 && (
+                  <button
+                    type='button'
+                    className={cn(
+                      'px-2.5 py-1 text-[12px] transition-colors border-l border-slate-200 dark:border-border',
+                      viewMode === 'calendar'
+                        ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                        : 'bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:bg-slate-50'
+                    )}
+                    onClick={() => setViewMode('calendar')}
+                  >
+                    Calendar
+                  </button>
+                )}
+                {dateFields.length >= 2 && (
+                  <button
+                    type='button'
+                    className={cn(
+                      'px-2.5 py-1 text-[12px] transition-colors border-l border-slate-200 dark:border-border',
+                      viewMode === 'gantt'
+                        ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                        : 'bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:bg-slate-50'
+                    )}
+                    onClick={() => setViewMode('gantt')}
+                  >
+                    Gantt
+                  </button>
+                )}
               </div>
-            )}
+            }
             <input
               ref={fileInputRef}
               type='file'
@@ -880,8 +915,20 @@ export function CollectionBrowserPage() {
         </div>
       </div>
 
-      {/* Content area — tree view or table */}
-      {viewMode === 'tree' && treeConfig ? (
+      {/* Content area — calendar / gantt / tree / table */}
+      {viewMode === 'calendar' && collection ? (
+        <CollectionCalendar
+          collection={collection}
+          dateFields={dateFields}
+          displayTemplate={(colMeta?.display_template as string | null) ?? null}
+        />
+      ) : viewMode === 'gantt' && collection ? (
+        <CollectionGantt
+          collection={collection}
+          dateFields={dateFields}
+          displayTemplate={(colMeta?.display_template as string | null) ?? null}
+        />
+      ) : viewMode === 'tree' && treeConfig ? (
         <div className='flex-1 overflow-auto'>
           {movingNodeId && (
             <div className='px-4 py-2 bg-nvr-cyan/10 text-[12px] text-nvr-navy dark:text-nvr-cyan flex items-center gap-2'>
