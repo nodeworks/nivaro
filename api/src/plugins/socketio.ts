@@ -163,6 +163,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
     socket.on('record:leave', () => leaveRecordRoom())
 
+    // Mission-control pulse — admin-only live activity stream
+    socket.on('pulse:join', async () => {
+      const user = authenticatedUser
+      if (!user?.role) return
+      try {
+        const role = await db('nivaro_roles').where({ id: user.role }).first()
+        if (role?.admin_access) socket.join('pulse')
+      } catch {
+        /* silent, same style as other joins */
+      }
+    })
+    socket.on('pulse:leave', () => socket.leave('pulse'))
+
     // Field editing indicator — fan out inside the record room only.
     socket.on('field:focus', (payload: { field?: string }) => {
       const user = authenticatedUser

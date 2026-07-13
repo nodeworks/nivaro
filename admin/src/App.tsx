@@ -95,6 +95,7 @@ const AskPage = lazy(() => import('@/pages/Ask').then((m) => ({ default: m.AskPa
 const ScheduledReportsPage = lazy(() =>
   import('@/pages/ScheduledReports').then((m) => ({ default: m.ScheduledReportsPage }))
 )
+const PulsePage = lazy(() => import('@/pages/Pulse').then((m) => ({ default: m.PulsePage })))
 const WallboardPage = lazy(() =>
   import('@/pages/Wallboard').then((m) => ({ default: m.WallboardPage }))
 )
@@ -368,6 +369,7 @@ export default function App() {
                   <Route path='schema-snapshot' element={<SchemaSnapshotPage />} />
                   <Route path='content-promotion' element={<ContentPromotionPage />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
+                  <Route path='pulse' element={<PulsePage />} />
                   <Route path='scheduled-reports' element={<ScheduledReportsPage />} />
                   <Route path='blackout-dates' element={<BlackoutDatesPage />} />
                   <Route path='rules' element={<RulesPage />} />

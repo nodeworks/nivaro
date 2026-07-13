@@ -37,6 +37,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PuzzleIcon,
+  Radio,
   RefreshCw,
   RotateCcw,
   ScrollText,
@@ -141,6 +142,7 @@ export const navCategories: NavCategory[] = [
     label: 'Monitoring',
     items: [
       { icon: Activity, label: 'Activity', to: '/activity' },
+      { icon: Radio, label: 'Pulse', to: '/pulse' },
       { icon: FileBarChart, label: 'Reports', to: '/reports' },
       { icon: FileBarChart, label: 'Scheduled Reports', to: '/scheduled-reports' },
       { icon: TrendingUp, label: 'Team Throughput', to: '/team-throughput' },

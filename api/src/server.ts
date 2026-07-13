@@ -11,6 +11,7 @@ import { db } from './db/index.js'
 import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
+import { setPulseApp } from './services/activity.js'
 import { trackError } from './services/error-tracking.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
@@ -145,6 +146,9 @@ export async function buildServer() {
       message: err.message
     })
   })
+
+  // Mission-control pulse — activity broadcasts need the io instance
+  setPulseApp(app)
 
   // ─── Routes ───────────────────────────────────────────────────────────────
   await app.register(presencePublicRoutes, { prefix: '/api/presence' })
