@@ -45,6 +45,7 @@ import {
   ShieldCheck,
   ShieldOff,
   SlidersHorizontal,
+  Sparkles,
   Terminal,
   ThumbsUp,
   TrendingUp,
@@ -85,7 +86,8 @@ export const navCategories: NavCategory[] = [
     label: 'Home',
     items: [
       { icon: House, label: 'Overview', to: '/' },
-      { icon: LayoutGrid, label: 'Dashboards', to: '/dashboards' }
+      { icon: LayoutGrid, label: 'Dashboards', to: '/dashboards' },
+      { icon: Sparkles, label: 'Ask AI', to: '/ask' }
     ]
   },
   {

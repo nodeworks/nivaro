@@ -772,4 +772,93 @@ export async function aiRoutes(app: FastifyInstance) {
       return reply.send({ duplicates: [], enabled: true })
     }
   })
+
+  // ─── POST /chat — ask-your-data tool-use loop ─────────────────────────────
+  app.post('/chat', { preHandler: authenticate }, async (req, reply) => {
+    const client = await getClient()
+    if (!client) {
+      return reply
+        .code(503)
+        .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+    }
+    const { messages } = req.body as { messages?: Array<{ role: string; content: string }> }
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return reply.code(400).send({ error: 'messages array is required' })
+    }
+    const history = messages
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+      .slice(-20)
+      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, 4000) }))
+    if (history.length === 0 || history[history.length - 1].role !== 'user') {
+      return reply.code(400).send({ error: 'last message must be from the user' })
+    }
+
+    const { CHAT_SYSTEM_PROMPT, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } = await import(
+      '../services/ai-chat.js'
+    )
+    const settings = await getAiSettings()
+    const trace: Array<{ tool: string; input: Record<string, unknown>; summary: string }> = []
+    const convo: Anthropic.MessageParam[] = history
+
+    try {
+      for (let round = 0; round < MAX_ROUNDS; round++) {
+        const response = await client.messages.create({
+          model: settings.model,
+          max_tokens: 1500,
+          system: CHAT_SYSTEM_PROMPT,
+          tools: CHAT_TOOLS,
+          messages: convo
+        })
+
+        if (response.stop_reason !== 'tool_use') {
+          const text = response.content
+            .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+            .map((b) => b.text)
+            .join('\n')
+          await logActivity({
+            action: 'ai-chat',
+            user: req.user?.id,
+            comment: `${trace.length} tool call(s)`,
+            req
+          })
+          return reply.send({ data: { reply: text, trace } })
+        }
+
+        convo.push({ role: 'assistant', content: response.content })
+        const results: Anthropic.ToolResultBlockParam[] = []
+        for (const block of response.content) {
+          if (block.type !== 'tool_use') continue
+          const input = (block.input ?? {}) as Record<string, unknown>
+          try {
+            const { result, summary } = await executeChatTool(req.user!, block.name, input)
+            trace.push({ tool: block.name, input, summary })
+            results.push({
+              type: 'tool_result',
+              tool_use_id: block.id,
+              content: JSON.stringify(result).slice(0, 30_000)
+            })
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Tool failed'
+            trace.push({ tool: block.name, input, summary: `error: ${msg}` })
+            results.push({
+              type: 'tool_result',
+              tool_use_id: block.id,
+              content: `Error: ${msg}`,
+              is_error: true
+            })
+          }
+        }
+        convo.push({ role: 'user', content: results })
+      }
+      return reply.send({
+        data: {
+          reply: 'I hit the tool-call limit before finishing — try a more specific question.',
+          trace
+        }
+      })
+    } catch (err) {
+      req.log.error({ err }, 'AI chat failed')
+      return reply.code(502).send({ error: 'AI request failed' })
+    }
+  })
 }

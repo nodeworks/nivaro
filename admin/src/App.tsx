@@ -90,6 +90,7 @@ const CustomQueriesPage = lazy(() =>
 const CustomQueryEditPage = lazy(() =>
   import('@/pages/CustomQueryEdit').then((m) => ({ default: m.CustomQueryEditPage }))
 )
+const AskPage = lazy(() => import('@/pages/Ask').then((m) => ({ default: m.AskPage })))
 const ErdViewPage = lazy(() => import('@/pages/ErdView').then((m) => ({ default: m.ErdViewPage })))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
@@ -351,6 +352,7 @@ export default function App() {
                 <Route path='rules' element={<RulesPage />} />
                 <Route path='rules/:id' element={<RuleEditPage />} />
                 <Route path='dashboards' element={<DashboardsPage />} />
+                <Route path='ask' element={<AskPage />} />
                 <Route path='dashboards/:id' element={<DashboardEditPage />} />
                 <Route path='reports' element={<ReportsPage />} />
                 <Route path='profile' element={<ProfilePage />} />
