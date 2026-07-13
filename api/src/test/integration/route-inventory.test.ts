@@ -103,6 +103,16 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'POST', path: '/api/push/unsubscribe' },
   { method: 'GET', path: '/api/push/status' },
 
+  // Batch 5 (2026-07): trash, merge, schema graph, dashboard links, issues
+  { method: 'GET', path: '/api/trash/' },
+  { method: 'POST', path: '/api/trash/:id/restore' },
+  { method: 'GET', path: '/api/merge/preview' },
+  { method: 'POST', path: '/api/merge/' },
+  { method: 'GET', path: '/api/data-model/graph-stats' },
+  { method: 'POST', path: '/api/dashboard-links/' },
+  { method: 'GET', path: '/api/dashboard-links/for/:dashboardId' },
+  { method: 'GET', path: '/api/dashboard-links/public/:token' },
+
   // Operations tooling (2026-07 batch)
   { method: 'GET', path: '/api/files/:id/usage' },
   { method: 'GET', path: '/api/files/usage/orphans' },

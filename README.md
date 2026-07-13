@@ -137,6 +137,14 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Pipeline Flow Map & Replay** — Sankey of transition volumes (send-backs in red) and a time-lapse of backlog moving through states
 - **Wallboard & Pulse** — chrome-free TV dashboard rotating across queues, and a live activity stream with per-minute pulse
 - **Voice on Ask AI** — dictate questions and have answers read back
+- **Trash & Restore** — every deleted record is restorable for 30 days with its original id
+- **Time-Travel Restore** — scrub a slider through a record's history and restore to any point
+- **Record Merge** — dedupe wizard that repoints every inbound reference to the survivor
+- **Spreadsheet Mode** — Excel-grade editable grid: keyboard nav, range select, paste blocks, fill down
+- **Schema Graph** — force-directed live map of your whole schema, sized by rows, heat-mapped by writes
+- **Live Presence Map** — see who's on which admin page in real time
+- **Built-in Bug Reporter** — one click files screenshot + console tail into the issue log
+- **Public Dashboard Links** — token URLs render live read-only dashboards to anyone
 - **Full SDK Coverage** — ~175 typed SDK commands spanning every feature area, explorable in the in-browser SDK playground
 
 ---

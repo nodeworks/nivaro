@@ -7,6 +7,7 @@ export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/collaboration.js'
 export * from './sections/content-ops.js'
+export * from './sections/data-safety.js'
 export * from './sections/devex.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
@@ -91,6 +92,15 @@ import {
   pickerExclusionsGuide,
   pickerFilterGuide
 } from './sections/content-ops.js'
+import {
+  bugReporterDocs,
+  dashboardLinkDocs,
+  mergeDocs,
+  schemaGraphDocs,
+  spreadsheetDocs,
+  timeTravelDocs,
+  trashDocs
+} from './sections/data-safety.js'
 import {
   devexCdcStream,
   devexCodegen,
@@ -561,6 +571,10 @@ export const navSections: NavGroup[] = [
     id: 'content-ops',
     label: 'Content Operations',
     items: [
+      trashDocs,
+      timeTravelDocs,
+      mergeDocs,
+      spreadsheetDocs,
       formsV2Docs,
       contentOpsDraftPublish,
       contentOpsScheduledChanges,
@@ -685,7 +699,7 @@ export const navSections: NavGroup[] = [
   {
     id: 'low-code',
     label: 'Low-Code Builders',
-    items: [lowCodePageBuilder, lowCodeRuleBuilder, lowCodeFormulaBuilder]
+    items: [lowCodePageBuilder, lowCodeRuleBuilder, lowCodeFormulaBuilder, dashboardLinkDocs]
   },
   {
     id: 'observability',
@@ -694,6 +708,7 @@ export const navSections: NavGroup[] = [
       obsApiAnalytics,
       wallboardPulseDocs,
       recordGraphDocs,
+      bugReporterDocs,
       obsHealthDashboard,
       obsDataQuality,
       obsIssueLog,
@@ -709,6 +724,7 @@ export const navSections: NavGroup[] = [
     id: 'data-model',
     label: 'Data Model',
     items: [
+      schemaGraphDocs,
       fieldImpactDocs,
       systemTables,
       permissionsModel,
