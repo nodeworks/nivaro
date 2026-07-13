@@ -14,6 +14,7 @@ import {
   updateFileMeta,
   uploadFile
 } from '../services/files.js'
+import { findOrphanFiles, getFileUsage } from '../services/file-usage.js'
 import { getStorage } from '../services/storage/index.js'
 
 function contentDisposition(filename: string, mode: 'inline' | 'attachment' = 'inline'): string {
@@ -99,6 +100,25 @@ export async function filesRoutes(app: FastifyInstance) {
       if (status === 400) return reply.code(400).send({ error: (err as Error).message })
       throw err
     }
+  })
+
+  // Where is this file referenced? FK-driven scan — see services/file-usage.ts
+  app.get('/:id/usage', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const file = await getFile(id)
+    if (!file) return reply.code(404).send({ error: 'Not found' })
+    const usage = await getFileUsage(id)
+    return reply.send({ data: usage })
+  })
+
+  // Files referenced by nothing — deletion candidates (admin only)
+  app.get('/usage/orphans', { preHandler: requireAdmin }, async (req, reply) => {
+    const q = req.query as { limit?: string; offset?: string }
+    const result = await findOrphanFiles({
+      limit: Number(q.limit ?? 50),
+      offset: Number(q.offset ?? 0)
+    })
+    return reply.send(result)
   })
 
   app.get('/:id/meta', async (req, reply) => {

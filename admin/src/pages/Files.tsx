@@ -8,6 +8,7 @@ import {
   FileVideo,
   LayoutGrid,
   LayoutList,
+  Link2,
   Trash2,
   Upload,
   X
@@ -16,6 +17,7 @@ import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type CMSFile } from '@/lib/api'
 import { formatNumber, formatRelative } from '@/lib/utils'
@@ -174,22 +176,85 @@ function FileCard({
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+function UsageCell({ fileId }: { fileId: string }) {
+  const [open, setOpen] = useState(false)
+  const { data, isLoading } = useQuery({
+    queryKey: ['file-usage', fileId],
+    queryFn: () =>
+      api
+        .get<{
+          data: { usages: Array<{ table: string; column: string; count: number }>; total: number }
+        }>(`/files/${fileId}/usage`)
+        .then((r) => r.data.data),
+    enabled: open,
+    staleTime: 60_000
+  })
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className='rounded p-1.5 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-slate-100 hover:text-nvr-navy'
+          aria-label='Show usage'
+          title='Where is this file used?'
+        >
+          <Link2 className='h-3.5 w-3.5' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-64 p-3'>
+        <p className='mb-2 text-[11px] font-semibold text-slate-500'>Usage</p>
+        {isLoading ? (
+          <Skeleton className='h-4 w-32' />
+        ) : !data || data.usages.length === 0 ? (
+          <p className='text-[12px] text-slate-400'>Not referenced anywhere — safe to delete.</p>
+        ) : (
+          <div className='space-y-1'>
+            {data.usages.map((u) => (
+              <div
+                key={`${u.table}.${u.column}`}
+                className='flex items-center justify-between gap-2'
+              >
+                <code className='truncate font-mono text-[11px] text-slate-600'>{u.table}</code>
+                <span className='shrink-0 rounded-full bg-slate-100 px-1.5 text-[10px] font-semibold text-slate-500'>
+                  {u.count}
+                </span>
+              </div>
+            ))}
+            <p className='pt-1 text-[11px] text-slate-400'>
+              {data.total} reference{data.total !== 1 ? 's' : ''} total
+            </p>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 export function FilesPage() {
   const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
   const [view, setView] = useState<'grid' | 'list'>('list')
+  const [scope, setScope] = useState<'all' | 'unused'>('all')
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const limit = 50
 
   const { data, isLoading } = useQuery({
-    queryKey: ['files', page],
+    queryKey: ['files', page, scope],
     queryFn: () =>
       api
-        .get<{ data: CMSFile[]; total: number }>('/files', {
-          params: { limit, offset: (page - 1) * limit }
-        })
-        .then((r) => r.data)
+        .get<{ data: CMSFile[]; total: number }>(
+          scope === 'unused' ? '/files/usage/orphans' : '/files',
+          { params: { limit, offset: (page - 1) * limit } }
+        )
+        .then((r) => ({
+          ...r.data,
+          data: r.data.data.map((f) => ({
+            ...f,
+            filesize: f.filesize != null ? Number(f.filesize) : null
+          }))
+        }))
   })
 
   const files: CMSFile[] = data?.data ?? []
@@ -246,6 +311,24 @@ export function FilesPage() {
             )}
           </div>
           <div className='flex items-center gap-2'>
+            {/* Scope: all files vs unreferenced (deletion candidates) */}
+            <div className='flex items-center rounded-lg border border-slate-200 p-0.5'>
+              {(['all', 'unused'] as const).map((s) => (
+                <button
+                  key={s}
+                  type='button'
+                  onClick={() => {
+                    setScope(s)
+                    setPage(1)
+                  }}
+                  className={`h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors ${
+                    scope === s ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-700'
+                  }`}
+                >
+                  {s === 'all' ? 'All' : 'Unused'}
+                </button>
+              ))}
+            </div>
             {/* View toggle */}
             <div className='flex items-center rounded-lg border border-slate-200 p-0.5'>
               <button
@@ -346,7 +429,7 @@ export function FilesPage() {
                   <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Type</th>
                   <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Size</th>
                   <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Uploaded</th>
-                  <th className='w-16 px-4 py-2.5' />
+                  <th className='w-24 px-4 py-2.5' />
                 </tr>
               </thead>
               <tbody className='divide-y divide-slate-100'>
@@ -400,34 +483,37 @@ export function FilesPage() {
                         {formatRelative(file.uploaded_on)}
                       </td>
                       <td className='px-4 py-2.5'>
-                        {pendingDelete === file.id ? (
-                          <div className='flex items-center gap-1'>
+                        <div className='flex items-center justify-end gap-0.5'>
+                          <UsageCell fileId={file.id} />
+                          {pendingDelete === file.id ? (
+                            <div className='flex items-center gap-1'>
+                              <button
+                                type='button'
+                                className='rounded bg-red-500 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-red-600 disabled:opacity-50'
+                                onClick={() => deleteFile.mutate(file.id)}
+                                disabled={deleteFile.isPending}
+                              >
+                                Delete
+                              </button>
+                              <button
+                                type='button'
+                                className='rounded border px-2 py-0.5 text-[11px] hover:bg-slate-50'
+                                onClick={() => setPendingDelete(null)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
                             <button
                               type='button'
-                              className='rounded bg-red-500 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-red-600 disabled:opacity-50'
-                              onClick={() => deleteFile.mutate(file.id)}
-                              disabled={deleteFile.isPending}
+                              className='rounded p-1.5 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 hover:text-red-500'
+                              onClick={() => setPendingDelete(file.id)}
+                              aria-label='Delete file'
                             >
-                              Delete
+                              <Trash2 className='h-3.5 w-3.5' />
                             </button>
-                            <button
-                              type='button'
-                              className='rounded border px-2 py-0.5 text-[11px] hover:bg-slate-50'
-                              onClick={() => setPendingDelete(null)}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type='button'
-                            className='rounded p-1.5 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 hover:text-red-500'
-                            onClick={() => setPendingDelete(file.id)}
-                            aria-label='Delete file'
-                          >
-                            <Trash2 className='h-3.5 w-3.5' />
-                          </button>
-                        )}
+                          )}
+                        </div>
                       </td>
                     </tr>
                   )
