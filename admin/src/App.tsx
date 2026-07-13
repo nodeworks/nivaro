@@ -95,6 +95,9 @@ const AskPage = lazy(() => import('@/pages/Ask').then((m) => ({ default: m.AskPa
 const ScheduledReportsPage = lazy(() =>
   import('@/pages/ScheduledReports').then((m) => ({ default: m.ScheduledReportsPage }))
 )
+const WallboardPage = lazy(() =>
+  import('@/pages/Wallboard').then((m) => ({ default: m.WallboardPage }))
+)
 const BlueprintsPage = lazy(() =>
   import('@/pages/Blueprints').then((m) => ({ default: m.BlueprintsPage }))
 )
@@ -315,6 +318,14 @@ export default function App() {
                   element={
                     <Suspense fallback={<AppShell />}>
                       <SetupPage />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path='/wallboard'
+                  element={
+                    <Suspense fallback={<AppShell />}>
+                      <WallboardPage />
                     </Suspense>
                   }
                 />
