@@ -31,6 +31,7 @@ import { FieldPicker } from '@/components/field-picker'
 import { type ActiveFilter, FilterBar } from '@/components/filter-bar'
 import { RelationLabel } from '@/components/relation-label'
 import { SavedViews } from '@/components/saved-views'
+import { SpreadsheetView } from '@/components/spreadsheet-view'
 import { TreePicker } from '@/components/tree-picker'
 import { TreeView } from '@/components/tree-view'
 import { Badge } from '@/components/ui/badge'
@@ -193,7 +194,7 @@ export function CollectionBrowserPage() {
   const [isImporting, setIsImporting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [displayColumns, setDisplayColumns] = useState<string[]>([])
-  const [viewMode, setViewMode] = usePersistedTab<'table' | 'tree' | 'calendar' | 'gantt'>(
+  const [viewMode, setViewMode] = usePersistedTab<'table' | 'grid' | 'tree' | 'calendar' | 'gantt'>(
     `nvr_viewmode_${collection ?? ''}`,
     'table'
   )
@@ -796,6 +797,18 @@ export function CollectionBrowserPage() {
                 >
                   Table
                 </button>
+                <button
+                  type='button'
+                  className={cn(
+                    'px-2.5 py-1 text-[12px] transition-colors border-l border-slate-200 dark:border-border',
+                    viewMode === 'grid'
+                      ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                      : 'bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:bg-slate-50'
+                  )}
+                  onClick={() => setViewMode('grid')}
+                >
+                  Grid
+                </button>
                 {treeConfig && (
                   <button
                     type='button'
@@ -915,8 +928,10 @@ export function CollectionBrowserPage() {
         </div>
       </div>
 
-      {/* Content area — calendar / gantt / tree / table */}
-      {viewMode === 'calendar' && collection ? (
+      {/* Content area — grid / calendar / gantt / tree / table */}
+      {viewMode === 'grid' && collection ? (
+        <SpreadsheetView collection={collection} />
+      ) : viewMode === 'calendar' && collection ? (
         <CollectionCalendar
           collection={collection}
           dateFields={dateFields}
