@@ -15,11 +15,12 @@ interface TraceEntry {
 
 interface Proposal {
   proposal_id: string
-  action_type: 'bulk_update' | 'create_record'
+  action_type: 'bulk_update' | 'create_record' | 'create_dashboard'
   collection: string
   count: number
   changes: Record<string, unknown> | null
   sample: Array<{ id: string; label: string }>
+  widgets?: Array<{ type: string; title: string; collection: string; field: string | null }>
 }
 
 interface ChatTurn {
@@ -125,9 +126,11 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
       )
       const res = r.data.data.result
       setResultText(
-        proposal.action_type === 'create_record'
-          ? `Created record ${String(res.id ?? '')}`
-          : `Updated ${String(res.updated)} record(s)${Number(res.failed) > 0 ? `, ${String(res.failed)} failed` : ''}`
+        proposal.action_type === 'create_dashboard'
+          ? `Created dashboard — open /dashboards/${String(res.dashboard_id ?? '')}`
+          : proposal.action_type === 'create_record'
+            ? `Created record ${String(res.id ?? '')}`
+            : `Updated ${String(res.updated)} record(s)${Number(res.failed) > 0 ? `, ${String(res.failed)} failed` : ''}`
       )
       setStatus('executed')
     } catch (err) {
@@ -140,11 +143,27 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
   return (
     <div className='mt-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-800 dark:bg-amber-900/10'>
       <p className='text-[12px] font-semibold text-amber-800 dark:text-amber-300'>
-        {proposal.action_type === 'create_record'
-          ? `Proposed: create a ${proposal.collection} record`
-          : `Proposed: update ${proposal.count} ${proposal.collection} record${proposal.count !== 1 ? 's' : ''}`}
+        {proposal.action_type === 'create_dashboard'
+          ? `Proposed: create dashboard “${String(proposal.changes?.name ?? '')}” with ${proposal.count} widget${proposal.count !== 1 ? 's' : ''}`
+          : proposal.action_type === 'create_record'
+            ? `Proposed: create a ${proposal.collection} record`
+            : `Proposed: update ${proposal.count} ${proposal.collection} record${proposal.count !== 1 ? 's' : ''}`}
       </p>
-      {proposal.changes && (
+      {proposal.widgets && proposal.widgets.length > 0 && (
+        <div className='mt-1.5 space-y-0.5'>
+          {proposal.widgets.map((w, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: static preview
+            <p key={i} className='text-[11.5px] text-amber-900 dark:text-amber-200'>
+              <code className='font-mono'>{w.type}</code> — {w.title}{' '}
+              <span className='text-amber-700/70'>
+                ({w.collection}
+                {w.field ? `.${w.field}` : ''})
+              </span>
+            </p>
+          ))}
+        </div>
+      )}
+      {proposal.action_type !== 'create_dashboard' && proposal.changes && (
         <div className='mt-1.5 space-y-0.5'>
           {Object.entries(proposal.changes).map(([k, v]) => (
             <p key={k} className='text-[11.5px] text-amber-900 dark:text-amber-200'>

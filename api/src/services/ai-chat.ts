@@ -85,17 +85,21 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   {
     name: 'propose_action',
     description:
-      'PROPOSE a mutation for the user to approve — never executes directly. bulk_update: filter (query_items shape) + changes (field:value). create_record: data (field:value). Returns a preview the user will approve or reject in the UI. After calling this, tell the user to review the proposal card; do NOT claim anything was changed.',
+      'PROPOSE a mutation for the user to approve — never executes directly. bulk_update: filter (query_items shape) + changes (field:value). create_record: data (field:value). create_dashboard: dashboard {name, widgets:[{type: count|sum|avg|latest|bar_chart|line_chart, title, collection, field (the value/group field; optional for count/latest), filters?}]}. Returns a preview the user approves or rejects in the UI. After calling this, tell the user to review the proposal card; do NOT claim anything was changed or created.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        action_type: { type: 'string', enum: ['bulk_update', 'create_record'] },
-        collection: { type: 'string' },
+        action_type: { type: 'string', enum: ['bulk_update', 'create_record', 'create_dashboard'] },
+        collection: { type: 'string', description: 'bulk_update/create_record target (omit for create_dashboard)' },
         filter: { type: 'object', description: 'bulk_update: which records (query_items filter shape)' },
         changes: { type: 'object', description: 'bulk_update: fields to set on every matched record' },
-        data: { type: 'object', description: 'create_record: fields for the new record' }
+        data: { type: 'object', description: 'create_record: fields for the new record' },
+        dashboard: {
+          type: 'object',
+          description: 'create_dashboard: {name, widgets:[{type,title,collection,field,filters?}]} (max 12 widgets)'
+        }
       },
-      required: ['action_type', 'collection']
+      required: ['action_type']
     }
   },
   {

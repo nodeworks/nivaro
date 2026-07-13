@@ -21,13 +21,16 @@ const EXPIRY_MS = 60 * 60 * 1000
 
 export interface ProposalPreview {
   proposal_id: string
-  action_type: 'bulk_update' | 'create_record'
+  action_type: 'bulk_update' | 'create_record' | 'create_dashboard'
   collection: string
   count: number
   changes: Record<string, unknown> | null
   sample: Array<{ id: string; label: string }>
+  widgets?: Array<{ type: string; title: string; collection: string; field: string | null }>
   expires_note: string
 }
+
+const WIDGET_TYPES = new Set(['count', 'sum', 'avg', 'latest', 'bar_chart', 'line_chart'])
 
 function parseJson<T>(v: unknown): T | null {
   if (v == null) return null
@@ -51,8 +54,22 @@ export async function proposeAction(
     filter?: unknown
     changes?: Record<string, unknown>
     data?: Record<string, unknown>
+    dashboard?: {
+      name?: string
+      widgets?: Array<{
+        type?: string
+        title?: string
+        collection?: string
+        field?: string
+        filters?: unknown
+      }>
+    }
   }
 ): Promise<ProposalPreview> {
+  // Dashboards validate per-widget collections instead of a single one
+  if (input.action_type === 'create_dashboard') {
+    return proposeDashboard(user, input.dashboard ?? {})
+  }
   const collection = String(input.collection ?? '')
   if (!/^[a-zA-Z0-9_]+$/.test(collection) || collection.startsWith('nivaro_')) {
     throw new Error('Invalid collection')
@@ -136,6 +153,80 @@ export async function proposeAction(
   }
 }
 
+async function proposeDashboard(
+  user: User,
+  dashboard: {
+    name?: string
+    widgets?: Array<{
+      type?: string
+      title?: string
+      collection?: string
+      field?: string
+      filters?: unknown
+    }>
+  }
+): Promise<ProposalPreview> {
+  const name = String(dashboard.name ?? '').trim()
+  if (!name) throw new Error('dashboard.name is required')
+  const rawWidgets = Array.isArray(dashboard.widgets) ? dashboard.widgets.slice(0, 12) : []
+  if (rawWidgets.length === 0) throw new Error('dashboard.widgets must have at least one widget')
+
+  const widgets: Array<{ type: string; title: string; collection: string; field: string | null; filters: string | null }> = []
+  for (const w of rawWidgets) {
+    const type = String(w.type ?? '')
+    if (!WIDGET_TYPES.has(type)) {
+      throw new Error(`Invalid widget type '${type}' — use one of: ${[...WIDGET_TYPES].join(', ')}`)
+    }
+    const collection = String(w.collection ?? '')
+    if (!/^[a-zA-Z0-9_]+$/.test(collection) || collection.startsWith('nivaro_')) {
+      throw new Error(`Invalid widget collection: ${collection}`)
+    }
+    if (!(await can(user, 'read', collection))) {
+      throw new Error(`You cannot read ${collection}`)
+    }
+    const valid = new Set(
+      ((await db('nivaro_fields').where({ collection }).select('field')) as Array<{ field: string }>).map(
+        (r) => r.field
+      )
+    )
+    const field = w.field != null && valid.has(String(w.field)) ? String(w.field) : null
+    if (type !== 'count' && type !== 'latest' && !field) {
+      throw new Error(`Widget '${String(w.title ?? type)}' needs a valid field for ${type}`)
+    }
+    widgets.push({
+      type,
+      title: String(w.title ?? `${type} of ${collection}`).slice(0, 100),
+      collection,
+      field,
+      filters: w.filters ? JSON.stringify(w.filters) : null
+    })
+  }
+
+  const id = randomUUID()
+  await db('nivaro_ai_proposals').insert({
+    id,
+    user: user.id,
+    action_type: 'create_dashboard',
+    collection: '__dashboard__',
+    payload: JSON.stringify({ name, widgets }),
+    preview: JSON.stringify({ action_type: 'create_dashboard', count: widgets.length }),
+    status: 'proposed',
+    created_at: new Date()
+  })
+
+  return {
+    proposal_id: id,
+    action_type: 'create_dashboard',
+    collection: '__dashboard__',
+    count: widgets.length,
+    changes: { name },
+    sample: [],
+    widgets: widgets.map((w) => ({ type: w.type, title: w.title, collection: w.collection, field: w.field })),
+    expires_note:
+      'The user must approve this proposal in the UI within 1 hour; it does NOT execute automatically.'
+  }
+}
+
 export async function executeProposal(
   user: User,
   proposalId: string
@@ -155,9 +246,49 @@ export async function executeProposal(
 
   const payload = parseJson<Record<string, unknown>>(row.payload) ?? {}
   const collection = String(row.collection)
-  let result: Record<string, unknown>
+  let result: Record<string, unknown> = {}
 
-  if (row.action_type === 'create_record') {
+  if (row.action_type === 'create_dashboard') {
+    const name = String((payload.name as string) ?? 'AI Dashboard')
+    const widgets = (payload.widgets as Array<Record<string, unknown>>) ?? []
+    const dashId = randomUUID()
+    await db('nivaro_dashboards').insert({
+      id: dashId,
+      name,
+      user: user.id,
+      is_shared: false,
+      created_at: new Date(),
+      updated_at: new Date()
+    })
+    // KPIs 1x1, charts 2x2 — packed left-to-right on a 4-unit grid
+    let col = 0
+    let rowPos = 0
+    for (const w of widgets) {
+      const isChart = w.type === 'bar_chart' || w.type === 'line_chart'
+      const width = isChart ? 2 : 1
+      const height = isChart ? 2 : 1
+      if (col + width > 4) {
+        col = 0
+        rowPos += 1
+      }
+      await db('nivaro_dashboard_widgets').insert({
+        id: randomUUID(),
+        dashboard: dashId,
+        type: w.type,
+        title: w.title,
+        collection: w.collection,
+        field: w.field ?? null,
+        filters: w.filters ?? null,
+        col,
+        row: rowPos,
+        width,
+        height,
+        created_at: new Date()
+      })
+      col += width
+    }
+    result = { dashboard_id: dashId, widgets: widgets.length }
+  } else if (row.action_type === 'create_record') {
     const created = (await createOne(
       user,
       collection,
