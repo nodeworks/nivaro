@@ -77,7 +77,23 @@ export async function issuesRoutes(app: FastifyInstance) {
       .leftJoin('nivaro_users as a', 'i.assigned_to', 'a.id')
       .leftJoin('nivaro_users as r', 'i.raised_by', 'r.id')
       .select(
-        'i.*',
+        // everything except the (potentially large) screenshot blob
+        'i.id',
+        'i.collection',
+        'i.item',
+        'i.title',
+        'i.severity',
+        'i.status',
+        'i.assigned_to',
+        'i.raised_by',
+        'i.resolution_notes',
+        'i.source',
+        'i.details',
+        'i.fingerprint',
+        'i.occurrence_count',
+        'i.last_seen_at',
+        'i.created_at',
+        'i.updated_at',
         db.raw(
           "LTRIM(RTRIM(CONCAT(COALESCE(a.first_name, ''), ' ', COALESCE(a.last_name, '')))) as assigned_to_name"
         ),
@@ -139,6 +155,15 @@ export async function issuesRoutes(app: FastifyInstance) {
       collection?: string | null
       item?: string | null
       assigned_to?: string | null
+      details?: string | null
+      screenshot?: string | null
+    }
+
+    if (body.screenshot && !/^data:image\/(png|jpeg|webp);base64,/.test(body.screenshot)) {
+      return reply.code(400).send({ error: 'screenshot must be a data:image URI' })
+    }
+    if (body.screenshot && body.screenshot.length > 2_500_000) {
+      return reply.code(400).send({ error: 'screenshot too large (2MB cap)' })
     }
 
     if (!body.title?.trim()) {
@@ -165,6 +190,9 @@ export async function issuesRoutes(app: FastifyInstance) {
         collection: body.collection ?? null,
         item: body.item ?? null,
         assigned_to: body.assigned_to ?? null,
+        details: body.details ? String(body.details).slice(0, 8000) : null,
+        screenshot: body.screenshot ?? null,
+        source: 'manual',
         raised_by: req.user!.id,
         created_at: now,
         updated_at: now

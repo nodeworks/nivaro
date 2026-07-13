@@ -283,6 +283,18 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
   const [notes, setNotes] = useState(issue.resolution_notes ?? '')
   const [assignee, setAssignee] = useState(issue.assigned_to ?? '')
 
+  // Full row (list omits the screenshot blob + may lack details)
+  const { data: full } = useQuery({
+    queryKey: ['issue-full', issue.id],
+    queryFn: () =>
+      api
+        .get<{ data: Issue & { details?: string | null; screenshot?: string | null } }>(
+          `/issues/${issue.id}`
+        )
+        .then((r) => r.data.data),
+    staleTime: 60_000
+  })
+
   const patchMut = useMutation({
     mutationFn: (body: object) => api.patch(`/issues/${issue.id}`, body),
     onSuccess: () => {
@@ -296,6 +308,20 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
 
   return (
     <div className='space-y-4 bg-slate-50 px-6 py-4 dark:bg-muted/30'>
+      {full?.details && (
+        <pre className='max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'>
+          {full.details}
+        </pre>
+      )}
+      {full?.screenshot && (
+        <a href={full.screenshot} target='_blank' rel='noreferrer'>
+          <img
+            src={full.screenshot}
+            alt='Reported page screenshot'
+            className='max-h-64 rounded-md border border-slate-200 dark:border-border'
+          />
+        </a>
+      )}
       <div className='flex flex-wrap items-center gap-4 text-[12px]'>
         <span className='text-muted-foreground'>
           Raised by{' '}

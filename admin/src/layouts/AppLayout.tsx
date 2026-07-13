@@ -60,6 +60,7 @@ import {
 } from 'lucide-react'
 import { Component, type ReactNode, Suspense, useEffect, useState } from 'react'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
+import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
 import { NotificationBell } from '@/components/notification-bell'
 import { KeyboardShortcuts } from '@/components/shortcuts-overlay'
@@ -645,6 +646,7 @@ export function AppLayout() {
                   className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
                 >
                   <Outlet />
+                  <BugReporter />
                 </div>
               )}
             </Suspense>
