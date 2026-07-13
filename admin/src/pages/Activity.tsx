@@ -68,8 +68,15 @@ function collectionLabel(name: string, collections: Collection[]): string {
 
 const LABEL_FALLBACKS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
 
-function ItemLabel({ collection, item }: { collection: string; item: string }) {
-  const isSystem = !collection || collection.startsWith('nivaro_') || collection.startsWith('directus_')
+function ItemLabel({ collection, item, action }: { collection: string; item: string; action?: string }) {
+  // Skip the label lookup for delete rows — the record is gone by definition,
+  // and legacy-import history references many long-deleted items. 404s on
+  // create/update rows of since-deleted items still fall back to the raw id.
+  const isSystem =
+    !collection ||
+    collection.startsWith('nivaro_') ||
+    collection.startsWith('directus_') ||
+    action === 'delete'
 
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', collection],
@@ -236,7 +243,7 @@ export function ActivityPage() {
                       {isPipeline && row.comment ? (
                         <span className='block truncate' title={row.comment}>{row.comment}</span>
                       ) : row.collection && row.item ? (
-                        <ItemLabel collection={row.collection} item={row.item} />
+                        <ItemLabel collection={row.collection} item={row.item} action={row.action} />
                       ) : (
                         <span className='font-mono text-muted-foreground'>{row.item ?? '—'}</span>
                       )}

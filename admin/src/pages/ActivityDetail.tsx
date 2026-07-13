@@ -23,8 +23,13 @@ const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 's
 const PIPELINE_ACTIONS = new Set(['pipeline-transition', 'pipeline-start'])
 const LABEL_FALLBACKS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
 
-function useItemLabel(collection: string | null, item: string | null) {
-  const isSystem = !collection || collection.startsWith('nivaro_') || collection.startsWith('directus_')
+function useItemLabel(collection: string | null, item: string | null, action?: string | null) {
+  // Delete rows reference a record that no longer exists — skip the lookup.
+  const isSystem =
+    !collection ||
+    collection.startsWith('nivaro_') ||
+    collection.startsWith('directus_') ||
+    action === 'delete'
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', collection],
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
@@ -76,7 +81,7 @@ export function ActivityDetailPage() {
     queryFn: () => api.get(`/activity/${id}`).then((r) => r.data.data as ActivityEntry),
     enabled: !!id
   })
-  const itemLabel = useItemLabel(entry?.collection ?? null, entry?.item ?? null)
+  const itemLabel = useItemLabel(entry?.collection ?? null, entry?.item ?? null, entry?.action ?? null)
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', entry?.collection],
     queryFn: () => api.get(`/collections/${entry!.collection}`).then((r) => r.data.data),
