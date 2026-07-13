@@ -3,6 +3,7 @@ import type { DocSection } from './types.js'
 // ─── Section imports ──────────────────────────────────────────────────────────
 
 export * from './sections/admin-ux.js'
+export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/collaboration.js'
 export * from './sections/content-ops.js'
@@ -38,6 +39,16 @@ import {
   adminUxSavedViews,
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
+import {
+  adminI18nDocs,
+  aiChatDocs,
+  fieldImpactDocs,
+  formsV2Docs,
+  pipelineSimulatorDocs,
+  scheduledReportsDocs,
+  slaScheduleDocs,
+  ssoDocs
+} from './sections/assist-ops.js'
 import { attributesGuide } from './sections/attributes.js'
 import {
   collabApprovals,
@@ -380,6 +391,7 @@ export const navSections: NavGroup[] = [
     id: 'pipeline-engine',
     label: 'Pipeline Engine',
     items: [
+      pipelineSimulatorDocs,
       pipelineOverview,
       pipelineDimensions,
       pipelineOwnerMatrix,
@@ -491,12 +503,21 @@ export const navSections: NavGroup[] = [
   {
     id: 'ai-features',
     label: 'AI Features',
-    items: [aiOverview, aiGenerate, aiSummarize, aiContentValidation, aiDuplicateDetection]
+    items: [
+      aiChatDocs,
+      aiOverview,
+      aiGenerate,
+      aiSummarize,
+      aiContentValidation,
+      aiDuplicateDetection
+    ]
   },
   {
     id: 'monitoring',
     label: 'Monitoring & Automation',
     items: [
+      scheduledReportsDocs,
+      slaScheduleDocs,
       submissionFormsGuide,
       fieldWatchesGuide,
       notificationSubscriptionsGuide,
@@ -530,6 +551,7 @@ export const navSections: NavGroup[] = [
     id: 'content-ops',
     label: 'Content Operations',
     items: [
+      formsV2Docs,
       contentOpsDraftPublish,
       contentOpsScheduledChanges,
       contentOpsDataExport,
@@ -565,6 +587,7 @@ export const navSections: NavGroup[] = [
     id: 'security',
     label: 'Security & Infrastructure',
     items: [
+      ssoDocs,
       securityMultiDb,
       securityReadReplica,
       securityTwoFactor,
@@ -639,6 +662,7 @@ export const navSections: NavGroup[] = [
     id: 'admin-ux',
     label: 'Admin UX & Search',
     items: [
+      adminI18nDocs,
       adminUxGlobalSearch,
       adminUxSavedViews,
       adminUxImportFromUrl,
@@ -672,6 +696,7 @@ export const navSections: NavGroup[] = [
     id: 'data-model',
     label: 'Data Model',
     items: [
+      fieldImpactDocs,
       systemTables,
       permissionsModel,
       mssqlRules,
