@@ -18,7 +18,8 @@ import {
   Loader2,
   Network,
   Play,
-  Sparkles
+  Sparkles,
+  Waypoints
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
@@ -26,6 +27,7 @@ import { toast } from 'sonner'
 import { ApprovalPanel } from '@/components/approval-panel'
 import { ErpStatusBadge } from '@/components/erp-status-badge'
 import { RecordDrilldownSheet } from '@/components/record-drilldown-sheet'
+import { RecordGraphSheet } from '@/components/record-graph-sheet'
 import { ShareLinkPopover } from '@/components/share-link-popover'
 import { TimelineSheet } from '@/components/timeline-sheet'
 import { Button } from '@/components/ui/button'
@@ -363,6 +365,7 @@ export function ItemEditPage() {
 
   const [summarizing, setSummarizing] = useState(false)
   const [timelineOpen, setTimelineOpen] = useState(false)
+  const [graphOpen, setGraphOpen] = useState(false)
   const presence = useRecordPresence(collection, !isNew && id ? id : undefined)
   const [summary, setSummary] = useState<string | null>(null)
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
@@ -824,6 +827,17 @@ export function ItemEditPage() {
                         <History className='h-3.5 w-3.5' />
                       </Button>
                     )}
+                    {id && !isNew && (
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        onClick={() => setGraphOpen(true)}
+                        title='Record graph — explore related records'
+                        className='rounded-none -ml-px first:ml-0'
+                      >
+                        <Waypoints className='h-3.5 w-3.5' />
+                      </Button>
+                    )}
                     {id && !isNew && collection && (
                       <ShareLinkPopover
                         collection={collection}
@@ -922,6 +936,14 @@ export function ItemEditPage() {
           </DrilldownContext.Provider>
         </ItemEditAuthContext.Provider>
       </NavigationContext.Provider>
+      {id && !isNew && collection && (
+        <RecordGraphSheet
+          collection={collection}
+          item={id}
+          open={graphOpen}
+          onOpenChange={setGraphOpen}
+        />
+      )}
       {id && !isNew && collection && (
         <TimelineSheet
           collection={collection}
