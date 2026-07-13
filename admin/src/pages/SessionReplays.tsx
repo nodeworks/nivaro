@@ -481,8 +481,8 @@ export function SessionReplaysPage() {
         {/* Sessions for the selected person */}
         <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
           {!enabled && recordings.length === 0 ? (
-            <div className='mx-auto max-w-md pt-24 text-center'>
-              <Clapperboard className='mx-auto h-8 w-8 text-slate-300' />
+            <div className='max-w-md px-6 py-10'>
+              <Clapperboard className='h-8 w-8 text-slate-300' />
               <h2 className='mt-4 text-[15px] font-semibold text-slate-800 dark:text-foreground'>
                 Recording is off
               </h2>
@@ -493,15 +493,15 @@ export function SessionReplaysPage() {
             </div>
           ) : !selected ? (
             enabled && (
-              <div className='mx-auto max-w-md pt-24 text-center'>
-                <Clapperboard className='mx-auto h-8 w-8 text-slate-300' />
+              <div className='px-6 py-10'>
+                <Clapperboard className='h-8 w-8 text-slate-300' />
                 <p className='mt-4 text-[13px] text-slate-400'>
                   Recording is on — sessions appear here as people work.
                 </p>
               </div>
             )
           ) : (
-            <div className='mx-auto max-w-3xl px-6 py-5'>
+            <div className='px-6 py-5'>
               <div className='mb-4 flex items-baseline gap-3'>
                 <h2 className='text-[15px] font-semibold text-slate-900 dark:text-foreground'>
                   {selected.name}
