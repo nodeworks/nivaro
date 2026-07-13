@@ -30,7 +30,7 @@ function PasswordLoginForm() {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password })
       })
       if (res.ok) {
         const body = (await res.json().catch(() => null)) as { totp_required?: boolean } | null
@@ -204,6 +204,18 @@ export function LoginPage() {
   const redirectTo = params.get('redirect')
   const totpStep = params.get('totp') === '1'
   const [tab, setTab] = usePersistedTab<'microsoft' | 'password'>('nvr_tab_login', 'microsoft')
+  const [providers, setProviders] = useState<{
+    oidc: { enabled: boolean; label: string }
+    saml: { enabled: boolean; label: string }
+  } | null>(null)
+  useEffect(() => {
+    fetch('/api/auth/providers')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setProviders(d?.data ?? null))
+      .catch(() => {})
+  }, [])
+  const oidcLabel = providers?.oidc.label ?? 'Microsoft'
+  const isMicrosoft = oidcLabel.toLowerCase() === 'microsoft'
 
   useEffect(() => {
     if (redirectTo) sessionStorage.setItem('nivaro_post_login_redirect', redirectTo)
@@ -381,11 +393,15 @@ export function LoginPage() {
                   className='flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors'
                   style={
                     tab === 'microsoft'
-                      ? { background: 'white', color: '#0f172a', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }
+                      ? {
+                          background: 'white',
+                          color: '#0f172a',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
+                        }
                       : { color: '#64748b' }
                   }
                 >
-                  Microsoft
+                  {oidcLabel}
                 </button>
                 <button
                   type='button'
@@ -393,7 +409,11 @@ export function LoginPage() {
                   className='flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors'
                   style={
                     tab === 'password'
-                      ? { background: 'white', color: '#0f172a', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }
+                      ? {
+                          background: 'white',
+                          color: '#0f172a',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
+                        }
                       : { color: '#64748b' }
                   }
                 >
@@ -412,11 +432,20 @@ export function LoginPage() {
                   <a
                     href='/api/auth/login'
                     className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
-                    style={{ background: '#0078d4' }}
+                    style={{ background: isMicrosoft ? '#0078d4' : '#0f172a' }}
                   >
-                    <MicrosoftIcon />
-                    Continue with Microsoft
+                    {isMicrosoft ? <MicrosoftIcon /> : <KeyIcon />}
+                    Continue with {oidcLabel}
                   </a>
+                  {providers?.saml.enabled && (
+                    <a
+                      href='/api/auth/saml/login'
+                      className='mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
+                    >
+                      <KeyIcon dark />
+                      Continue with {providers.saml.label}
+                    </a>
+                  )}
                   <p className='mt-6 text-center text-[12px] leading-relaxed text-slate-400'>
                     Access is restricted to authorized users. If you need access, contact your
                     administrator.
@@ -443,6 +472,24 @@ function NivaroMark({ size = 24, color = 'currentColor' }: { size?: number; colo
       <rect x='2' y='2' width='6' height='20' fill={color} />
       <rect x='16' y='2' width='6' height='20' fill={color} />
       <polygon points='8,2 12.5,2 16,22 11.5,22' fill={color} />
+    </svg>
+  )
+}
+
+function KeyIcon({ dark = false }: { dark?: boolean }) {
+  return (
+    <svg
+      width='16'
+      height='16'
+      viewBox='0 0 24 24'
+      fill='none'
+      stroke={dark ? '#334155' : 'white'}
+      strokeWidth='2'
+      strokeLinecap='round'
+      strokeLinejoin='round'
+      aria-hidden='true'
+    >
+      <path d='M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4' />
     </svg>
   )
 }

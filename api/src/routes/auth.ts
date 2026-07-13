@@ -82,6 +82,25 @@ export async function authRoutes(app: FastifyInstance) {
   )
 
   // Initiate OIDC login
+  // Public provider discovery — drives the login page buttons. The OIDC flow
+  // works with any compliant issuer; OIDC_PROVIDER_LABEL rebrands the button
+  // (default 'Microsoft' for backwards compatibility).
+  app.get('/providers', async (_req, reply) => {
+    return reply.send({
+      data: {
+        oidc: {
+          enabled: true,
+          label: process.env.OIDC_PROVIDER_LABEL ?? 'Microsoft'
+        },
+        saml: {
+          enabled: samlEnabled(),
+          label: process.env.SAML_PROVIDER_LABEL ?? 'SSO'
+        },
+        password: { enabled: true }
+      }
+    })
+  })
+
   app.get('/login', async (req, reply) => {
     const state = generateState()
     const codeVerifier = generateCodeVerifier()

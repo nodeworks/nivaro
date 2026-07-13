@@ -37,9 +37,18 @@ export async function handleCallback(requestUrl: URL, state: string, codeVerifie
 
   const claims = tokens.claims()
 
+  // Generic-issuer claim tolerance: Microsoft uses email/upn, others commonly
+  // put the address in preferred_username. Only accept it when it looks like
+  // an email — some IdPs put opaque usernames there.
+  const emailish = (v: unknown): string | null =>
+    typeof v === 'string' && /.+@.+\..+/.test(v) ? v : null
   return {
     sub: claims?.sub ?? '',
-    email: (claims?.email as string | undefined) ?? '',
+    email:
+      emailish(claims?.email) ??
+      emailish(claims?.upn) ??
+      emailish(claims?.preferred_username) ??
+      '',
     name: (claims?.name as string | undefined) ?? '',
     given_name: (claims?.given_name as string | undefined) ?? null,
     family_name: (claims?.family_name as string | undefined) ?? null,
