@@ -94,6 +94,15 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'POST', path: '/api/ai/proposals/:id/reject' },
   { method: 'POST', path: '/api/ai/navigate' },
 
+  // Batch 4 (2026-07): record graph, pipeline flow map + replay, web push
+  { method: 'GET', path: '/api/record-graph/:collection/:id' },
+  { method: 'GET', path: '/api/pipelines/:id/flow-map' },
+  { method: 'GET', path: '/api/pipelines/:id/replay' },
+  { method: 'GET', path: '/api/push/vapid-public-key' },
+  { method: 'POST', path: '/api/push/subscribe' },
+  { method: 'POST', path: '/api/push/unsubscribe' },
+  { method: 'GET', path: '/api/push/status' },
+
   // Operations tooling (2026-07 batch)
   { method: 'GET', path: '/api/files/:id/usage' },
   { method: 'GET', path: '/api/files/usage/orphans' },

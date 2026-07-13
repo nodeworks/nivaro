@@ -22,7 +22,7 @@ export const aiChatDocs: DocSection = {
       type: 'ul',
       items: [
         'Tools: list_collections, query_items (items service — RLS applies), aggregate (refuses when the user is row-filtered), semantic_search (hits intersected with the permission-checked read).',
-        'Read-only by design — the model cannot create, update, or delete.',
+        'Reads are direct; mutations only ever happen through the proposal gate (see AI Actions & Dashboards) — the model can never write without your approval.',
         'Every answer shows the tool trace: exactly which queries produced it.',
         'Uses the model configured in Settings → AI Features.'
       ]
@@ -91,7 +91,7 @@ export const scheduledReportsDocs: DocSection = {
       items: [
         'Recipients get the PDF as an attachment; subject carries the date.',
         'Send now runs the same path as the cron for instant verification.',
-        "Reports run as their creator — configure recipients knowing what the report exposes.",
+        'Reports run as their creator — configure recipients knowing what the report exposes.',
         'New schedules activate on the next server restart (crons register at boot); Send now works immediately.'
       ]
     }

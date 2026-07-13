@@ -131,6 +131,12 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Provider-Agnostic SSO** — any OIDC issuer plus SAML 2.0, discovery-driven login page
 - **Admin i18n** — translated admin shell (EN/ES/DE/FR) with an incremental extraction pattern
 - **Operations Tooling** — automatic error tracking into the issue log, logical backup export, content promotion between instances, file usage/orphan tracking, permission simulator, and an interactive data-model ERD
+- **AI-Generated Dashboards** — ask the chat for a dashboard; approve a widget-by-widget preview and it builds the real thing
+- **Browser Push Notifications** — native web push (VAPID, zero-setup keys) so notifications reach you with the tab closed
+- **Record Graph Explorer** — radial map of any record's relation neighborhood, click to explore hop by hop
+- **Pipeline Flow Map & Replay** — Sankey of transition volumes (send-backs in red) and a time-lapse of backlog moving through states
+- **Wallboard & Pulse** — chrome-free TV dashboard rotating across queues, and a live activity stream with per-minute pulse
+- **Voice on Ask AI** — dictate questions and have answers read back
 - **Full SDK Coverage** — ~175 typed SDK commands spanning every feature area, explorable in the in-browser SDK playground
 
 ---

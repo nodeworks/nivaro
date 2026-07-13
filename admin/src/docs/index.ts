@@ -14,6 +14,7 @@ export * from './sections/field-display.js'
 export * from './sections/field-rules.js'
 export * from './sections/graphql.js'
 export * from './sections/integrations.js'
+export * from './sections/live-ops.js'
 export * from './sections/low-code.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
@@ -172,6 +173,13 @@ import {
   integrationsParallelBranches,
   integrationsSyncJobs
 } from './sections/integrations.js'
+import {
+  aiActionsDocs,
+  flowMapReplayDocs,
+  recordGraphDocs,
+  wallboardPulseDocs,
+  webPushDocs
+} from './sections/live-ops.js'
 import {
   lowCodeFormulaBuilder,
   lowCodePageBuilder,
@@ -391,6 +399,7 @@ export const navSections: NavGroup[] = [
     id: 'pipeline-engine',
     label: 'Pipeline Engine',
     items: [
+      flowMapReplayDocs,
       pipelineSimulatorDocs,
       pipelineOverview,
       pipelineDimensions,
@@ -505,6 +514,7 @@ export const navSections: NavGroup[] = [
     label: 'AI Features',
     items: [
       aiChatDocs,
+      aiActionsDocs,
       aiOverview,
       aiGenerate,
       aiSummarize,
@@ -655,6 +665,7 @@ export const navSections: NavGroup[] = [
       collabUserActivityFeed,
       collabKeyboardShortcuts,
       collabSmsPush,
+      webPushDocs,
       collabMessageActions
     ]
   },
@@ -681,6 +692,8 @@ export const navSections: NavGroup[] = [
     label: 'Observability',
     items: [
       obsApiAnalytics,
+      wallboardPulseDocs,
+      recordGraphDocs,
       obsHealthDashboard,
       obsDataQuality,
       obsIssueLog,

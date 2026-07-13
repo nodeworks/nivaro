@@ -264,7 +264,6 @@ export function sendTestMail(to: string): Command<{ data: { sent: boolean } }> {
   return cmd('POST', '/mail/test', undefined, { to })
 }
 
-
 // ─── Permission simulator ─────────────────────────────────────────────────────
 
 export interface PermissionSimulation {
@@ -351,7 +350,6 @@ export function reportClientError(input: {
   return cmd('POST', '/issues/client', undefined, input)
 }
 
-
 // ─── Pipeline simulator ───────────────────────────────────────────────────────
 
 export interface PipelineSimulation {
@@ -366,8 +364,18 @@ export interface PipelineSimulation {
     is_initial: boolean
     is_terminal: boolean
     is_current: boolean
-    owners: Array<{ id: string; email: string; first_name: string | null; last_name: string | null }>
-    sla_rule: { name: string; duration_hours: number; warning_threshold_pct: number; business_hours_only: boolean } | null
+    owners: Array<{
+      id: string
+      email: string
+      first_name: string | null
+      last_name: string | null
+    }>
+    sla_rule: {
+      name: string
+      duration_hours: number
+      warning_threshold_pct: number
+      business_hours_only: boolean
+    } | null
   }>
   transitions: Array<{
     id: string
@@ -379,7 +387,13 @@ export interface PipelineSimulation {
     role_pass: boolean
     available: boolean
     required_roles: string[]
-    condition_rules: Array<{ field: string; op: string; value: unknown; record_value: unknown; passed: boolean }>
+    condition_rules: Array<{
+      field: string
+      op: string
+      value: unknown
+      record_value: unknown
+      passed: boolean
+    }>
   }>
 }
 
@@ -397,7 +411,10 @@ export function simulatePipeline(
 export function readFieldImpact(
   collection: string,
   field: string
-): Command<{ data: Array<{ source: string; label: string; detail: string; link: string | null }>; total: number }> {
+): Command<{
+  data: Array<{ source: string; label: string; detail: string; link: string | null }>
+  total: number
+}> {
   return cmd('GET', `/data-model/${collection}/fields/${field}/impact`)
 }
 
@@ -446,7 +463,6 @@ export function runScheduledReport(id: number): Command<{ data: { sent: number }
   return cmd('POST', `/scheduled-reports/${id}/run`)
 }
 
-
 // ─── Record timeline ──────────────────────────────────────────────────────────
 
 export interface TimelineEvent {
@@ -459,7 +475,10 @@ export interface TimelineEvent {
 }
 
 /** Unified chronological history for one record. */
-export function readTimeline(collection: string, item: string | number): Command<{ data: TimelineEvent[] }> {
+export function readTimeline(
+  collection: string,
+  item: string | number
+): Command<{ data: TimelineEvent[] }> {
   return cmd('GET', `/timeline/${collection}/${item}`)
 }
 
@@ -486,7 +505,10 @@ export function createShareLink(data: {
   return cmd('POST', '/share-links/', undefined, data)
 }
 
-export function listShareLinks(collection: string, item: string | number): Command<{ data: ShareLink[] }> {
+export function listShareLinks(
+  collection: string,
+  item: string | number
+): Command<{ data: ShareLink[] }> {
   return cmd('GET', `/share-links/for/${collection}/${item}`)
 }
 
@@ -497,11 +519,71 @@ export function revokeShareLink(id: UUID): Command<void> {
 // ─── Blueprints ───────────────────────────────────────────────────────────────
 
 /** Export a schema+workflow+layout+queue bundle for a collection set. Admin only. */
-export function exportBlueprint(name: string, collections: string[]): Command<{ data: Record<string, unknown> }> {
+export function exportBlueprint(
+  name: string,
+  collections: string[]
+): Command<{ data: Record<string, unknown> }> {
   return cmd('POST', '/blueprints/export', undefined, { name, collections })
 }
 
 /** Install a blueprint artifact idempotently. Admin only. */
-export function installBlueprint(blueprint: Record<string, unknown>): Command<{ data: Record<string, unknown> }> {
+export function installBlueprint(
+  blueprint: Record<string, unknown>
+): Command<{ data: Record<string, unknown> }> {
   return cmd('POST', '/blueprints/install', undefined, { blueprint })
+}
+
+// ─── Record graph ─────────────────────────────────────────────────────────────
+
+export interface RecordGraphNode {
+  collection: string
+  id: string
+  label: string
+}
+
+export interface RecordGraphEdge {
+  kind: 'm2o' | 'o2m' | 'm2m'
+  via: string
+  node: RecordGraphNode
+}
+
+/** One record's relation neighborhood: M2O parents, O2M children, M2M partners. */
+export function readRecordGraph(
+  collection: string,
+  item: string | number
+): Command<{ data: { node: RecordGraphNode; edges: RecordGraphEdge[]; truncated: boolean } }> {
+  return cmd('GET', `/record-graph/${collection}/${item}`)
+}
+
+// ─── Pipeline flow map & replay ───────────────────────────────────────────────
+
+export interface PipelineFlowEdge {
+  from: string
+  to: string
+  count: number
+  back: boolean
+}
+
+export interface PipelineFlowState {
+  id: string
+  label: string
+  color: string | null
+}
+
+/** Aggregated transition volumes between a pipeline's states (Sankey data). */
+export function readPipelineFlowMap(
+  templateId: string,
+  days?: number
+): Command<{ data: { states: PipelineFlowState[]; flows: PipelineFlowEdge[]; days: number } }> {
+  return cmd('GET', `/pipelines/${templateId}/flow-map`, days ? { days } : undefined)
+}
+
+/** Daily per-state record counts over time (time-lapse replay frames). */
+export function readPipelineReplay(
+  templateId: string,
+  days?: number
+): Command<{
+  data: { states: Array<Record<string, unknown>>; days: Array<Record<string, unknown>> }
+}> {
+  return cmd('GET', `/pipelines/${templateId}/replay`, days ? { days } : undefined)
 }
