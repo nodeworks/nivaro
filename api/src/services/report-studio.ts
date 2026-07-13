@@ -132,7 +132,7 @@ export async function physicalColumns(table: string): Promise<Set<string>> {
   return cols
 }
 
-async function isRegisteredBusinessCollection(name: string): Promise<boolean> {
+export async function isRegisteredBusinessCollection(name: string): Promise<boolean> {
   if (!/^[a-zA-Z0-9_]+$/.test(name) || name.startsWith('nivaro_') || name.startsWith('directus_'))
     return false
   const row = await db('nivaro_collections').where({ collection: name }).first()

@@ -3,9 +3,11 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { can } from '../services/permissions.js'
 import {
   type DateRange,
   type EntityFilter,
+  isRegisteredBusinessCollection,
   parseJson,
   physicalColumns,
   resolveWidgetData,
@@ -510,6 +512,17 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
       const field = String(req.query.field ?? '')
       if (!/^[a-zA-Z0-9_]+$/.test(field)) return reply.code(400).send({ error: 'Invalid field' })
+      // Never enumerate credential-like columns, even on business tables
+      if (/token|secret|password|hash|totp|key/i.test(field)) {
+        return reply.code(400).send({ error: 'Field not filterable' })
+      }
+      // Only fields the report owner actually pinned to the filter bar
+      const filterBar =
+        parseJson<{ filter_bar?: Array<{ field: string }> }>(report.global_filters)?.filter_bar ??
+        []
+      if (!filterBar.some((f) => f.field === field)) {
+        return reply.code(400).send({ error: 'Field is not on this report’s filter bar' })
+      }
 
       const widgets = (await db('nivaro_report_widgets')
         .where({ report: report.id })
@@ -518,6 +531,9 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       const seen = new Map<string, string>()
       for (const col of collections) {
         try {
+          // registered business collections the VIEWER can read — nothing else
+          if (!(await isRegisteredBusinessCollection(col))) continue
+          if (!(await can(req.user!, 'read', col))) continue
           const valid = await physicalColumns(col)
           if (!valid.has(field)) continue
           const rows = (await db(col)
