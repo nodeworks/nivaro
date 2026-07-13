@@ -31,7 +31,7 @@ import {
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { api, type Collection } from '@/lib/api'
-import { formatDate, titleCase } from '@/lib/utils'
+import { cn, formatDate, titleCase } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,6 +60,7 @@ interface SubmissionForm {
   rate_limit_per_hour: number
   is_active: boolean
   success_message: string | null
+  layout_id?: number | null
   created_at: string
   updated_at: string
   submission_count: number
@@ -453,9 +454,22 @@ export function SubmissionFormEditPage() {
       setRateLimit(form.rate_limit_per_hour)
       setIsActive(form.is_active)
       setSuccessMessage(form.success_message ?? '')
+      setLayoutId(form.layout_id ?? null)
       setInitialized(true)
     }
   }, [form, initialized])
+
+  const [layoutId, setLayoutId] = useState<number | null>(null)
+  const { data: collectionLayouts = [] } = useQuery({
+    queryKey: ['collection-layouts', collection],
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{ id: number; name: string; layout_type?: string; tab_mode?: string }>
+        }>('/collection-layouts', { params: { collection } })
+        .then((r) => r.data.data.filter((l) => (l.layout_type ?? 'grouped') === 'grouped')),
+    enabled: !!collection
+  })
 
   const { data: subsData } = useQuery({
     queryKey: ['submission-form-subs', id, subsPage],
@@ -596,8 +610,8 @@ export function SubmissionFormEditPage() {
       toast.error('Collection is required')
       return
     }
-    if (fields.length === 0) {
-      toast.error('At least one field is required')
+    if (fields.length === 0 && layoutId == null) {
+      toast.error('At least one field is required (or pick a layout)')
       return
     }
 
@@ -610,7 +624,8 @@ export function SubmissionFormEditPage() {
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
       rate_limit_per_hour: rateLimit,
       is_active: isActive,
-      success_message: successMessage.trim() || null
+      success_message: successMessage.trim() || null,
+      layout_id: layoutId
     }
 
     if (isNew) {
@@ -948,6 +963,42 @@ export function SubmissionFormEditPage() {
                 </div>
 
                 <div className='space-y-1.5'>
+                  <Label>Layout (optional)</Label>
+                  <p className='mb-1.5 text-[11px] text-muted-foreground'>
+                    Back this form with a grouped layout — its sections render as form sections (or
+                    a step wizard when the layout uses steps), with field visibility rules applied.
+                    The flat field list below is ignored while a layout is set.
+                  </p>
+                  <div className='mb-4 flex flex-wrap gap-1.5'>
+                    <button
+                      type='button'
+                      onClick={() => setLayoutId(null)}
+                      className={cn(
+                        'rounded-full px-2.5 py-1 text-[11px] font-medium',
+                        layoutId == null
+                          ? 'bg-[#00ceff1a] text-nvr-navy dark:text-[#00ceff]'
+                          : 'bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-muted'
+                      )}
+                    >
+                      None (flat fields)
+                    </button>
+                    {collectionLayouts.map((l) => (
+                      <button
+                        key={l.id}
+                        type='button'
+                        onClick={() => setLayoutId(l.id)}
+                        className={cn(
+                          'rounded-full px-2.5 py-1 text-[11px] font-medium',
+                          layoutId === l.id
+                            ? 'bg-[#00ceff1a] text-nvr-navy dark:text-[#00ceff]'
+                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-muted'
+                        )}
+                      >
+                        {l.name}
+                        {l.tab_mode === 'steps' ? ' · steps' : ''}
+                      </button>
+                    ))}
+                  </div>
                   <Label htmlFor='sf-rate'>Rate limit per IP / hour</Label>
                   <Input
                     id='sf-rate'

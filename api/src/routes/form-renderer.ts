@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { type FormLayoutField, type FormLayoutStructure, loadFormLayout } from '../services/form-layout.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -101,6 +102,48 @@ function renderField(path: string, cfg: FieldConfig, dbType: string): string {
 </div>`
 }
 
+function renderLayoutField(f: FormLayoutField): string {
+  const visAttr = f.visibility?.length
+    ? ` data-vis='${escHtml(JSON.stringify(f.visibility))}'`
+    : ''
+  const reqAttr = f.required ? ' required' : ''
+  const reqMark = f.required ? '<span class="req" aria-hidden="true">*</span>' : ''
+  const safeName = escHtml(f.path.replace(/\./g, '__'))
+  const label = escHtml(f.label)
+  const placeholder = escHtml(f.placeholder ?? '')
+
+  if (f.choices) {
+    const opts = f.choices
+      .map((c) => `<option value="${escHtml(c.value)}">${escHtml(c.text)}</option>`)
+      .join('')
+    return `<div class="field"${visAttr}>
+  <label for="f_${safeName}">${label}${reqMark}</label>
+  <select id="f_${safeName}" name="${safeName}" data-path="${escHtml(f.path)}"${reqAttr}>
+    <option value="">${placeholder || 'Select…'}</option>${opts}
+  </select>
+</div>`
+  }
+  const widget = guessWidget(f.path, f.db_type)
+  if (widget === 'checkbox') {
+    return `<div class="field"${visAttr}>
+  <div class="field-cb">
+    <input type="checkbox" id="f_${safeName}" name="${safeName}" data-path="${escHtml(f.path)}"${reqAttr}>
+    <label for="f_${safeName}">${label}${reqMark}</label>
+  </div>
+</div>`
+  }
+  if (widget === 'textarea') {
+    return `<div class="field"${visAttr}>
+  <label for="f_${safeName}">${label}${reqMark}</label>
+  <textarea id="f_${safeName}" name="${safeName}" data-path="${escHtml(f.path)}" placeholder="${placeholder}"${reqAttr}></textarea>
+</div>`
+  }
+  return `<div class="field"${visAttr}>
+  <label for="f_${safeName}">${label}${reqMark}</label>
+  <input type="${escHtml(widget)}" id="f_${safeName}" name="${safeName}" data-path="${escHtml(f.path)}" placeholder="${placeholder}"${reqAttr}>
+</div>`
+}
+
 function buildHtml(params: {
   token: string
   formName: string
@@ -109,8 +152,10 @@ function buildHtml(params: {
   fieldTypes: Record<string, string>
   hasPassword: boolean
   successMessage: string
+  layout?: FormLayoutStructure | null
 }): string {
-  const { token, formName, formConfig, fields, fieldTypes, hasPassword, successMessage } = params
+  const { token, formName, formConfig, fields, fieldTypes, hasPassword, successMessage, layout } = params
+  const steps = layout?.tab_mode === 'steps' && layout.sections.length > 1
 
   const heading = escHtml(formConfig.heading || formName)
   const description = formConfig.description
@@ -127,9 +172,34 @@ function buildHtml(params: {
 </div>`
     : ''
 
-  const fieldsHtml = fields
-    .map((f) => renderField(f, fieldCfgs[f] || {}, fieldTypes[f] || ''))
-    .join('\n')
+  const fieldsHtml = layout
+    ? layout.sections
+        .map((sec, i) => {
+          const inner = sec.fields.map(renderLayoutField).join('\n')
+          const title = sec.label ? `<h2 class="sec-title">${escHtml(sec.label)}</h2>` : ''
+          if (steps) {
+            return `<div class="step" data-step="${i}"${i > 0 ? ' hidden' : ''}>${title}${inner}</div>`
+          }
+          return `<section class="sec">${title}${inner}</section>`
+        })
+        .join('\n')
+    : fields.map((f) => renderField(f, fieldCfgs[f] || {}, fieldTypes[f] || '')).join('\n')
+
+  const stepsBar = steps
+    ? `<div class="steps-bar">${(layout?.sections ?? [])
+        .map(
+          (sec, i) =>
+            `<div class="step-dot${i === 0 ? ' active' : ''}" data-dot="${i}"><span>${i + 1}</span>${sec.label ? escHtml(sec.label) : `Step ${i + 1}`}</div>`
+        )
+        .join('')}</div>`
+    : ''
+
+  const stepControls = steps
+    ? `<div class="step-nav">
+  <button type="button" class="step-btn back" id="step-back" hidden>Back</button>
+  <button type="button" class="step-btn next" id="step-next">Next</button>
+</div>`
+    : ''
 
   const submitJs = `(function(){
 var TOKEN=${escJson(token)};
@@ -137,8 +207,62 @@ var SUBMIT_URL='/api/submission-forms/public/'+TOKEN;
 var HAS_PW=${escJson(hasPassword)};
 var SUBMIT_LABEL=${escJson(formConfig.submit_label || 'Submit')};
 var SUCCESS_MSG=${escJson(successMessage)};
+var STEPS=${escJson(!!steps)};
 var form=document.getElementById('sf');
 var msgEl=document.getElementById('msg');
+// ── Visibility rules ──
+function fieldVal(path){var el=form.querySelector('[data-path="'+path+'"]');if(!el)return null;return el.type==='checkbox'?el.checked:el.value;}
+function ruleMatch(r){var v=fieldVal(r.when);switch(r.op){
+  case 'eq':return String(v)===String(r.value);
+  case 'neq':return String(v)!==String(r.value);
+  case 'null':return v===null||v===''||v===false;
+  case 'nnull':return !(v===null||v===''||v===false);
+  case 'contains':return String(v||'').indexOf(String(r.value))>=0;
+  case 'in':return Array.isArray(r.value)&&r.value.map(String).indexOf(String(v))>=0;
+  default:return true;}}
+function applyVisibility(){form.querySelectorAll('[data-vis]').forEach(function(w){
+  var rules;try{rules=JSON.parse(w.getAttribute('data-vis'))}catch(e){return}
+  var visible=true;
+  rules.forEach(function(r){var m=ruleMatch(r);
+    if(r.action==='show'&&!m)visible=false;
+    if(r.action==='hide'&&m)visible=false;});
+  w.hidden=!visible;
+  w.querySelectorAll('input,select,textarea').forEach(function(el){el.disabled=!visible;});
+});}
+form.addEventListener('input',applyVisibility);
+form.addEventListener('change',applyVisibility);
+applyVisibility();
+// ── Step wizard ──
+var curStep=0;
+function stepEls(){return Array.prototype.slice.call(form.querySelectorAll('.step'));}
+function showStep(i){var els=stepEls();if(!els.length)return;
+  curStep=Math.max(0,Math.min(i,els.length-1));
+  els.forEach(function(el,idx){el.hidden=idx!==curStep;});
+  document.querySelectorAll('.step-dot').forEach(function(d,idx){
+    d.classList.toggle('active',idx===curStep);
+    d.classList.toggle('done',idx<curStep);});
+  var back=document.getElementById('step-back');
+  var next=document.getElementById('step-next');
+  var submit=form.querySelector('.submit');
+  if(back)back.hidden=curStep===0;
+  if(next)next.hidden=curStep===els.length-1;
+  if(submit&&STEPS)submit.hidden=curStep!==els.length-1;
+  applyVisibility();}
+function stepValid(){var els=stepEls();if(!els.length)return true;
+  var bad=null;
+  els[curStep].querySelectorAll('[required]').forEach(function(el){
+    if(el.disabled||el.closest('[hidden]'))return;
+    var v=el.type==='checkbox'?el.checked:el.value;
+    if(!v&&bad===null)bad=el;});
+  if(bad){bad.focus();bad.classList.add('invalid');setTimeout(function(){bad.classList.remove('invalid')},1200);return false;}
+  return true;}
+if(STEPS){
+  var nextBtn=document.getElementById('step-next');
+  var backBtn=document.getElementById('step-back');
+  if(nextBtn)nextBtn.addEventListener('click',function(){if(stepValid())showStep(curStep+1);});
+  if(backBtn)backBtn.addEventListener('click',function(){showStep(curStep-1);});
+  showStep(0);
+}
 function showMsg(text,type){msgEl.textContent=text;msgEl.className='msg '+type;msgEl.hidden=false;}
 function hideMsg(){msgEl.hidden=true;}
 form.addEventListener('submit',async function(e){
@@ -146,8 +270,10 @@ form.addEventListener('submit',async function(e){
   var btn=form.querySelector('.submit');
   btn.disabled=true;btn.textContent='Submitting…';
   hideMsg();
+  if(STEPS&&!stepValid()){btn.disabled=false;btn.textContent=SUBMIT_LABEL;return;}
   var data={};
   form.querySelectorAll('[data-path]').forEach(function(el){
+    if(el.disabled)return;
     var path=el.getAttribute('data-path');
     data[path]=el.type==='checkbox'?el.checked:el.value;
   });
@@ -231,6 +357,21 @@ form.addEventListener('submit',async function(e){
     }
     .submit:hover{background:var(--accent-h)}
     .submit:disabled{opacity:.55;cursor:not-allowed}
+    .sec{margin-bottom:8px}
+    .sec-title{font-size:14px;font-weight:600;margin:20px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+    .field select{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font:inherit;color:var(--text);background:var(--bg);outline:none}
+    .field select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,206,255,.12)}
+    .field.invalid input,.field input.invalid,select.invalid,textarea.invalid,input.invalid{border-color:var(--err);box-shadow:0 0 0 3px rgba(239,68,68,.12)}
+    .steps-bar{display:flex;gap:4px;margin-bottom:24px;flex-wrap:wrap}
+    .step-dot{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);padding:4px 10px 4px 4px;border-radius:999px;background:var(--surface)}
+    .step-dot span{display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--border);font-weight:600;font-size:10px}
+    .step-dot.active{color:var(--text);background:rgba(0,206,255,.1)}
+    .step-dot.active span{background:var(--accent);color:#172940}
+    .step-dot.done span{background:var(--ok);color:#fff}
+    .step-nav{display:flex;justify-content:space-between;gap:8px;margin-bottom:14px}
+    .step-btn{padding:9px 18px;border-radius:var(--r);font:600 13px/1 inherit;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--text)}
+    .step-btn.next{margin-left:auto;background:var(--accent);border-color:var(--accent);color:#172940}
+    .step-btn.next:hover{background:var(--accent-h)}
     .done{text-align:center;padding:48px 16px}
     .done-icon{font-size:36px;margin-bottom:12px;color:var(--ok)}
     .done-title{font-size:18px;font-weight:600;margin-bottom:8px}
@@ -243,10 +384,12 @@ form.addEventListener('submit',async function(e){
     <h1 class="form-title">${heading}</h1>
     ${description}
     <div id="msg" class="msg" role="alert" aria-live="polite" hidden></div>
+    ${stepsBar}
     <form id="sf" novalidate>
       ${passwordBlock}
       ${fieldsHtml}
-      <button type="submit" class="submit">${submitLabel}</button>
+      ${stepControls}
+      <button type="submit" class="submit"${steps ? ' hidden' : ''}>${submitLabel}</button>
     </form>
   </div>
 </div>
@@ -306,12 +449,19 @@ export async function formRendererRoutes(app: FastifyInstance) {
       }
     }
 
+    // Layout-backed form: resolve the referenced grouped layout; fall back to
+    // the flat fields list when missing/invalid.
+    const layout = form.layout_id
+      ? await loadFormLayout(Number(form.layout_id), form.collection as string)
+      : null
+
     const html = buildHtml({
       token: form.token as string,
       formName: form.name as string,
       formConfig,
       fields,
       fieldTypes,
+      layout,
       hasPassword: !!form.password_hash,
       successMessage:
         (form.success_message as string) || 'Thank you! Your submission has been received.'

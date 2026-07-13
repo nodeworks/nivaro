@@ -101,6 +101,7 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       rate_limit_per_hour?: number
       is_active?: boolean
       success_message?: string | null
+      layout_id?: number | null
     }
 
     if (!body.name?.trim()) return reply.code(400).send({ error: 'name is required' })
@@ -125,6 +126,7 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       rate_limit_per_hour: body.rate_limit_per_hour ?? 60,
       is_active: body.is_active !== false ? 1 : 0,
       success_message: body.success_message ?? null,
+      layout_id: body.layout_id ?? null,
       created_by: req.user?.id ?? null,
       created_at: new Date(),
       updated_at: new Date()
@@ -162,9 +164,11 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
         rate_limit_per_hour?: number
         is_active?: boolean
         success_message?: string | null
+        layout_id?: number | null
       }
 
       const patch: Record<string, unknown> = { updated_at: new Date() }
+      if (body.layout_id !== undefined) patch.layout_id = body.layout_id
       if (body.name !== undefined) patch.name = body.name.trim()
       if (body.collection !== undefined) patch.collection = body.collection.trim()
       if (body.fields !== undefined) patch.fields = toJsonStr(body.fields)
@@ -297,11 +301,18 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Form not found' })
     }
 
+    let layout = null
+    if (form.layout_id) {
+      const { loadFormLayout } = await import('../services/form-layout.js')
+      layout = await loadFormLayout(Number(form.layout_id), form.collection as string)
+    }
+
     return reply.send({
       data: {
         name: form.name,
         collection: form.collection,
-        fields: parseJson<string[]>(form.fields) ?? [],
+        fields: layout ? layout.field_paths : (parseJson<string[]>(form.fields) ?? []),
+        layout,
         success_message: form.success_message ?? null,
         has_password: !!form.password_hash
       }
@@ -350,8 +361,14 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Form not found' })
     }
 
-    // Whitelist submitted data against allowed fields
-    const allowedFields = parseJson<string[]>(form.fields) ?? []
+    // Whitelist submitted data against allowed fields — the layout's field
+    // set when a layout backs this form, else the flat fields list.
+    let allowedFields = parseJson<string[]>(form.fields) ?? []
+    if (form.layout_id) {
+      const { loadFormLayout } = await import('../services/form-layout.js')
+      const layout = await loadFormLayout(Number(form.layout_id), form.collection as string)
+      if (layout) allowedFields = layout.field_paths
+    }
     const submittedData = body.data ?? {}
     const filteredData: Record<string, unknown> = {}
     for (const field of allowedFields) {
