@@ -120,6 +120,18 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/session-recordings/' },
   { method: 'GET', path: '/api/session-recordings/:id/events' },
 
+  // Report Studio (2026-07)
+  { method: 'GET', path: '/api/report-studio/' },
+  { method: 'POST', path: '/api/report-studio/' },
+  { method: 'GET', path: '/api/report-studio/:id' },
+  { method: 'PUT', path: '/api/report-studio/:id/widgets' },
+  { method: 'POST', path: '/api/report-studio/:id/widgets/:widgetId/data' },
+  { method: 'POST', path: '/api/report-studio/preview' },
+  { method: 'POST', path: '/api/report-studio/:id/clone' },
+  { method: 'PUT', path: '/api/report-studio/:id/subscription' },
+  { method: 'GET', path: '/api/report-studio/:id/alerts' },
+  { method: 'POST', path: '/api/report-studio/:id/alerts' },
+
   // Operations tooling (2026-07 batch)
   { method: 'GET', path: '/api/files/:id/usage' },
   { method: 'GET', path: '/api/files/usage/orphans' },

@@ -103,6 +103,12 @@ const BlueprintsPage = lazy(() =>
   import('@/pages/Blueprints').then((m) => ({ default: m.BlueprintsPage }))
 )
 const TrashPage = lazy(() => import('@/pages/Trash').then((m) => ({ default: m.TrashPage })))
+const ReportStudioPage = lazy(() =>
+  import('@/pages/ReportStudio').then((m) => ({ default: m.ReportStudioPage }))
+)
+const ReportStudioEditPage = lazy(() =>
+  import('@/pages/ReportStudioEdit').then((m) => ({ default: m.ReportStudioEditPage }))
+)
 const SessionReplaysPage = lazy(() =>
   import('@/pages/SessionReplays').then((m) => ({ default: m.SessionReplaysPage }))
 )
@@ -390,6 +396,8 @@ export default function App() {
                   <Route path='blueprints' element={<BlueprintsPage />} />
                   <Route path='trash' element={<TrashPage />} />
                   <Route path='session-replays' element={<SessionReplaysPage />} />
+                  <Route path='report-studio' element={<ReportStudioPage />} />
+                  <Route path='report-studio/:id' element={<ReportStudioEditPage />} />
                   <Route path='pulse' element={<PulsePage />} />
                   <Route path='scheduled-reports' element={<ScheduledReportsPage />} />
                   <Route path='blackout-dates' element={<BlackoutDatesPage />} />

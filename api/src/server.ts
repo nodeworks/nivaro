@@ -304,6 +304,33 @@ export async function buildServer() {
       }
     }
     scheduleReports()
+
+    // ── Report Studio — hourly alert checks + daily/weekly subscription mail ──
+    app.cron.schedule('report-studio-alerts', '0 * * * *', async () => {
+      try {
+        const { runReportAlertChecks } = await import('./services/report-studio-jobs.js')
+        const r = await runReportAlertChecks(app)
+        if (r.fired || r.resolved) app.log.info(r, '[report-studio] alert pass')
+      } catch (err) {
+        app.log.warn({ err }, '[report-studio] alert cron failed')
+      }
+    })
+    app.cron.schedule('report-studio-daily', '0 7 * * *', async () => {
+      try {
+        const { runReportSubscriptions } = await import('./services/report-studio-jobs.js')
+        await runReportSubscriptions(app, 'daily')
+      } catch (err) {
+        app.log.warn({ err }, '[report-studio] daily digest failed')
+      }
+    })
+    app.cron.schedule('report-studio-weekly', '0 7 * * 1', async () => {
+      try {
+        const { runReportSubscriptions } = await import('./services/report-studio-jobs.js')
+        await runReportSubscriptions(app, 'weekly')
+      } catch (err) {
+        app.log.warn({ err }, '[report-studio] weekly digest failed')
+      }
+    })
   })
 
   return app

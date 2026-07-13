@@ -97,6 +97,7 @@ import {
   dashboardLinkDocs,
   journeyTrailDocs,
   mergeDocs,
+  reportStudioDocs,
   schemaGraphDocs,
   sessionReplayDocs,
   spreadsheetDocs,
@@ -538,6 +539,7 @@ export const navSections: NavGroup[] = [
     id: 'monitoring',
     label: 'Monitoring & Automation',
     items: [
+      reportStudioDocs,
       scheduledReportsDocs,
       slaScheduleDocs,
       submissionFormsGuide,

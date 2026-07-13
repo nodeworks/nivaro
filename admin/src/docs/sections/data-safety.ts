@@ -211,3 +211,34 @@ function App() {
     }
   ]
 }
+
+export const reportStudioDocs: DocSection = {
+  id: 'report-studio',
+  label: 'Report Studio',
+  content: [
+    { type: 'h1', id: 'report-studio', text: 'Report Studio' },
+    {
+      type: 'p',
+      text: 'Compose reports as a drag-and-drop grid of widgets — KPIs, bar/line/donut charts, tables and section dividers — each defined by you over any collection: pick an aggregate (count, sum, avg, min, max), an optional group-by (a field, or a date bucketed by day/week/month), filters, and a date field the report-level date range applies to. Widgets preview live as you configure; layout saves automatically.'
+    },
+    { type: 'h2', id: 'report-studio-model', text: 'How widgets resolve' },
+    {
+      type: 'ul',
+      items: [
+        'Everything resolves server-side as the viewer — collection read permissions apply per widget, field names validate against the physical schema.',
+        'Group-by on a relation (M2O) field resolves display labels from the related collection automatically.',
+        'The report date range (this month, last 30 days, last N months, YTD) applies to each widget through its configured date field; widgets without one ignore it.',
+        'Share a report with everyone or scope it to a role; clone, export and import as JSON.'
+      ]
+    },
+    { type: 'h2', id: 'report-studio-subs', text: 'Subscriptions & alerts' },
+    {
+      type: 'ul',
+      items: [
+        'Subscribe for a daily (07:00) or weekly (Monday) email — the report renders fresh, server-side, as you, into a mail-safe HTML digest with KPIs, bars and tables, plus an in-app notification.',
+        'Alerts watch a KPI or table widget: conditions on its value or row count (gt/gte/lt/lte/eq, AND), checked hourly. An alert fires ONCE when crossed and resolves when back in range — the open firing entry is the cooldown, so it never re-spams.',
+        'Delivery per alert: in-app, email, or both. Toggle or delete any time; a firing badge shows live status.'
+      ]
+    }
+  ]
+}
