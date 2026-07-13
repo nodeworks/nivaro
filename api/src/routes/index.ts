@@ -65,6 +65,7 @@ import { backupsRoutes } from './backups.js'
 import { promotionRoutes } from './promotion.js'
 import { scheduledReportsRoutes } from './scheduled-reports.js'
 import { blueprintsRoutes } from './blueprints.js'
+import { mergeRoutes } from './merge.js'
 import { pushRoutes } from './push.js'
 import { recordGraphRoutes } from './record-graph.js'
 import { trashRoutes } from './trash.js'
@@ -168,6 +169,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(recordGraphRoutes, { prefix: '/record-graph' })
   await app.register(pushRoutes, { prefix: '/push' })
   await app.register(trashRoutes, { prefix: '/trash' })
+  await app.register(mergeRoutes, { prefix: '/merge' })
   await app.register(bulkActionsRoutes)
   await app.register(itemActionsRoutes)
   await app.register(extensionRegistryRoutes)

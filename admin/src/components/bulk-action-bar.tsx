@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { Loader2, Pencil, Play, Trash2, X } from 'lucide-react'
+import { GitMerge, Loader2, Pencil, Play, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { MergeSheet } from '@/components/merge-sheet'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -39,6 +40,7 @@ export function BulkActionBar({
   availableTransitions = []
 }: BulkActionBarProps) {
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [showMerge, setShowMerge] = useState(false)
   const [showUpdate, setShowUpdate] = useState(false)
   const [showTransition, setShowTransition] = useState(false)
   const [field, setField] = useState('')
@@ -283,6 +285,17 @@ export function BulkActionBar({
                   {action.label}
                 </Button>
               ))}
+              {count >= 2 && count <= 5 && (
+                <Button
+                  size='sm'
+                  variant='ghost'
+                  className='h-8 text-white/90 hover:bg-white/10 hover:text-white'
+                  onClick={() => setShowMerge(true)}
+                >
+                  <GitMerge className='mr-1.5 h-3.5 w-3.5' />
+                  Merge
+                </Button>
+              )}
               <Button
                 size='sm'
                 className='h-8 bg-red-600 text-white hover:bg-red-700'
@@ -303,7 +316,7 @@ export function BulkActionBar({
               Delete {count} item{count === 1 ? '' : 's'}?
             </DialogTitle>
             <DialogDescription>
-              This permanently deletes the selected records. This action cannot be undone.
+              Deleted records move to Trash and stay restorable for 30 days.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -321,6 +334,17 @@ export function BulkActionBar({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <MergeSheet
+        collection={collection}
+        ids={selectedIds}
+        open={showMerge}
+        onOpenChange={setShowMerge}
+        onMerged={() => {
+          onSuccess()
+          onClear()
+        }}
+      />
     </>
   )
 }
