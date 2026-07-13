@@ -103,6 +103,9 @@ const BlueprintsPage = lazy(() =>
   import('@/pages/Blueprints').then((m) => ({ default: m.BlueprintsPage }))
 )
 const TrashPage = lazy(() => import('@/pages/Trash').then((m) => ({ default: m.TrashPage })))
+const PublicDashboardPage = lazy(() =>
+  import('@/pages/PublicDashboard').then((m) => ({ default: m.PublicDashboardPage }))
+)
 const ErdViewPage = lazy(() => import('@/pages/ErdView').then((m) => ({ default: m.ErdViewPage })))
 const SchemaGraphPage = lazy(() =>
   import('@/pages/SchemaGraph').then((m) => ({ default: m.SchemaGraphPage }))
@@ -331,6 +334,14 @@ export default function App() {
                   element={
                     <Suspense fallback={<AppShell />}>
                       <WallboardPage />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path='/d/:token'
+                  element={
+                    <Suspense fallback={<AppShell />}>
+                      <PublicDashboardPage />
                     </Suspense>
                   }
                 />

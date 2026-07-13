@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { computeWidgetData } from '../services/dashboard-widgets.js'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
@@ -425,61 +426,8 @@ export async function dashboardsRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
-    if (!widget.collection) {
-      return { data: null }
-    }
-
-    // Safety: always validate collection against registry
-    const validCollection = await resolveCollection(widget.collection)
-    if (!validCollection) {
-      return reply.code(400).send({ error: 'Unknown collection' })
-    }
-
-    const col = widget.collection
-
-    try {
-      if (widget.type === 'count') {
-        const result = await db(col).count('* as count').first()
-        return { data: { value: Number(result?.count ?? 0) } }
-      }
-
-      if (widget.type === 'sum') {
-        if (!widget.field) return { data: { value: null } }
-        const result = await db(col).sum(`${widget.field} as total`).first()
-        return { data: { value: result?.total !== null ? Number(result?.total) : null } }
-      }
-
-      if (widget.type === 'avg') {
-        if (!widget.field) return { data: { value: null } }
-        const result = await db(col).avg(`${widget.field} as average`).first()
-        return { data: { value: result?.average !== null ? Number(result?.average) : null } }
-      }
-
-      if (widget.type === 'latest') {
-        const rows = await db(col).orderBy('created_at', 'desc').limit(10)
-        return { data: { rows } }
-      }
-
-      if (widget.type === 'bar_chart' || widget.type === 'line_chart') {
-        // Group by day for last 30 days (MSSQL syntax)
-        const rows = await db(col)
-          .select(db.raw('CAST(created_at AS DATE) as date'))
-          .count('* as count')
-          .whereRaw('created_at >= DATEADD(day, -30, GETDATE())')
-          .groupByRaw('CAST(created_at AS DATE)')
-          .orderBy('date', 'asc')
-
-        const chartData = rows.map((r) => ({
-          date: String(r.date),
-          count: Number(r.count)
-        }))
-        return { data: { rows: chartData } }
-      }
-
-      return reply.code(400).send({ error: 'Unsupported widget type' })
-    } catch (err) {
-      app.log.error(err, 'dashboard widget data error')
-      return reply.code(500).send({ error: 'Failed to compute widget data' })
-    }
+    const result = await computeWidgetData(widget)
+    if ('error' in result) return reply.code(result.status).send({ error: result.error })
+    return { data: result.data }
   })
 }

@@ -14,6 +14,7 @@ import {
   YAxis
 } from 'recharts'
 import { toast } from 'sonner'
+import { DashboardLinkPopover } from '@/components/dashboard-link-popover'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -572,6 +573,7 @@ export function DashboardEditPage() {
           </div>
 
           <div className='flex items-center gap-2'>
+            <DashboardLinkPopover dashboardId={data.id} />
             <Button
               size='sm'
               variant='outline'
