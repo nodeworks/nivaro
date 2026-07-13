@@ -104,6 +104,9 @@ const BlueprintsPage = lazy(() =>
 )
 const TrashPage = lazy(() => import('@/pages/Trash').then((m) => ({ default: m.TrashPage })))
 const ErdViewPage = lazy(() => import('@/pages/ErdView').then((m) => ({ default: m.ErdViewPage })))
+const SchemaGraphPage = lazy(() =>
+  import('@/pages/SchemaGraph').then((m) => ({ default: m.SchemaGraphPage }))
+)
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
 )
@@ -353,6 +356,7 @@ export default function App() {
                   <Route path='activity/:id' element={<ActivityDetailPage />} />
                   <Route path='data-model' element={<DataModelPage />} />
                   <Route path='data-model/erd' element={<ErdViewPage />} />
+                  <Route path='data-model/graph' element={<SchemaGraphPage />} />
                   <Route path='data-model/:table' element={<TableEditorPage />} />
                   <Route path='pipelines' element={<PipelinesPage />} />
                   <Route path='pipelines/:id' element={<PipelineEditPage />} />

@@ -181,6 +181,38 @@ export async function dataModelRoutes(app: FastifyInstance) {
     }
   })
 
+  // ─── GET /graph-stats — row counts + 7d write volume for the schema graph ──
+
+  app.get('/graph-stats', async (_req, reply) => {
+    try {
+      // Row counts from partition stats — instant, no table scans
+      const counts = rawRows<{ name: string; rows: number }>(
+        await db.raw(`
+          SELECT t.name AS name, SUM(p.rows) AS rows
+          FROM sys.tables t
+          JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
+          GROUP BY t.name
+        `)
+      )
+      const weekAgo = new Date(Date.now() - 7 * 86_400_000)
+      const writes = (await db('nivaro_activity')
+        .where('timestamp', '>', weekAgo)
+        .whereIn('action', ['create', 'update', 'delete'])
+        .whereNotNull('collection')
+        .groupBy('collection')
+        .select('collection')
+        .count({ n: '*' })) as Array<{ collection: string; n: number | string }>
+      return reply.send({
+        data: {
+          rows: Object.fromEntries(counts.map((c) => [c.name, Number(c.rows)])),
+          writes_7d: Object.fromEntries(writes.map((w) => [w.collection, Number(w.n)]))
+        }
+      })
+    } catch (err) {
+      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) })
+    }
+  })
+
   // ─── GET /:table — single table detail ───────────────────────────────────
 
   app.get('/:table', async (req, reply) => {
