@@ -123,6 +123,7 @@ async function buildMaterializedRow(
     | undefined
 
   let state: string | null = null
+  let stateId: string | null = null
   let stateColor: string | null = null
   let enteredStateAt: Date | null = null
   let slaDurationHours: number | null = null
@@ -153,6 +154,7 @@ async function buildMaterializedRow(
     if (instance) {
       state = instance.state_key
       stateColor = instance.state_color
+      stateId = instance.current_state
 
       if (instance.current_state) {
         const history = (await db('nivaro_workflow_history')
@@ -257,6 +259,7 @@ async function buildMaterializedRow(
     row: {
       label,
       state,
+      state_id: stateId,
       state_color: stateColor,
       entered_state_at: enteredStateAt,
       sla_duration_hours: slaDurationHours,

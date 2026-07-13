@@ -86,6 +86,8 @@ export interface QueueItemRow {
   owners: QueueOwner[]
   sla_status: 'ok' | 'warning' | 'breached' | null
   at_risk: boolean
+  predicted_risk?: boolean
+  predicted_note?: string | null
   aging_hours: number | null
   claimed_by: QueueOwner | null
   extra?: Record<string, unknown>
@@ -1183,7 +1185,14 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       key: 'at_risk',
       header: aliasFor('at_risk', 'Risk'),
       sortable: true,
-      render: (row) => (row.at_risk ? <span className='text-red-500'>⚑ At risk</span> : null)
+      render: (row) =>
+        row.at_risk ? (
+          <span className='text-red-500'>⚑ At risk</span>
+        ) : row.predicted_risk ? (
+          <span className='text-amber-500' title={row.predicted_note ?? undefined}>
+            ⚑ Predicted
+          </span>
+        ) : null
     }
   ]
 

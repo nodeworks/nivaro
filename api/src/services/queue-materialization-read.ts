@@ -455,6 +455,7 @@ export async function fetchMaterializedQueueItems(
     'qi.item_id',
     'qi.label',
     'qi.state',
+    'qi.state_id',
     'qi.state_color',
     'qi.entered_state_at',
     'qi.sla_duration_hours',
@@ -472,6 +473,7 @@ export async function fetchMaterializedQueueItems(
     item_id: string
     label: string
     state: string | null
+    state_id: string | null
     state_color: string | null
     entered_state_at: Date | null
     sla_duration_hours: number | null
@@ -659,8 +661,22 @@ export async function fetchMaterializedQueueItems(
     }
   }
 
+  // Predictive risk from per-state historical percentiles — cached rows carry
+  // state_id since migration 147; NULL (pre-rebuild rows) simply never predicts.
+  let durationStats: Map<string, { p50: number; p80: number; n: number }> | null = null
+  try {
+    const { getStateDurationStats } = await import('./predictive-sla.js')
+    durationStats = await getStateDurationStats()
+  } catch {
+    durationStats = null
+  }
+  const { predictStuck } = await import('./predictive-sla.js')
+
   const items: QueueItem[] = rows.map((r) => {
     const sla = computeSla(r)
+    const prediction = durationStats
+      ? predictStuck(durationStats, r.state_id, sla.aging_hours)
+      : { predicted: false, p80_hours: null, note: null }
     return {
       collection: r.collection,
       item_id: r.item_id,
@@ -670,6 +686,8 @@ export async function fetchMaterializedQueueItems(
       owners: ownersByQueueItemId.get(r.id) ?? [],
       sla_status: sla.status,
       at_risk: !!r.at_risk,
+      predicted_risk: prediction.predicted,
+      predicted_note: prediction.note,
       aging_hours: sla.aging_hours,
       claimed_by: r.claimed_by
         ? { id: r.claimed_by, name: claimantNameById.get(r.claimed_by) ?? '' }

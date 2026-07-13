@@ -64,6 +64,7 @@ export interface MaterializedRowInput {
   item_id: string
   label: string
   state: string | null
+  state_id?: string | null
   state_color: string | null
   entered_state_at: Date | null
   sla_duration_hours: number | null
@@ -90,6 +91,7 @@ function rowFromQueueItem(item: QueueItem): MaterializedRowInput {
     item_id: item.item_id,
     label: item.label,
     state: item.state,
+    state_id: item.state_id ?? null,
     state_color: item.state_color,
     entered_state_at: null,
     sla_duration_hours: null,
@@ -151,6 +153,7 @@ async function buildCollectionSourceRows(
       item_id: item.item_id,
       label: item.label,
       state: item.state,
+      state_id: item.state_id ?? null,
       state_color: item.state_color,
       entered_state_at: enteredAtEntries[item.item_id] ?? null,
       sla_duration_hours: sla?.duration_hours ?? null,
@@ -204,6 +207,7 @@ export async function writeMaterializedRowChunk(
       item_id: r.item_id,
       label: r.label,
       state: r.state,
+      state_id: r.state_id ?? null,
       state_color: r.state_color,
       entered_state_at: r.entered_state_at,
       sla_duration_hours: r.sla_duration_hours,

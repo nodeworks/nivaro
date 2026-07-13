@@ -285,6 +285,11 @@ export interface QueueItem {
   owners: QueueOwner[]
   sla_status: 'ok' | 'warning' | 'breached' | null
   at_risk: boolean
+  /** Workflow state uuid — rides into the materialized cache for prediction. */
+  state_id?: string | null
+  /** Historical-P80 stuck prediction. */
+  predicted_risk?: boolean
+  predicted_note?: string | null
   aging_hours: number | null
   claimed_by: QueueOwner | null
   extra?: Record<string, unknown>
@@ -1449,9 +1454,14 @@ export async function resolveCollectionSource(
     return { items: [], matchedCount: sanity.matchedCount, truncated: sanity.truncated, idMeta }
   }
 
-  const stateById = new Map<string, { key: string; color: string | null }>()
+  const stateById = new Map<string, { key: string; color: string | null; id: string | null }>()
   for (const inst of instances) {
-    if (inst.state_key) stateById.set(inst.item, { key: inst.state_key, color: inst.state_color })
+    if (inst.state_key)
+      stateById.set(inst.item, {
+        key: inst.state_key,
+        color: inst.state_color,
+        id: (inst.current_state as string | null) ?? null
+      })
   }
 
   const ownerRequests = instances
@@ -1537,21 +1547,42 @@ export async function resolveCollectionSource(
     })()
   ])
 
-  const items = ids.map((id) => ({
-    collection: source.collection as string,
-    item_id: id,
-    label: labels[`${source.collection}:${id}`] ?? id,
-    state: stateById.get(id)?.key ?? null,
-    state_color: stateById.get(id)?.color ?? null,
-    owners: (ownersByItem.get(id) ?? []).map((o) => ({ id: o.id, name: userDisplayName(o) })),
-    sla_status: slaMap[id]?.status ?? null,
-    at_risk: !!atRiskMap[id]?.at_risk,
-    aging_hours: slaMap[id]?.elapsed_hours ?? null,
-    claimed_by: null,
-    extra: extraResolved.extraById.get(id) ?? {},
-    extra_ids: extraResolved.extraIdsById.get(id) ?? {},
-    url: `/collections/${source.collection}/${id}`
-  }))
+  // Predictive risk: compare current time-in-state to the historical P80 for
+  // that state (services/predictive-sla.ts). Non-fatal: prediction failures
+  // never break the queue.
+  let durationStats: Awaited<ReturnType<typeof import('./predictive-sla.js').getStateDurationStats>> | null =
+    null
+  try {
+    const { getStateDurationStats } = await import('./predictive-sla.js')
+    durationStats = await getStateDurationStats()
+  } catch {
+    durationStats = null
+  }
+  const { predictStuck } = await import('./predictive-sla.js')
+
+  const items = ids.map((id) => {
+    const prediction = durationStats
+      ? predictStuck(durationStats, stateById.get(id)?.id, slaMap[id]?.elapsed_hours ?? null)
+      : { predicted: false, p80_hours: null, note: null }
+    return {
+      collection: source.collection as string,
+      item_id: id,
+      label: labels[`${source.collection}:${id}`] ?? id,
+      state: stateById.get(id)?.key ?? null,
+      state_id: stateById.get(id)?.id ?? null,
+      state_color: stateById.get(id)?.color ?? null,
+      owners: (ownersByItem.get(id) ?? []).map((o) => ({ id: o.id, name: userDisplayName(o) })),
+      sla_status: slaMap[id]?.status ?? null,
+      at_risk: !!atRiskMap[id]?.at_risk,
+      predicted_risk: prediction.predicted,
+      predicted_note: prediction.note,
+      aging_hours: slaMap[id]?.elapsed_hours ?? null,
+      claimed_by: null,
+      extra: extraResolved.extraById.get(id) ?? {},
+      extra_ids: extraResolved.extraIdsById.get(id) ?? {},
+      url: `/collections/${source.collection}/${id}`
+    }
+  })
 
   return { items, matchedCount: sanity.matchedCount, truncated: sanity.truncated, idMeta }
 }
