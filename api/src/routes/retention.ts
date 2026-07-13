@@ -43,7 +43,7 @@ export async function retentionRoutes(app: FastifyInstance) {
 
   app.post('/', async (req, reply) => {
     const b = req.body as Record<string, unknown>
-    const [id] = await db('nivaro_retention_policies').insert({
+    const inserted = await db('nivaro_retention_policies').insert({
       name: b.name,
       inactivity_threshold_months: b.inactivity_threshold_months ?? 36,
       action: b.action ?? 'redact',
@@ -55,7 +55,9 @@ export async function retentionRoutes(app: FastifyInstance) {
       is_active: b.is_active ?? true,
       dry_run_mode: b.dry_run_mode ?? false,
       created_by: req.user?.id ?? null
-    })
+      // MSSQL/tedious returns row count on bare insert — OUTPUT the identity
+    }).returning('id')
+    const id = typeof inserted[0] === 'object' ? (inserted[0] as { id: number }).id : inserted[0]
     const row = await db('nivaro_retention_policies').where({ id }).first()
     await logActivity({
       action: 'create',
@@ -137,7 +139,15 @@ export async function retentionRoutes(app: FastifyInstance) {
       triggered_by: req.user?.id ?? null
     })
 
-    return reply.send({ data: { ...result, dry_run: isDryRun } })
+    // Snake_case to match the admin RunResult shape (and GET /:id/runs)
+    return reply.send({
+      data: {
+        affected_count: result.affectedCount,
+        affected_ids: result.affectedIds,
+        errors: result.errors,
+        dry_run: isDryRun
+      }
+    })
   })
 
   app.get('/:id/runs', async (req, reply) => {
