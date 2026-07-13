@@ -6,7 +6,8 @@ export type {
   ItemEditFormProps,
   ItemLinkTarget,
   QueueRealtimeAdapter,
-  QueueWorklistProps
+  QueueWorklistProps,
+  ReportViewProps
 } from '@nivaro/shared'
 export {
   CommentPanel,
@@ -26,6 +27,7 @@ export {
   QueueWorklist,
   QueueWorkloadView,
   RecordDrilldownSheet,
+  ReportView,
   RevisionsPanel,
   TaskPanel,
   useGridFlush,

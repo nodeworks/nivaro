@@ -641,3 +641,249 @@ export function readSessionRecordingEvents(id: UUID): Command<{ data: { events: 
 export function deleteSessionRecording(id: UUID): Command<{ data: { deleted: boolean } }> {
   return cmd('DELETE', `/session-recordings/${id}`)
 }
+
+// ─── Report Studio ────────────────────────────────────────────────────────────
+
+export interface ReportWidgetConfig {
+  metric?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string }
+  dimension?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
+  filters?: Array<{ field: string; op: string; value?: unknown }>
+  date_field?: string | null
+  limit?: number
+  columns?: string[]
+  sort?: string
+  format?: { prefix?: string; suffix?: string; decimals?: number }
+  compare?: 'previous_period' | 'previous_year' | null
+  orientation?: 'horizontal' | 'vertical'
+  metrics?: Array<{
+    label: string
+    collection: string
+    aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'
+    field?: string
+    format?: { prefix?: string; suffix?: string; decimals?: number }
+    color?: string
+  }>
+}
+
+export type ReportWidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider'
+
+export interface ReportWidget {
+  id: UUID
+  type: ReportWidgetType
+  title: string
+  collection: string | null
+  config: ReportWidgetConfig | null
+  x: number
+  y: number
+  w: number
+  h: number
+  sort?: number
+}
+
+export interface ReportDateRange {
+  preset:
+    | 'this_month'
+    | 'last_30_days'
+    | 'last_3_months'
+    | 'last_6_months'
+    | 'last_12_months'
+    | 'ytd'
+    | 'custom'
+  start?: string
+  end?: string
+}
+
+export interface ReportEntityFilter {
+  field: string
+  values: Array<string | number>
+}
+
+export interface ReportDef {
+  id: UUID
+  name: string
+  icon: string | null
+  description: string | null
+  owner: UUID
+  is_shared: boolean
+  role_id: UUID | null
+  global_filters: {
+    date_range?: ReportDateRange | null
+    filter_bar?: Array<{ field: string; label: string }>
+  } | null
+  widget_count?: number
+  widgets?: ReportWidget[]
+  editable?: boolean
+  updated_at: ISODate
+}
+
+export interface ReportWidgetData {
+  value?: number | null
+  prev_value?: number | null
+  change_pct?: number | null
+  row_count?: number
+  rows?: Array<Record<string, unknown>>
+  series?: Array<{ dim: string; value: number; prev?: number }>
+  tiles?: Array<{
+    label: string
+    value: number | null
+    prev_value?: number | null
+    change_pct?: number | null
+    format?: { prefix?: string; suffix?: string; decimals?: number }
+    color?: string
+  }>
+}
+
+/** List reports visible to the current user. */
+export function listReports(): Command<{ data: ReportDef[] }> {
+  return cmd('GET', '/report-studio/')
+}
+
+/** One report with its widgets. */
+export function readReport(id: UUID): Command<{ data: ReportDef }> {
+  return cmd('GET', `/report-studio/${id}`)
+}
+
+export function createReport(body: {
+  name: string
+  icon?: string
+  description?: string
+}): Command<{ data: ReportDef }> {
+  return cmd('POST', '/report-studio/', undefined, body)
+}
+
+export function updateReport(
+  id: UUID,
+  body: Partial<{
+    name: string
+    icon: string | null
+    description: string | null
+    is_shared: boolean
+    role_id: UUID | null
+    global_filters: ReportDef['global_filters']
+  }>
+): Command<{ data: ReportDef }> {
+  return cmd('PATCH', `/report-studio/${id}`, undefined, body)
+}
+
+export function deleteReport(id: UUID): Command<{ data: { deleted: boolean } }> {
+  return cmd('DELETE', `/report-studio/${id}`)
+}
+
+/** Bulk-replace a report's widget set (the builder's save). */
+export function saveReportWidgets(
+  id: UUID,
+  widgets: Array<Partial<ReportWidget>>
+): Command<{ data: { saved: number; ids: UUID[] } }> {
+  return cmd('PUT', `/report-studio/${id}/widgets`, undefined, { widgets })
+}
+
+/** Resolve a saved widget's data (as the viewer). */
+export function readReportWidgetData(
+  id: UUID,
+  widgetId: UUID,
+  body?: { date_range?: ReportDateRange | null; entity_filters?: ReportEntityFilter[] }
+): Command<{ data: ReportWidgetData }> {
+  return cmd('POST', `/report-studio/${id}/widgets/${widgetId}/data`, undefined, body ?? {})
+}
+
+/** Preview an unsaved widget config. */
+export function previewReportWidget(body: {
+  type: ReportWidgetType
+  collection?: string | null
+  config?: ReportWidgetConfig | null
+  date_range?: ReportDateRange | null
+  entity_filters?: ReportEntityFilter[]
+}): Command<{ data: ReportWidgetData }> {
+  return cmd('POST', '/report-studio/preview', undefined, body)
+}
+
+export function cloneReport(id: UUID): Command<{ data: { id: UUID } }> {
+  return cmd('POST', `/report-studio/${id}/clone`)
+}
+
+/** Distinct values for a filter-bar field (FK-labeled). */
+export function readReportFilterOptions(
+  id: UUID,
+  field: string
+): Command<{ data: Array<{ value: string; label: string }> }> {
+  return cmd('GET', `/report-studio/${id}/filter-options`, { field })
+}
+
+/** Compose widgets from a prompt (admin/owner). */
+export function aiBuildReport(
+  id: UUID,
+  prompt: string
+): Command<{ data: { widgets: ReportWidget[] } }> {
+  return cmd('POST', `/report-studio/${id}/ai-build`, undefined, { prompt })
+}
+
+/** Turn prose into a date range + entity filters. */
+export function aiReportFilters(
+  id: UUID,
+  prompt: string,
+  fields: string[]
+): Command<{
+  data: { date_range?: ReportDateRange | null; entity_filters?: ReportEntityFilter[] }
+}> {
+  return cmd('POST', `/report-studio/${id}/ai-filters`, undefined, { prompt, fields })
+}
+
+export interface ReportSubscription {
+  id: number
+  cadence: 'daily' | 'weekly'
+  delivery_email: boolean
+  delivery_inapp: boolean
+}
+
+export function readReportSubscription(id: UUID): Command<{ data: ReportSubscription | null }> {
+  return cmd('GET', `/report-studio/${id}/subscription`)
+}
+
+/** Subscribe/update (body) or unsubscribe (null). */
+export function setReportSubscription(
+  id: UUID,
+  body: { cadence: 'daily' | 'weekly'; delivery_email?: boolean; delivery_inapp?: boolean } | null
+): Command<{ data: ReportSubscription | null }> {
+  return cmd('PUT', `/report-studio/${id}/subscription`, undefined, body)
+}
+
+export interface ReportAlert {
+  id: UUID
+  widget: UUID
+  name: string
+  conditions: Array<{ field: 'value' | 'row_count'; op: string; value: number }>
+  is_active: boolean
+  firing: boolean
+}
+
+export function listReportAlerts(id: UUID): Command<{ data: ReportAlert[] }> {
+  return cmd('GET', `/report-studio/${id}/alerts`)
+}
+
+export function createReportAlert(
+  id: UUID,
+  body: {
+    widget: UUID
+    name?: string
+    conditions: Array<{ field: 'value' | 'row_count'; op: string; value: number }>
+    delivery_email?: boolean
+    delivery_inapp?: boolean
+  }
+): Command<{ data: { id: UUID } }> {
+  return cmd('POST', `/report-studio/${id}/alerts`, undefined, body)
+}
+
+export function toggleReportAlert(
+  id: UUID,
+  alertId: UUID,
+  isActive: boolean
+): Command<{ data: { updated: boolean } }> {
+  return cmd('PATCH', `/report-studio/${id}/alerts/${alertId}`, undefined, { is_active: isActive })
+}
+
+export function deleteReportAlert(
+  id: UUID,
+  alertId: UUID
+): Command<{ data: { deleted: boolean } }> {
+  return cmd('DELETE', `/report-studio/${id}/alerts/${alertId}`)
+}

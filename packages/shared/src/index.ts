@@ -15,6 +15,8 @@ export type { QueueRealtimeAdapter, QueueWorklistProps } from './components/queu
 export { QueueWorklist } from './components/queue/QueueWorklist'
 export { QueueWorkloadView } from './components/queue/QueueWorkloadView'
 export { RecordDrilldownSheet } from './components/RecordDrilldownSheet'
+export type { ReportViewProps } from './components/ReportView'
+export { ReportView } from './components/ReportView'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'
 export * from './context'

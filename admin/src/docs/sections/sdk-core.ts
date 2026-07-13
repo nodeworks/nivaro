@@ -689,6 +689,26 @@ import '@nivaro/react/styles.css'`
       type: 'p',
       text: '`openItem` is checked first; returning `true` skips navigation. Otherwise the component navigates to `itemUrl(target)`, falling back to the admin shape when neither is provided.'
     },
+    { type: 'h3', text: 'Report Studio viewer' },
+    {
+      type: 'p',
+      text: '`<ReportView reportId="…" />` renders a read-only Report Studio report in your own app: it fetches the definition and resolves every widget (KPIs, KPI groups, bar/line/donut charts, tables) as the client identity — collection read permissions apply server-side. Charts are inline SVG, so it adds no charting dependency; style the shell with `className`/`style`.'
+    },
+    {
+      type: 'pre',
+      code: `import { NivaroProvider, ReportView } from '@nivaro/react'
+
+<ReportView
+  reportId="…"
+  refetchInterval={60_000}          // live-refresh; omit for one-shot
+  dateRange={{ preset: 'last_3_months' }}   // override the saved range (optional)
+  entityFilters={[{ field: 'division', values: [1, 2] }]}  // optional
+/>`
+    },
+    {
+      type: 'p',
+      text: 'For custom rendering, skip the component and drive the data commands directly: `readReport`, `readReportWidgetData` / `previewReportWidget`, plus the full CRUD, subscription (`setReportSubscription`), alert (`createReportAlert`), and AI (`aiBuildReport`, `aiReportFilters`) surface from `@nivaro/sdk`.'
+    },
     {
       type: 'pre',
       code: `import { createNivaro } from '@nivaro/sdk'
