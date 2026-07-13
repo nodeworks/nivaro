@@ -69,6 +69,7 @@ import { useCloudPlugins, useExtensionPlugins } from '@/extensions/store'
 import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
+import { useT } from '@/lib/i18n'
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
@@ -316,6 +317,7 @@ function WorkspaceSwitcher() {
 function PanelNavItem({ icon: Icon, label, to }: NavItem) {
   const { pathname } = useLocation()
   const active = isActiveRoute(to, pathname)
+  const t = useT()
 
   return (
     <Link
@@ -329,12 +331,13 @@ function PanelNavItem({ icon: Icon, label, to }: NavItem) {
       )}
     >
       <Icon className={cn('h-[15px] w-[15px] shrink-0', active ? 'text-nvr-cyan' : '')} />
-      {label}
+      {t(`nav.${label}`, label)}
     </Link>
   )
 }
 
 export function AppLayout() {
+  const t = useT()
   const { user } = useAuth()
   const { data: settings } = useSettings()
   useQuery({
@@ -512,7 +515,7 @@ export function AppLayout() {
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side='right' sideOffset={8}>
-                      {cat.label}
+                      {t(`nav.${cat.label}`, cat.label)}
                     </TooltipContent>
                   </Tooltip>
                 )
@@ -603,7 +606,7 @@ export function AppLayout() {
                   {projectName}
                 </p>
                 <p className='truncate text-[13.5px] font-semibold leading-tight tracking-[-0.01em] text-white'>
-                  {activeCat.label}
+                  {t(`nav.${activeCat.label}`, activeCat.label)}
                 </p>
               </div>
 

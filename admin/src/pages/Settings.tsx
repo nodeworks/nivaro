@@ -32,6 +32,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api, type CMSSettings, type Role } from '@/lib/api'
+import { ADMIN_LOCALES, useLocale } from '@/lib/i18n'
 import { useSettings } from '@/lib/useSettings'
 import { cn } from '@/lib/utils'
 
@@ -217,9 +218,9 @@ function BackupsSection() {
           Backups
         </h2>
         <p className='mb-6 text-[12px] text-muted-foreground'>
-          Download a logical backup of this instance — a gzip stream of newline-delimited JSON,
-          one record per row, restorable with standard tooling. Files on disk/object storage are
-          not included.
+          Download a logical backup of this instance — a gzip stream of newline-delimited JSON, one
+          record per row, restorable with standard tooling. Files on disk/object storage are not
+          included.
         </p>
         <div className='space-y-4'>
           <label className='flex items-start gap-2 text-[13px] text-slate-700 dark:text-slate-300'>
@@ -239,7 +240,8 @@ function BackupsSection() {
           </label>
           {manifest && (
             <p className='text-[12px] text-muted-foreground'>
-              {manifest.business.length} business collection{manifest.business.length !== 1 ? 's' : ''}
+              {manifest.business.length} business collection
+              {manifest.business.length !== 1 ? 's' : ''}
               {includeSystem ? ` + ${manifest.system.length} system tables` : ''} will be exported.
             </p>
           )}
@@ -333,6 +335,7 @@ export function SettingsPage() {
   const [slaBusinessDays, setSlaBusinessDays] = useState<number[]>([1, 2, 3, 4, 5])
   const [slaHolidays, setSlaHolidays] = useState<string[]>([])
   const [newHoliday, setNewHoliday] = useState('')
+  const { locale: adminLocale, setLocale: setAdminLocale } = useLocale()
   const [fileMaxMb, setFileMaxMb] = useState(50)
   const [collectionPageSize, setCollectionPageSize] = useState(25)
   const [activityRetentionDays, setActivityRetentionDays] = useState<number | ''>('')
@@ -636,9 +639,16 @@ export function SettingsPage() {
                     <div className='flex flex-col gap-3'>
                       <div className='flex flex-wrap gap-2'>
                         {[
-                          '#00ceff', '#1e96d2', '#3b82f6', '#6366f1',
-                          '#8b5cf6', '#10b981', '#14b8a6', '#f97316',
-                          '#f43f5e', '#64748b',
+                          '#00ceff',
+                          '#1e96d2',
+                          '#3b82f6',
+                          '#6366f1',
+                          '#8b5cf6',
+                          '#10b981',
+                          '#14b8a6',
+                          '#f97316',
+                          '#f43f5e',
+                          '#64748b'
                         ].map((c) => (
                           <button
                             key={c}
@@ -648,7 +658,7 @@ export function SettingsPage() {
                             style={{
                               backgroundColor: c,
                               borderColor: projectColor === c ? 'white' : 'transparent',
-                              boxShadow: projectColor === c ? `0 0 0 2px ${c}` : undefined,
+                              boxShadow: projectColor === c ? `0 0 0 2px ${c}` : undefined
                             }}
                             aria-label={c}
                           >
@@ -688,6 +698,28 @@ export function SettingsPage() {
                   onSave={saveLocalization}
                   saving={mutation.isPending}
                 >
+                  <Field
+                    label='Admin interface language'
+                    hint='Applies to this browser only — stored locally, takes effect immediately. Navigation and shell are translated; page-level translation is incremental.'
+                  >
+                    <div className='flex flex-wrap gap-1.5'>
+                      {ADMIN_LOCALES.map((l) => (
+                        <button
+                          key={l.value}
+                          type='button'
+                          onClick={() => setAdminLocale(l.value)}
+                          className={cn(
+                            'rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors',
+                            adminLocale === l.value
+                              ? 'bg-[#00ceff1a] text-nvr-navy dark:text-[#00ceff]'
+                              : 'bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-muted dark:text-muted-foreground'
+                          )}
+                        >
+                          {l.label}
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
                   <Field label='Default Language'>
                     <Select value={defaultLanguage} onValueChange={setDefaultLanguage}>
                       <SelectTrigger className='h-8 text-[13px]'>

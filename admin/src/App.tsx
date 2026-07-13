@@ -5,6 +5,7 @@ import { Toaster } from 'sonner'
 import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
+import { I18nProvider } from '@/lib/i18n'
 import { ThemeProvider } from '@/lib/theme'
 
 function safeRedirectPath(raw: string | null | undefined, fallback = '/'): string {
@@ -290,138 +291,140 @@ function AppShell() {
 export default function App() {
   return (
     <ThemeProvider>
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <BrowserRouter>
-            <PostLoginRedirect />
-            <Routes>
-              <Route
-                path='/login'
-                element={
-                  <PublicRoute>
-                    <Suspense fallback={<AppShell />}>
-                      <LoginPage />
-                    </Suspense>
-                  </PublicRoute>
-                }
-              />
-              <Route
-                path='/setup'
-                element={
-                  <Suspense fallback={<AppShell />}>
-                    <SetupPage />
-                  </Suspense>
-                }
-              />
-              <Route
-                element={
-                  <ProtectedRoute>
-                    <ExtensionPluginLoader />
-                    <AppLayout />
-                  </ProtectedRoute>
-                }
-              >
-                <Route index element={<DashboardPage />} />
-                <Route path='collections' element={<CollectionsPage />} />
-                <Route path='collections/:collection' element={<CollectionBrowserPage />} />
-                <Route path='collections/:collection/:id' element={<ItemEditPage />} />
-                <Route path='users' element={<UsersPage />} />
-                <Route path='users/:id' element={<UserEditPage />} />
-                <Route path='roles' element={<RolesPage />} />
-                <Route path='flows' element={<FlowsPage />} />
-                <Route path='flows/:id' element={<FlowEditPage />} />
-                <Route path='files' element={<FilesPage />} />
-                <Route path='activity' element={<ActivityPage />} />
-                <Route path='activity/:id' element={<ActivityDetailPage />} />
-                <Route path='data-model' element={<DataModelPage />} />
-                <Route path='data-model/erd' element={<ErdViewPage />} />
-                <Route path='data-model/:table' element={<TableEditorPage />} />
-                <Route path='pipelines' element={<PipelinesPage />} />
-                <Route path='pipelines/:id' element={<PipelineEditPage />} />
-                <Route path='external-apis' element={<ExternalApisPage />} />
-                <Route path='external-apis/:id' element={<ExternalApiEditPage />} />
-                <Route path='extensions' element={<ExtensionsPage />} />
-                <Route path='settings' element={<SettingsPage />} />
-                <Route path='docs' element={<DocsPage />} />
-                <Route path='graphql' element={<GraphQLExplorerPage />} />
-                <Route path='api-docs' element={<ApiDocsPage />} />
-                <Route path='webhooks' element={<WebhooksPage />} />
-                <Route path='webhooks/:id' element={<WebhookEditPage />} />
-                <Route path='custom-queries' element={<CustomQueriesPage />} />
-                <Route path='custom-queries/:id' element={<CustomQueryEditPage />} />
-                <Route path='schema-snapshot' element={<SchemaSnapshotPage />} />
-                <Route path='content-promotion' element={<ContentPromotionPage />} />
-                <Route path='scheduled-reports' element={<ScheduledReportsPage />} />
-                <Route path='blackout-dates' element={<BlackoutDatesPage />} />
-                <Route path='rules' element={<RulesPage />} />
-                <Route path='rules/:id' element={<RuleEditPage />} />
-                <Route path='dashboards' element={<DashboardsPage />} />
-                <Route path='ask' element={<AskPage />} />
-                <Route path='dashboards/:id' element={<DashboardEditPage />} />
-                <Route path='reports' element={<ReportsPage />} />
-                <Route path='profile' element={<ProfilePage />} />
-                <Route path='workspaces' element={<WorkspacesPage />} />
-                <Route path='presence' element={<PresencePage />} />
-                <Route path='analytics' element={<AnalyticsPage />} />
-                <Route path='submission-forms' element={<SubmissionFormsPage />} />
-                <Route path='submission-forms/:id' element={<SubmissionFormEditPage />} />
-                <Route path='field-watches' element={<FieldWatchesPage />} />
+      <I18nProvider>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <BrowserRouter>
+              <PostLoginRedirect />
+              <Routes>
                 <Route
-                  path='notification-subscriptions'
-                  element={<NotificationSubscriptionsPage />}
-                />
-                <Route path='imports' element={<ImportsPage />} />
-                <Route path='imports/:id' element={<ImportJobPage />} />
-                <Route path='sla-rules' element={<SlaRulesPage />} />
-                <Route path='team-throughput' element={<TeamThroughputPage />} />
-                <Route path='alerts' element={<AlertsPage />} />
-                <Route path='alerts/:id' element={<AlertEditPage />} />
-                <Route path='hierarchies' element={<HierarchiesPage />} />
-                <Route path='hierarchies/:id' element={<HierarchiesPage />} />
-                <Route path='hierarchies/:id/tree' element={<HierarchyViewPage />} />
-                <Route path='record-templates' element={<RecordTemplatesPage />} />
-                <Route path='scheduled-changes' element={<ScheduledChangesPage />} />
-                <Route path='collection-presets' element={<CollectionPresetsPage />} />
-                <Route path='virtual-collections' element={<VirtualCollectionsPage />} />
-                <Route path='api-keys' element={<ApiKeysPage />} />
-                <Route path='notifications' element={<NotificationsCenterPage />} />
-                <Route path='sync-jobs' element={<SyncJobsPage />} />
-                <Route path='pdf-templates' element={<PdfTemplatesPage />} />
-                <Route path='playground' element={<PlaygroundPage />} />
-                <Route path='dead-letters' element={<DeadLetterQueuePage />} />
-                <Route path='pages-admin' element={<PagesAdminPage />} />
-                <Route path='pages-admin/:id/edit' element={<PageEditPage />} />
-                <Route path='p/:slug' element={<PageViewPage />} />
-                <Route path='api-analytics' element={<ApiAnalyticsPage />} />
-                <Route path='health' element={<HealthDashboardPage />} />
-                <Route path='data-quality' element={<DataQualityPage />} />
-                <Route path='privacy-retention' element={<RetentionPoliciesPage />} />
-                <Route path='issues' element={<IssuesPage />} />
-                <Route path='workflows' element={<WorkflowsPage />} />
-                <Route path='workflows/:id' element={<WorkflowEditPage />} />
-                <Route path='widgets' element={<WidgetsPage />} />
-                <Route path='persisted-queries' element={<PersistedQueriesPage />} />
-                <Route path='erp-submissions' element={<ErpSubmissionsPage />} />
-                <Route path='tasks' element={<TasksPage />} />
-                <Route path='approvals' element={<ApprovalsPage />} />
-                <Route path='queues' element={<QueuesPage />} />
-                <Route path='queues/:id' element={<QueueDetailPage />} />
-                <Route path='at-risk' element={<AtRiskPage />} />
-                <Route path='account' element={<AccountPage />} />
-                <Route
-                  path='extensions/ui/*'
+                  path='/login'
                   element={
-                    <div className='flex flex-1 min-h-0 flex-col items-center justify-center text-slate-400 text-sm'>
-                      No plugin page found for this route.
-                    </div>
+                    <PublicRoute>
+                      <Suspense fallback={<AppShell />}>
+                        <LoginPage />
+                      </Suspense>
+                    </PublicRoute>
                   }
                 />
-              </Route>
-            </Routes>
-          </BrowserRouter>
-          <Toaster richColors position='bottom-right' />
-        </AuthProvider>
-      </QueryClientProvider>
+                <Route
+                  path='/setup'
+                  element={
+                    <Suspense fallback={<AppShell />}>
+                      <SetupPage />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  element={
+                    <ProtectedRoute>
+                      <ExtensionPluginLoader />
+                      <AppLayout />
+                    </ProtectedRoute>
+                  }
+                >
+                  <Route index element={<DashboardPage />} />
+                  <Route path='collections' element={<CollectionsPage />} />
+                  <Route path='collections/:collection' element={<CollectionBrowserPage />} />
+                  <Route path='collections/:collection/:id' element={<ItemEditPage />} />
+                  <Route path='users' element={<UsersPage />} />
+                  <Route path='users/:id' element={<UserEditPage />} />
+                  <Route path='roles' element={<RolesPage />} />
+                  <Route path='flows' element={<FlowsPage />} />
+                  <Route path='flows/:id' element={<FlowEditPage />} />
+                  <Route path='files' element={<FilesPage />} />
+                  <Route path='activity' element={<ActivityPage />} />
+                  <Route path='activity/:id' element={<ActivityDetailPage />} />
+                  <Route path='data-model' element={<DataModelPage />} />
+                  <Route path='data-model/erd' element={<ErdViewPage />} />
+                  <Route path='data-model/:table' element={<TableEditorPage />} />
+                  <Route path='pipelines' element={<PipelinesPage />} />
+                  <Route path='pipelines/:id' element={<PipelineEditPage />} />
+                  <Route path='external-apis' element={<ExternalApisPage />} />
+                  <Route path='external-apis/:id' element={<ExternalApiEditPage />} />
+                  <Route path='extensions' element={<ExtensionsPage />} />
+                  <Route path='settings' element={<SettingsPage />} />
+                  <Route path='docs' element={<DocsPage />} />
+                  <Route path='graphql' element={<GraphQLExplorerPage />} />
+                  <Route path='api-docs' element={<ApiDocsPage />} />
+                  <Route path='webhooks' element={<WebhooksPage />} />
+                  <Route path='webhooks/:id' element={<WebhookEditPage />} />
+                  <Route path='custom-queries' element={<CustomQueriesPage />} />
+                  <Route path='custom-queries/:id' element={<CustomQueryEditPage />} />
+                  <Route path='schema-snapshot' element={<SchemaSnapshotPage />} />
+                  <Route path='content-promotion' element={<ContentPromotionPage />} />
+                  <Route path='scheduled-reports' element={<ScheduledReportsPage />} />
+                  <Route path='blackout-dates' element={<BlackoutDatesPage />} />
+                  <Route path='rules' element={<RulesPage />} />
+                  <Route path='rules/:id' element={<RuleEditPage />} />
+                  <Route path='dashboards' element={<DashboardsPage />} />
+                  <Route path='ask' element={<AskPage />} />
+                  <Route path='dashboards/:id' element={<DashboardEditPage />} />
+                  <Route path='reports' element={<ReportsPage />} />
+                  <Route path='profile' element={<ProfilePage />} />
+                  <Route path='workspaces' element={<WorkspacesPage />} />
+                  <Route path='presence' element={<PresencePage />} />
+                  <Route path='analytics' element={<AnalyticsPage />} />
+                  <Route path='submission-forms' element={<SubmissionFormsPage />} />
+                  <Route path='submission-forms/:id' element={<SubmissionFormEditPage />} />
+                  <Route path='field-watches' element={<FieldWatchesPage />} />
+                  <Route
+                    path='notification-subscriptions'
+                    element={<NotificationSubscriptionsPage />}
+                  />
+                  <Route path='imports' element={<ImportsPage />} />
+                  <Route path='imports/:id' element={<ImportJobPage />} />
+                  <Route path='sla-rules' element={<SlaRulesPage />} />
+                  <Route path='team-throughput' element={<TeamThroughputPage />} />
+                  <Route path='alerts' element={<AlertsPage />} />
+                  <Route path='alerts/:id' element={<AlertEditPage />} />
+                  <Route path='hierarchies' element={<HierarchiesPage />} />
+                  <Route path='hierarchies/:id' element={<HierarchiesPage />} />
+                  <Route path='hierarchies/:id/tree' element={<HierarchyViewPage />} />
+                  <Route path='record-templates' element={<RecordTemplatesPage />} />
+                  <Route path='scheduled-changes' element={<ScheduledChangesPage />} />
+                  <Route path='collection-presets' element={<CollectionPresetsPage />} />
+                  <Route path='virtual-collections' element={<VirtualCollectionsPage />} />
+                  <Route path='api-keys' element={<ApiKeysPage />} />
+                  <Route path='notifications' element={<NotificationsCenterPage />} />
+                  <Route path='sync-jobs' element={<SyncJobsPage />} />
+                  <Route path='pdf-templates' element={<PdfTemplatesPage />} />
+                  <Route path='playground' element={<PlaygroundPage />} />
+                  <Route path='dead-letters' element={<DeadLetterQueuePage />} />
+                  <Route path='pages-admin' element={<PagesAdminPage />} />
+                  <Route path='pages-admin/:id/edit' element={<PageEditPage />} />
+                  <Route path='p/:slug' element={<PageViewPage />} />
+                  <Route path='api-analytics' element={<ApiAnalyticsPage />} />
+                  <Route path='health' element={<HealthDashboardPage />} />
+                  <Route path='data-quality' element={<DataQualityPage />} />
+                  <Route path='privacy-retention' element={<RetentionPoliciesPage />} />
+                  <Route path='issues' element={<IssuesPage />} />
+                  <Route path='workflows' element={<WorkflowsPage />} />
+                  <Route path='workflows/:id' element={<WorkflowEditPage />} />
+                  <Route path='widgets' element={<WidgetsPage />} />
+                  <Route path='persisted-queries' element={<PersistedQueriesPage />} />
+                  <Route path='erp-submissions' element={<ErpSubmissionsPage />} />
+                  <Route path='tasks' element={<TasksPage />} />
+                  <Route path='approvals' element={<ApprovalsPage />} />
+                  <Route path='queues' element={<QueuesPage />} />
+                  <Route path='queues/:id' element={<QueueDetailPage />} />
+                  <Route path='at-risk' element={<AtRiskPage />} />
+                  <Route path='account' element={<AccountPage />} />
+                  <Route
+                    path='extensions/ui/*'
+                    element={
+                      <div className='flex flex-1 min-h-0 flex-col items-center justify-center text-slate-400 text-sm'>
+                        No plugin page found for this route.
+                      </div>
+                    }
+                  />
+                </Route>
+              </Routes>
+            </BrowserRouter>
+            <Toaster richColors position='bottom-right' />
+          </AuthProvider>
+        </QueryClientProvider>
+      </I18nProvider>
     </ThemeProvider>
   )
 }
