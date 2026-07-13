@@ -112,6 +112,8 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'POST', path: '/api/dashboard-links/' },
   { method: 'GET', path: '/api/dashboard-links/for/:dashboardId' },
   { method: 'GET', path: '/api/dashboard-links/public/:token' },
+  { method: 'GET', path: '/api/journeys/user/:id' },
+  { method: 'GET', path: '/api/journeys/days/:id' },
 
   // Operations tooling (2026-07 batch)
   { method: 'GET', path: '/api/files/:id/usage' },

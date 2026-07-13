@@ -95,6 +95,7 @@ import {
 import {
   bugReporterDocs,
   dashboardLinkDocs,
+  journeyTrailDocs,
   mergeDocs,
   schemaGraphDocs,
   spreadsheetDocs,
@@ -709,6 +710,7 @@ export const navSections: NavGroup[] = [
       wallboardPulseDocs,
       recordGraphDocs,
       bugReporterDocs,
+      journeyTrailDocs,
       obsHealthDashboard,
       obsDataQuality,
       obsIssueLog,

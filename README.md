@@ -145,6 +145,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Live Presence Map** — see who's on which admin page in real time
 - **Built-in Bug Reporter** — one click files screenshot + console tail into the issue log
 - **Public Dashboard Links** — token URLs render live read-only dashboards to anyone
+- **Journey Trail** — session-by-session page breadcrumbs with time-on-page per user (admin-only, 30-day retention)
 - **Full SDK Coverage** — ~175 typed SDK commands spanning every feature area, explorable in the in-browser SDK playground
 
 ---

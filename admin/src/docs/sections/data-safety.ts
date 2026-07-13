@@ -137,3 +137,29 @@ export const schemaGraphDocs: DocSection = {
     }
   ]
 }
+
+export const journeyTrailDocs: DocSection = {
+  id: 'journey-trail',
+  label: 'Journey Trail',
+  content: [
+    { type: 'h1', id: 'journey-trail', text: 'Journey Trail' },
+    {
+      type: 'p',
+      text: 'A session-by-session breadcrumb of every admin page a user visited, with time spent on each — session-replay insight without recording anything on screen. Built from the same presence pings that power the live map, persisted with 30-day retention.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/journeys/user/:id?date=YYYY-MM-DD   # sessions + steps for one day
+GET /api/journeys/days/:id                   # which of the last 30 days have data`
+    },
+    {
+      type: 'ul',
+      items: [
+        'Admin-only — this is user tracking; the API refuses non-admins.',
+        'Durations stamp when the user moves to the next page or disconnects (capped at 8h against dangling sessions).',
+        'UI: the Journey Trail card on a user profile (admin view), with a day picker of active days.',
+        'Rows purge automatically after 30 days in the daily retention pass.'
+      ]
+    }
+  ]
+}

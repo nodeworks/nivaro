@@ -245,6 +245,10 @@ export async function buildServer() {
           }
         }
         await purgeExpiredTrash()
+        await db('nivaro_admin_journeys')
+          .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
+          .del()
+          .catch(() => 0)
       } catch (err) {
         app.log.warn({ err }, '[retention] purge failed')
       }

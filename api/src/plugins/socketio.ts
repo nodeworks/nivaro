@@ -44,6 +44,41 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     return [...pagePresence.values()]
   }
 
+  // Journey trail — last persisted journey row per socket, so the next ping
+  // (or disconnect) can stamp how long the user stayed on the page.
+  const journeyTail = new Map<string, { rowId: number; enteredAt: number }>()
+
+  async function closeJourneyRow(socketId: string) {
+    const tail = journeyTail.get(socketId)
+    if (!tail) return
+    journeyTail.delete(socketId)
+    const seconds = Math.round((Date.now() - tail.enteredAt) / 1000)
+    try {
+      await db('nivaro_admin_journeys')
+        .where({ id: tail.rowId })
+        .update({ duration_seconds: Math.min(seconds, 8 * 3600) })
+    } catch {
+      /* journey bookkeeping never breaks sockets */
+    }
+  }
+
+  async function openJourneyRow(socketId: string, userId: string, path: string) {
+    try {
+      const [row] = await db('nivaro_admin_journeys')
+        .insert({
+          user: userId,
+          session_id: socketId,
+          path,
+          entered_at: new Date()
+        })
+        .returning('id')
+      const rowId = typeof row === 'object' ? (row as { id: number }).id : row
+      journeyTail.set(socketId, { rowId: Number(rowId), enteredAt: Date.now() })
+    } catch {
+      /* table may not exist mid-migration — skip silently */
+    }
+  }
+
 
   io.on('connection', (socket) => {
     app.log.debug({ socketId: socket.id }, 'Socket connected')
@@ -192,11 +227,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (!user || typeof payload?.path !== 'string') return
       const path = payload.path.slice(0, 200)
       const existing = pagePresence.get(socket.id)
+      const changed = existing?.path !== path
       pagePresence.set(socket.id, {
         user: { id: user.id, name: displayName(user) },
         path,
-        since: existing?.path === path ? existing.since : Date.now()
+        since: changed ? Date.now() : existing.since
       })
+      if (changed) {
+        void closeJourneyRow(socket.id).then(() => openJourneyRow(socket.id, user.id, path))
+      }
       io.to('presence-map').emit('presence-map:update', presenceSnapshot())
     })
     socket.on('presence-map:join', async () => {
@@ -245,6 +284,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
     socket.on('disconnect', () => {
       leaveRecordRoom()
+      void closeJourneyRow(socket.id)
       if (pagePresence.delete(socket.id)) {
         io.to('presence-map').emit('presence-map:update', presenceSnapshot())
       }

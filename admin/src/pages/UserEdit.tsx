@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { DelegationCard } from '@/components/delegation-card'
+import { JourneyTrail } from '@/components/journey-trail'
 import { RevisionsPanel } from '@/components/revisions-panel'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -346,6 +347,9 @@ export function UserEditPage() {
 
             {/* Delegation (own save, outside the profile form) */}
             <DelegationCard user={user} mode='admin' />
+
+            {/* Journey trail (admin-only API) */}
+            {currentUser?.is_admin && id && <JourneyTrail userId={id} />}
           </div>
         )}
       </div>
