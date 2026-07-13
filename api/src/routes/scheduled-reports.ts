@@ -48,7 +48,8 @@ export async function scheduledReportsRoutes(app: FastifyInstance) {
     if (!CRON_RE.test(String(b.cron_schedule))) {
       return reply.code(400).send({ error: 'cron_schedule must be a 5-part cron expression' })
     }
-    const type = b.report_type === 'queue' ? 'queue' : 'collection'
+    const type =
+      b.report_type === 'queue' ? 'queue' : b.report_type === 'ops_brief' ? 'ops_brief' : 'collection'
     if (type === 'collection' && !b.collection) {
       return reply.code(400).send({ error: 'collection is required for collection reports' })
     }
@@ -97,7 +98,9 @@ export async function scheduledReportsRoutes(app: FastifyInstance) {
     if (b.cron_schedule !== undefined && !CRON_RE.test(String(b.cron_schedule))) {
       return reply.code(400).send({ error: 'cron_schedule must be a 5-part cron expression' })
     }
-    if (b.report_type !== undefined) u.report_type = b.report_type === 'queue' ? 'queue' : 'collection'
+    if (b.report_type !== undefined)
+      u.report_type =
+        b.report_type === 'queue' ? 'queue' : b.report_type === 'ops_brief' ? 'ops_brief' : 'collection'
     if (b.filters !== undefined) u.filters = toJson(b.filters)
     if (b.fields !== undefined) u.fields = toJson(b.fields)
     if (b.recipients !== undefined) u.recipients = JSON.stringify(b.recipients)

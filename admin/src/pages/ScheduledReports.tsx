@@ -30,7 +30,7 @@ import { cn, formatRelative } from '@/lib/utils'
 interface ScheduledReport {
   id: number
   name: string
-  report_type: 'collection' | 'queue'
+  report_type: 'collection' | 'queue' | 'ops_brief'
   collection: string | null
   queue_id: string | null
   recipients: string[]
@@ -110,7 +110,7 @@ export function ScheduledReportsPage() {
   const qc = useQueryClient()
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
-  const [type, setType] = useState<'collection' | 'queue'>('collection')
+  const [type, setType] = useState<'collection' | 'queue' | 'ops_brief'>('collection')
   const [target, setTarget] = useState('')
   const [recipients, setRecipients] = useState('')
   const [cron, setCron] = useState('0 8 * * 1-5')
@@ -226,7 +226,7 @@ export function ScheduledReportsPage() {
                 <div>
                   <p className='mb-1 text-[11px] font-medium text-slate-500'>Source</p>
                   <div className='flex items-center rounded-lg border border-slate-200 p-0.5 dark:border-border'>
-                    {(['collection', 'queue'] as const).map((t) => (
+                    {(['collection', 'queue', 'ops_brief'] as const).map((t) => (
                       <button
                         key={t}
                         type='button'
@@ -241,28 +241,30 @@ export function ScheduledReportsPage() {
                             : 'text-slate-400 hover:text-slate-700'
                         )}
                       >
-                        {t}
+                        {t === 'ops_brief' ? 'AI brief' : t}
                       </button>
                     ))}
                   </div>
                 </div>
-                <div>
-                  <p className='mb-1 text-[11px] font-medium text-slate-500'>
-                    {type === 'collection' ? 'Collection' : 'Queue'}
-                  </p>
-                  <TargetCombobox
-                    value={target}
-                    onChange={setTarget}
-                    options={
-                      type === 'collection'
-                        ? collections
-                            .filter((c) => !c.collection.startsWith('nivaro_'))
-                            .map((c) => ({ value: c.collection, label: c.collection }))
-                        : queues.map((q) => ({ value: q.id, label: q.name }))
-                    }
-                    placeholder={type === 'collection' ? 'Select collection…' : 'Select queue…'}
-                  />
-                </div>
+                {type !== 'ops_brief' && (
+                  <div>
+                    <p className='mb-1 text-[11px] font-medium text-slate-500'>
+                      {type === 'collection' ? 'Collection' : 'Queue'}
+                    </p>
+                    <TargetCombobox
+                      value={target}
+                      onChange={setTarget}
+                      options={
+                        type === 'collection'
+                          ? collections
+                              .filter((c) => !c.collection.startsWith('nivaro_'))
+                              .map((c) => ({ value: c.collection, label: c.collection }))
+                          : queues.map((q) => ({ value: q.id, label: q.name }))
+                      }
+                      placeholder={type === 'collection' ? 'Select collection…' : 'Select queue…'}
+                    />
+                  </div>
+                )}
               </div>
               <div className='flex flex-wrap items-end gap-3'>
                 <div className='min-w-64 flex-1'>
@@ -337,8 +339,12 @@ export function ScheduledReportsPage() {
                       {r.name}
                     </p>
                     <p className='truncate text-[11px] text-slate-400'>
-                      {r.report_type === 'queue' ? `queue ${r.queue_id}` : r.collection} ·{' '}
-                      <Clock className='inline h-3 w-3' /> <code>{r.cron_schedule}</code> ·{' '}
+                      {r.report_type === 'queue'
+                        ? `queue ${r.queue_id}`
+                        : r.report_type === 'ops_brief'
+                          ? 'AI ops brief'
+                          : r.collection}{' '}
+                      · <Clock className='inline h-3 w-3' /> <code>{r.cron_schedule}</code> ·{' '}
                       {r.recipients.length} recipient{r.recipients.length !== 1 ? 's' : ''}
                       {r.last_run_at &&
                         ` · last run ${formatRelative(r.last_run_at)} (${r.last_run_status})`}

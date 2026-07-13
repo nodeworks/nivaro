@@ -14,7 +14,7 @@ import { htmlToPdf } from './pdf-layout.js'
 export interface ScheduledReport {
   id: number
   name: string
-  report_type: 'collection' | 'queue'
+  report_type: 'collection' | 'queue' | 'ops_brief'
   collection: string | null
   queue_id: string | null
   filters: string | null
@@ -141,6 +141,154 @@ async function renderQueueReport(report: ScheduledReport, runAs: User): Promise<
   )
 }
 
+
+// ─── AI ops brief ─────────────────────────────────────────────────────────────
+
+/** Simple markdown → HTML for the brief body (headings, lists, bold, paras). */
+function miniMarkdown(md: string): string {
+  const lines = md.split('\n')
+  const out: string[] = []
+  let inList = false
+  for (const raw of lines) {
+    const line = raw.trimEnd()
+    const inline = (t: string) =>
+      esc(t).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    if (/^#{1,3} /.test(line)) {
+      if (inList) { out.push('</ul>'); inList = false }
+      out.push(`<h2>${inline(line.replace(/^#{1,3} /, ''))}</h2>`)
+    } else if (/^[-*] /.test(line)) {
+      if (!inList) { out.push('<ul>'); inList = true }
+      out.push(`<li>${inline(line.slice(2))}</li>`)
+    } else if (line.trim() === '') {
+      if (inList) { out.push('</ul>'); inList = false }
+    } else {
+      if (inList) { out.push('</ul>'); inList = false }
+      out.push(`<p>${inline(line)}</p>`)
+    }
+  }
+  if (inList) out.push('</ul>')
+  return out.join('\n')
+}
+
+async function gatherOpsFacts(): Promise<Record<string, unknown>> {
+  const now = Date.now()
+  const weekAgo = new Date(now - 7 * 86_400_000)
+  const twoWeeksAgo = new Date(now - 14 * 86_400_000)
+
+  const [thisWeek, lastWeek] = await Promise.all([
+    db('nivaro_workflow_history').where('timestamp', '>=', weekAgo).count({ n: '*' }),
+    db('nivaro_workflow_history')
+      .where('timestamp', '>=', twoWeeksAgo)
+      .where('timestamp', '<', weekAgo)
+      .count({ n: '*' })
+  ])
+
+  // Latest queue snapshots vs 7 days ago
+  const snapshots = (await db('nivaro_queue_stat_snapshots as s')
+    .join('nivaro_queues as q', 'q.id', 's.queue_id')
+    .where('s.snapshot_date', '>=', twoWeeksAgo)
+    .orderBy('s.snapshot_date', 'desc')
+    .select('q.name', 's.snapshot_date', 's.total', 's.unowned', 's.sla_warning', 's.sla_breached', 's.at_risk')
+    .catch(() => [])) as Array<Record<string, unknown>>
+  const latestByQueue = new Map<string, Record<string, unknown>>()
+  const weekAgoByQueue = new Map<string, Record<string, unknown>>()
+  for (const s of snapshots) {
+    const name = String(s.name)
+    if (!latestByQueue.has(name)) latestByQueue.set(name, s)
+    const d = new Date(s.snapshot_date as string).getTime()
+    if (!weekAgoByQueue.has(name) && d <= now - 6.5 * 86_400_000) weekAgoByQueue.set(name, s)
+  }
+  const queues = [...latestByQueue.entries()].map(([name, cur]) => ({
+    name,
+    now: {
+      total: Number(cur.total),
+      unowned: Number(cur.unowned),
+      sla_breached: Number(cur.sla_breached),
+      at_risk: Number(cur.at_risk)
+    },
+    week_ago: weekAgoByQueue.has(name)
+      ? {
+          total: Number(weekAgoByQueue.get(name)?.total),
+          sla_breached: Number(weekAgoByQueue.get(name)?.sla_breached)
+        }
+      : null
+  }))
+
+  // Predictively stuck: non-terminal instances whose age > P80 for their state
+  let stuck: Array<Record<string, unknown>> = []
+  try {
+    const { getStateDurationStats } = await import('./predictive-sla.js')
+    const stats = await getStateDurationStats()
+    const rows = (await db.raw(`
+      SELECT TOP 200 wi.collection, wi.item, wi.current_state, s.label AS state_label,
+             DATEDIFF(hour, h.entered_at, GETDATE()) AS age_hours
+      FROM nivaro_workflow_instances wi
+      JOIN nivaro_workflow_states s ON s.id = wi.current_state
+      CROSS APPLY (
+        SELECT MAX(timestamp) AS entered_at FROM nivaro_workflow_history
+        WHERE instance = wi.id AND to_state = wi.current_state
+      ) h
+      WHERE s.is_terminal = 0 AND h.entered_at IS NOT NULL
+      ORDER BY age_hours DESC
+    `)) as Array<Record<string, unknown>>
+    stuck = rows
+      .filter((r) => {
+        const st = stats.get(String(r.current_state))
+        return st && st.n >= 30 && Number(r.age_hours) > st.p80
+      })
+      .slice(0, 8)
+      .map((r) => ({
+        record: `${String(r.collection)}/${String(r.item)}`,
+        state: String(r.state_label),
+        age_hours: Number(r.age_hours)
+      }))
+  } catch {
+    stuck = []
+  }
+
+  const [issuesRow] = await db('nivaro_issues')
+    .where('created_at', '>=', weekAgo)
+    .count({ n: '*' })
+    .catch(() => [{ n: 0 }])
+
+  return {
+    period: 'last 7 days',
+    workflow_transitions: { this_week: Number(thisWeek[0]?.n ?? 0), prior_week: Number(lastWeek[0]?.n ?? 0) },
+    queues,
+    predictively_stuck_records: stuck,
+    new_issues: Number((issuesRow as { n?: number })?.n ?? 0)
+  }
+}
+
+async function renderOpsBrief(report: ScheduledReport): Promise<string> {
+  const { getAiClient, getAiModelSettings } = await import('./ai-client.js')
+  const client = await getAiClient()
+  const facts = await gatherOpsFacts()
+
+  let body: string
+  if (client) {
+    const { model } = await getAiModelSettings()
+    const response = await client.messages.create({
+      model,
+      max_tokens: 900,
+      messages: [
+        {
+          role: 'user',
+          content: `You are writing the weekly operations brief for a work-management platform. Using ONLY these facts, write a concise executive brief in markdown (## headings, - bullets, **bold** for numbers). Lead with the headline trend, then queue health, then the stuck records that need attention (name them), then issues. No preamble, no invented numbers.\n\nFACTS:\n${JSON.stringify(facts, null, 2)}`
+        }
+      ]
+    })
+    body = response.content
+      .map((b) => (b.type === 'text' ? b.text : ''))
+      .filter(Boolean)
+      .join('\n')
+  } else {
+    body = `## Ops summary (AI not configured — raw facts)\n\n${'```'}\n${JSON.stringify(facts, null, 2)}\n${'```'}`
+  }
+
+  return reportShell(report.name, 'AI weekly operations brief', miniMarkdown(body))
+}
+
 export async function runScheduledReport(
   report: ScheduledReport
 ): Promise<{ sent: number; error?: string }> {
@@ -155,7 +303,9 @@ export async function runScheduledReport(
   const html =
     report.report_type === 'queue'
       ? await renderQueueReport(report, creator)
-      : await renderCollectionReport(report)
+      : report.report_type === 'ops_brief'
+        ? await renderOpsBrief(report)
+        : await renderCollectionReport(report)
 
   const pdf = await htmlToPdf(html, {
     format: 'A4',
