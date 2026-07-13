@@ -16,7 +16,14 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -50,7 +57,7 @@ type Policy = {
   row_filter?: RowCondition[] | null
 }
 type Collection = { collection: string; display_name: string | null }
-type ActiveTab = 'permissions' | 'members' | 'ui'
+type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate'
 
 const ALL_NAV_ITEMS = navCategories.flatMap((cat) =>
   cat.items.map((item) => ({ category: cat.label, label: item.label, to: item.to }))
@@ -680,7 +687,8 @@ function UiPermissionsTab({
   return (
     <div className='space-y-5'>
       <p className='text-[12px] text-slate-500'>
-        Uncheck to hide nav items and block direct URL access for this role. API access is controlled separately via policies.
+        Uncheck to hide nav items and block direct URL access for this role. API access is
+        controlled separately via policies.
       </p>
       {categories.map((cat) => {
         const items = ALL_NAV_ITEMS.filter((i) => i.category === cat)
@@ -786,7 +794,7 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
 
       {/* Tabs */}
       <div className='shrink-0 flex border-b border-slate-100 bg-slate-50/50 dark:bg-muted/20 dark:border-border'>
-        {(['permissions', 'members', 'ui'] as ActiveTab[]).map((tab) => (
+        {(['permissions', 'members', 'ui', 'simulate'] as ActiveTab[]).map((tab) => (
           <button
             key={tab}
             type='button'
@@ -798,7 +806,7 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
                 : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
             )}
           >
-            {tab === 'ui' ? 'UI Access' : tab}
+            {tab === 'ui' ? 'UI Access' : tab === 'simulate' ? 'Simulator' : tab}
           </button>
         ))}
       </div>
@@ -822,7 +830,16 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
             />
           )
         ) : activeTab === 'ui' ? (
-          <UiPermissionsTab roleId={role.id} isAdmin={role.admin_access} disabled={(roleDetail as (typeof roleDetail & { ui_permissions?: string[] }) | undefined)?.ui_permissions ?? []} />
+          <UiPermissionsTab
+            roleId={role.id}
+            isAdmin={role.admin_access}
+            disabled={
+              (roleDetail as (typeof roleDetail & { ui_permissions?: string[] }) | undefined)
+                ?.ui_permissions ?? []
+            }
+          />
+        ) : activeTab === 'simulate' ? (
+          <SimulatorTab roleId={role.id} collections={collections} />
         ) : (
           <MembersTab roleId={role.id} />
         )}
@@ -856,6 +873,192 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
           </Button>
         )}
       </div>
+    </div>
+  )
+}
+
+// ─── Permission simulator ─────────────────────────────────────────────────────
+
+interface SimulationResult {
+  allowed: boolean
+  reason: string
+  admin_access: boolean
+  fields: string[] | null
+  row_filter: Array<{ field: string; op: string; value?: unknown }> | null
+  tree_permission: { result: boolean | null; note: string } | null
+  ui_disabled_routes: string[]
+}
+
+function SimulatorTab({ roleId, collections }: { roleId: string; collections: Collection[] }) {
+  const [collection, setCollection] = useState('')
+  const [action, setAction] = useState<'create' | 'read' | 'update' | 'delete'>('read')
+  const [itemId, setItemId] = useState('')
+  const [colOpen, setColOpen] = useState(false)
+
+  const simulate = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: SimulationResult }>(`/roles/${roleId}/simulate`, {
+          collection,
+          action,
+          item_id: itemId.trim() || null
+        })
+        .then((r) => r.data.data),
+    onError: () => toast.error('Simulation failed')
+  })
+  const result = simulate.data
+
+  return (
+    <div className='max-w-xl space-y-4'>
+      <p className='text-[12px] text-muted-foreground'>
+        Evaluate what a user with this role can do — the same checks the API runs (policies, field
+        lists, row filters, tree permissions).
+      </p>
+      <div className='flex flex-wrap items-end gap-2'>
+        <div>
+          <p className='mb-1 text-[11px] font-medium text-slate-500'>Collection</p>
+          <Popover open={colOpen} onOpenChange={setColOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant='outline'
+                role='combobox'
+                className='h-8 w-[200px] justify-between px-2 text-[12px] font-normal'
+              >
+                <span className={cn('truncate', !collection && 'text-muted-foreground')}>
+                  {collection || 'Select collection…'}
+                </span>
+                <ChevronsUpDown className='ml-1 h-3 w-3 shrink-0 opacity-50' />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className='w-[240px] p-0' align='start'>
+              <Command>
+                <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
+                <CommandList>
+                  <CommandEmpty>No collections</CommandEmpty>
+                  <CommandGroup>
+                    {collections.map((c) => (
+                      <CommandItem
+                        key={c.collection}
+                        value={c.collection}
+                        onSelect={() => {
+                          setCollection(c.collection)
+                          setColOpen(false)
+                        }}
+                        className='text-[12px]'
+                      >
+                        <Check
+                          className={cn(
+                            'mr-2 h-3 w-3',
+                            collection === c.collection ? 'opacity-100' : 'opacity-0'
+                          )}
+                        />
+                        {c.collection}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+        </div>
+        <div>
+          <p className='mb-1 text-[11px] font-medium text-slate-500'>Action</p>
+          <div className='flex items-center rounded-lg border border-slate-200 p-0.5 dark:border-border'>
+            {(['create', 'read', 'update', 'delete'] as const).map((a) => (
+              <button
+                key={a}
+                type='button'
+                onClick={() => setAction(a)}
+                className={cn(
+                  'h-7 rounded-md px-2.5 text-[11px] font-medium capitalize transition-colors',
+                  action === a
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+                )}
+              >
+                {a}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className='mb-1 text-[11px] font-medium text-slate-500'>Item ID (optional)</p>
+          <input
+            type='text'
+            value={itemId}
+            onChange={(e) => setItemId(e.target.value)}
+            placeholder='for tree rules'
+            className='h-8 w-[130px] rounded-md border border-slate-200 px-2 text-[12px] focus:outline-none focus:ring-1 focus:ring-[#00ceff] dark:border-border dark:bg-background'
+          />
+        </div>
+        <Button
+          size='sm'
+          disabled={!collection || simulate.isPending}
+          onClick={() => simulate.mutate()}
+        >
+          {simulate.isPending ? 'Running…' : 'Simulate'}
+        </Button>
+      </div>
+
+      {result && (
+        <div className='space-y-3 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+          <div className='flex items-center gap-2'>
+            <Badge
+              className={cn(
+                'text-[11px]',
+                result.allowed
+                  ? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400'
+                  : 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400'
+              )}
+            >
+              {result.allowed ? 'Allowed' : 'Denied'}
+            </Badge>
+            <p className='text-[13px] text-slate-700 dark:text-slate-300'>{result.reason}</p>
+          </div>
+          <div className='space-y-2 text-[12px]'>
+            <div>
+              <span className='font-medium text-slate-500'>Visible fields: </span>
+              {result.fields === null ? (
+                <span className='text-slate-600 dark:text-slate-400'>all fields</span>
+              ) : result.fields.length === 0 ? (
+                <span className='text-slate-400'>none</span>
+              ) : (
+                <span className='font-mono text-slate-600 dark:text-slate-400'>
+                  {result.fields.join(', ')}
+                </span>
+              )}
+            </div>
+            <div>
+              <span className='font-medium text-slate-500'>Row filter: </span>
+              {result.row_filter ? (
+                <code className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] dark:bg-muted'>
+                  {result.row_filter
+                    .map((c) => `${c.field} ${c.op} ${JSON.stringify(c.value ?? '')}`)
+                    .join(' AND ')}
+                </code>
+              ) : (
+                <span className='text-slate-600 dark:text-slate-400'>none — all rows visible</span>
+              )}
+            </div>
+            {result.tree_permission && (
+              <div>
+                <span className='font-medium text-slate-500'>Tree rules: </span>
+                <span className='text-slate-600 dark:text-slate-400'>
+                  {result.tree_permission.note}
+                </span>
+              </div>
+            )}
+            {result.ui_disabled_routes.length > 0 && (
+              <div>
+                <span className='font-medium text-slate-500'>Hidden admin pages: </span>
+                <span className='font-mono text-slate-600 dark:text-slate-400'>
+                  {result.ui_disabled_routes.join(', ')}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

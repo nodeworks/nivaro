@@ -5,7 +5,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
 import { getPoliciesForRole, parseRowFilter } from '../services/permissions.js'
-import type { Role } from '../types.js'
+import type { Role, User } from '../types.js'
 
 /**
  * Validate + normalize an incoming row_filter. Returns:
@@ -134,6 +134,114 @@ export async function rolesRoutes(app: FastifyInstance) {
       .select('id', 'first_name', 'last_name', 'email', 'status', 'last_access')
       .orderBy('first_name')
     return reply.send({ data: users })
+  })
+
+  // Permission simulator — "what would a user with this role see/do?"
+  // Evaluates the same code paths the items service uses (can, field list,
+  // row filter, tree permissions, ui_permissions) and explains each verdict.
+  app.post('/:id/simulate', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = req.body as {
+      collection?: string
+      action?: 'create' | 'read' | 'update' | 'delete'
+      item_id?: string | null
+      user_id?: string | null
+    }
+    if (!body.collection || !body.action) {
+      return reply.code(400).send({ error: 'collection and action are required' })
+    }
+    const role = await db<Role>('nivaro_roles').where({ id }).first()
+    if (!role) return reply.code(404).send({ error: 'Role not found' })
+
+    // Synthetic user carrying the role — $CURRENT_USER row filters resolve to
+    // the optional user_id so per-user filters can be simulated too.
+    const simUser = {
+      id: body.user_id ?? '00000000-0000-0000-0000-000000000000',
+      role: id,
+      email: 'simulated@nivaro',
+      status: 'active'
+    } as unknown as User
+
+    if (role.admin_access) {
+      return reply.send({
+        data: {
+          allowed: true,
+          reason: 'Role has admin access — all permission checks bypass',
+          admin_access: true,
+          fields: null,
+          row_filter: null,
+          tree_permission: null,
+          ui_disabled_routes: []
+        }
+      })
+    }
+
+    const policy = await db('nivaro_policies')
+      .where({ role: id, action: body.action })
+      .where((qb) => {
+        qb.where({ collection: body.collection }).orWhere({ collection: '*' })
+      })
+      .orderByRaw(`CASE WHEN collection = '*' THEN 1 ELSE 0 END`)
+      .first()
+
+    const allowed = !!policy
+    const reason = !policy
+      ? `No '${body.action}' policy for '${body.collection}' (or wildcard) on this role`
+      : policy.collection === '*'
+        ? `Allowed by the wildcard (*) '${body.action}' policy`
+        : `Allowed by the '${body.collection}' '${body.action}' policy`
+
+    let fields: string[] | null = null
+    if (policy?.fields) {
+      try {
+        fields = typeof policy.fields === 'string' ? JSON.parse(policy.fields) : policy.fields
+      } catch {
+        fields = null
+      }
+    }
+
+    const rowFilter = policy ? parseRowFilter(policy.row_filter) : null
+
+    // Tree permissions apply only when an item is provided and rules exist
+    let treePermission: { result: boolean | null; note: string } | null = null
+    if (allowed && body.item_id && ['read', 'update', 'delete'].includes(body.action)) {
+      const { getTreePermission } = await import('../services/tree-permissions.js')
+      const result = await getTreePermission(
+        simUser,
+        body.action as 'read' | 'update' | 'delete',
+        body.collection,
+        body.item_id
+      )
+      treePermission = {
+        result,
+        note:
+          result === null
+            ? 'No tree rules apply to this item'
+            : result
+              ? 'Tree rule allows (never grants beyond policies)'
+              : 'DENIED by a subtree rule — request would 403'
+      }
+    }
+
+    let uiDisabled: string[] = []
+    const rawUiPerms = (role as Role & { ui_permissions?: string | null }).ui_permissions
+    try {
+      uiDisabled = rawUiPerms ? JSON.parse(String(rawUiPerms)) : []
+    } catch {
+      uiDisabled = []
+    }
+
+    return reply.send({
+      data: {
+        allowed: allowed && treePermission?.result !== false,
+        reason: treePermission?.result === false ? treePermission.note : reason,
+        admin_access: false,
+        fields, // null = all fields
+        row_filter: rowFilter,
+        tree_permission: treePermission,
+        ui_disabled_routes: uiDisabled
+      }
+    })
   })
 
   // Policies for a role
