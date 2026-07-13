@@ -3,6 +3,7 @@ import {
   Activity,
   AlertOctagon,
   AlertTriangle,
+  ArrowRightLeft,
   BarChart2,
   Bell,
   BellDot,
@@ -160,6 +161,7 @@ export const navCategories: NavCategory[] = [
     label: 'System',
     items: [
       { icon: Database, label: 'Virtual Collections', to: '/virtual-collections' },
+      { icon: ArrowRightLeft, label: 'Content Promotion', to: '/content-promotion' },
       { icon: Link2, label: 'External APIs', to: '/external-apis' },
       { icon: Braces, label: 'GraphQL', to: '/graphql' },
       { icon: Code2, label: 'Custom Queries', to: '/custom-queries' },
