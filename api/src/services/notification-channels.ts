@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { sendMail } from './mail.js'
+import { sendWebPush } from './web-push.js'
 
 /**
  * Multi-channel user notification service.
@@ -123,6 +124,17 @@ export async function notifyUser(
           item: opts.item ?? null
         })
         .returning('*')
+
+      // Browser push rides the in-app channel: no-op for users with no
+      // registered subscription, never blocks the caller.
+      void sendWebPush(userId, {
+        title: opts.subject.slice(0, 120),
+        body: opts.message.slice(0, 300),
+        url:
+          opts.collection && opts.item
+            ? `/collections/${opts.collection}/${opts.item}`
+            : '/notifications'
+      })
 
       if (app.io) {
         emitNotification(app.io, userId, {
