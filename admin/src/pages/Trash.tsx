@@ -127,12 +127,12 @@ export function TrashPage() {
                     <p className='truncate text-[13px] font-medium text-slate-800 dark:text-foreground'>
                       {e.label}
                     </p>
-                    <p className='text-[11px] text-slate-400'>
+                    <div className='text-[11px] text-slate-400'>
                       <Badge className='mr-1.5 h-4 px-1.5 text-[10px]'>{e.collection}</Badge>#
                       {e.item_id}
                       {e.deleted_by_name ? ` · deleted by ${e.deleted_by_name}` : ''} ·{' '}
                       {formatRelative(e.deleted_at)}
-                    </p>
+                    </div>
                   </div>
                   <Button
                     size='sm'

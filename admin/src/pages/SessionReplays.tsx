@@ -172,7 +172,7 @@ export function SessionReplaysPage() {
                   className='flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'
                 >
                   <div className='min-w-0 flex-1'>
-                    <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+                    <div className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
                       {rec.user_name || rec.user.slice(0, 8)}
                       {rec.truncated && (
                         <Badge
@@ -183,7 +183,7 @@ export function SessionReplaysPage() {
                         </Badge>
                       )}
                       {!rec.ended_at && <Badge className='ml-2 h-4 px-1.5 text-[10px]'>live</Badge>}
-                    </p>
+                    </div>
                     <p className='text-[11px] text-slate-400'>
                       {formatRelative(rec.started_at)} · {duration(rec)} · {rec.event_count} events
                       · {formatFileSize(rec.byte_size)}
