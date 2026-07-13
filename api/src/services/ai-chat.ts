@@ -263,21 +263,32 @@ export async function executeChatTool(
       if (!query) throw new Error('query is required')
       const limit = Math.min(10, Math.max(1, Number(input.limit) || 5))
       const vec = await embedText(query)
-      const hits = (await searchEmbeddings(collection, vec, limit)).filter((h) => h.score > 0)
-      // Resolve labels for the hits through the permission-checked read path
-      let labeled: unknown = hits
-      if (hits.length > 0) {
+      const rawHits = (await searchEmbeddings(collection, vec, limit)).filter((h) => h.score > 0)
+      // Resolve hits through the permission-checked read path and DROP any hit
+      // whose row it does not return — raw embedding ids must never leak rows
+      // the user's row-level security filter hides.
+      let visibleHits: typeof rawHits = []
+      let rows: unknown[] = []
+      if (rawHits.length > 0) {
         try {
           const res = await readItems(user, collection, {
-            filter: { id: { _in: hits.map((h) => h.item) } },
+            filter: { id: { _in: rawHits.map((h) => h.item) } },
             limit
           })
-          labeled = { hits, rows: (res as { data?: unknown[] }).data ?? [] }
+          rows = (res as { data?: unknown[] }).data ?? []
+          const visibleIds = new Set(
+            (rows as Array<{ id?: unknown }>).map((r) => String(r.id))
+          )
+          visibleHits = rawHits.filter((h) => visibleIds.has(String(h.item)))
         } catch (err) {
           if (err instanceof ForbiddenError) throw new Error('No read access')
+          throw err
         }
       }
-      return { result: labeled, summary: `${hits.length} semantic hit(s) in ${collection}` }
+      return {
+        result: { hits: visibleHits, rows },
+        summary: `${visibleHits.length} semantic hit(s) in ${collection}`
+      }
     }
 
     default:
