@@ -16,6 +16,7 @@ export * from './sections/integrations.js'
 export * from './sections/low-code.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
+export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
 export * from './sections/platform.js'
 export * from './sections/queues.js'
@@ -189,6 +190,14 @@ import {
   obsHealthDashboard,
   obsIssueLog
 } from './sections/observability.js'
+import {
+  opsBackups,
+  opsContentPromotion,
+  opsErdView,
+  opsErrorTracking,
+  opsFileUsage,
+  opsPermissionSimulator
+} from './sections/ops-tooling.js'
 import {
   architecture,
   userActivity,
@@ -646,7 +655,18 @@ export const navSections: NavGroup[] = [
   {
     id: 'observability',
     label: 'Observability',
-    items: [obsApiAnalytics, obsHealthDashboard, obsDataQuality, obsIssueLog]
+    items: [
+      obsApiAnalytics,
+      obsHealthDashboard,
+      obsDataQuality,
+      obsIssueLog,
+      opsErrorTracking,
+      opsBackups,
+      opsContentPromotion,
+      opsFileUsage,
+      opsPermissionSimulator,
+      opsErdView
+    ]
   },
   {
     id: 'data-model',

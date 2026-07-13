@@ -117,6 +117,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Embeddable Widget SDK** — token-gated public list/form widgets via a one-line script tag; XSS-safe, no iframes
 - **Zapier / Make Integration** — REST-hook triggers, create/update actions, and discovery endpoints under `/api/zapier`, authenticated with `nvk_` API keys
 - **Public API Docs Site** — static `www/api-reference.html` explorer regenerated from any instance via `pnpm docs:api`
+- **Operations Tooling** — automatic error tracking into the issue log, logical backup export, content promotion between instances, file usage/orphan tracking, permission simulator, and an interactive data-model ERD
 - **Full SDK Coverage** — ~175 typed SDK commands spanning every feature area, explorable in the in-browser SDK playground
 
 ---
