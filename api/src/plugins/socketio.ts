@@ -185,6 +185,20 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         user: { id: user.id, name: displayName(user) }
       })
     })
+    // Live co-editing v3 — relay value keystrokes inside the record room.
+    // Preview-only on the receiving side; persistence still goes through the
+    // normal save path with all its validation.
+    socket.on('field:change', (payload: { field?: string; value?: unknown }) => {
+      const user = authenticatedUser
+      if (!user || !joinedRecordRoom || typeof payload?.field !== 'string') return
+      const value = typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
+      socket.to(joinedRecordRoom).emit('field:changed', {
+        field: payload.field,
+        value,
+        user: { id: user.id, name: displayName(user) }
+      })
+    })
+
     socket.on('field:blur', (payload: { field?: string }) => {
       const user = authenticatedUser
       if (!user || !joinedRecordRoom || typeof payload?.field !== 'string') return

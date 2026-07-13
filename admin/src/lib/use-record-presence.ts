@@ -22,10 +22,14 @@ export interface Viewer {
   name: string
 }
 
+export interface LiveEdit extends Viewer {
+  value?: unknown
+}
+
 export function useRecordPresence(collection: string | undefined, item: string | undefined) {
   const { user } = useAuth()
   const [viewers, setViewers] = useState<Viewer[]>([])
-  const [editing, setEditing] = useState<Record<string, Viewer>>({})
+  const [editing, setEditing] = useState<Record<string, LiveEdit>>({})
   const socketRef = useRef<Socket | null>(null)
 
   useEffect(() => {
@@ -67,6 +71,18 @@ export function useRecordPresence(collection: string | undefined, item: string |
       })
     })
 
+    // Live keystroke preview from other editors
+    socket.on(
+      'field:changed',
+      (payload: { field: string; value?: unknown; user: Viewer | null }) => {
+        if (!payload.user || payload.user.id === user?.id) return
+        setEditing((prev) => ({
+          ...prev,
+          [payload.field]: { ...payload.user!, value: payload.value }
+        }))
+      }
+    )
+
     // Broadcast my own focus/blur from the data-field wrappers
     const onFocusIn = (e: FocusEvent) => {
       const wrap = (e.target as HTMLElement | null)?.closest?.('[data-field]')
@@ -78,13 +94,31 @@ export function useRecordPresence(collection: string | undefined, item: string |
       const field = wrap?.getAttribute('data-field')
       if (field) socket.emit('field:blur', { field })
     }
+    // Broadcast my keystrokes (throttled) for the live preview on other screens
+    let lastEmit = 0
+    const onInput = (e: Event) => {
+      const target = e.target as HTMLInputElement | HTMLTextAreaElement | null
+      const wrap = target?.closest?.('[data-field]')
+      const field = wrap?.getAttribute('data-field')
+      if (!field) return
+      const now = Date.now()
+      if (now - lastEmit < 250) return
+      lastEmit = now
+      const value =
+        target && 'type' in target && (target as HTMLInputElement).type === 'checkbox'
+          ? (target as HTMLInputElement).checked
+          : (target?.value ?? '')
+      socket.emit('field:change', { field, value })
+    }
     document.addEventListener('focusin', onFocusIn)
     document.addEventListener('focusout', onFocusOut)
+    document.addEventListener('input', onInput)
 
     return () => {
       disposed = true
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', onFocusOut)
+      document.removeEventListener('input', onInput)
       socket.emit('record:leave')
       socket.disconnect()
       socketRef.current = null
@@ -100,7 +134,11 @@ export function useRecordPresence(collection: string | undefined, item: string |
       const el = document.querySelector<HTMLElement>(`[data-field="${CSS.escape(field)}"]`)
       if (el) {
         el.classList.add('nvr-remote-editing')
-        el.dataset.remoteEditor = editing[field].name
+        const e = editing[field]
+        el.dataset.remoteEditor =
+          e.value !== undefined && e.value !== ''
+            ? `${e.name}: ${String(e.value).slice(0, 40)}`
+            : e.name
         marked.push(el)
       }
     }
