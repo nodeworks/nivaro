@@ -36,6 +36,7 @@ vi.mock('../../services/files.js', () => ({
 import fastifyMultipart from '@fastify/multipart'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
+import { makeLookupFetcher } from '../../routes/import-templates.js'
 import { uploadFileBuffer } from '../../services/files.js'
 import { can } from '../../services/permissions.js'
 import type { User } from '../../types.js'
@@ -134,6 +135,20 @@ function makeChain(result: unknown) {
     delete: vi.fn().mockResolvedValue(1),
     returning: vi.fn().mockResolvedValue([{ id: 'new-id' }]),
     then: vi.fn((cb: (v: unknown) => unknown) => Promise.resolve(result).then(cb))
+  }
+  return chain
+}
+
+// Minimal thenable chain for exercising makeLookupFetcher directly against a fake
+// knex — real enough to satisfy db(collection).select('*').whereIn(...).where(...).
+function makeLookupChain(rows: Row[]) {
+  const chain: Record<string, unknown> = {
+    select: vi.fn().mockReturnThis(),
+    whereIn: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    whereNot: vi.fn().mockReturnThis(),
+    then: (resolve: (v: Row[]) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve(rows).then(resolve, reject)
   }
   return chain
 }
@@ -478,5 +493,214 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     expect(parsed.data.values.vendor_name).toBe('Acme Corp')
     expect(parsed.data.file_id).toBeNull()
     expect(vi.mocked(uploadFileBuffer)).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/parse persists the file and returns a non-null file_id when attach_file_field is set', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-2',
+      name: 'Vendor Import With File',
+      collection: 'purchase_orders',
+      mode: 'prefill',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([
+        { target: 'vendor_name', source: 'Vendor', steps: [{ type: 'trim' }] }
+      ]),
+      line_map: null,
+      attach_file_field: 'source_file',
+      is_active: true,
+      is_shared: false,
+      role_id: null,
+      created_by: 'user-1'
+    }
+    vi.mocked(db).mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>)
+
+    const app = await buildApp(user, false)
+    const xlsx = xlsxBuffer([{ Vendor: '  Acme Corp  ' }])
+    const { body, boundary } = buildMultipartPayload([
+      {
+        name: 'file',
+        value: xlsx,
+        filename: 'import.xlsx',
+        contentType: 'application/octet-stream'
+      }
+    ])
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-2/parse',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: body
+    })
+
+    expect(res.statusCode).toBe(200)
+    const parsed = JSON.parse(res.body) as { data: { file_id: string | null } }
+    expect(typeof parsed.data.file_id).toBe('string')
+    expect(parsed.data.file_id).not.toBeNull()
+    expect(vi.mocked(uploadFileBuffer)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(uploadFileBuffer)).toHaveBeenCalledWith(
+      user,
+      expect.any(Buffer),
+      'import.xlsx',
+      'application/octet-stream'
+    )
+  })
+
+  it('POST /:id/parse returns 400 for a non-multipart request', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-1',
+      collection: 'purchase_orders',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: null,
+      attach_file_field: null
+    }
+    vi.mocked(db).mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>)
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-1/parse',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ not: 'multipart' })
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body)).toEqual({ error: 'No file provided' })
+  })
+
+  it('POST / rejects a header lookup targeting a nivaro_ table', async () => {
+    const user = makeAdminUser()
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'purchase_orders' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections.first() — primary collection
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // nivaro_fields.select — primary collection
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Vendor Import',
+        collection: 'purchase_orders',
+        header_map: [
+          {
+            target: 'vendor_id',
+            source: 'Vendor',
+            steps: [{ type: 'lookup', collection: 'nivaro_users', match_field: 'id' }]
+          }
+        ]
+      })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as {
+      error: string
+      details: { path: string; message: string }[]
+    }
+    expect(body.error).toBe('Invalid template config')
+    expect(
+      body.details.some(
+        (d) =>
+          d.path === 'header_map[0].steps[0]' &&
+          d.message === 'Unknown lookup collection "nivaro_users"'
+      )
+    ).toBe(true)
+  })
+
+  it('POST / rejects a header lookup with an unknown match_field', async () => {
+    const user = makeAdminUser()
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'purchase_orders' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections.first() — primary collection
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // nivaro_fields.select — primary collection
+      .mockReturnValueOnce(
+        makeChain({ id: 2, collection: 'vendors' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections.first() — lookup target
+      .mockReturnValueOnce(
+        makeChain([{ field: 'id' }, { field: 'name' }]) as unknown as ReturnType<typeof db>
+      ) // nivaro_fields.select — lookup target
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Vendor Import',
+        collection: 'purchase_orders',
+        header_map: [
+          {
+            target: 'vendor_id',
+            source: 'Vendor',
+            steps: [{ type: 'lookup', collection: 'vendors', match_field: 'not_a_real_field' }]
+          }
+        ]
+      })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as {
+      error: string
+      details: { path: string; message: string }[]
+    }
+    expect(body.error).toBe('Invalid template config')
+    expect(
+      body.details.some(
+        (d) =>
+          d.path === 'header_map[0].steps[0].match_field' && d.message.includes('not_a_real_field')
+      )
+    ).toBe(true)
+  })
+})
+
+describe('makeLookupFetcher', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('reparses stringified JSON array column values into real arrays', async () => {
+    vi.mocked(db).mockReturnValueOnce(
+      makeLookupChain([
+        { id: 1, code: 'A1', values: '[1,2,3]', note: '[not valid json' }
+      ]) as unknown as ReturnType<typeof db>
+    )
+
+    const fetcher = makeLookupFetcher()
+    const rows = await fetcher({
+      collection: 'disperse_maps',
+      match_field: 'code',
+      values: ['A1'],
+      scope_filters: []
+    })
+
+    expect(rows).toEqual([{ id: 1, code: 'A1', values: [1, 2, 3], note: '[not valid json' }])
+  })
+
+  it('blocks nivaro_ collections and non-identifier collection names without querying', async () => {
+    const fetcher = makeLookupFetcher()
+
+    const blockedByPrefix = await fetcher({
+      collection: 'nivaro_users',
+      match_field: 'id',
+      values: ['x'],
+      scope_filters: []
+    })
+    const blockedByShape = await fetcher({
+      collection: 'sys.objects',
+      match_field: 'id',
+      values: ['x'],
+      scope_filters: []
+    })
+
+    expect(blockedByPrefix).toEqual([])
+    expect(blockedByShape).toEqual([])
+    expect(db).not.toHaveBeenCalled()
   })
 })

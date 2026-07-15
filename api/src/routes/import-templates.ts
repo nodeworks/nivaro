@@ -12,6 +12,7 @@ import type {
   ConfigError,
   ImportHeaderRule,
   ImportLineConfig,
+  ImportStep,
   ImportTemplateConfig
 } from '../services/import-templates-config.js'
 import { normalizeImportTemplateConfig } from '../services/import-templates-config.js'
@@ -52,12 +53,33 @@ function templateRowToConfig(row: Record<string, unknown>): ImportTemplateConfig
   }
 }
 
+const COLLECTION_NAME_RE = /^[A-Za-z0-9_]+$/
+
+/** Post-processes fetched rows: MSSQL nvarchar-JSON array columns (e.g. a disperse
+ *  map's values list) arrive as plain strings — reparse any string value that looks
+ *  like a JSON array so it reaches the pipeline as a real array. Never throws. */
+function parseArrayStrings(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      const val = row[key]
+      if (typeof val !== 'string' || !val.trim().startsWith('[')) continue
+      try {
+        const parsed = JSON.parse(val)
+        if (Array.isArray(parsed)) row[key] = parsed
+      } catch {
+        // not valid JSON — leave the raw string untouched
+      }
+    }
+  }
+  return rows
+}
+
 /** Case-insensitive matching happens in the pipeline map, not here — MSSQL's default
  *  collation is already case-insensitive, but the pipeline normalizes anyway. */
-function makeLookupFetcher(): LookupFetcher {
+export function makeLookupFetcher(): LookupFetcher {
   return async ({ collection, match_field, values, scope_filters }) => {
-    if (/^nivaro_/i.test(collection)) return []
-    return selectInChunks(values, 500, (chunk) => {
+    if (/^nivaro_/i.test(collection) || !COLLECTION_NAME_RE.test(collection)) return []
+    const rows = await selectInChunks(values, 500, (chunk) => {
       let q = db(collection).select('*').whereIn(match_field, chunk)
       for (const f of scope_filters) {
         q =
@@ -67,6 +89,7 @@ function makeLookupFetcher(): LookupFetcher {
       }
       return q
     })
+    return parseArrayStrings(rows)
   }
 }
 
@@ -80,6 +103,81 @@ async function resolveLineChildCollection(
     .where({ one_collection: collection, one_field: targetField })
     .first()) as { many_collection: string } | undefined
   return relation?.many_collection ?? null
+}
+
+/** Resolves + caches a lookup target collection's field set. `null` means the
+ *  collection is unknown, blocklisted, or not a valid identifier. */
+async function resolveLookupFieldSet(
+  collection: string,
+  fieldSetCache: Map<string, Set<string> | null>
+): Promise<Set<string> | null> {
+  const cached = fieldSetCache.get(collection)
+  if (cached !== undefined) return cached
+
+  if (!COLLECTION_NAME_RE.test(collection) || /^nivaro_/i.test(collection)) {
+    fieldSetCache.set(collection, null)
+    return null
+  }
+
+  const collRow = await db('nivaro_collections').where({ collection }).first()
+  if (!collRow) {
+    fieldSetCache.set(collection, null)
+    return null
+  }
+
+  const fieldRows = (await db('nivaro_fields').where({ collection }).select('field')) as {
+    field: string
+  }[]
+  const fieldSet = new Set(fieldRows.map((r) => r.field))
+  fieldSetCache.set(collection, fieldSet)
+  return fieldSet
+}
+
+/** Validates one lookup step's collection + match_field + scope_filters fields
+ *  against live schema metadata, appending ConfigError entries in place. */
+async function validateLookupStep(
+  step: Extract<ImportStep, { type: 'lookup' }>,
+  path: string,
+  errors: ConfigError[],
+  fieldSetCache: Map<string, Set<string> | null>
+): Promise<void> {
+  const fieldSet = await resolveLookupFieldSet(step.collection, fieldSetCache)
+  if (!fieldSet) {
+    errors.push({ path, message: `Unknown lookup collection "${step.collection}"` })
+    return
+  }
+  if (!fieldSet.has(step.match_field)) {
+    errors.push({
+      path: `${path}.match_field`,
+      message: `Unknown field "${step.match_field}" on ${step.collection}`
+    })
+  }
+  step.scope_filters.forEach((f, i) => {
+    if (!fieldSet.has(f.field)) {
+      errors.push({
+        path: `${path}.scope_filters[${i}].field`,
+        message: `Unknown field "${f.field}" on ${step.collection}`
+      })
+    }
+  })
+}
+
+/** Finds every `lookup` step across a set of header rules and validates each. */
+async function validateLookupStepsInRules(
+  rules: ImportHeaderRule[],
+  basePath: string,
+  errors: ConfigError[],
+  fieldSetCache: Map<string, Set<string> | null>
+): Promise<void> {
+  for (let i = 0; i < rules.length; i++) {
+    const steps = rules[i].steps
+    for (let j = 0; j < steps.length; j++) {
+      const step = steps[j]
+      if (step.type === 'lookup') {
+        await validateLookupStep(step, `${basePath}[${i}].steps[${j}]`, errors, fieldSetCache)
+      }
+    }
+  }
 }
 
 /** Validates a normalized config's field/collection targets against live schema
@@ -109,6 +207,9 @@ async function validateConfigAgainstSchema(
     }
   })
 
+  const lookupFieldSetCache = new Map<string, Set<string> | null>()
+  await validateLookupStepsInRules(config.header_map, 'header_map', errors, lookupFieldSetCache)
+
   if (config.line_map) {
     const childCollection = await resolveLineChildCollection(
       collection,
@@ -133,6 +234,36 @@ async function validateConfigAgainstSchema(
         })
       }
     })
+
+    await validateLookupStepsInRules(
+      config.line_map.columns,
+      'line_map.columns',
+      errors,
+      lookupFieldSetCache
+    )
+
+    const disperse = config.line_map.disperse
+    if (disperse) {
+      const mapFieldSet = await resolveLookupFieldSet(disperse.map_collection, lookupFieldSetCache)
+      if (!mapFieldSet) {
+        errors.push({
+          path: 'line_map.disperse.map_collection',
+          message: `Unknown lookup collection "${disperse.map_collection}"`
+        })
+      } else if (!mapFieldSet.has(disperse.map_key_field)) {
+        errors.push({
+          path: 'line_map.disperse.map_key_field',
+          message: `Unknown field "${disperse.map_key_field}" on ${disperse.map_collection}`
+        })
+      }
+
+      await validateLookupStepsInRules(
+        disperse.member_columns,
+        'line_map.disperse.member_columns',
+        errors,
+        lookupFieldSetCache
+      )
+    }
   }
 }
 
@@ -317,7 +448,12 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
-    const multipart = await req.file()
+    let multipart: Awaited<ReturnType<typeof req.file>>
+    try {
+      multipart = await req.file()
+    } catch {
+      return reply.code(400).send({ error: 'No file provided' })
+    }
     if (!multipart) return reply.code(400).send({ error: 'No file provided' })
     const buffer = await multipart.toBuffer()
     if (buffer.length > MAX_FILE_BYTES) {
@@ -371,7 +507,12 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
 
   // POST /import-templates/test — builder "test panel": run an unsaved config, no persist
   app.post('/test', { preHandler: requireAdmin }, async (req, reply) => {
-    const multipart = await req.file()
+    let multipart: Awaited<ReturnType<typeof req.file>>
+    try {
+      multipart = await req.file()
+    } catch {
+      return reply.code(400).send({ error: 'No file provided' })
+    }
     if (!multipart) return reply.code(400).send({ error: 'No file provided' })
     const buffer = await multipart.toBuffer()
     if (buffer.length > MAX_FILE_BYTES) {
