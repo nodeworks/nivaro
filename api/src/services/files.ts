@@ -65,20 +65,19 @@ function buildDiskName(id: string, ext: string): string {
 
 // ─── File operations ─────────────────────────────────────────────────────────
 
-export async function uploadFile(
+export async function uploadFileBuffer(
   user: User,
-  multipart: MultipartFile,
+  buffer: Buffer,
+  filename: string,
+  mimeType: string,
   folderId?: string
 ): Promise<StoredFile> {
   const fileId = randomUUID()
   const diskId = ulid().toLowerCase()
-  const originalName = multipart.filename
-  const mimeType = multipart.mimetype || mime.lookup(originalName) || 'application/octet-stream'
   const ext =
-    extname(originalName) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
+    extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
   const diskName = buildDiskName(diskId, ext)
 
-  const buffer = await multipart.toBuffer()
   const provider = getStorageProviderName()
   await getStorage().put(diskName, buffer, String(mimeType))
 
@@ -87,8 +86,8 @@ export async function uploadFile(
     storage: provider,
     storage_provider: provider,
     filename_disk: diskName,
-    filename_download: originalName,
-    title: originalName.replace(/\.[^.]+$/, ''),
+    filename_download: filename,
+    title: filename.replace(/\.[^.]+$/, ''),
     type: String(mimeType),
     folder: folderId ?? null,
     uploaded_by: user.id,
@@ -109,6 +108,15 @@ export async function uploadFile(
   })
 
   return file
+}
+
+export async function uploadFile(
+  user: User,
+  multipart: MultipartFile,
+  folderId?: string
+): Promise<StoredFile> {
+  const buffer = await multipart.toBuffer()
+  return uploadFileBuffer(user, buffer, multipart.filename, multipart.mimetype || mime.lookup(multipart.filename) || 'application/octet-stream', folderId)
 }
 
 /**
