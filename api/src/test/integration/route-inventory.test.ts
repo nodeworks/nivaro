@@ -147,6 +147,15 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/comments/' },
   { method: 'POST', path: '/api/comments/' },
   { method: 'GET', path: '/api/tasks/' },
+
+  // Import templates — spreadsheet-driven prefill/direct-import builder + runner
+  { method: 'GET', path: '/api/import-templates' },
+  { method: 'POST', path: '/api/import-templates' },
+  { method: 'PATCH', path: '/api/import-templates/:id' },
+  { method: 'DELETE', path: '/api/import-templates/:id' },
+  { method: 'POST', path: '/api/import-templates/:id/parse' },
+  { method: 'POST', path: '/api/import-templates/:id/execute' },
+  { method: 'POST', path: '/api/import-templates/test' }
 ]
 
 describe('Route inventory — frontend-called routes must exist', () => {

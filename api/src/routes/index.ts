@@ -42,6 +42,7 @@ import { flowsRoutes, webhookFlowRoute } from './flows.js'
 import { globalSearchRoutes } from './global-search.js'
 import { healthRoutes } from './health.js'
 import { hierarchyRoutes } from './hierarchy.js'
+import { importTemplatesRoutes } from './import-templates.js'
 import { importsRoutes } from './imports.js'
 import { issuesRoutes } from './issues.js'
 import { itemActionsRoutes } from './item-actions.js'
@@ -157,6 +158,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(fieldWatchesRoutes, { prefix: '/field-watches' })
   await app.register(notificationSubscriptionsRoutes, { prefix: '/notification-subscriptions' })
   await app.register(importsRoutes, { prefix: '/imports' })
+  await app.register(importTemplatesRoutes, { prefix: '/import-templates' })
   await app.register(slaRoutes, { prefix: '/sla' })
   await app.register(alertsRoutes, { prefix: '/alerts' })
   await app.register(analyticsRoutes, { prefix: '/analytics' })
