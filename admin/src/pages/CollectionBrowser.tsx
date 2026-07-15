@@ -1,3 +1,6 @@
+import type { ImportParseResponse, ImportTemplateSummary } from '@nivaro/sdk'
+import { createNivaro } from '@nivaro/sdk'
+import { ImportFromFileButton, ImportIssuesPanel, NivaroProvider } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import {
@@ -44,6 +47,14 @@ import {
   CommandItem,
   CommandList
 } from '@/components/ui/command'
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -192,6 +203,13 @@ export function CollectionBrowserPage() {
   const [isExporting, setIsExporting] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
+  const nivaroClient = useMemo(() => createNivaro(window.location.origin), [])
+  const [directImport, setDirectImport] = useState<{
+    tpl: ImportTemplateSummary
+    result: ImportParseResponse
+  } | null>(null)
+  const [directIssues, setDirectIssues] = useState<ImportParseResponse['issues']>([])
+  const [directExecuting, setDirectExecuting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [displayColumns, setDisplayColumns] = useState<string[]>([])
   const [viewMode, setViewMode] = usePersistedTab<'table' | 'grid' | 'tree' | 'calendar' | 'gantt'>(
@@ -765,8 +783,42 @@ export function CollectionBrowserPage() {
     }
   }
 
+  const handleImportParsed = (result: ImportParseResponse, tpl: ImportTemplateSummary) => {
+    if (tpl.mode === 'direct') {
+      setDirectIssues(result.issues)
+      setDirectImport({ tpl, result })
+    } else {
+      navigate(`/collections/${collection}/new`, {
+        state: { importResult: result, importTemplateId: tpl.id }
+      })
+    }
+  }
+
+  const handleDirectImportConfirm = async () => {
+    if (!directImport) return
+    setDirectExecuting(true)
+    try {
+      const res = await api.post<{ data: { id: string } }>(
+        `/import-templates/${directImport.tpl.id}/execute`,
+        directImport.result
+      )
+      toast.success('Record created from file')
+      setDirectImport(null)
+      navigate(`/collections/${collection}/${res.data.data.id}`)
+    } catch (err) {
+      const issues = (err as { response?: { data?: { issues?: ImportParseResponse['issues'] } } })
+        .response?.data?.issues
+      if (issues) setDirectIssues(issues)
+      toast.error('Import failed')
+    } finally {
+      setDirectExecuting(false)
+    }
+  }
+
+  const directImportHasBlockingIssue = directIssues.some((i) => i.severity === 'error')
+
   return (
-    <>
+    <NivaroProvider client={nivaroClient}>
       {/* Page header */}
       <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-6 py-2.5'>
         <div className='flex items-center justify-between gap-3'>
@@ -869,6 +921,9 @@ export function CollectionBrowserPage() {
                 <Plus className='mr-1.5 h-3.5 w-3.5' />
                 New item
               </Button>
+            )}
+            {!colMeta?.singleton && collection && (
+              <ImportFromFileButton collection={collection} onParsed={handleImportParsed} />
             )}
             <Popover open={exportOpen} onOpenChange={setExportOpen}>
               <PopoverTrigger asChild>
@@ -1224,6 +1279,41 @@ export function CollectionBrowserPage() {
         </div>
       )}
 
+      <Dialog
+        open={!!directImport}
+        onOpenChange={(open) => {
+          if (!open) setDirectImport(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create {displayName} from file</DialogTitle>
+          </DialogHeader>
+          <DialogBody className='space-y-3'>
+            {directImport && (
+              <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+                {Object.keys(directImport.result.values).length} field
+                {Object.keys(directImport.result.values).length === 1 ? '' : 's'} resolved ·{' '}
+                {directImport.result.lines.length} line
+                {directImport.result.lines.length === 1 ? '' : 's'}
+              </p>
+            )}
+            <ImportIssuesPanel issues={directIssues} />
+          </DialogBody>
+          <DialogFooter>
+            <Button variant='outline' onClick={() => setDirectImport(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleDirectImportConfirm}
+              disabled={directImportHasBlockingIssue || directExecuting}
+            >
+              {directExecuting ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Confirm'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {selectedIds.length > 0 && (
         <>
           <div className='fixed bottom-[68px] left-1/2 z-50 -translate-x-1/2 flex items-center gap-2'>
@@ -1276,7 +1366,7 @@ export function CollectionBrowserPage() {
           />
         </>
       )}
-    </>
+    </NivaroProvider>
   )
 }
 

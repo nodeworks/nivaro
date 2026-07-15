@@ -1,3 +1,4 @@
+import type { ImportParseResponse } from '@nivaro/sdk'
 import { createNivaro } from '@nivaro/sdk'
 import {
   DrilldownContext,
@@ -21,7 +22,7 @@ import {
   Sparkles,
   Waypoints
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { ApprovalPanel } from '@/components/approval-panel'
@@ -362,6 +363,20 @@ export function ItemEditPage() {
   const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
   const drillCtx = useMemo(() => ({ open: (t: DrilldownTarget) => setDrilldown(t) }), [])
   const isNew = id === 'new'
+
+  // Router-state handoff from CollectionBrowser/QueueWorklist "New from file" —
+  // consumed once, then the state is cleared so back/refresh doesn't re-apply it.
+  const importResultConsumedRef = useRef(false)
+  const [importResult, setImportResult] = useState<ImportParseResponse | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run-once handoff
+  useEffect(() => {
+    if (importResultConsumedRef.current) return
+    const state = location.state as { importResult?: ImportParseResponse } | null
+    if (!isNew || !state?.importResult) return
+    importResultConsumedRef.current = true
+    setImportResult(state.importResult)
+    navigate(location.pathname + location.search, { replace: true, state: null })
+  }, [location, isNew])
 
   const [summarizing, setSummarizing] = useState(false)
   const [timelineOpen, setTimelineOpen] = useState(false)
@@ -931,6 +946,7 @@ export function ItemEditPage() {
                 {...(parentFieldParam && parentIdParam && isNew
                   ? { initialValues: { [parentFieldParam]: parentIdParam } }
                   : {})}
+                {...(isNew && importResult ? { initialImportResult: importResult } : {})}
               />
             </div>
           </DrilldownContext.Provider>
