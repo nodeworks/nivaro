@@ -40,16 +40,16 @@ async function reportFileEvent(
   const endpointMap: Record<FileEventType, string> = {
     created: '/storage/file-created',
     deleted: '/storage/file-deleted',
-    bandwidth: '/storage/bandwidth',
+    bandwidth: '/storage/bandwidth'
   }
 
   fetch(`${gatewayUrl}${endpointMap[event]}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-provision-secret': secret,
+      'x-provision-secret': secret
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(payload)
   }).catch(() => {}) // Fire-and-forget — never fail the upload/delete
 }
 
@@ -74,8 +74,7 @@ export async function uploadFileBuffer(
 ): Promise<StoredFile> {
   const fileId = randomUUID()
   const diskId = ulid().toLowerCase()
-  const ext =
-    extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
+  const ext = extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
   const diskName = buildDiskName(diskId, ext)
 
   const provider = getStorageProviderName()
@@ -104,7 +103,7 @@ export async function uploadFileBuffer(
     filename: file.filename_download,
     mimeType: file.type,
     sizeBytes: file.filesize,
-    folder: file.folder ?? null,
+    folder: file.folder ?? null
   })
 
   return file
@@ -116,7 +115,13 @@ export async function uploadFile(
   folderId?: string
 ): Promise<StoredFile> {
   const buffer = await multipart.toBuffer()
-  return uploadFileBuffer(user, buffer, multipart.filename, multipart.mimetype || mime.lookup(multipart.filename) || 'application/octet-stream', folderId)
+  return uploadFileBuffer(
+    user,
+    buffer,
+    multipart.filename,
+    multipart.mimetype || mime.lookup(multipart.filename) || 'application/octet-stream',
+    folderId
+  )
 }
 
 /**
@@ -167,17 +172,21 @@ export async function createPresignedFile(
     filename: file.filename_download,
     mimeType: file.type,
     sizeBytes: null,
-    folder: file.folder ?? null,
+    folder: file.folder ?? null
   })
 
   return { file, uploadUrl }
 }
 
-export async function getFile(id: string): Promise<(StoredFile & { uploaded_by_name: string | null }) | undefined> {
+export async function getFile(
+  id: string
+): Promise<(StoredFile & { uploaded_by_name: string | null }) | undefined> {
   return db('nivaro_files as f')
     .select(
       'f.*',
-      db.raw("COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(u.first_name,'') + ' ' + ISNULL(u.last_name,''))), ''), u.email) as uploaded_by_name")
+      db.raw(
+        "COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(u.first_name,'') + ' ' + ISNULL(u.last_name,''))), ''), u.email) as uploaded_by_name"
+      )
     )
     .leftJoin('nivaro_users as u', 'u.id', 'f.uploaded_by')
     .where('f.id', id)
@@ -197,7 +206,9 @@ export async function listFiles(
   const q = db('nivaro_files as f')
     .select(
       'f.*',
-      db.raw("COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(u.first_name,'') + ' ' + ISNULL(u.last_name,''))), ''), u.email) as uploaded_by_name")
+      db.raw(
+        "COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(u.first_name,'') + ' ' + ISNULL(u.last_name,''))), ''), u.email) as uploaded_by_name"
+      )
     )
     .leftJoin('nivaro_users as u', 'u.id', 'f.uploaded_by')
     .limit(limit)
@@ -271,7 +282,7 @@ export async function deleteFile(id: string): Promise<void> {
   // Report to gateway (fire-and-forget)
   await reportFileEvent('deleted', {
     slug: getTenantSlug() ?? null,
-    fileKey: file.filename_disk,
+    fileKey: file.filename_disk
   })
 }
 
@@ -281,7 +292,7 @@ export async function reportFileBandwidth(file: StoredFile): Promise<void> {
   await reportFileEvent('bandwidth', {
     slug: getTenantSlug() ?? null,
     bytesTransferred: file.filesize ?? 0,
-    requestCount: 1,
+    requestCount: 1
   })
 }
 
