@@ -46,11 +46,15 @@ export * from './commands/content.js'
 export * from './commands/devex.js'
 export * from './commands/files.js'
 export * from './commands/infra.js'
+export * from './commands/import-templates.js'
 export * from './commands/queues.js'
 export type { PresenceClient, PresenceOptions, PresenceSession } from './presence.js'
 export { createPresence } from './presence.js'
 export type { NivaroRealtime, RealtimeEvent } from './realtime.js'
 export { createRealtime } from './realtime.js'
+
+// Import types for NivaroClient interface
+import type { ImportParseResponse } from './commands/import-templates.js'
 
 // ─── Primitive aliases ────────────────────────────────────────────────────────
 
@@ -1630,6 +1634,7 @@ export interface NivaroClient {
     operationName?: string
   ): Promise<T>
   upload(file: File, opts?: { folder?: string; title?: string }): Promise<FileUploadResult>
+  importParse(templateId: string, file: File | Blob, fileName?: string): Promise<ImportParseResponse>
   fileUrl(fileId: string): string
   setToken(token: string | null): void
   getToken(): string | undefined
@@ -1739,6 +1744,24 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     return `${baseUrl}/api/files/${fileId}`
   }
 
+  async function importParse(
+    templateId: string,
+    file: File | Blob,
+    fileName?: string
+  ): Promise<ImportParseResponse> {
+    const form = new FormData()
+    form.append('file', file, fileName ?? (file as File).name ?? 'import.xlsx')
+    const res = await fetcher(`${baseUrl}/api/import-templates/${templateId}/parse`, {
+      method: 'POST',
+      headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : {},
+      credentials: credentialsMode(),
+      body: form
+    })
+    const json = await res.json()
+    if (!res.ok) throw Object.assign(new Error(json?.error || 'Import parse failed'), { status: res.status, issues: json?.issues })
+    return json.data
+  }
+
   async function graphql<T = Record<string, unknown>>(
     query: string,
     variables?: Record<string, unknown>,
@@ -1773,7 +1796,7 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     return json.data
   }
 
-  return { request, graphql, upload, fileUrl, setToken, getToken, url: baseUrl }
+  return { request, graphql, upload, importParse, fileUrl, setToken, getToken, url: baseUrl }
 }
 
 // ─── Tree (same-collection hierarchy) ─────────────────────────────────────────
