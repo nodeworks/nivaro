@@ -145,7 +145,9 @@ function resolveLookupOutcome(
   rowNumber: number | undefined
 ): StepFoldResult {
   const key = candidate == null ? '' : String(candidate).trim().toLowerCase()
-  const record = key !== '' ? matchMap.get(key) : undefined
+  // Empty cells are not lookup misses — resolve to blank silently instead of warning.
+  if (key === '') return { value: undefined }
+  const record = matchMap.get(key)
   if (record) {
     return { value: step.take === 'record' ? record : record.id }
   }

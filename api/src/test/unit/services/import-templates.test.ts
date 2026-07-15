@@ -102,6 +102,16 @@ describe('runImportPipeline — lookup', () => {
     expect(issues[0]).toMatchObject({ severity: 'error', rule: 'header:vendor', column: 'Vendor' })
   })
 
+  it('empty cells resolve to blank silently — no miss issue even with on_miss=error', async () => {
+    const { values, issues } = await runImportPipeline({
+      config,
+      rows: [{ Vendor: '  ' }],
+      lookup: NO_LOOKUP
+    })
+    expect(values.vendor).toBeUndefined()
+    expect(issues.filter((i) => i.rule === 'header:vendor')).toEqual([])
+  })
+
   it('scope_filters substitute $resolved values', async () => {
     const scoped = cfg({
       header_map: [
