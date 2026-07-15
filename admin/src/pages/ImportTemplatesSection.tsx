@@ -1281,7 +1281,9 @@ function TestPanel({ collection, draft }: { collection: string; draft: TemplateD
         attach_file_field: draft.attach_file_field || null
       }
       form.append('config', JSON.stringify(configPayload))
-      const res = await api.post<{ data: ImportParseResponse }>('/import-templates/test', form)
+      const res = await api.post<{ data: ImportParseResponse }>('/import-templates/test', form, {
+        headers: { 'Content-Type': undefined }
+      })
       return res.data.data
     },
     onSuccess: (data) => {
