@@ -156,7 +156,7 @@ function resolveLookupOutcome(
     column,
     message:
       step.on_miss === 'create_stub'
-        ? `No match for "${name}" in ${step.collection} — will create new record`
+        ? `No match for "${name}" — flagged as new`
         : `No match for "${name}" in ${step.collection}`
   }
   if (rowNumber != null) issue.row = rowNumber
@@ -447,15 +447,13 @@ async function processDisperse(
       (_rowNumber, target) => `disperse:${target}`
     )
 
-    const nestedRows = groups.map((_g, i) => {
-      const result = memberResults[i]
-      const nestedRow: Record<string, unknown> = {
-        ...result.values,
-        allocated_amount: splitAmounts[i]
-      }
-      if (Object.keys(result.stubs).length > 0) nestedRow.stubs = result.stubs
-      return nestedRow
-    })
+    // Nested member stubs are NOT written into the stored row — create_stub misses
+    // already surface as warn issues (resolveLookupOutcome); persisting a `stubs` key
+    // here would leak pipeline metadata into the business JSON on save.
+    const nestedRows = groups.map((_g, i) => ({
+      ...memberResults[i].values,
+      allocated_amount: splitAmounts[i]
+    }))
 
     const draft = lineDraftByRowNumber.get(rowNumber)
     if (draft) draft.nested = { field: disperse.nested_target, rows: nestedRows }

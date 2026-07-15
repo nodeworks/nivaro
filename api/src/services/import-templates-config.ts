@@ -140,6 +140,11 @@ function normalizeRule(raw: unknown, path: string, errors: ConfigError[]): Impor
     const normalized = normalizeStep(step, `${path}.steps[${i}]`, errors)
     if (normalized) normalizedSteps.push(normalized)
   })
+  // The pipeline resolves exactly one lookup per rule (foldStepsSync's pre-lookup
+  // slice assumes no earlier lookup); reject configs that would silently drop one.
+  if (normalizedSteps.filter((s) => s.type === 'lookup').length > 1) {
+    errors.push({ path, message: 'Only one lookup step per rule' })
+  }
   return {
     target: src.target,
     source: typeof src.source === 'string' ? src.source : null,

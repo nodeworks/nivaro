@@ -5,7 +5,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { uploadFileBuffer } from '../services/files.js'
-import { readSpreadsheet } from '../services/import-spreadsheet.js'
+import { IMPORT_ROW_CAP, readSpreadsheet } from '../services/import-spreadsheet.js'
 import type { ImportIssue, LineDraft, LookupFetcher } from '../services/import-templates.js'
 import { runImportPipeline } from '../services/import-templates.js'
 import type {
@@ -20,6 +20,7 @@ import { applyFieldRules, createOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
+const MODES = ['prefill', 'direct', 'both'] as const
 
 function parseJsonSafe(val: unknown): unknown {
   if (typeof val !== 'string') return val
@@ -79,21 +80,30 @@ function parseArrayStrings(rows: Record<string, unknown>[]): Record<string, unkn
 }
 
 /** Case-insensitive matching happens in the pipeline map, not here — MSSQL's default
- *  collation is already case-insensitive, but the pipeline normalizes anyway. */
-export function makeLookupFetcher(): LookupFetcher {
+ *  collation is already case-insensitive, but the pipeline normalizes anyway.
+ *  `onError` lets a stale-config lookup failure (dropped/renamed column) degrade to an
+ *  error issue the route appends, instead of throwing a 500 out of the pipeline. */
+export function makeLookupFetcher(onError?: (message: string) => void): LookupFetcher {
   return async ({ collection, match_field, values, scope_filters }) => {
     if (/^nivaro_/i.test(collection) || !COLLECTION_NAME_RE.test(collection)) return []
-    const rows = await selectInChunks(values, 500, (chunk) => {
-      let q = db(collection).select('*').whereIn(match_field, chunk)
-      for (const f of scope_filters) {
-        q =
-          f.op === 'neq'
-            ? q.whereNot(f.field, f.value as never)
-            : q.where(f.field, f.value as never)
-      }
-      return q
-    })
-    return parseArrayStrings(rows)
+    try {
+      const rows = await selectInChunks(values, 500, (chunk) => {
+        let q = db(collection).select('*').whereIn(match_field, chunk)
+        for (const f of scope_filters) {
+          q =
+            f.op === 'neq'
+              ? q.whereNot(f.field, f.value as never)
+              : q.where(f.field, f.value as never)
+        }
+        return q
+      })
+      return parseArrayStrings(rows)
+    } catch {
+      onError?.(
+        `Lookup against "${collection}" failed — the collection or a mapped field may have changed`
+      )
+      return []
+    }
   }
 }
 
@@ -239,8 +249,11 @@ async function validateConfigAgainstSchema(
     }
     const childFieldRows = (await db('nivaro_fields')
       .where({ collection: childCollection })
-      .select('field')) as { field: string }[]
+      .select('field', 'type')) as { field: string; type: string | null }[]
     const childFieldSet = new Set(childFieldRows.map((r) => r.field))
+    const childAliasFields = new Set(
+      childFieldRows.filter((r) => r.type === 'alias').map((r) => r.field)
+    )
     config.line_map.columns.forEach((col, i) => {
       if (!childFieldSet.has(col.target)) {
         errors.push({
@@ -259,6 +272,20 @@ async function validateConfigAgainstSchema(
 
     const disperse = config.line_map.disperse
     if (disperse) {
+      // nested_target holds the split rows on each line child — it must be a physical
+      // (repeater/JSON) column on the child collection, never an alias relation field.
+      if (!childFieldSet.has(disperse.nested_target)) {
+        errors.push({
+          path: 'line_map.disperse',
+          message: `Unknown field "${disperse.nested_target}" on ${childCollection} — nested_target requires a repeater/JSON column`
+        })
+      } else if (childAliasFields.has(disperse.nested_target)) {
+        errors.push({
+          path: 'line_map.disperse',
+          message: `Field "${disperse.nested_target}" on ${childCollection} is an alias field — nested_target requires a repeater/JSON column`
+        })
+      }
+
       const mapFieldSet = await resolveLookupFieldSet(disperse.map_collection, lookupFieldSetCache)
       if (!mapFieldSet) {
         errors.push({
@@ -320,6 +347,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     if (!name || !collection) {
       return reply.code(400).send({ error: 'name and collection are required' })
     }
+    if (body.mode !== undefined && !MODES.includes(body.mode as (typeof MODES)[number])) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid mode', details: [{ path: 'mode', message: 'Unknown mode' }] })
+    }
 
     const { config, errors } = normalizeImportTemplateConfig(body)
     if (errors.length === 0) {
@@ -375,6 +407,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
     const body = req.body as Record<string, unknown>
+    if (body.mode !== undefined && !MODES.includes(body.mode as (typeof MODES)[number])) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid mode', details: [{ path: 'mode', message: 'Unknown mode' }] })
+    }
     const collection =
       typeof body.collection === 'string' ? body.collection : (existing.collection as string)
 
@@ -493,23 +530,40 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       }
     }
 
+    const lookupIssues: ImportIssue[] = []
     const result = await runImportPipeline({
       config,
       rows,
-      lookup: makeLookupFetcher(),
+      lookup: makeLookupFetcher((message) =>
+        lookupIssues.push({ severity: 'error', rule: 'lookup', message })
+      ),
       applyLineFieldRules
     })
-    const issues = [...sheetIssues, ...result.issues]
+    const issues = [...sheetIssues, ...result.issues, ...lookupIssues]
 
     let file_id: string | null = null
     if (config.attach_file_field) {
-      const stored = await uploadFileBuffer(
-        req.user!,
-        buffer,
-        multipart.filename,
-        multipart.mimetype || 'application/octet-stream'
-      )
-      file_id = stored.id
+      try {
+        const stored = await uploadFileBuffer(
+          req.user!,
+          buffer,
+          multipart.filename,
+          multipart.mimetype || 'application/octet-stream'
+        )
+        file_id = stored.id
+      } catch {
+        return reply.code(422).send({
+          error: 'File upload failed',
+          issues: [
+            ...issues,
+            {
+              severity: 'error',
+              rule: 'upload',
+              message: 'The uploaded file could not be stored — no data was imported.'
+            }
+          ]
+        })
+      }
     }
 
     const values = { ...result.values }
@@ -574,6 +628,19 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
 
     const values = { ...(body.values as Record<string, unknown>) }
     const lines = body.lines as LineDraft[]
+    if (lines.length > IMPORT_ROW_CAP) {
+      return reply.code(422).send({
+        error: `Too many line items — the import cap is ${IMPORT_ROW_CAP} rows`,
+        issues: [
+          ...bodyIssues,
+          {
+            severity: 'error',
+            rule: 'execute',
+            message: `Submitted ${lines.length} line items; the import cap is ${IMPORT_ROW_CAP} rows`
+          }
+        ]
+      })
+    }
     const config = templateRowToConfig(template)
     if (config.attach_file_field && body.file_id) {
       values[config.attach_file_field] = body.file_id
@@ -605,15 +672,39 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     const createdChildIds: (string | number)[] = []
     let parent: { id: string | number } | null = null
     const childCollection: string | null = childRelation?.collection ?? null
+    const fkField = childRelation?.fkField ?? null
     let failedAtLine = 0
 
-    try {
-      const fkField = childRelation?.fkField ?? null
+    // The parent create is isolated: createOne inserts then reads the row back, so a
+    // throw here (e.g. a row-level filter hiding the freshly-created row from this user)
+    // may mean the record WAS written but is unreadable. We don't know its id, so we
+    // can't compensate — report honestly rather than claiming nothing was created.
+    const orphanReply = () =>
+      reply.code(422).send({
+        error: 'The record may have been created but could not be read back',
+        issues: [
+          ...bodyIssues,
+          {
+            severity: 'error',
+            rule: 'execute',
+            message:
+              'The record may have been created but could not be read back (check read permissions / row-level filters for your role); line items were not created.'
+          }
+        ]
+      })
 
+    try {
       parent = (await createOne(req.user!, collection, values, req, workspaceId)) as {
         id: string | number
       }
+    } catch {
+      return orphanReply()
+    }
+    if (!parent || parent.id == null) {
+      return orphanReply()
+    }
 
+    try {
       if (childCollection && fkField) {
         for (let i = 0; i < lines.length; i++) {
           failedAtLine = i + 1
@@ -726,13 +817,16 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       }
     }
 
+    const lookupIssues: ImportIssue[] = []
     const result = await runImportPipeline({
       config,
       rows,
-      lookup: makeLookupFetcher(),
+      lookup: makeLookupFetcher((message) =>
+        lookupIssues.push({ severity: 'error', rule: 'lookup', message })
+      ),
       applyLineFieldRules
     })
-    const issues = [...sheetIssues, ...result.issues]
+    const issues = [...sheetIssues, ...result.issues, ...lookupIssues]
 
     return reply.send({
       data: {

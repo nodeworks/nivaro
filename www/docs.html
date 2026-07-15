@@ -7047,7 +7047,7 @@ Authorization: Bearer &lt;token&gt;
             <thead><tr><th>on_miss</th><th>Behavior</th></tr></thead>
             <tbody><tr><tr><td>leave_blank</td><td>Leaves the field empty and records a warn-severity issue.</td></tr>
               <tr><td>error</td><td>Records an error-severity issue — blocks direct execute until resolved.</td></tr>
-              <tr><td>create_stub</td><td>Leaves the field empty and attaches an <code class="doc-code">{ is_new: true, name }</code> sidecar the UI renders as a "will create" badge; a header-level create_stub is warn-only (no sidecar slot exists for header values, only for line values).</td></tr></tr></tbody>
+              <tr><td>create_stub</td><td>Flags the miss as a warn issue and an <code class="doc-code">{ is_new: true, name }</code> <code class="doc-code">stubs</code> sidecar on the parse response; no record is created and nothing extra is persisted (v1). A header-level create_stub is warn-only (no sidecar slot exists for header values, only for line values), and nested disperse-member stubs surface as warn issues only — never written into the stored row.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Line mapping (child rows)</h3>
           <p class="doc-p">A template can map spreadsheet rows to child records through an existing one-to-many relation on the collection: pick the target O2M field, an optional row filter (skip rows where a column is null/equals/not-equals a value), and per-column header rules the same shape as above. "Apply field rules to each line" runs the collection's existing Field Rules engine per generated line, so line defaults come from the same mechanism as manual entry.</p>
@@ -7074,7 +7074,7 @@ Authorization: Bearer &lt;token&gt;
           <ul class="doc-ul">
             <li>Files are capped at 25MB and 5,000 data rows per sheet; a sheet over the row cap is truncated to the first 5,000 rows, reported as a warn-severity issue (never a silent drop).</li>
             <li>The pipeline never throws for data problems — every miss or coercion failure becomes an issue (warn or error). Only structural failures (unreadable file, no matching sheet, empty sheet) abort the parse.</li>
-            <li>Direct execute is blocked while any error-severity issue remains, and the server re-checks the submitted issues itself — a client cannot smuggle an error-severity issue past the block.</li>
+            <li>Direct execute is blocked while any error-severity issue remains: the error-issue block validates the SUBMITTED issues array as an advisory UX guard. Actual enforcement is the items service (RBAC, validation rules, RLS, hooks) applied to every created row — the same guarantees as POST /items.</li>
             <li>Direct execute is all-or-nothing: the parent record and every child row are created in sequence, and any failure compensates by deleting everything already created for that import (raw deletes, not through trash) rather than leaving a partial record behind.</li>
           </ul>
           <h3 class="doc-h3">REST API</h3>

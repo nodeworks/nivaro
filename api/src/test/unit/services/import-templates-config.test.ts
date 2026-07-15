@@ -90,4 +90,23 @@ describe('normalizeImportTemplateConfig', () => {
     const { errors } = normalizeImportTemplateConfig({ line_map: { columns: [] } })
     expect(errors[0].path).toBe('line_map')
   })
+
+  it('rejects a rule with more than one lookup step', () => {
+    const { errors } = normalizeImportTemplateConfig({
+      header_map: [
+        {
+          target: 'vendor',
+          source: 'Vendor',
+          steps: [
+            { type: 'lookup', collection: 'vendors', match_field: 'name' },
+            { type: 'lookup', collection: 'regions', match_field: 'code' }
+          ]
+        }
+      ]
+    })
+    expect(errors).toContainEqual({
+      path: 'header_map[0]',
+      message: 'Only one lookup step per rule'
+    })
+  })
 })

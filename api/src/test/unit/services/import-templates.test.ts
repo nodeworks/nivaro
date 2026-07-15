@@ -236,6 +236,24 @@ describe('runImportPipeline — disperse', () => {
     const amounts = (disperseLine?.nested?.rows || []).map((r) => r.allocated_amount)
     expect(amounts).toEqual(['33.33', '33.33', '33.34']) // sums to 100.00
   })
+
+  it('never writes a stubs key into nested rows — create_stub misses surface as issues only', async () => {
+    // The units lookup only matches 'Unit A'; 'Unit B'/'Unit C' are create_stub misses.
+    const { lines, issues } = await runImportPipeline({
+      config,
+      rows: [
+        { 'Line Number': 1, 'Supplier Item': 'SUP-1', 'Line Total': 100 },
+        { 'Line Number': 2, 'Unit Type': 'Router', 'Unit Name': 'Unit A', 'Line Total': 10 },
+        { 'Line Number': 3, 'Unit Type': 'Router', 'Unit Name': 'Unit B', 'Line Total': 10 },
+        { 'Line Number': 4, 'Unit Type': 'Router', 'Unit Name': 'Unit C', 'Line Total': 10 }
+      ],
+      lookup
+    })
+    const disperseLine = lines.find((l) => l.nested)
+    expect(disperseLine?.nested?.rows.length).toBe(3)
+    expect(disperseLine?.nested?.rows.every((r) => !('stubs' in r))).toBe(true)
+    expect(issues.some((i) => i.severity === 'warn' && /flagged as new/.test(i.message))).toBe(true)
+  })
 })
 
 describe('runImportPipeline — missing columns', () => {

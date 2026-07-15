@@ -60,7 +60,7 @@ export const importTemplatesGuide: DocSection = {
         ['error', 'Records an error-severity issue — blocks direct execute until resolved.'],
         [
           'create_stub',
-          'Leaves the field empty and attaches an `{ is_new: true, name }` sidecar the UI renders as a "will create" badge; a header-level create_stub is warn-only (no sidecar slot exists for header values, only for line values).'
+          'Flags the miss as a warn issue and an `{ is_new: true, name }` `stubs` sidecar on the parse response; no record is created and nothing extra is persisted (v1). A header-level create_stub is warn-only (no sidecar slot exists for header values, only for line values), and nested disperse-member stubs surface as warn issues only — never written into the stored row.'
         ]
       ]
     },
@@ -124,7 +124,7 @@ export const importTemplatesGuide: DocSection = {
       items: [
         'Files are capped at 25MB and 5,000 data rows per sheet; a sheet over the row cap is truncated to the first 5,000 rows, reported as a warn-severity issue (never a silent drop).',
         'The pipeline never throws for data problems — every miss or coercion failure becomes an issue (warn or error). Only structural failures (unreadable file, no matching sheet, empty sheet) abort the parse.',
-        'Direct execute is blocked while any error-severity issue remains, and the server re-checks the submitted issues itself — a client cannot smuggle an error-severity issue past the block.',
+        'Direct execute is blocked while any error-severity issue remains: the error-issue block validates the SUBMITTED issues array as an advisory UX guard. Actual enforcement is the items service (RBAC, validation rules, RLS, hooks) applied to every created row — the same guarantees as POST /items.',
         'Direct execute is all-or-nothing: the parent record and every child row are created in sequence, and any failure compensates by deleting everything already created for that import (raw deletes, not through trash) rather than leaving a partial record behind.'
       ]
     },

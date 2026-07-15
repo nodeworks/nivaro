@@ -172,6 +172,20 @@ function makeLookupChain(rows: Row[]) {
   return chain
 }
 
+// A lookup chain whose await rejects — simulates a dropped/renamed column making the
+// lookup query throw at runtime (stale template config).
+function makeThrowingLookupChain() {
+  const chain: Record<string, unknown> = {
+    select: vi.fn().mockReturnThis(),
+    whereIn: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    whereNot: vi.fn().mockReturnThis(),
+    then: (_resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.reject(new Error('Invalid column name')).then(_resolve, reject)
+  }
+  return chain
+}
+
 async function buildApp(user: User, isAdmin: boolean): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
   // @ts-ignore — test shim; Fastify object decorators require factory in strict mode
@@ -890,6 +904,194 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
 
     expect(res.statusCode).toBe(403)
     expect(vi.mocked(createOne)).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/parse — a lookup DB failure degrades to an error issue, not a 500', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-lk',
+      collection: 'purchase_orders',
+      mode: 'prefill',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([
+        {
+          target: 'vendor_id',
+          source: 'Vendor',
+          steps: [
+            {
+              type: 'lookup',
+              collection: 'vendors',
+              match_field: 'name',
+              scope_filters: [],
+              on_miss: 'leave_blank',
+              take: 'id'
+            }
+          ]
+        }
+      ]),
+      line_map: null,
+      attach_file_field: null
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeThrowingLookupChain() as unknown as ReturnType<typeof db>) // lookup throws
+
+    const app = await buildApp(user, false)
+    const xlsx = xlsxBuffer([{ Vendor: 'Acme' }])
+    const { body, boundary } = buildMultipartPayload([
+      {
+        name: 'file',
+        value: xlsx,
+        filename: 'import.xlsx',
+        contentType: 'application/octet-stream'
+      }
+    ])
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-lk/parse',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: body
+    })
+
+    expect(res.statusCode).toBe(200)
+    const parsed = JSON.parse(res.body) as {
+      data: { issues: { severity: string; rule: string }[] }
+    }
+    expect(parsed.data.issues.some((i) => i.severity === 'error' && i.rule === 'lookup')).toBe(true)
+  })
+
+  it('POST /:id/execute — 422 when the created parent cannot be read back (createOne returns null)', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-1',
+      collection: 'purchase_orders',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: null,
+      attach_file_field: null
+    }
+    vi.mocked(db).mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>)
+    vi.mocked(createOne).mockResolvedValueOnce(null as never)
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-1/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ values: { vendor_name: 'Acme' }, lines: [], issues: [] })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string; issues: { message: string }[] }
+    expect(body.error).toContain('could not be read back')
+    expect(body.issues.some((i) => i.message.includes('could not be read back'))).toBe(true)
+    expect(vi.mocked(createOne)).toHaveBeenCalledTimes(1)
+  })
+
+  it('POST /:id/execute — 422 when submitted lines exceed the import cap, no rows created', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-1',
+      collection: 'purchase_orders',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: null,
+      attach_file_field: null
+    }
+    vi.mocked(db).mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>)
+
+    const lines = Array.from({ length: 5001 }, (_, i) => ({ values: { sku: `S${i}` } }))
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-1/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ values: {}, lines, issues: [] })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string }
+    expect(body.error).toContain('5000')
+    expect(vi.mocked(createOne)).not.toHaveBeenCalled()
+  })
+
+  it('POST / rejects a disperse nested_target that is an alias field on the child collection', async () => {
+    const user = makeAdminUser()
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'purchase_orders' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections primary
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // nivaro_fields primary
+      .mockReturnValueOnce(
+        makeChain({
+          many_collection: 'po_line_items',
+          many_field: 'purchase_order_id'
+        }) as unknown as ReturnType<typeof db>
+      ) // relation resolve
+      .mockReturnValueOnce(
+        makeChain([{ field: 'nested_items', type: 'alias' }]) as unknown as ReturnType<typeof db>
+      ) // child nivaro_fields (nested_target is an alias)
+      .mockReturnValueOnce(
+        makeChain({ id: 2, collection: 'disperse_maps' }) as unknown as ReturnType<typeof db>
+      ) // map collection
+      .mockReturnValueOnce(makeChain([{ field: 'code' }]) as unknown as ReturnType<typeof db>) // map fields
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Disperse Import',
+        collection: 'purchase_orders',
+        line_map: {
+          target_field: 'line_items',
+          columns: [],
+          disperse: {
+            map_collection: 'disperse_maps',
+            map_key_column: 'Line Ref',
+            map_key_field: 'code',
+            map_values_path: 'values',
+            map_all_field: null,
+            member_match_column: 'Unit Type',
+            group_by_column: 'Unit Name',
+            amount_column: 'Line Total',
+            nested_target: 'nested_items',
+            member_columns: []
+          }
+        }
+      })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as { error: string; details: { path: string }[] }
+    expect(body.error).toBe('Invalid template config')
+    expect(body.details.some((d) => d.path === 'line_map.disperse')).toBe(true)
+  })
+
+  it('POST / rejects a mode outside the allowlist', async () => {
+    const user = makeAdminUser()
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ name: 'X', collection: 'purchase_orders', mode: 'sideways' })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as { error: string; details: { path: string }[] }
+    expect(body.details.some((d) => d.path === 'mode')).toBe(true)
+    expect(db).not.toHaveBeenCalled()
   })
 
   it('PATCH /:id — admin updates name + mode, response reflects changes', async () => {
