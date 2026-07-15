@@ -562,21 +562,36 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       values[config.attach_file_field] = body.file_id
     }
 
+    // Lines with no way to be persisted must fail loudly before anything is created,
+    // rather than silently dropping the submitted rows.
+    let childRelation: { collection: string; fkField: string } | null = null
+    if (lines.length > 0) {
+      childRelation = config.line_map
+        ? await resolveLineChildRelation(collection, config.line_map.target_field)
+        : null
+      if (!childRelation) {
+        return reply.code(422).send({
+          error: 'Template has no line mapping for the submitted lines',
+          issues: [
+            ...bodyIssues,
+            {
+              severity: 'error',
+              rule: 'execute',
+              message: 'Template has no line mapping for the submitted lines'
+            }
+          ]
+        })
+      }
+    }
+
     const workspaceId = req.workspaceId ?? undefined
     const createdChildIds: (string | number)[] = []
     let parent: { id: string | number } | null = null
-    let childCollection: string | null = null
+    const childCollection: string | null = childRelation?.collection ?? null
     let failedAtLine = 0
 
     try {
-      let fkField: string | null = null
-      if (config.line_map && lines.length > 0) {
-        const relation = await resolveLineChildRelation(collection, config.line_map.target_field)
-        if (relation) {
-          childCollection = relation.collection
-          fkField = relation.fkField
-        }
-      }
+      const fkField = childRelation?.fkField ?? null
 
       parent = (await createOne(req.user!, collection, values, req, workspaceId)) as {
         id: string | number
@@ -639,7 +654,9 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       req
     })
 
-    return reply.code(201).send({ data: { id: String(parent.id), line_ids: createdChildIds } })
+    return reply
+      .code(201)
+      .send({ data: { id: String(parent.id), line_ids: createdChildIds.map(String) } })
   })
 
   // POST /import-templates/test — builder "test panel": run an unsaved config, no persist

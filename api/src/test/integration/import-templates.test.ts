@@ -811,6 +811,40 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     expect(parentDeleteChain.del).toHaveBeenCalled()
   })
 
+  it('POST /:id/execute — 422 when line_map is null but lines are submitted, zero createOne calls', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-1',
+      collection: 'purchase_orders',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: null,
+      attach_file_field: null
+    }
+    vi.mocked(db).mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>)
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-1/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { vendor_name: 'Acme' },
+        lines: [{ values: { sku: 'A1', qty: 1 } }],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string; issues: { rule: string }[] }
+    expect(body.error).toBe('Template has no line mapping for the submitted lines')
+    expect(body.issues.some((i) => i.rule === 'execute')).toBe(true)
+    expect(vi.mocked(createOne)).not.toHaveBeenCalled()
+  })
+
   it('POST /:id/execute — 403 on a prefill-only template', async () => {
     const user = makeRegularUser({ id: 'user-1' })
     const template = {
