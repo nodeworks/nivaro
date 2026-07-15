@@ -130,6 +130,7 @@ import {
 import { cn, resolveCollectionIcon, titleCase } from '@/lib/utils'
 import { TreeSection } from '@/pages/DataModel'
 import { FieldRulesSection } from '@/pages/FieldRulesSection'
+import { ImportTemplatesSection } from '@/pages/ImportTemplatesSection'
 
 // ─── Formula mode toggle (Builder | Raw) ─────────────────────────────────────
 
@@ -16851,6 +16852,7 @@ type Tab =
   | 'groups'
   | 'behavior'
   | 'rules'
+  | 'imports'
   | 'tree'
   | 'content'
   | 'settings'
@@ -16995,6 +16997,7 @@ export function TableEditorPage() {
                 'groups',
                 'behavior',
                 'rules',
+                'imports',
                 'tree',
                 'content',
                 'attributes',
@@ -17018,9 +17021,11 @@ export function TableEditorPage() {
                   ? 'Behavior'
                   : t === 'rules'
                     ? 'Field Rules'
-                    : t === 'content'
-                      ? 'Content'
-                      : t}
+                    : t === 'imports'
+                      ? 'Imports'
+                      : t === 'content'
+                        ? 'Content'
+                        : t}
             </button>
           ))}
         </div>
@@ -17066,6 +17071,7 @@ export function TableEditorPage() {
               />
             )}
             {tab === 'rules' && <FieldRulesSection collection={table ?? ''} isAdmin={isAdmin} />}
+            {tab === 'imports' && <ImportTemplatesSection collection={table ?? ''} />}
             {tab === 'tree' && <TreeSection collection={table ?? ''} isAdmin={isAdmin} />}
             {tab === 'attributes' && <AttributesTab tableName={table ?? ''} />}
             {tab === 'settings' && (
