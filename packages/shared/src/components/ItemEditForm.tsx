@@ -316,7 +316,7 @@ export function ItemEditForm({
     enabled: !layoutSlug || activeLayoutData !== undefined
   })
 
-  const { data: relations = [] } = useQuery<CMSRelation[]>({
+  const { data: relations = [], isFetched: relationsFetched } = useQuery<CMSRelation[]>({
     queryKey: ['relations', collection],
     queryFn: () =>
       client
@@ -589,11 +589,11 @@ export function ItemEditForm({
   }, [collection, relations, o2mStagingCtx])
 
   useEffect(() => {
-    if (isNew && initialImportResult && !appliedInitialImportRef.current) {
-      appliedInitialImportRef.current = true
-      applyImportResult(initialImportResult)
-    }
-  }, [isNew, initialImportResult, applyImportResult])
+    if (!isNew || !initialImportResult || appliedInitialImportRef.current) return
+    if (initialImportResult.lines.length > 0 && !relationsFetched) return
+    appliedInitialImportRef.current = true
+    applyImportResult(initialImportResult)
+  }, [isNew, initialImportResult, relationsFetched, applyImportResult])
 
   // ── M2M staging ────────────────────────────────────────────────────────────
   const [m2mLinks, setM2mLinks] = useState<Map<string, unknown[]>>(new Map())
