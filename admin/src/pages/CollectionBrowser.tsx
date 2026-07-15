@@ -1282,7 +1282,7 @@ export function CollectionBrowserPage() {
       <Dialog
         open={!!directImport}
         onOpenChange={(open) => {
-          if (!open) setDirectImport(null)
+          if (!open && !directExecuting) setDirectImport(null)
         }}
       >
         <DialogContent>
@@ -1301,7 +1301,11 @@ export function CollectionBrowserPage() {
             <ImportIssuesPanel issues={directIssues} />
           </DialogBody>
           <DialogFooter>
-            <Button variant='outline' onClick={() => setDirectImport(null)}>
+            <Button
+              variant='outline'
+              onClick={() => setDirectImport(null)}
+              disabled={directExecuting}
+            >
               Cancel
             </Button>
             <Button
