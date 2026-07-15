@@ -7068,7 +7068,7 @@ Authorization: Bearer &lt;token&gt;
             <thead><tr><th>Mode</th><th>Behavior</th></tr></thead>
             <tbody><tr><tr><td>prefill</td><td>Parse result only fills a form for the user to review and save normally.</td></tr>
               <tr><td>direct</td><td>Parse result is confirmed in a preview dialog, then created server-side in one transactional call.</td></tr>
-              <tr><td>both</td><td>Template supports either — on the create form it always behaves as prefill (a form context is prefill by definition); on Collection Browser/Queue entry points it behaves as direct.</td></tr></tr></tbody>
+              <tr><td>both</td><td>Template supports either — on Collection Browser it opens the same direct-create confirm dialog, with a "Review in form instead" button that closes the dialog and hands the parsed result to the create form for review; on the create form and Queue entry points it behaves as prefill.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Caps and resilience</h3>
           <ul class="doc-ul">

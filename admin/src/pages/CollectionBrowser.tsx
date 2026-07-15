@@ -784,7 +784,7 @@ export function CollectionBrowserPage() {
   }
 
   const handleImportParsed = (result: ImportParseResponse, tpl: ImportTemplateSummary) => {
-    if (tpl.mode === 'direct') {
+    if (tpl.mode !== 'prefill') {
       setDirectIssues(result.issues)
       setDirectImport({ tpl, result })
     } else {
@@ -792,6 +792,15 @@ export function CollectionBrowserPage() {
         state: { importResult: result, importTemplateId: tpl.id }
       })
     }
+  }
+
+  const handleReviewInFormInstead = () => {
+    if (!directImport) return
+    const { tpl, result } = directImport
+    setDirectImport(null)
+    navigate(`/collections/${collection}/new`, {
+      state: { importResult: result, importTemplateId: tpl.id }
+    })
   }
 
   const handleDirectImportConfirm = async () => {
@@ -1308,6 +1317,15 @@ export function CollectionBrowserPage() {
             >
               Cancel
             </Button>
+            {directImport?.tpl.mode === 'both' && (
+              <Button
+                variant='outline'
+                onClick={handleReviewInFormInstead}
+                disabled={directExecuting}
+              >
+                Review in form instead
+              </Button>
+            )}
             <Button
               onClick={handleDirectImportConfirm}
               disabled={directImportHasBlockingIssue || directExecuting}

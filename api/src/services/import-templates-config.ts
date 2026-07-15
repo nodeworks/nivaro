@@ -44,7 +44,7 @@ export interface ImportLineConfig {
 }
 
 export interface ImportTemplateConfig {
-  file_types: ('xlsx' | 'csv')[]
+  file_types: ('xlsx' | 'xlsm' | 'xls' | 'csv')[]
   sheet_match: string | null
   header_row: number
   header_map: ImportHeaderRule[]
@@ -59,7 +59,8 @@ export interface ConfigError {
 
 const ON_MISS = ['leave_blank', 'error', 'create_stub'] as const
 const TAKE = ['id', 'record'] as const
-const FILE_TYPES = ['xlsx', 'csv'] as const
+const FILE_TYPES = ['xlsx', 'xlsm', 'xls', 'csv'] as const
+const DEFAULT_FILE_TYPES: ImportTemplateConfig['file_types'] = ['xlsx', 'xlsm', 'csv']
 const ROW_FILTER_OPS = ['nnull', 'eq', 'neq'] as const
 
 function asObject(raw: unknown): Record<string, unknown> {
@@ -241,10 +242,10 @@ export function normalizeImportTemplateConfig(raw: unknown): {
 
   const fileTypesRaw = Array.isArray(src.file_types) ? src.file_types : null
   const fileTypes = fileTypesRaw
-    ? fileTypesRaw.filter((t): t is 'xlsx' | 'csv' =>
+    ? fileTypesRaw.filter((t): t is (typeof FILE_TYPES)[number] =>
         FILE_TYPES.includes(t as (typeof FILE_TYPES)[number])
       )
-    : [...FILE_TYPES]
+    : [...DEFAULT_FILE_TYPES]
 
   const headerMapRaw = Array.isArray(src.header_map) ? src.header_map : []
   const headerMap: ImportHeaderRule[] = []
@@ -257,7 +258,7 @@ export function normalizeImportTemplateConfig(raw: unknown): {
     src.line_map != null ? normalizeLineConfig(src.line_map, 'line_map', errors) : null
 
   const config: ImportTemplateConfig = {
-    file_types: fileTypes.length > 0 ? fileTypes : [...FILE_TYPES],
+    file_types: fileTypes.length > 0 ? fileTypes : [...DEFAULT_FILE_TYPES],
     sheet_match: typeof src.sheet_match === 'string' ? src.sheet_match : null,
     header_row: Math.max(1, Number(src.header_row) || 1),
     header_map: headerMap,

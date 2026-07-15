@@ -29,7 +29,7 @@ import { cn } from '@/lib/utils'
 // ─── Config types (mirrors api/src/services/import-templates-config.ts) ───────
 
 type ImportMode = 'prefill' | 'direct' | 'both'
-type FileType = 'xlsx' | 'csv'
+type FileType = 'xlsx' | 'xlsm' | 'xls' | 'csv'
 type OnMiss = 'leave_blank' | 'error' | 'create_stub'
 type Take = 'id' | 'record'
 type RowFilterOp = 'nnull' | 'eq' | 'neq'
@@ -200,7 +200,7 @@ function blankDraft(): TemplateDraft {
     id: null,
     name: '',
     mode: 'prefill',
-    file_types: ['xlsx', 'csv'],
+    file_types: ['xlsx', 'xlsm', 'csv'],
     sheet_match: '',
     header_row: 1,
     attach_file_field: '',
@@ -217,7 +217,7 @@ function rowToDraft(row: TemplateRow): TemplateDraft {
     id: row.id,
     name: row.name,
     mode: row.mode,
-    file_types: row.file_types.length ? row.file_types : ['xlsx', 'csv'],
+    file_types: row.file_types.length ? row.file_types : ['xlsx', 'xlsm', 'csv'],
     sheet_match: row.sheet_match ?? '',
     header_row: row.header_row,
     attach_file_field: row.attach_file_field ?? '',
@@ -1204,7 +1204,7 @@ function BasicsFields({
       <div className='space-y-1.5'>
         <Label className='text-[11px] text-slate-500'>File types</Label>
         <div className='flex items-center gap-4'>
-          {(['xlsx', 'csv'] as const).map((t) => (
+          {(['xlsx', 'xlsm', 'xls', 'csv'] as const).map((t) => (
             <label
               key={t}
               className='flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-600'
@@ -1321,7 +1321,7 @@ function TestPanel({ collection, draft }: { collection: string; draft: TemplateD
         <input
           ref={fileRef}
           type='file'
-          accept='.xlsx,.csv'
+          accept={draft.file_types.map((t) => `.${t}`).join(',')}
           className='hidden'
           onChange={(e) => {
             setFile(e.target.files?.[0] ?? null)

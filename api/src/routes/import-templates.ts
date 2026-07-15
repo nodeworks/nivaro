@@ -33,7 +33,7 @@ function parseJsonSafe(val: unknown): unknown {
 function formatTemplate(row: Record<string, unknown>) {
   return {
     ...row,
-    file_types: parseJsonSafe(row.file_types) ?? ['xlsx', 'csv'],
+    file_types: parseJsonSafe(row.file_types) ?? ['xlsx', 'xlsm', 'csv'],
     header_map: parseJsonSafe(row.header_map) ?? [],
     line_map: parseJsonSafe(row.line_map),
     is_active: !!row.is_active,
@@ -44,7 +44,11 @@ function formatTemplate(row: Record<string, unknown>) {
 /** Reconstructs the ImportTemplateConfig shape from a saved template row's JSON columns. */
 function templateRowToConfig(row: Record<string, unknown>): ImportTemplateConfig {
   return {
-    file_types: (parseJsonSafe(row.file_types) as ('xlsx' | 'csv')[] | null) ?? ['xlsx', 'csv'],
+    file_types: (parseJsonSafe(row.file_types) as ImportTemplateConfig['file_types'] | null) ?? [
+      'xlsx',
+      'xlsm',
+      'csv'
+    ],
     sheet_match: (row.sheet_match as string | null) ?? null,
     header_row: Number(row.header_row) || 1,
     header_map: (parseJsonSafe(row.header_map) as ImportHeaderRule[] | null) ?? [],

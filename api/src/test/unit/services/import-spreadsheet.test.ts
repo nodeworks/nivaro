@@ -2,15 +2,22 @@ import { describe, expect, it } from 'vitest'
 import * as XLSX from 'xlsx'
 import { readSpreadsheet } from '../../../services/import-spreadsheet.js'
 
-function xlsxBuffer(sheets: Record<string, Record<string, unknown>[]>): Buffer {
+function xlsxBuffer(
+  sheets: Record<string, Record<string, unknown>[]>,
+  bookType: XLSX.BookType = 'xlsx'
+): Buffer {
   const wb = XLSX.utils.book_new()
   for (const [name, rows] of Object.entries(sheets)) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), name)
   }
-  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+  return XLSX.write(wb, { type: 'buffer', bookType }) as Buffer
 }
 
-const CONFIG = { sheet_match: 'EFP Import Sheet', header_row: 1, file_types: ['xlsx', 'csv'] as ('xlsx' | 'csv')[] }
+const CONFIG = {
+  sheet_match: 'EFP Import Sheet',
+  header_row: 1,
+  file_types: ['xlsx', 'xlsm', 'csv'] as ('xlsx' | 'xlsm' | 'xls' | 'csv')[]
+}
 
 describe('readSpreadsheet', () => {
   it('picks the sheet matching sheet_match substring', () => {
@@ -53,11 +60,20 @@ describe('readSpreadsheet', () => {
     expect(issues[0].severity).toBe('error')
   })
 
+  it('reads xlsm buffers when the config allows the type', () => {
+    const buf = xlsxBuffer({ First: [{ Vendor: 'Acme', 'Line Number': 1 }] }, 'xlsm')
+    const { rows, issues } = readSpreadsheet(buf, 'bid.xlsm', { ...CONFIG, sheet_match: null })
+    expect(issues).toEqual([])
+    expect(rows).toEqual([{ Vendor: 'Acme', 'Line Number': 1 }])
+  })
+
   it('caps rows at 5000 with a warn issue', () => {
     const rows = Array.from({ length: 5010 }, (_, i) => ({ 'Line Number': i + 1 }))
     const buf = xlsxBuffer({ Sheet1: rows })
     const result = readSpreadsheet(buf, 'big.xlsx', { ...CONFIG, sheet_match: null })
     expect(result.rows.length).toBe(5000)
-    expect(result.issues.some((i) => i.severity === 'warn' && i.message.includes('5000'))).toBe(true)
+    expect(result.issues.some((i) => i.severity === 'warn' && i.message.includes('5000'))).toBe(
+      true
+    )
   })
 })

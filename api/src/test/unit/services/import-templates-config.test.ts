@@ -6,7 +6,7 @@ describe('normalizeImportTemplateConfig', () => {
     const { config, errors } = normalizeImportTemplateConfig({})
     expect(errors).toEqual([])
     expect(config).toEqual({
-      file_types: ['xlsx', 'csv'],
+      file_types: ['xlsx', 'xlsm', 'csv'],
       sheet_match: null,
       header_row: 1,
       header_map: [],

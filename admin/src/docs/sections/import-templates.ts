@@ -21,7 +21,7 @@ export const importTemplatesGuide: DocSection = {
     { type: 'h3', text: 'Header rules' },
     {
       type: 'p',
-      text: 'One rule per target field on the collection: a source column name and an ordered list of steps. Steps run in array order, and every resolved value is added to a `$resolved.*` context so a later rule can reference an earlier one\'s result (e.g. a unit lookup scoped by an already-resolved region).'
+      text: "One rule per target field on the collection: a source column name and an ordered list of steps. Steps run in array order, and every resolved value is added to a `$resolved.*` context so a later rule can reference an earlier one's result (e.g. a unit lookup scoped by an already-resolved region)."
     },
     {
       type: 'table',
@@ -42,7 +42,7 @@ export const importTemplatesGuide: DocSection = {
         ],
         [
           'wrap_richtext',
-          'Wraps a plain string into the rich-text editor\'s portable JSON block shape.'
+          "Wraps a plain string into the rich-text editor's portable JSON block shape."
         ],
         ['const', 'Ignores the incoming value and sets a fixed literal.']
       ]
@@ -72,7 +72,7 @@ export const importTemplatesGuide: DocSection = {
     { type: 'h3', text: 'Disperse — splitting an amount across grouped rows' },
     {
       type: 'p',
-      text: 'An optional step on line mapping for sheets where one row carries a total that must be split across several other rows into a nested repeater/JSON field on each line (e.g. a supplier-unit-type breakdown). It looks up a driving key column against a map collection, groups the sheet\'s other rows by a group-by column, splits the amount column evenly across the groups, and resolves one more level of per-member lookup rules — the only nested level the pipeline supports.'
+      text: "An optional step on line mapping for sheets where one row carries a total that must be split across several other rows into a nested repeater/JSON field on each line (e.g. a supplier-unit-type breakdown). It looks up a driving key column against a map collection, groups the sheet's other rows by a group-by column, splits the amount column evenly across the groups, and resolves one more level of per-member lookup rules — the only nested level the pipeline supports."
     },
     {
       type: 'note',
@@ -98,7 +98,7 @@ export const importTemplatesGuide: DocSection = {
         ],
         [
           'Queue worklist toolbar',
-          'Same button, driven by whether the queue\'s first collection-type source has active templates.'
+          "Same button, driven by whether the queue's first collection-type source has active templates."
         ]
       ]
     },
@@ -114,7 +114,7 @@ export const importTemplatesGuide: DocSection = {
         ],
         [
           'both',
-          'Template supports either — on the create form it always behaves as prefill (a form context is prefill by definition); on Collection Browser/Queue entry points it behaves as direct.'
+          'Template supports either — on Collection Browser it opens the same direct-create confirm dialog, with a "Review in form instead" button that closes the dialog and hands the parsed result to the create form for review; on the create form and Queue entry points it behaves as prefill.'
         ]
       ]
     },
@@ -148,7 +148,7 @@ export const importTemplatesGuide: DocSection = {
         [
           'POST /import-templates/:id/parse',
           'authenticated + create permission on the target collection',
-          'Multipart file upload; runs the saved template\'s pipeline and returns `{ values, lines, issues, file_id, line_target_field }`. The only side effect is uploading the file when an attach field is configured — it never writes business data.'
+          "Multipart file upload; runs the saved template's pipeline and returns `{ values, lines, issues, file_id, line_target_field }`. The only side effect is uploading the file when an attach field is configured — it never writes business data."
         ],
         [
           'POST /import-templates/:id/execute',
@@ -164,7 +164,7 @@ export const importTemplatesGuide: DocSection = {
     },
     {
       type: 'note',
-      text: 'Parse copies the uploaded file\'s id into `values[attach_file_field]` automatically — a client integrating the SDK directly needs no attach-field logic of its own.'
+      text: "Parse copies the uploaded file's id into `values[attach_file_field]` automatically — a client integrating the SDK directly needs no attach-field logic of its own."
     },
     { type: 'h3', text: 'SDK' },
     {
