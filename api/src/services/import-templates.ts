@@ -390,16 +390,8 @@ async function processDisperse(
   for (const { row: triggerRow, rowNumber } of triggerEntries) {
     const candidate = String(triggerRow[disperse.map_key_column]).trim()
     const mapRecord = mapMatchMap.get(candidate.toLowerCase())
-    if (!mapRecord) {
-      issues.push({
-        severity: 'warn',
-        rule: 'disperse',
-        column: disperse.map_key_column,
-        row: rowNumber,
-        message: `No ${disperse.map_collection} match for "${candidate}"`
-      })
-      continue
-    }
+    // Not being in the dispersal map is the normal case — the row stays a plain line.
+    if (!mapRecord) continue
 
     const isAll = disperse.map_all_field ? Boolean(mapRecord[disperse.map_all_field]) : false
     const rawValuesPath = mapRecord[disperse.map_values_path]
