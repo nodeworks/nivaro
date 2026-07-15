@@ -1308,7 +1308,7 @@ function TestPanel({ collection, draft }: { collection: string; draft: TemplateD
     }
   })
 
-  const rows = result?.lines.slice(0, 20) ?? []
+  const rows = useMemo(() => result?.lines.slice(0, 20) ?? [], [result])
   const columnKeys = useMemo(() => {
     const keys = new Set<string>()
     for (const line of rows) for (const k of Object.keys(line.values ?? {})) keys.add(k)
@@ -1758,7 +1758,7 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
         </Section>
 
         <Section title='Test'>
-          <TestPanel collection={collection} draft={draft} />
+          <TestPanel key={selectedId ?? '__new__'} collection={collection} draft={draft} />
         </Section>
 
         <div className='flex items-center justify-end gap-2 pb-2'>
