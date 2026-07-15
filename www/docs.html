@@ -300,6 +300,7 @@
           <a class="docs-nav-item" data-section="alerts" href="#alerts">Alert Engine</a>
           <a class="docs-nav-item" data-section="at-risk-flagging" href="#at-risk-flagging">At-Risk Flagging</a>
           <a class="docs-nav-item" data-section="imports" href="#imports">Data Import Queue</a>
+          <a class="docs-nav-item" data-section="import-templates" href="#import-templates">Import Templates</a>
           <a class="docs-nav-item" data-section="submission-forms" href="#submission-forms">Submission Forms</a>
           <a class="docs-nav-item" data-section="field-watches" href="#field-watches">Field Watches</a>
           <a class="docs-nav-item" data-section="notification-subscriptions-guide" href="#notification-subscriptions-guide">Notification Subscriptions</a>
@@ -4158,9 +4159,57 @@ const { data: updated } = await nivaro.request(
           <h1 class="doc-h1" id="sdk-react">SDK — React (@nivaro/react)</h1>
           <p class="doc-p"><code class="doc-code">@nivaro/react</code> is a form runtime built on <code class="doc-code">@nivaro/sdk</code>. One hook (<code class="doc-code">useNivaroForm</code>) handles schema loading, field rules, visibility/lock evaluation, relation options, validation, and submit. Pair it with your own inputs (headless) or use <code class="doc-code">&lt;NivaroForm&gt;</code> for auto-rendering fields.</p>
           <h3 class="doc-h3">Installation</h3>
-          <pre class="doc-pre"><code>pnpm add @nivaro/react @nivaro/sdk react react-dom</code></pre>
+          <pre class="doc-pre"><code>pnpm add @nivaro/react @nivaro/sdk react react-dom @tanstack/react-query sonner</code></pre>
+          <h3 class="doc-h3">Styling</h3>
+          <p class="doc-p">The styled components (<code class="doc-code">ItemEditForm</code>, <code class="doc-code">QueueWorklist</code>, panels, sheets) are built with Tailwind. Two ways to get their styles — pick one:</p>
+          <p class="doc-p">**Option A — precompiled CSS (simplest, no Tailwind required).** One import, works in any app:</p>
+          <pre class="doc-pre"><code>// app entry
+import '@nivaro/react/full.css'</code></pre>
+          <p class="doc-p">**Option B — Tailwind v3 preset.** If your app already runs Tailwind 3 and you want one utility pipeline (no duplicated classes):</p>
+          <pre class="doc-pre"><code>// tailwind.config.js
+module.exports = {
+  presets: [require('@nivaro/react/tailwind-preset')],
+  content: [
+    './src/**/*.{ts,tsx}',
+    './node_modules/@nivaro/react/dist/**/*.js'
+  ]
+}
+
+// app entry
+import '@nivaro/react/styles.css'</code></pre>
+          <p class="doc-p">The preset supplies the theme tokens (<code class="doc-code">nvr-cyan</code>, semantic color vars, radius, type scale) and the animate plugin; <code class="doc-code">styles.css</code> supplies the CSS variables plus class-based dark-mode overrides. Tailwind v4 configs ignore <code class="doc-code">tailwind.config.js</code> presets — use Option A there. Dark mode in both options: <code class="doc-code">dark</code> class on <code class="doc-code">&lt;html&gt;</code>. The headless <code class="doc-code">useNivaroForm</code> API needs neither.</p>
           <h3 class="doc-h3">Setup</h3>
-          <p class="doc-p">Wrap your app in <code class="doc-code">&lt;NivaroProvider&gt;</code> with a configured SDK client:</p>
+          <p class="doc-p">Wrap your app in <code class="doc-code">&lt;NivaroProvider&gt;</code> with a configured SDK client. It provides a TanStack Query <code class="doc-code">QueryClient</code> automatically when your app does not already run a <code class="doc-code">QueryClientProvider</code> — if you do, yours wins.</p>
+          <h3 class="doc-h3">Item links in embedded apps</h3>
+          <p class="doc-p">Components like <code class="doc-code">QueueWorklist</code> open records at the admin route shape (<code class="doc-code">/collections/:collection/:id</code>) by default. When embedding in your own app, override link handling on <code class="doc-code">NavigationContext</code>:</p>
+          <pre class="doc-pre"><code>import { NavigationContext } from '@nivaro/react'
+
+&lt;NavigationContext.Provider
+  value={{
+    navigate: (to) =&gt; router.push(to),
+    // Map record links onto YOUR routes (row clicks, Open buttons, Work Next):
+    itemUrl: ({ collection, itemId, layoutSlug }) =&gt;
+      `/records/${collection}/${itemId}${layoutSlug ? `?layout=${layoutSlug}` : ''}`,
+    // Or intercept opening entirely (return true = handled — e.g. open your own drawer):
+    openItem: ({ collection, itemId }) =&gt; {
+      openMyDetailDrawer(collection, itemId)
+      return true
+    }
+  }}
+&gt;</code></pre>
+          <p class="doc-p"><code class="doc-code">openItem</code> is checked first; returning <code class="doc-code">true</code> skips navigation. Otherwise the component navigates to <code class="doc-code">itemUrl(target)</code>, falling back to the admin shape when neither is provided.</p>
+          <h3 class="doc-h3">Report Studio viewer</h3>
+          <p class="doc-p"><code class="doc-code">&lt;ReportView reportId="…" /&gt;</code> renders a fully-styled, interactive Report Studio report in your own app — same as <code class="doc-code">QueueWorklist</code> / <code class="doc-code">ItemEditForm</code>: bring the styles via <code class="doc-code">@nivaro/react/full.css</code> (or the Tailwind preset). It fetches the definition and resolves every widget (KPIs, KPI groups, bar/line/donut charts via recharts, tables) as the client identity — collection read permissions apply server-side. Interactive: a global filter bar (date-range switcher + live entity-filter chips) and per-widget refresh. Read-only (no drag/resize edit surface).</p>
+          <pre class="doc-pre"><code>import { NivaroProvider, ReportView } from '@nivaro/react'
+
+&lt;ReportView
+  reportId="…"
+  refetchInterval={60_000}          // live-refresh; omit for one-shot
+  showFilterBar                              // date range + entity chips (default true)
+  dateRange={{ preset: 'last_3_months' }}    // override the saved range (optional)
+  initialEntityFilters={[{ field: 'division', values: [1, 2] }]}
+/&gt;</code></pre>
+          <p class="doc-p">For custom rendering, skip the component and drive the data commands directly: <code class="doc-code">readReport</code>, <code class="doc-code">readReportWidgetData</code> / <code class="doc-code">previewReportWidget</code>, plus the full CRUD, subscription (<code class="doc-code">setReportSubscription</code>), alert (<code class="doc-code">createReportAlert</code>), and AI (<code class="doc-code">aiBuildReport</code>, <code class="doc-code">aiReportFilters</code>) surface from <code class="doc-code">@nivaro/sdk</code>.</p>
           <pre class="doc-pre"><code>import { createNivaro } from '@nivaro/sdk'
 import { NivaroProvider } from '@nivaro/react'
 
@@ -5224,10 +5273,10 @@ const { data: rev } = await nivaro.request(readRevision('rev-uuid'))
           <!-- /SYNC:sdk-rest -->
         </div>
 
-        <div class="doc-section" id="s-sdk-coverage" data-toc='[{"id":"sdk-coverage","label":"SDK Coverage: ~175 Typed Commands"}]'>
+        <div class="doc-section" id="s-sdk-coverage" data-toc='[{"id":"sdk-coverage","label":"SDK Coverage: 300+ Typed Commands"}]'>
           <!-- SYNC:sdk-coverage -->
-          <h1 class="doc-h1" id="sdk-coverage">SDK Coverage: ~175 Typed Commands</h1>
-          <p class="doc-p">The @nivaro/sdk command surface now covers every feature area — roughly 175 typed <code class="doc-code">Command&lt;T&gt;</code> factories spanning items, files, workflows, pipelines, flows, comments, webhooks, rules, custom queries, trees and hierarchies, submission forms, field watches, notification subscriptions, imports, SLA, alerts, AI endpoints (generate, summarize, validate, check-duplicates), translations, drafts, scheduled changes, record templates, saved views, API keys, widget feeds, sync jobs, ERP submissions, PDF templates, pages, and more. If a REST route exists, there is a typed command for it.</p>
+          <h1 class="doc-h1" id="sdk-coverage">SDK Coverage: 300+ Typed Commands</h1>
+          <p class="doc-p">The @nivaro/sdk command surface now covers every feature area — roughly 175 typed <code class="doc-code">Command&lt;T&gt;</code> factories spanning items, files, workflows, pipelines, flows, comments, webhooks, rules, custom queries, trees and hierarchies, submission forms, field watches, notification subscriptions, imports, SLA, alerts, AI endpoints (generate, summarize, validate, check-duplicates), translations, drafts, scheduled changes, record templates, saved views, API keys, widget feeds, sync jobs, ERP submissions, PDF templates, pages, queues (worklists, items, claims, saved views, trends, workload), roles &amp; policies (RBAC/RLS), user management + out-of-office delegation, file management (list/meta/presign/transform URLs), dashboard widgets, extension item/bulk actions, throughput reporting, and more. If a REST route exists, there is a typed command for it.</p>
           <h3 class="doc-h3">Discovering commands</h3>
           <ul class="doc-ul">
             <li>Everything is exported from the package root — editor autocomplete on <code class="doc-code">import { … } from "@nivaro/sdk"</code> is the fastest index.</li>
@@ -6972,6 +7021,98 @@ Authorization: Bearer &lt;token&gt;
           </table></div>
           <div class="doc-note doc-warn">Import is admin-only. <code class="doc-code">nivaro_*</code> system tables are blocked as import targets.</div>
           <!-- /SYNC:imports -->
+        </div>
+
+        <div class="doc-section" id="s-import-templates" data-toc='[{"id":"import-templates","label":"Import Templates"}]'>
+          <!-- SYNC:import-templates -->
+          <h1 class="doc-h1" id="import-templates">Import Templates</h1>
+          <p class="doc-p">An Import Template is an admin-configured, declarative mapping from a spreadsheet (xlsx or csv) to a single record on a target collection, optionally with child rows. An end user uploads a file against a template; the server parses it, resolves sheet columns into field values (including relation lookups), and either pre-fills a create form for review or creates the record directly. Nothing is hardcoded per template — every rule (trim, remap, expression, lookup, rich-text wrap, constant) is data stored on the template row.</p>
+          <div class="doc-note">This is distinct from the Data Import Queue (Monitoring → Imports) — that feature bulk-inserts many rows per record with duplicate-strategy upserts and background processing. Import Templates is an interactive, single-record, parent-plus-children file-to-form import, reviewed (or previewed) before anything is written.</div>
+          <h3 class="doc-h3">Building a template</h3>
+          <p class="doc-p">Open Data Model → select a collection → Table Editor → the "Imports" tab. The left panel lists templates for the collection (name, mode, active toggle); the right panel is the editor: basics (name, mode, sheet match rule, header row, attach-file field, sharing), header rules, line mapping, and disperse.</p>
+          <h3 class="doc-h3">Header rules</h3>
+          <p class="doc-p">One rule per target field on the collection: a source column name and an ordered list of steps. Steps run in array order, and every resolved value is added to a <code class="doc-code">$resolved.*</code> context so a later rule can reference an earlier one's result (e.g. a unit lookup scoped by an already-resolved region).</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Step</th><th>Behavior</th></tr></thead>
+            <tbody><tr><tr><td>trim</td><td>Trims surrounding whitespace from a string value.</td></tr>
+              <tr><td>remap</td><td>Looks the value up in a fixed map (e.g. region codes); <code class="doc-code">passthrough</code> controls whether an unmapped value is kept as-is or cleared.</td></tr>
+              <tr><td>expression</td><td>Renders a <code class="doc-code">{{Column}}</code> / <code class="doc-code">{{$resolved.field}}</code> template string against the row and the resolved context so far.</td></tr>
+              <tr><td>lookup</td><td>Matches the value against a field on another collection (case-insensitive), with optional scope filters; see on_miss policies below.</td></tr>
+              <tr><td>wrap_richtext</td><td>Wraps a plain string into the rich-text editor's portable JSON block shape.</td></tr>
+              <tr><td>const</td><td>Ignores the incoming value and sets a fixed literal.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Lookup step and on_miss policies</h3>
+          <p class="doc-p">A lookup step names a target collection, a match field, optional scope filters (AND-ed, each <code class="doc-code">{{token}}</code>-substitutable), and <code class="doc-code">take</code> (id or the full record). What happens when nothing matches is the <code class="doc-code">on_miss</code> policy:</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>on_miss</th><th>Behavior</th></tr></thead>
+            <tbody><tr><tr><td>leave_blank</td><td>Leaves the field empty and records a warn-severity issue.</td></tr>
+              <tr><td>error</td><td>Records an error-severity issue — blocks direct execute until resolved.</td></tr>
+              <tr><td>create_stub</td><td>Leaves the field empty and attaches an <code class="doc-code">{ is_new: true, name }</code> sidecar the UI renders as a "will create" badge; a header-level create_stub is warn-only (no sidecar slot exists for header values, only for line values).</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Line mapping (child rows)</h3>
+          <p class="doc-p">A template can map spreadsheet rows to child records through an existing one-to-many relation on the collection: pick the target O2M field, an optional row filter (skip rows where a column is null/equals/not-equals a value), and per-column header rules the same shape as above. "Apply field rules to each line" runs the collection's existing Field Rules engine per generated line, so line defaults come from the same mechanism as manual entry.</p>
+          <h3 class="doc-h3">Disperse — splitting an amount across grouped rows</h3>
+          <p class="doc-p">An optional step on line mapping for sheets where one row carries a total that must be split across several other rows into a nested repeater/JSON field on each line (e.g. a supplier-unit-type breakdown). It looks up a driving key column against a map collection, groups the sheet's other rows by a group-by column, splits the amount column evenly across the groups, and resolves one more level of per-member lookup rules — the only nested level the pipeline supports.</p>
+          <div class="doc-note">Every lookup in the pipeline — header, line, and disperse member — is batched: candidate values across all rows for one rule are deduped and resolved with a single query, never one query per row.</div>
+          <h3 class="doc-h3">Test panel</h3>
+          <p class="doc-p">The builder has a live test panel at the bottom of the editor: upload a sample file and it runs the pipeline against the CURRENT (possibly unsaved) editor config, showing the resolved header values, a line preview grid, and a color-coded issues list. Nothing is saved or persisted by the test panel — it exists purely so an admin can iterate config against a real file before switching the template on.</p>
+          <h3 class="doc-h3">Entry points</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Surface</th><th>Behavior</th></tr></thead>
+            <tbody><tr><tr><td>Create form (Item Edit, and any headless @nivaro/react host)</td><td>"Import from file" header button when active, visible templates exist for the collection. Parsed values merge into the draft, lines stage into the inline grid, and the uploaded file id stages into the attach field — review and save through the normal path.</td></tr>
+              <tr><td>Collection Browser</td><td>"New from file" toolbar button. A prefill-mode template navigates to a pre-filled create form; a direct-mode template shows a confirm preview dialog and creates the record (and lines) server-side, all-or-nothing.</td></tr>
+              <tr><td>Queue worklist toolbar</td><td>Same button, driven by whether the queue's first collection-type source has active templates.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Modes</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Mode</th><th>Behavior</th></tr></thead>
+            <tbody><tr><tr><td>prefill</td><td>Parse result only fills a form for the user to review and save normally.</td></tr>
+              <tr><td>direct</td><td>Parse result is confirmed in a preview dialog, then created server-side in one transactional call.</td></tr>
+              <tr><td>both</td><td>Template supports either — on the create form it always behaves as prefill (a form context is prefill by definition); on Collection Browser/Queue entry points it behaves as direct.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Caps and resilience</h3>
+          <ul class="doc-ul">
+            <li>Files are capped at 25MB and 5,000 data rows per sheet; a sheet over the row cap is truncated to the first 5,000 rows, reported as a warn-severity issue (never a silent drop).</li>
+            <li>The pipeline never throws for data problems — every miss or coercion failure becomes an issue (warn or error). Only structural failures (unreadable file, no matching sheet, empty sheet) abort the parse.</li>
+            <li>Direct execute is blocked while any error-severity issue remains, and the server re-checks the submitted issues itself — a client cannot smuggle an error-severity issue past the block.</li>
+            <li>Direct execute is all-or-nothing: the parent record and every child row are created in sequence, and any failure compensates by deleting everything already created for that import (raw deletes, not through trash) rather than leaving a partial record behind.</li>
+          </ul>
+          <h3 class="doc-h3">REST API</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>Auth</th><th>Purpose</th></tr></thead>
+            <tbody><tr><tr><td>GET /import-templates?collection=</td><td>authenticated</td><td>Lists templates visible to the caller (own, or shared and role-matched) for the given collection — powers every entry-point button.</td></tr>
+              <tr><td>POST /import-templates</td><td>admin</td><td>Creates a template; config is normalized and validated against live schema (unknown target fields, lookup collections, or relation targets are rejected with the offending path).</td></tr>
+              <tr><td>PATCH /import-templates/:id</td><td>admin</td><td>Updates a template; same validation as create.</td></tr>
+              <tr><td>DELETE /import-templates/:id</td><td>admin</td><td>Deletes a template.</td></tr>
+              <tr><td>POST /import-templates/:id/parse</td><td>authenticated + create permission on the target collection</td><td>Multipart file upload; runs the saved template's pipeline and returns <code class="doc-code">{ values, lines, issues, file_id, line_target_field }</code>. The only side effect is uploading the file when an attach field is configured — it never writes business data.</td></tr>
+              <tr><td>POST /import-templates/:id/execute</td><td>authenticated + create permission + mode allows direct</td><td>Body is the (possibly client-edited) parse result; creates the parent and child rows transactionally and returns the created ids.</td></tr>
+              <tr><td>POST /import-templates/test</td><td>admin</td><td>Multipart file plus a <code class="doc-code">config</code> field carrying the (possibly unsaved) builder config as JSON; runs the same pipeline and returns the same shape as parse, but never persists the uploaded file.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Parse copies the uploaded file's id into <code class="doc-code">values[attach_file_field]</code> automatically — a client integrating the SDK directly needs no attach-field logic of its own.</div>
+          <h3 class="doc-h3">SDK</h3>
+          <pre class="doc-pre"><code>import { createNivaro, listImportTemplates, executeImportTemplate } from '@nivaro/sdk'
+
+const cms = createNivaro({ url, token })
+
+// List templates available for a collection
+const { data: templates } = await cms.request(listImportTemplates('purchase_orders'))
+
+// Parse a file against a saved template (multipart upload, not a Command)
+const parsed = await cms.importParse(templates[0].id, file)
+// → { values, lines, issues, file_id, line_target_field }
+
+// Direct-mode templates: create the parent + lines from a (possibly edited) parse result
+const { data: created } = await cms.request(
+  executeImportTemplate(templates[0].id, {
+    values: parsed.values,
+    lines: parsed.lines,
+    issues: parsed.issues,
+    file_id: parsed.file_id
+  })
+)
+// → { id, line_ids }</code></pre>
+          <div class="doc-note doc-warn">Lookup collections are never <code class="doc-code">nivaro_*</code> system tables — the fetcher blocks them the same way the Data Import Queue blocks system collections as import targets. Parse and test panel resolve lookups without a per-viewer read check on the lookup collection itself, since templates are admin-authored — the same curation-not-security precedent as picker_filter and widget feeds.</div>
+          <!-- /SYNC:import-templates -->
         </div>
 
         <div class="doc-section" id="s-submission-forms" data-toc='[{"id":"submission-forms-guide","label":"Public Submission Forms"}]'>

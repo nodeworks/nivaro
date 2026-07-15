@@ -605,12 +605,83 @@ const { data: updated } = await nivaro.request(
 #### Installation
 
 ```typescript
-pnpm add @nivaro/react @nivaro/sdk react react-dom
+pnpm add @nivaro/react @nivaro/sdk react react-dom @tanstack/react-query sonner
 ```
+
+#### Styling
+
+The styled components (`ItemEditForm`, `QueueWorklist`, panels, sheets) are built with Tailwind. Two ways to get their styles — pick one:
+
+**Option A — precompiled CSS (simplest, no Tailwind required).** One import, works in any app:
+
+```typescript
+// app entry
+import '@nivaro/react/full.css'
+```
+
+**Option B — Tailwind v3 preset.** If your app already runs Tailwind 3 and you want one utility pipeline (no duplicated classes):
+
+```typescript
+// tailwind.config.js
+module.exports = {
+  presets: [require('@nivaro/react/tailwind-preset')],
+  content: [
+    './src/**/*.{ts,tsx}',
+    './node_modules/@nivaro/react/dist/**/*.js'
+  ]
+}
+
+// app entry
+import '@nivaro/react/styles.css'
+```
+
+The preset supplies the theme tokens (`nvr-cyan`, semantic color vars, radius, type scale) and the animate plugin; `styles.css` supplies the CSS variables plus class-based dark-mode overrides. Tailwind v4 configs ignore `tailwind.config.js` presets — use Option A there. Dark mode in both options: `dark` class on `<html>`. The headless `useNivaroForm` API needs neither.
 
 #### Setup
 
-Wrap your app in `<NivaroProvider>` with a configured SDK client:
+Wrap your app in `<NivaroProvider>` with a configured SDK client. It provides a TanStack Query `QueryClient` automatically when your app does not already run a `QueryClientProvider` — if you do, yours wins.
+
+#### Item links in embedded apps
+
+Components like `QueueWorklist` open records at the admin route shape (`/collections/:collection/:id`) by default. When embedding in your own app, override link handling on `NavigationContext`:
+
+```typescript
+import { NavigationContext } from '@nivaro/react'
+
+<NavigationContext.Provider
+  value={{
+    navigate: (to) => router.push(to),
+    // Map record links onto YOUR routes (row clicks, Open buttons, Work Next):
+    itemUrl: ({ collection, itemId, layoutSlug }) =>
+      `/records/${collection}/${itemId}${layoutSlug ? `?layout=${layoutSlug}` : ''}`,
+    // Or intercept opening entirely (return true = handled — e.g. open your own drawer):
+    openItem: ({ collection, itemId }) => {
+      openMyDetailDrawer(collection, itemId)
+      return true
+    }
+  }}
+>
+```
+
+`openItem` is checked first; returning `true` skips navigation. Otherwise the component navigates to `itemUrl(target)`, falling back to the admin shape when neither is provided.
+
+#### Report Studio viewer
+
+`<ReportView reportId="…" />` renders a fully-styled, interactive Report Studio report in your own app — same as `QueueWorklist` / `ItemEditForm`: bring the styles via `@nivaro/react/full.css` (or the Tailwind preset). It fetches the definition and resolves every widget (KPIs, KPI groups, bar/line/donut charts via recharts, tables) as the client identity — collection read permissions apply server-side. Interactive: a global filter bar (date-range switcher + live entity-filter chips) and per-widget refresh. Read-only (no drag/resize edit surface).
+
+```typescript
+import { NivaroProvider, ReportView } from '@nivaro/react'
+
+<ReportView
+  reportId="…"
+  refetchInterval={60_000}          // live-refresh; omit for one-shot
+  showFilterBar                              // date range + entity chips (default true)
+  dateRange={{ preset: 'last_3_months' }}    // override the saved range (optional)
+  initialEntityFilters={[{ field: 'division', values: [1, 2] }]}
+/>
+```
+
+For custom rendering, skip the component and drive the data commands directly: `readReport`, `readReportWidgetData` / `previewReportWidget`, plus the full CRUD, subscription (`setReportSubscription`), alert (`createReportAlert`), and AI (`aiBuildReport`, `aiReportFilters`) surface from `@nivaro/sdk`.
 
 ```typescript
 import { createNivaro } from '@nivaro/sdk'
@@ -2120,6 +2191,65 @@ When `business_hours_only: true`, only Mon-Fri 09:00-17:00 is counted. Blackout 
 
 ---
 
+## SDK — Queues
+
+Full command coverage for cross-collection worklists: queue CRUD and source configuration, item resolution with scopes/filters/sorting/pagination, claims, saved views (including column snapshots), per-viewer default views, stat trends, per-owner workload, and materialized-cache rebuilds.
+
+```typescript
+import {
+  createNivaro, listQueues, readQueueItems, claimQueueItem,
+  listQueueViews, createQueueView, setQueueDefaultView, readQueueTrends
+} from '@nivaro/sdk'
+
+const nivaro = createNivaro('https://nivaro.example.com', { token: 'nvk_…' })
+
+const { data: queues } = await nivaro.request(listQueues())
+
+// Table-style page 1 with per-column filters (omit page/limit for the full set)
+const result = await nivaro.request(
+  readQueueItems(queues[0].id, {
+    scope: 'mine',
+    sort: '-priority',
+    filters: { state: 'Waiting on Manager Approval' },
+    page: 1,
+    limit: 25
+  })
+)
+console.log(result.stats.total, result.data.length)
+
+// Claim the first unclaimed item
+const next = result.data.find((i) => !i.claimed_by)
+if (next) await nivaro.request(claimQueueItem(queues[0].id, next))
+
+// Save the current table state as a shared view and star it as my default
+const view = await nivaro.request(
+  createQueueView(queues[0].id, {
+    name: 'My triage',
+    is_shared: true,
+    state: { scope: 'mine', sort: '-priority', view: 'table', columns: null }
+  })
+)
+await nivaro.request(setQueueDefaultView(queues[0].id, view.data.id))
+```
+
+| Command | Purpose |
+| --- | --- |
+| listQueues / readQueue | Queues visible to the caller; one queue with sources + extra-field metadata |
+| createQueue / updateQueue / deleteQueue | Queue CRUD incl. display_config (views, row_click, default_columns…) |
+| updateQueueSources | Replace sources wholesale (max 10); cache-affecting edits rebuild materialized queues |
+| readQueueItems | Resolve items: scope mine/unowned/all/claimed, column filters, sort, optional pagination |
+| readQueueWorkload | Items grouped per owner with WIP limits |
+| readQueueTrends | Daily stat snapshots for sparklines (scope "mine" = caller series) |
+| claimQueueItem / releaseQueueItem | Claims with pipeline instance-owner write-through |
+| listQueueViews / createQueueView / updateQueueView / deleteQueueView | Saved views — state snapshots incl. visible columns |
+| readQueueColumnPrefs / setQueueDefaultView | Per-viewer starred default view |
+| rematerializeQueue | Force a materialized-cache rebuild |
+| readQueueCollectionStates / suggestQueueLabels | Builder helpers: state pickers, label-template previews |
+
+> **Note:** Queue reads respect queue-level visibility (owner, shared, role-scoped). Claims return 403 when the queue has claims disabled.
+
+---
+
 ## SDK — Presence & Awareness
 
 Real-time presence tracking via Socket.io. See who is currently viewing/editing an item and take coordination actions (lock, merge, notify).
@@ -2308,9 +2438,9 @@ await nivaro.request(createHierarchyConfig({
 
 ---
 
-## SDK Coverage: ~175 Typed Commands
+## SDK Coverage: 300+ Typed Commands
 
-The @nivaro/sdk command surface now covers every feature area — roughly 175 typed `Command<T>` factories spanning items, files, workflows, pipelines, flows, comments, webhooks, rules, custom queries, trees and hierarchies, submission forms, field watches, notification subscriptions, imports, SLA, alerts, AI endpoints (generate, summarize, validate, check-duplicates), translations, drafts, scheduled changes, record templates, saved views, API keys, widget feeds, sync jobs, ERP submissions, PDF templates, pages, and more. If a REST route exists, there is a typed command for it.
+The @nivaro/sdk command surface now covers every feature area — roughly 175 typed `Command<T>` factories spanning items, files, workflows, pipelines, flows, comments, webhooks, rules, custom queries, trees and hierarchies, submission forms, field watches, notification subscriptions, imports, SLA, alerts, AI endpoints (generate, summarize, validate, check-duplicates), translations, drafts, scheduled changes, record templates, saved views, API keys, widget feeds, sync jobs, ERP submissions, PDF templates, pages, queues (worklists, items, claims, saved views, trends, workload), roles & policies (RBAC/RLS), user management + out-of-office delegation, file management (list/meta/presign/transform URLs), dashboard widgets, extension item/bulk actions, throughput reporting, and more. If a REST route exists, there is a typed command for it.
 
 #### Discovering commands
 

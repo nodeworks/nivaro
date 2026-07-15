@@ -14,6 +14,7 @@ export * from './sections/features.js'
 export * from './sections/field-display.js'
 export * from './sections/field-rules.js'
 export * from './sections/graphql.js'
+export * from './sections/import-templates.js'
 export * from './sections/integrations.js'
 export * from './sections/live-ops.js'
 export * from './sections/low-code.js'
@@ -179,6 +180,7 @@ import {
   graphqlSort,
   graphqlSubscriptions
 } from './sections/graphql.js'
+import { importTemplatesGuide } from './sections/import-templates.js'
 import {
   integrationsConnector,
   integrationsCrossTriggers,
@@ -546,6 +548,7 @@ export const navSections: NavGroup[] = [
       fieldWatchesGuide,
       notificationSubscriptionsGuide,
       dataImportGuide,
+      importTemplatesGuide,
       slaTrackingGuide,
       queueSlaTimers,
       alertEngineGuide,
