@@ -45,8 +45,8 @@ export * from './commands/collab.js'
 export * from './commands/content.js'
 export * from './commands/devex.js'
 export * from './commands/files.js'
-export * from './commands/infra.js'
 export * from './commands/import-templates.js'
+export * from './commands/infra.js'
 export * from './commands/queues.js'
 export type { PresenceClient, PresenceOptions, PresenceSession } from './presence.js'
 export { createPresence } from './presence.js'
@@ -1757,8 +1757,12 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
       credentials: credentialsMode(),
       body: form
     })
-    const json = await res.json()
-    if (!res.ok) throw Object.assign(new Error(json?.error || 'Import parse failed'), { status: res.status, issues: json?.issues })
+    const json = await res.json().catch(() => ({ error: res.statusText }))
+    if (!res.ok)
+      throw Object.assign(new Error(json?.error || 'Import parse failed'), {
+        status: res.status,
+        issues: json?.issues
+      })
     return json.data
   }
 
