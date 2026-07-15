@@ -33,11 +33,17 @@ vi.mock('../../services/files.js', () => ({
   uploadFileBuffer: vi.fn().mockResolvedValue({ id: 'stored-file-1' })
 }))
 
+vi.mock('../../services/items.js', () => ({
+  applyFieldRules: vi.fn().mockResolvedValue(undefined),
+  createOne: vi.fn()
+}))
+
 import fastifyMultipart from '@fastify/multipart'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { makeLookupFetcher } from '../../routes/import-templates.js'
 import { uploadFileBuffer } from '../../services/files.js'
+import { createOne } from '../../services/items.js'
 import { can } from '../../services/permissions.js'
 import type { User } from '../../types.js'
 import { makeAdminUser, makeRegularUser } from '../helpers.js'
@@ -133,6 +139,7 @@ function makeChain(result: unknown) {
     insert: vi.fn().mockReturnThis(),
     update: vi.fn().mockReturnThis(),
     delete: vi.fn().mockResolvedValue(1),
+    del: vi.fn().mockResolvedValue(1),
     returning: vi.fn().mockResolvedValue([{ id: 'new-id' }]),
     then: vi.fn((cb: (v: unknown) => unknown) => Promise.resolve(result).then(cb))
   }
@@ -659,6 +666,176 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
           d.path === 'header_map[0].steps[0].match_field' && d.message.includes('not_a_real_field')
       )
     ).toBe(true)
+  })
+
+  it('POST /:id/execute — happy path creates parent + 2 lines', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-1',
+      collection: 'purchase_orders',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = { many_collection: 'po_line_items', many_field: 'purchase_order_id' }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // relation resolve
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'parent-1' } as never)
+      .mockResolvedValueOnce({ id: 'line-1' } as never)
+      .mockResolvedValueOnce({ id: 'line-2' } as never)
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-1/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { vendor_name: 'Acme' },
+        lines: [{ values: { sku: 'A1', qty: 1 } }, { values: { sku: 'A2', qty: 2 } }],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    const body = JSON.parse(res.body) as { data: { id: string; line_ids: string[] } }
+    expect(body.data.id).toBe('parent-1')
+    expect(body.data.line_ids).toEqual(['line-1', 'line-2'])
+    expect(vi.mocked(createOne)).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      2,
+      user,
+      'po_line_items',
+      { sku: 'A1', qty: 1, purchase_order_id: 'parent-1' },
+      expect.anything(),
+      undefined
+    )
+  })
+
+  it('POST /:id/execute — 422 with an error-severity issue in body, no rows created', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-1',
+      collection: 'purchase_orders',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: null,
+      attach_file_field: null
+    }
+    vi.mocked(db).mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>)
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-1/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { vendor_name: 'Acme' },
+        lines: [],
+        issues: [{ severity: 'error', rule: 'header:vendor', message: 'bad vendor' }]
+      })
+    })
+
+    expect(res.statusCode).toBe(422)
+    expect(vi.mocked(createOne)).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/execute — line 2 throws, compensates by deleting parent + line 1', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-1',
+      collection: 'purchase_orders',
+      mode: 'both',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = { many_collection: 'po_line_items', many_field: 'purchase_order_id' }
+    const childDeleteChain = makeChain(1)
+    const parentDeleteChain = makeChain(1)
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // relation resolve
+      .mockReturnValueOnce(childDeleteChain as unknown as ReturnType<typeof db>) // compensation: child delete
+      .mockReturnValueOnce(parentDeleteChain as unknown as ReturnType<typeof db>) // compensation: parent delete
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'parent-1' } as never)
+      .mockResolvedValueOnce({ id: 'line-1' } as never)
+      .mockRejectedValueOnce(new Error('line 2 validation failed'))
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-1/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { vendor_name: 'Acme' },
+        lines: [{ values: { sku: 'A1', qty: 1 } }, { values: { sku: 'A2', qty: 2 } }],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string; issues: { message: string }[] }
+    expect(body.error).toContain('line 2')
+    expect(body.issues.some((i) => i.message.includes('line 2 validation failed'))).toBe(true)
+
+    expect(childDeleteChain.whereIn).toHaveBeenCalledWith('id', ['line-1'])
+    expect(childDeleteChain.del).toHaveBeenCalled()
+    expect(parentDeleteChain.where).toHaveBeenCalledWith({ id: 'parent-1' })
+    expect(parentDeleteChain.del).toHaveBeenCalled()
+  })
+
+  it('POST /:id/execute — 403 on a prefill-only template', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-1',
+      collection: 'purchase_orders',
+      mode: 'prefill',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: null,
+      attach_file_field: null
+    }
+    vi.mocked(db).mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>)
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-1/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ values: {}, lines: [], issues: [] })
+    })
+
+    expect(res.statusCode).toBe(403)
+    expect(vi.mocked(createOne)).not.toHaveBeenCalled()
   })
 })
 

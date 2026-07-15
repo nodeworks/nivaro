@@ -6,7 +6,7 @@ import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { uploadFileBuffer } from '../services/files.js'
 import { readSpreadsheet } from '../services/import-spreadsheet.js'
-import type { LookupFetcher } from '../services/import-templates.js'
+import type { ImportIssue, LineDraft, LookupFetcher } from '../services/import-templates.js'
 import { runImportPipeline } from '../services/import-templates.js'
 import type {
   ConfigError,
@@ -16,7 +16,7 @@ import type {
   ImportTemplateConfig
 } from '../services/import-templates-config.js'
 import { normalizeImportTemplateConfig } from '../services/import-templates-config.js'
-import { applyFieldRules } from '../services/items.js'
+import { applyFieldRules, createOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -93,16 +93,27 @@ export function makeLookupFetcher(): LookupFetcher {
   }
 }
 
-/** Resolves the O2M child collection for a line_map target_field: the relation row
- *  where `one_collection = collection AND one_field = target_field`. */
+/** Resolves the O2M child relation for a line_map target_field: the relation row
+ *  where `one_collection = collection AND one_field = target_field`. Returns both
+ *  the child collection and its FK field back to the parent. */
+async function resolveLineChildRelation(
+  collection: string,
+  targetField: string
+): Promise<{ collection: string; fkField: string } | null> {
+  const relation = (await db('nivaro_relations')
+    .where({ one_collection: collection, one_field: targetField })
+    .first()) as { many_collection: string; many_field: string } | undefined
+  return relation ? { collection: relation.many_collection, fkField: relation.many_field } : null
+}
+
+/** Resolves just the O2M child collection for a line_map target_field — used where
+ *  the FK field itself isn't needed (e.g. applying field rules to the child shape). */
 async function resolveLineChildCollection(
   collection: string,
   targetField: string
 ): Promise<string | null> {
-  const relation = (await db('nivaro_relations')
-    .where({ one_collection: collection, one_field: targetField })
-    .first()) as { many_collection: string } | undefined
-  return relation?.many_collection ?? null
+  const relation = await resolveLineChildRelation(collection, targetField)
+  return relation?.collection ?? null
 }
 
 /** Resolves + caches a lookup target collection's field set. `null` means the
@@ -500,9 +511,135 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     return reply.send({ data: { values: result.values, lines: result.lines, issues, file_id } })
   })
 
-  // POST /import-templates/:id/execute — Task 7
-  app.post('/:id/execute', { preHandler: authenticate }, async (_req, reply) => {
-    return reply.code(501).send({ error: 'Not implemented' })
+  // POST /import-templates/:id/execute — all-or-nothing direct create: parent record
+  // + line rows into the O2M child collection. Any failure compensates by deleting
+  // everything created so far, leaving no partial import behind.
+  app.post('/:id/execute', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const template = (await db('nivaro_import_templates').where({ id }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!template) return reply.code(404).send({ error: 'Not found' })
+
+    const collection = template.collection as string
+    if (!(await can(req.user!, 'create', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+
+    const mode = template.mode as string
+    if (mode !== 'direct' && mode !== 'both') {
+      return reply.code(403).send({ error: 'Template does not support direct execution' })
+    }
+
+    const body = req.body as {
+      values?: unknown
+      lines?: unknown
+      issues?: unknown
+      file_id?: string | null
+    }
+    if (
+      typeof body.values !== 'object' ||
+      body.values === null ||
+      Array.isArray(body.values) ||
+      !Array.isArray(body.lines) ||
+      !Array.isArray(body.issues)
+    ) {
+      return reply.code(400).send({ error: 'values, lines, and issues are required' })
+    }
+
+    const bodyIssues = body.issues as ImportIssue[]
+    if (bodyIssues.some((issue) => issue.severity === 'error')) {
+      return reply.code(422).send({
+        error: 'Cannot execute import while unresolved errors remain',
+        issues: bodyIssues
+      })
+    }
+
+    const values = { ...(body.values as Record<string, unknown>) }
+    const lines = body.lines as LineDraft[]
+    const config = templateRowToConfig(template)
+    if (config.attach_file_field && body.file_id) {
+      values[config.attach_file_field] = body.file_id
+    }
+
+    const workspaceId = req.workspaceId ?? undefined
+    const createdChildIds: (string | number)[] = []
+    let parent: { id: string | number } | null = null
+    let childCollection: string | null = null
+    let failedAtLine = 0
+
+    try {
+      let fkField: string | null = null
+      if (config.line_map && lines.length > 0) {
+        const relation = await resolveLineChildRelation(collection, config.line_map.target_field)
+        if (relation) {
+          childCollection = relation.collection
+          fkField = relation.fkField
+        }
+      }
+
+      parent = (await createOne(req.user!, collection, values, req, workspaceId)) as {
+        id: string | number
+      }
+
+      if (childCollection && fkField) {
+        for (let i = 0; i < lines.length; i++) {
+          failedAtLine = i + 1
+          const line = lines[i]
+          const childData: Record<string, unknown> = {
+            ...line.values,
+            [fkField]: parent.id,
+            ...(line.nested ? { [line.nested.field]: line.nested.rows } : {})
+          }
+          const child = (await createOne(
+            req.user!,
+            childCollection,
+            childData,
+            req,
+            workspaceId
+          )) as { id: string | number }
+          createdChildIds.push(child.id)
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const compensationIssues: ImportIssue[] = [
+        { severity: 'error', rule: 'execute', row: failedAtLine, message }
+      ]
+      try {
+        if (childCollection && createdChildIds.length > 0) {
+          await db(childCollection).whereIn('id', createdChildIds).del()
+        }
+        if (parent) {
+          await db(collection).where({ id: parent.id }).del()
+        }
+      } catch (compensationErr) {
+        app.log.error(
+          compensationErr,
+          'import-template execute compensation failed — created rows may be orphaned'
+        )
+        compensationIssues.push({
+          severity: 'error',
+          rule: 'execute-compensation',
+          row: failedAtLine,
+          message: 'Compensation failed — some created rows may be orphaned'
+        })
+      }
+      return reply.code(422).send({
+        error: `Import failed on line ${failedAtLine} — nothing was created`,
+        issues: [...bodyIssues, ...compensationIssues]
+      })
+    }
+
+    await logActivity({
+      action: 'import-template-execute',
+      user: req.user?.id,
+      collection,
+      item: String(parent.id),
+      req
+    })
+
+    return reply.code(201).send({ data: { id: String(parent.id), line_ids: createdChildIds } })
   })
 
   // POST /import-templates/test — builder "test panel": run an unsaved config, no persist
