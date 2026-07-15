@@ -543,9 +543,17 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     })
 
     expect(res.statusCode).toBe(200)
-    const parsed = JSON.parse(res.body) as { data: { file_id: string | null } }
+    const parsed = JSON.parse(res.body) as {
+      data: {
+        values: Record<string, unknown>
+        file_id: string | null
+        line_target_field: string | null
+      }
+    }
     expect(typeof parsed.data.file_id).toBe('string')
     expect(parsed.data.file_id).not.toBeNull()
+    expect(parsed.data.values.source_file).toBe(parsed.data.file_id)
+    expect(parsed.data.line_target_field).toBeNull()
     expect(vi.mocked(uploadFileBuffer)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(uploadFileBuffer)).toHaveBeenCalledWith(
       user,

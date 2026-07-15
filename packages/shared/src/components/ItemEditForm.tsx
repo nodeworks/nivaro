@@ -1,6 +1,9 @@
+import type { ImportParseResponse } from '@nivaro/sdk'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileDown, Loader2, Save, Trash2 } from 'lucide-react'
 import { CloneDialog } from './item-edit/CloneDialog'
+import { ImportFromFileButton } from './import/ImportFromFileButton'
+import { ImportIssuesPanel } from './import/ImportIssuesPanel'
 import {
   type ReactNode,
   useCallback,
@@ -214,6 +217,10 @@ export interface ItemEditFormProps {
   extraTopContent?: ReactNode
   extraBottomContent?: ReactNode
   onHeaderWidgets?: (widgets: HeaderWidgetInfo[]) => void
+  /** Consumed once, on mount, when `isNew` — prefills the draft + stages O2M
+   *  lines from an already-parsed import result (e.g. handed off by a caller
+   *  that ran the file picker before this form existed). */
+  initialImportResult?: ImportParseResponse
 }
 
 export interface HeaderWidgetInfo {
@@ -274,7 +281,8 @@ export function ItemEditForm({
   renderField,
   extraTopContent,
   extraBottomContent,
-  onHeaderWidgets
+  onHeaderWidgets,
+  initialImportResult
 }: ItemEditFormProps) {
   const client = useNivaroClient()
   const fetchCfg = useApiFetchConfig()
@@ -546,6 +554,46 @@ export function ItemEditForm({
       return next
     }),
   }), [pendingO2MRows, pendingO2MEdits, pendingO2MDeletes])
+
+  // ── Import from file (new records) ─────────────────────────────────────────
+  const [importIssues, setImportIssues] = useState<ImportParseResponse['issues']>([])
+  const appliedInitialImportRef = useRef(false)
+
+  const applyImportResult = useCallback((result: ImportParseResponse) => {
+    draftRef.current = { ...draftRef.current, ...result.values }
+    setDraft((prev) => ({ ...prev, ...result.values }))
+
+    const issues = [...result.issues]
+    if (result.lines.length > 0) {
+      const rel = result.line_target_field
+        ? relations.find(
+            (r) => r.one_collection === collection && r.one_field === result.line_target_field
+          )
+        : null
+      if (rel?.many_collection && rel.many_field) {
+        for (const line of result.lines) {
+          o2mStagingCtx.queueRow(rel.many_collection, rel.many_field, {
+            ...line.values,
+            ...(line.nested ? { [line.nested.field]: line.nested.rows } : {})
+          })
+        }
+      } else {
+        issues.push({
+          severity: 'error',
+          rule: 'import-apply',
+          message: 'No matching relation found for the imported line items — they were not added.'
+        })
+      }
+    }
+    setImportIssues(issues)
+  }, [collection, relations, o2mStagingCtx])
+
+  useEffect(() => {
+    if (isNew && initialImportResult && !appliedInitialImportRef.current) {
+      appliedInitialImportRef.current = true
+      applyImportResult(initialImportResult)
+    }
+  }, [isNew, initialImportResult, applyImportResult])
 
   // ── M2M staging ────────────────────────────────────────────────────────────
   const [m2mLinks, setM2mLinks] = useState<Map<string, unknown[]>>(new Map())
@@ -2873,6 +2921,12 @@ export function ItemEditForm({
             )}
           >
             {extraTopContent}
+            {isNew && (
+              <ImportFromFileButton collection={collection} onParsed={applyImportResult} />
+            )}
+            {importIssues.length > 0 && (
+              <ImportIssuesPanel issues={importIssues} onDismiss={() => setImportIssues([])} />
+            )}
             {showLockBanner && (
               <ItemLockBanner
                 lockHolder={lockHolder}

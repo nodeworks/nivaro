@@ -508,7 +508,20 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       file_id = stored.id
     }
 
-    return reply.send({ data: { values: result.values, lines: result.lines, issues, file_id } })
+    const values = { ...result.values }
+    if (config.attach_file_field && file_id) {
+      values[config.attach_file_field] = file_id
+    }
+
+    return reply.send({
+      data: {
+        values,
+        lines: result.lines,
+        issues,
+        file_id,
+        line_target_field: config.line_map?.target_field ?? null
+      }
+    })
   })
 
   // POST /import-templates/:id/execute — all-or-nothing direct create: parent record
@@ -718,7 +731,13 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     const issues = [...sheetIssues, ...result.issues]
 
     return reply.send({
-      data: { values: result.values, lines: result.lines, issues, file_id: null }
+      data: {
+        values: result.values,
+        lines: result.lines,
+        issues,
+        file_id: null,
+        line_target_field: config.line_map?.target_field ?? null
+      }
     })
   })
 }
