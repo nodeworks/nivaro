@@ -108,7 +108,9 @@ export type ItemLinkTarget = {
 }
 
 export type NavigationContextValue = {
-  navigate: (path: string) => void
+  /** `options.state` rides along for hosts whose router supports it (e.g. react-router's
+   *  useNavigate) — hosts that ignore the second argument still navigate correctly. */
+  navigate: (path: string, options?: { state?: unknown }) => void
   /** Map item links onto the host app's own routes. Components fall back to
    *  the admin shape (/collections/:collection/:id?layout=…) when absent —
    *  external embeds supply one function and every open path follows. */

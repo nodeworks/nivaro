@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useItemEditAuth, useItemNavigation, useNivaroClient } from '../../context'
+import { useItemEditAuth, useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
@@ -44,6 +44,7 @@ import {
   filterDefLabel,
   filterValueDisplay
 } from '../DataTable'
+import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { Badge } from '../ui/badge'
 import { Checkbox } from '../ui/checkbox'
@@ -398,6 +399,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const client = useNivaroClient()
   const { userId } = useItemEditAuth()
   const itemNav = useItemNavigation()
+  const { navigate } = useNavigation()
   const [scope, setScope] = useState<Scope>('all')
   const [page, setPage] = useState(1)
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
@@ -418,6 +420,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       client.request<{ data: QueueMeta }>(get(`/queues/${queueId}`)).then((r) => r.data),
     enabled: !!queueId
   })
+
+  // Import-from-file entry point targets the first collection-type source —
+  // same rule the item_layout builder list uses (admin/src/pages/Queues.tsx).
+  const importCollection = queue?.sources?.find((s) => s.type === 'collection')?.collection ?? null
 
   // Every queue defaults to priority order — the table's default order IS the
   // triage order. Materialized queues serve priority sorts from a narrow scan
@@ -1964,6 +1970,16 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 <Play className='h-3 w-3 fill-current' />
                 Work Next
               </button>
+            )}
+            {importCollection && navigate && (
+              <ImportFromFileButton
+                collection={importCollection}
+                onParsed={(result, template) =>
+                  navigate(`/collections/${importCollection}/new`, {
+                    state: { importResult: result, importTemplateId: template.id }
+                  })
+                }
+              />
             )}
           </div>
         </div>
