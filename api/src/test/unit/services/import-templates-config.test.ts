@@ -109,4 +109,91 @@ describe('normalizeImportTemplateConfig', () => {
       message: 'Only one lookup step per rule'
     })
   })
+
+  it('normalizes take:field with take_field', () => {
+    const { config, errors } = normalizeImportTemplateConfig({
+      header_map: [
+        {
+          target: 'divisions',
+          source: null,
+          steps: [
+            { type: 'expression', template: '{{$resolved.regions}}' },
+            {
+              type: 'lookup',
+              collection: 'regions',
+              match_field: 'id',
+              take: 'field',
+              take_field: 'division'
+            }
+          ]
+        }
+      ]
+    })
+    expect(errors).toEqual([])
+    const lookup = config.header_map[0].steps[1] as { take: string; take_field?: string }
+    expect(lookup.take).toBe('field')
+    expect(lookup.take_field).toBe('division')
+  })
+
+  it('rejects take:field without take_field', () => {
+    const { errors } = normalizeImportTemplateConfig({
+      header_map: [
+        {
+          target: 'x',
+          source: 'X',
+          steps: [{ type: 'lookup', collection: 'regions', match_field: 'id', take: 'field' }]
+        }
+      ]
+    })
+    expect(errors.map((e) => e.message)).toContain('take "field" requires "take_field"')
+  })
+
+  it('$users lookups force take:id and allow only email match', () => {
+    const { config, errors } = normalizeImportTemplateConfig({
+      header_map: [
+        {
+          target: 'internal_contact',
+          source: 'Billing Contact (Email)',
+          steps: [{ type: 'lookup', collection: '$users', match_field: 'email', take: 'record' }]
+        }
+      ]
+    })
+    expect(errors).toEqual([])
+    expect((config.header_map[0].steps[0] as { take: string }).take).toBe('id')
+
+    const bad = normalizeImportTemplateConfig({
+      header_map: [
+        {
+          target: 'x',
+          source: 'X',
+          steps: [{ type: 'lookup', collection: '$users', match_field: 'first_name' }]
+        }
+      ]
+    })
+    expect(bad.errors.map((e) => e.message)).toContain('$users lookups may only match on: email')
+  })
+
+  it('normalizes line_map.nested and defaults', () => {
+    const { config, errors } = normalizeImportTemplateConfig({
+      line_map: {
+        target_field: 'lines',
+        columns: [],
+        nested: {
+          target_field: 'unit_workflows',
+          when: { column: 'Unit Type', op: 'nnull' },
+          columns: [{ target: 'unit_type', source: 'Unit Type', steps: [] }]
+        }
+      }
+    })
+    expect(errors).toEqual([])
+    expect(config.line_map?.nested?.target_field).toBe('unit_workflows')
+    expect(config.line_map?.nested?.when).toEqual({ column: 'Unit Type', op: 'nnull' })
+  })
+
+  it('rejects nested without target_field', () => {
+    const { errors } = normalizeImportTemplateConfig({
+      line_map: { target_field: 'lines', columns: [], nested: { columns: [] } }
+    })
+    expect(errors[0].path).toBe('line_map.nested')
+  })
 })

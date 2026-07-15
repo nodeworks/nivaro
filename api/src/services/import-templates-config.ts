@@ -10,7 +10,8 @@ export type ImportStep =
       match_field: string
       scope_filters: { field: string; op: 'eq' | 'neq'; value: string }[]
       on_miss: ImportOnMiss
-      take: 'id' | 'record'
+      take: 'id' | 'record' | 'field'
+      take_field?: string
     }
   | { type: 'wrap_richtext' }
   | { type: 'const'; value: unknown }
@@ -19,6 +20,12 @@ export interface ImportHeaderRule {
   target: string
   source: string | null
   steps: ImportStep[]
+}
+
+export interface ImportNestedConfig {
+  target_field: string
+  when: { column: string; op: 'nnull' | 'eq' | 'neq'; value?: string } | null
+  columns: ImportHeaderRule[]
 }
 
 export interface ImportDisperseConfig {
@@ -41,6 +48,7 @@ export interface ImportLineConfig {
   columns: ImportHeaderRule[]
   apply_field_rules: boolean
   disperse: ImportDisperseConfig | null
+  nested: ImportNestedConfig | null
 }
 
 export interface ImportTemplateConfig {
@@ -58,10 +66,12 @@ export interface ConfigError {
 }
 
 const ON_MISS = ['leave_blank', 'error', 'create_stub'] as const
-const TAKE = ['id', 'record'] as const
+const TAKE = ['id', 'record', 'field'] as const
 const FILE_TYPES = ['xlsx', 'xlsm', 'xls', 'csv'] as const
 const DEFAULT_FILE_TYPES: ImportTemplateConfig['file_types'] = ['xlsx', 'xlsm', 'csv']
 const ROW_FILTER_OPS = ['nnull', 'eq', 'neq'] as const
+const USERS_SENTINEL = '$users'
+const USERS_ALLOWED_MATCH_FIELDS = ['email']
 
 function asObject(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw)
@@ -99,11 +109,30 @@ function normalizeStep(raw: unknown, path: string, errors: ConfigError[]): Impor
         ok = false
       }
       if (!ok) return null
+      const collection = src.collection as string
+      const matchField = src.match_field as string
       const filters = Array.isArray(src.scope_filters) ? src.scope_filters : []
+      let take: 'id' | 'record' | 'field' = TAKE.includes(src.take as 'id' | 'record' | 'field')
+        ? (src.take as 'id' | 'record' | 'field')
+        : 'id'
+      let takeField = typeof src.take_field === 'string' ? src.take_field : ''
+      if (collection === USERS_SENTINEL) {
+        take = 'id'
+        takeField = ''
+        if (!USERS_ALLOWED_MATCH_FIELDS.includes(matchField)) {
+          errors.push({
+            path,
+            message: `$users lookups may only match on: ${USERS_ALLOWED_MATCH_FIELDS.join(', ')}`
+          })
+        }
+      }
+      if (take === 'field' && takeField === '') {
+        errors.push({ path, message: 'take "field" requires "take_field"' })
+      }
       return {
         type: 'lookup',
-        collection: src.collection as string,
-        match_field: src.match_field as string,
+        collection,
+        match_field: matchField,
         scope_filters: filters
           .map((f) => asObject(f))
           .filter((f) => typeof f.field === 'string' && typeof f.value === 'string')
@@ -115,7 +144,8 @@ function normalizeStep(raw: unknown, path: string, errors: ConfigError[]): Impor
         on_miss: ON_MISS.includes(src.on_miss as ImportOnMiss)
           ? (src.on_miss as ImportOnMiss)
           : 'leave_blank',
-        take: TAKE.includes(src.take as 'id' | 'record') ? (src.take as 'id' | 'record') : 'id'
+        take,
+        ...(take === 'field' ? { take_field: takeField } : {})
       }
     }
     case 'wrap_richtext':
@@ -197,6 +227,43 @@ function normalizeDisperse(
   }
 }
 
+function normalizeNested(
+  raw: unknown,
+  path: string,
+  errors: ConfigError[]
+): ImportNestedConfig | null {
+  const src = asObject(raw)
+  if (typeof src.target_field !== 'string' || src.target_field === '') {
+    errors.push({ path, message: 'nested requires "target_field"' })
+    return null
+  }
+  const whenSrc = asObject(src.when)
+  let when: ImportNestedConfig['when'] = null
+  if (src.when != null) {
+    if (
+      typeof whenSrc.column === 'string' &&
+      ROW_FILTER_OPS.includes(whenSrc.op as (typeof ROW_FILTER_OPS)[number])
+    ) {
+      when = {
+        column: whenSrc.column,
+        op: whenSrc.op as 'nnull' | 'eq' | 'neq',
+        ...(typeof whenSrc.value === 'string' ? { value: whenSrc.value } : {})
+      }
+    }
+  }
+  const columnsRaw = Array.isArray(src.columns) ? src.columns : []
+  const columns: ImportHeaderRule[] = []
+  columnsRaw.forEach((col, i) => {
+    const normalized = normalizeRule(col, `${path}.columns[${i}]`, errors)
+    if (normalized) columns.push(normalized)
+  })
+  return {
+    target_field: src.target_field,
+    when,
+    columns
+  }
+}
+
 function normalizeLineConfig(
   raw: unknown,
   path: string,
@@ -229,12 +296,14 @@ function normalizeLineConfig(
   })
   const disperse =
     src.disperse != null ? normalizeDisperse(src.disperse, `${path}.disperse`, errors) : null
+  const nested = src.nested != null ? normalizeNested(src.nested, `${path}.nested`, errors) : null
   return {
     target_field: src.target_field,
     row_filter: rowFilter,
     columns,
     apply_field_rules: src.apply_field_rules !== false,
-    disperse
+    disperse,
+    nested
   }
 }
 
