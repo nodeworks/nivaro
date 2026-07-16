@@ -28,7 +28,7 @@ import type {
 import { normalizeImportTemplateConfig } from '../services/import-templates-config.js'
 import { applyFieldRules, createOne, findM2MRelation, getActualColumns } from '../services/items.js'
 import { can } from '../services/permissions.js'
-import { recalcCollectionsParents } from '../services/rollups.js'
+import { getRollupContributors, recalcRollupsForParent } from '../services/rollups.js'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 const MODES = ['prefill', 'direct', 'both'] as const
@@ -266,6 +266,35 @@ async function deleteGroupedByCollection(
   }
   for (const [coll, ids] of byCollection) {
     await db(coll).whereIn('id', ids).del()
+  }
+}
+
+/** After compensation raw-deletes a created row, any stored rollup whose contributor
+ *  FK (`entry.parentFk`) is present on that row's own payload may now be stale — even
+ *  when the FK points at a record OUTSIDE the created tree entirely (e.g. a
+ *  lookup-resolved `product_id`, an M2M junction's far-side id, or a `create.defaults`
+ *  constant FK). `createOne` bumped that parent's stored rollup when the row was first
+ *  created (its generic per-collection contributor recalc doesn't care which field the
+ *  caller "meant" as the parent); the raw delete never re-triggers it, so it's left
+ *  inflated. Recalcs every contributor entry for the row's own collection whose
+ *  `parentFk` resolves to a non-null value on the row's payload, deduped per
+ *  `(parentCollection, rollupField, parentId)` so the same rollup is never recomputed
+ *  twice across rows/entries. Recalcing a parent id that was ITSELF deleted in this
+ *  same compensation is a harmless no-op — the update simply matches zero rows. */
+async function recalcContributorsForDeletedRows(
+  rows: Array<{ collection: string; payload: Record<string, unknown> }>
+): Promise<void> {
+  const seen = new Set<string>()
+  for (const row of rows) {
+    const entries = await getRollupContributors(row.collection)
+    for (const entry of entries) {
+      const parentId = row.payload[entry.parentFk]
+      if (parentId == null) continue
+      const key = `${entry.parentCollection}::${entry.rollupField}::${String(parentId)}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      await recalcRollupsForParent(entry, parentId)
+    }
   }
 }
 
@@ -1018,14 +1047,32 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     }
 
     const workspaceId = req.workspaceId ?? undefined
+    // Every created-row bookkeeping array below carries `payload` (the exact object
+    // passed to createOne) alongside `collection`/`id` — compensation's raw deletes
+    // bypass items-service hooks, so recalcContributorsForDeletedRows needs each row's
+    // own FK values (which may point at records outside the created tree entirely) to
+    // know which stored rollups createOne originally bumped and now need refreshing.
     const createdChildIds: (string | number)[] = []
-    // otherId is the M2M-linked record on the far side of the junction (an existing
-    // row, never part of the created tree) — tracked so compensation can recalc its
-    // rollup after the junction row that contributed to it is raw-deleted.
-    const createdJunctions: Array<{ collection: string; id: string | number; otherId: string | number }> =
-      []
-    const createdGrandchildren: Array<{ collection: string; id: string | number }> = []
-    const createdLookupRecords: Array<{ collection: string; id: string | number }> = []
+    const createdChildren: Array<{
+      collection: string
+      id: string | number
+      payload: Record<string, unknown>
+    }> = []
+    const createdJunctions: Array<{
+      collection: string
+      id: string | number
+      payload: Record<string, unknown>
+    }> = []
+    const createdGrandchildren: Array<{
+      collection: string
+      id: string | number
+      payload: Record<string, unknown>
+    }> = []
+    const createdLookupRecords: Array<{
+      collection: string
+      id: string | number
+      payload: Record<string, unknown>
+    }> = []
     let parent: { id: string | number } | null = null
     const childCollection: string | null = childRelation?.collection ?? null
     const fkField = childRelation?.fkField ?? null
@@ -1048,7 +1095,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
             req,
             workspaceId
           )) as { id: string | number }
-          createdLookupRecords.push({ collection: group.step.collection, id: created.id })
+          createdLookupRecords.push({
+            collection: group.step.collection,
+            id: created.id,
+            payload: group.defaultsPayload
+          })
           for (const apply of group.applies) apply(created.id)
         }
       } catch (err) {
@@ -1060,6 +1111,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
             compensationErr,
             'import-template execute compensation failed — created rows may be orphaned'
           )
+        }
+        try {
+          await recalcContributorsForDeletedRows(createdLookupRecords)
+        } catch {
+          // swallow — compensation already reported the real error
         }
         return reply.code(422).send({
           error: 'Import failed while creating referenced records — nothing was created',
@@ -1120,14 +1176,19 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           return true
         })
         for (const idValue of uniqueIds) {
+          const junctionPayload = { [info.fkToParent]: parent.id, [info.fkToOther]: idValue }
           const junctionRow = (await createOne(
             req.user!,
             info.junction,
-            { [info.fkToParent]: parent.id, [info.fkToOther]: idValue },
+            junctionPayload,
             req,
             workspaceId
           )) as { id: string | number }
-          createdJunctions.push({ collection: info.junction, id: junctionRow.id, otherId: idValue })
+          createdJunctions.push({
+            collection: info.junction,
+            id: junctionRow.id,
+            payload: junctionPayload
+          })
         }
       }
       failedM2mField = null
@@ -1154,17 +1215,23 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
             workspaceId
           )) as { id: string | number }
           createdChildIds.push(child.id)
+          createdChildren.push({ collection: childCollection, id: child.id, payload: childData })
 
           if (nestedRelation && line.nested) {
             for (const member of line.nested.rows) {
+              const grandchildPayload = { ...member, [nestedRelation.fk_field]: child.id }
               const grandchild = (await createOne(
                 req.user!,
                 nestedRelation.collection,
-                { ...member, [nestedRelation.fk_field]: child.id },
+                grandchildPayload,
                 req,
                 workspaceId
               )) as { id: string | number }
-              createdGrandchildren.push({ collection: nestedRelation.collection, id: grandchild.id })
+              createdGrandchildren.push({
+                collection: nestedRelation.collection,
+                id: grandchild.id,
+                payload: grandchildPayload
+              })
             }
           }
         }
@@ -1226,28 +1293,18 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       }
 
       // The compensation deletes above are raw db calls that bypass items-service
-      // hooks, so any stored rollup on a still-existing record that contributed a
-      // now-deleted junction row is stale. The parent/child/grandchild rows are
-      // themselves part of the raw-deleted tree — no recalc needed there, they're
-      // gone. Only the M2M "other side" (a pre-existing record only linked, never
-      // created) survives compensation and needs its rollup recomputed. Swallowed:
-      // compensation already reported the real error; a recalc failure must not
-      // mask it.
+      // hooks, so any stored rollup whose contributor FK lived on one of the deleted
+      // rows' own payloads is now stale — including FKs pointing OUTSIDE the created
+      // tree entirely (an M2M junction's far side, a lookup-resolved FK, a
+      // create.defaults constant). Swallowed: compensation already reported the real
+      // error; a recalc failure must not mask it.
       try {
-        if (createdJunctions.length > 0) {
-          const otherIdsByJunction = new Map<string, Set<string | number>>()
-          for (const junction of createdJunctions) {
-            const ids = otherIdsByJunction.get(junction.collection) ?? new Set<string | number>()
-            ids.add(junction.otherId)
-            otherIdsByJunction.set(junction.collection, ids)
-          }
-          await recalcCollectionsParents(
-            [...otherIdsByJunction].map(([childCollection, ids]) => ({
-              childCollection,
-              parentIds: [...ids]
-            }))
-          )
-        }
+        await recalcContributorsForDeletedRows([
+          ...createdGrandchildren,
+          ...createdJunctions,
+          ...createdChildren,
+          ...createdLookupRecords
+        ])
       } catch {
         // swallow
       }
