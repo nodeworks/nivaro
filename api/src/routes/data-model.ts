@@ -3,6 +3,12 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { selectInChunks } from '../services/db-batch.js'
+import {
+  bustRollupContributorCache,
+  parseRollupFormula,
+  recalcRollupsForParent
+} from '../services/rollups.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -836,6 +842,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
         })
       }
 
+      bustRollupContributorCache()
+
       const updated = await db<CMSField>('nivaro_fields')
         .where({ collection: table, field: body.field })
         .first()
@@ -869,6 +877,39 @@ export async function dataModelRoutes(app: FastifyInstance) {
         req
       })
       return reply.code(204).send()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return reply.code(500).send({ error: msg })
+    }
+  })
+
+  // ─── POST /:table/fields/:field/rollup-recalc — backfill a stored rollup ──
+
+  app.post('/:table/fields/:field/rollup-recalc', async (req, reply) => {
+    const { table, field } = req.params as { table: string; field: string }
+
+    try {
+      const fieldRow = await db('nivaro_fields').where({ collection: table, field }).first()
+      if (fieldRow?.computed_type !== 'rollup' || !fieldRow.computed_formula) {
+        return reply.code(400).send({ error: 'Field is not a stored rollup' })
+      }
+
+      const cfg = parseRollupFormula(fieldRow.computed_formula)
+      if (!cfg) return reply.code(400).send({ error: 'Invalid rollup formula' })
+
+      const entry = { parentCollection: table, parentFk: '', rollupField: field, sources: cfg.sources }
+
+      const idRows = (await db(table).select('id')) as Array<{ id: string | number }>
+      const ids = idRows.map((r) => r.id)
+
+      const processed = await selectInChunks(ids, 500, async (chunk) => {
+        for (const id of chunk) {
+          await recalcRollupsForParent(entry, id)
+        }
+        return chunk
+      })
+
+      return reply.send({ recalculated: processed.length })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return reply.code(500).send({ error: msg })

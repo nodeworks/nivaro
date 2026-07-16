@@ -79,6 +79,7 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'POST', path: '/api/pipelines/simulate' },
   { method: 'POST', path: '/api/ai/chat' },
   { method: 'GET', path: '/api/data-model/:table/fields/:field/impact' },
+  { method: 'POST', path: '/api/data-model/:table/fields/:field/rollup-recalc' },
   { method: 'GET', path: '/api/scheduled-reports/' },
   { method: 'POST', path: '/api/scheduled-reports/:id/run' },
   { method: 'GET', path: '/api/auth/providers' },

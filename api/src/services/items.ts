@@ -13,8 +13,20 @@ import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissio
 import { writeTrashRow } from './trash.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
+import {
+  computeRollupTotal,
+  parseRollupFormula,
+  recalcAffectedRollups,
+  type NormalizedRollup,
+  type RollupSource
+} from './rollups.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
+
+// Re-exported for compatibility with existing importers/tests — canonical
+// definitions and the recalc engine live in ./rollups.js.
+export { computeRollupTotal, parseRollupFormula }
+export type { NormalizedRollup, RollupSource }
 
 const _exprParser = new Parser({
   operators: {
@@ -265,167 +277,6 @@ interface ComputedFieldRow {
   computed_formula: string | null
   computed_type: string | null
   computed_store: boolean | number
-}
-
-/**
- * Rollup computed field config — stored as JSON in `computed_formula` when
- * `computed_type === 'rollup'`. Aggregates related items in another collection.
- * A single field may combine multiple sources; each source contributes its own
- * aggregate and the results are summed (count contributes its count).
- */
-export interface RollupSource {
-  related_collection: string // table to aggregate from
-  fk_field: string // column on related_collection pointing to this item's id
-  aggregate: 'sum' | 'count' | 'avg' | 'min' | 'max'
-  value_field: string // column to aggregate (ignored for count)
-  recursive?: boolean // if true: aggregate all descendants in same-collection tree
-}
-
-export interface NormalizedRollup {
-  sources: RollupSource[]
-}
-
-const ROLLUP_AGGREGATES = new Set(['sum', 'count', 'avg', 'min', 'max'])
-
-function isValidRollupSource(v: unknown): v is RollupSource {
-  if (!v || typeof v !== 'object') return false
-  const s = v as Record<string, unknown>
-  if (typeof s.related_collection !== 'string' || !s.related_collection) return false
-  if (typeof s.fk_field !== 'string' || !s.fk_field) return false
-  if (typeof s.aggregate !== 'string' || !ROLLUP_AGGREGATES.has(s.aggregate)) return false
-  if (typeof s.value_field !== 'string') return false
-  if (s.aggregate !== 'count' && !s.value_field) return false
-  if (s.recursive !== undefined && typeof s.recursive !== 'boolean') return false
-  return true
-}
-
-/**
- * Normalize a stored rollup config into `{ sources: [...] }`.
- * Accepts either the legacy single-source object shape or `{ sources: [...] }`.
- * Returns null when the JSON is unparseable or any source is invalid.
- */
-export function parseRollupFormula(raw: string | null): NormalizedRollup | null {
-  const parsed = parseJson<Record<string, unknown>>(raw)
-  if (!parsed || typeof parsed !== 'object') return null
-
-  const rawSources = Array.isArray((parsed as { sources?: unknown }).sources)
-    ? (parsed as { sources: unknown[] }).sources
-    : [parsed]
-
-  if (!rawSources.length) return null
-  if (!rawSources.every(isValidRollupSource)) return null
-
-  return { sources: rawSources as RollupSource[] }
-}
-
-/**
- * Compute a single rollup value for one item id.
- * Non-recursive: simple aggregate over related_collection where fk_field = id.
- * Recursive (same-collection tree): aggregate over all descendants via CTE.
- * Returns null on any error or invalid config.
- */
-async function computeRollupValue(
-  cfg: RollupSource,
-  id: unknown,
-  hostCollection?: string
-): Promise<number | null> {
-  if (!cfg.related_collection || !cfg.fk_field || !ROLLUP_AGGREGATES.has(cfg.aggregate)) {
-    return null
-  }
-  if (cfg.aggregate !== 'count' && !cfg.value_field) return null
-  if (id == null) return null
-
-  try {
-    // Recursive rollups only make sense over a same-collection tree — the CTE
-    // self-joins related_collection on fk_field, which is defined as pointing at
-    // the HOST collection's ids. A mismatched recursive config (only reachable via
-    // hand-authored JSON) falls back to the flat aggregate, as it always has.
-    if (cfg.recursive && hostCollection === cfg.related_collection) {
-      // MSSQL recursive CTE — gather all descendant ids at any depth, then aggregate.
-      // Identifiers are bound via ?? (escaped); the id value via ?.
-      // MSSQL CTEs never use the RECURSIVE keyword; MAXRECURSION guards depth.
-      const selectExpr =
-        cfg.aggregate === 'count' ? 'COUNT(*)' : `${cfg.aggregate.toUpperCase()}(??)`
-
-      const sql = `WITH descendants AS (
-  SELECT id FROM ?? WHERE ?? = ?
-  UNION ALL
-  SELECT c.id FROM ?? c INNER JOIN descendants d ON c.?? = d.id
-)
-SELECT ${selectExpr} AS v FROM ?? WHERE id IN (SELECT id FROM descendants)
-OPTION (MAXRECURSION 100)`
-
-      // Binding order:
-      //   ?? related_collection (anchor FROM)
-      //   ?? fk_field           (anchor WHERE)
-      //   ?  id
-      //   ?? related_collection (recursive FROM)
-      //   ?? fk_field           (recursive JOIN)
-      //   [?? value_field — only when aggregate != count, inside selectExpr]
-      //   ?? related_collection (final FROM)
-      const binds: Knex.RawBinding[] =
-        cfg.aggregate === 'count'
-          ? [
-              cfg.related_collection,
-              cfg.fk_field,
-              id as Knex.Value,
-              cfg.related_collection,
-              cfg.fk_field,
-              cfg.related_collection
-            ]
-          : [
-              cfg.related_collection,
-              cfg.fk_field,
-              id as Knex.Value,
-              cfg.related_collection,
-              cfg.fk_field,
-              cfg.value_field,
-              cfg.related_collection
-            ]
-
-      const raw = (await db.raw(sql, binds)) as
-        | { recordset?: Array<{ v: number | null }> }
-        | Array<{ v: number | null }>
-      const recordset = Array.isArray(raw) ? raw : raw.recordset
-      const v = recordset?.[0]?.v
-      if (v != null) return Number(v)
-      return cfg.aggregate === 'count' ? 0 : null
-    }
-
-    if (cfg.aggregate === 'count') {
-      const r = (await db(cfg.related_collection)
-        .where(cfg.fk_field, id as Knex.Value)
-        .count('* as v')
-        .first()) as { v: number } | undefined
-      return Number(r?.v ?? 0)
-    }
-
-    const r = (await db(cfg.related_collection)
-      .where(cfg.fk_field, id as Knex.Value)
-      [cfg.aggregate](`${cfg.value_field} as v`)
-      .first()) as { v: number | null } | undefined
-    return r?.v != null ? Number(r.v) : null
-  } catch {
-    return null
-  }
-}
-
-/**
- * Compute the combined value of a (possibly multi-source) rollup: each source's
- * aggregate via `computeRollupValue`, summed together. A source that returns
- * null contributes 0 to the sum; if every source returns null, the result is
- * null (distinguishing "no data" from "sums to zero").
- */
-export async function computeRollupTotal(
-  cfg: NormalizedRollup,
-  id: unknown,
-  hostCollection?: string
-): Promise<number | null> {
-  const values = await Promise.all(
-    cfg.sources.map((source) => computeRollupValue(source, id, hostCollection))
-  )
-  if (values.every((v) => v == null)) return null
-  return values.reduce((sum: number, v) => sum + (v ?? 0), 0)
 }
 
 /**
@@ -1791,6 +1642,9 @@ export async function createOne(
 
   const result = await readOne(user, collection, returnedId as string | number)
 
+  // Recalc any stored rollups this new row contributes to (never throws)
+  await recalcAffectedRollups(collection, (result ?? ctx.payload) as Record<string, unknown>)
+
   // after_create rules
   await evaluateRules(
     collection,
@@ -1874,6 +1728,10 @@ export async function updateOne(
   await updQ.update(filterToActualColumns(securedPayload, actualCols))
   const result = await readOne(user, collection, id, workspaceId)
 
+  // Recalc any stored rollups this row contributes to — both the previous and
+  // new parent when an FK field changed (never throws)
+  await recalcAffectedRollups(collection, result as Record<string, unknown> | null, previousData)
+
   // after_update rules
   await evaluateRules(
     collection,
@@ -1933,6 +1791,9 @@ export async function deleteOne(
 
   // Trash safety net — full-row snapshot, restorable for 30 days
   if (previousData) void writeTrashRow(collection, previousData, user.id)
+
+  // Recalc any stored rollups the deleted row contributed to (never throws)
+  await recalcAffectedRollups(collection, null, previousData)
 
   await hooks.trigger('after', { ...ctx, previousData })
 }

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { bustRollupContributorCache } from '../services/rollups.js'
 
 function parseJsonSafe(val: unknown): unknown {
   if (val === null || val === undefined) return val
@@ -450,6 +451,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     if ('is_translatable' in body) patch.is_translatable = body.is_translatable ? 1 : 0
 
     await db('nivaro_fields').where({ collection, field }).update(patch)
+    bustRollupContributorCache()
 
     const updated = (await db('nivaro_fields')
       .where({ collection, field })
