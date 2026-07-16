@@ -36,7 +36,7 @@ import { cn } from '@/lib/utils'
 
 type ImportMode = 'prefill' | 'direct' | 'both'
 type FileType = 'xlsx' | 'xlsm' | 'xls' | 'csv'
-type OnMiss = 'leave_blank' | 'error' | 'create_stub'
+type OnMiss = 'leave_blank' | 'error' | 'create_stub' | 'create'
 type Take = 'id' | 'record' | 'field'
 type RowFilterOp = 'nnull' | 'eq' | 'neq'
 
@@ -58,6 +58,7 @@ type ImportStep =
       on_miss: OnMiss
       take: Take
       take_field: string | null
+      create?: { defaults: ImportHeaderRule[]; dedupe_by: string[] }
     }
   | { type: 'wrap_richtext' }
   | { type: 'const'; value: unknown }
@@ -169,6 +170,11 @@ const DEFAULT_NESTED: ImportNestedConfig = {
 }
 
 const USERS_LOOKUP_OPTION: Option = { value: '$users', label: 'Users (system)' }
+
+const DEFAULT_LOOKUP_CREATE: { defaults: ImportHeaderRule[]; dedupe_by: string[] } = {
+  defaults: [],
+  dedupe_by: []
+}
 
 const DEFAULT_DISPERSE: ImportDisperseConfig = {
   map_collection: '',
@@ -409,8 +415,17 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 // ─── Step editors ───────────────────────────────────────────────────────────
 
-function AddStepButton({ onAdd }: { onAdd: (t: ImportStep['type']) => void }) {
+function AddStepButton({
+  onAdd,
+  excludeStepTypes
+}: {
+  onAdd: (t: ImportStep['type']) => void
+  excludeStepTypes?: ImportStep['type'][]
+}) {
   const [open, setOpen] = useState(false)
+  const stepTypes = excludeStepTypes?.length
+    ? STEP_TYPES.filter((s) => !excludeStepTypes.includes(s.value))
+    : STEP_TYPES
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -422,7 +437,7 @@ function AddStepButton({ onAdd }: { onAdd: (t: ImportStep['type']) => void }) {
         <Command>
           <CommandList>
             <CommandGroup>
-              {STEP_TYPES.map((s) => (
+              {stepTypes.map((s) => (
                 <CommandItem
                   key={s.value}
                   value={s.value}
@@ -564,11 +579,13 @@ function ConstEditor({
 function LookupEditor({
   step,
   onChange,
-  path
+  path,
+  errors
 }: {
   step: Extract<ImportStep, { type: 'lookup' }>
   onChange: (s: ImportStep) => void
   path: string
+  errors: ConfigErrorDetail[]
 }) {
   const collectionOptions = useCollectionOptions()
   const lookupCollectionOptions = [USERS_LOOKUP_OPTION, ...collectionOptions]
@@ -579,6 +596,9 @@ function LookupEditor({
   const matchFieldOptions = lookupFields
     .filter(isPlainField)
     .map((f) => ({ value: f.field, label: fieldLabel(f) }))
+  const onMissOptions: OnMiss[] = isUsersLookup
+    ? ['leave_blank', 'error', 'create_stub']
+    : ['leave_blank', 'error', 'create_stub', 'create']
 
   function setFilters(next: ScopeFilter[]) {
     onChange({ ...step, scope_filters: next })
@@ -689,13 +709,19 @@ function LookupEditor({
       <div className='flex flex-wrap items-center gap-4 text-[11px]'>
         <div className='flex items-center gap-2'>
           <span className='text-slate-400'>On miss:</span>
-          {(['leave_blank', 'error', 'create_stub'] as const).map((v) => (
+          {onMissOptions.map((v) => (
             <label key={v} className='flex cursor-pointer items-center gap-1 text-slate-600'>
               <input
                 type='radio'
                 name={`onmiss-${path}`}
                 checked={step.on_miss === v}
-                onChange={() => onChange({ ...step, on_miss: v })}
+                onChange={() =>
+                  onChange({
+                    ...step,
+                    on_miss: v,
+                    create: v === 'create' ? (step.create ?? DEFAULT_LOOKUP_CREATE) : step.create
+                  })
+                }
               />
               {v.replace('_', ' ')}
             </label>
@@ -735,6 +761,51 @@ function LookupEditor({
           </div>
         )}
       </div>
+      {!isUsersLookup && step.on_miss === 'create' && (
+        <div className='space-y-2 rounded-md border border-slate-200 bg-white p-2.5 dark:border-border dark:bg-card'>
+          <p className='text-[11px] text-slate-400'>
+            Defaults read the line's mapped values (not sheet columns). Records are created only on
+            direct import.
+          </p>
+          <div>
+            <p className='mb-1 text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
+              Defaults
+            </p>
+            <RuleEditor
+              rules={step.create?.defaults ?? []}
+              onChange={(defaults) =>
+                onChange({
+                  ...step,
+                  create: { dedupe_by: step.create?.dedupe_by ?? [], defaults }
+                })
+              }
+              fieldOptions={matchFieldOptions}
+              excludeStepTypes={['lookup']}
+              basePath={`${path}.create.defaults`}
+              errors={errors}
+            />
+          </div>
+          <LabeledField label='Dedupe by (comma-separated)'>
+            <Input
+              value={(step.create?.dedupe_by ?? []).join(', ')}
+              onChange={(e) =>
+                onChange({
+                  ...step,
+                  create: {
+                    defaults: step.create?.defaults ?? [],
+                    dedupe_by: e.target.value
+                      .split(',')
+                      .map((s) => s.trim())
+                      .filter(Boolean)
+                  }
+                })
+              }
+              placeholder='email, external_id'
+              className='h-8 font-mono text-[12px]'
+            />
+          </LabeledField>
+        </div>
+      )}
     </div>
   )
 }
@@ -811,7 +882,9 @@ function StepEditor({
         {step.type === 'remap' && <RemapEditor step={step} onChange={onChange} />}
         {step.type === 'expression' && <ExpressionEditor step={step} onChange={onChange} />}
         {step.type === 'const' && <ConstEditor step={step} onChange={onChange} />}
-        {step.type === 'lookup' && <LookupEditor step={step} onChange={onChange} path={path} />}
+        {step.type === 'lookup' && (
+          <LookupEditor step={step} onChange={onChange} path={path} errors={errors} />
+        )}
       </div>
       <InlineErrors errors={errorsUnder(errors, path)} ownPath={path} />
     </div>
@@ -825,6 +898,7 @@ function RuleRow({
   isFirst,
   isLast,
   fieldOptions,
+  excludeStepTypes,
   path,
   errors,
   onPatch,
@@ -835,6 +909,7 @@ function RuleRow({
   isFirst: boolean
   isLast: boolean
   fieldOptions: Option[] | null
+  excludeStepTypes?: ImportStep['type'][]
   path: string
   errors: ConfigErrorDetail[]
   onPatch: (patch: Partial<ImportHeaderRule>) => void
@@ -924,7 +999,10 @@ function RuleRow({
             }}
           />
         ))}
-        <AddStepButton onAdd={(t) => onPatch({ steps: [...rule.steps, defaultStepFor(t)] })} />
+        <AddStepButton
+          onAdd={(t) => onPatch({ steps: [...rule.steps, defaultStepFor(t)] })}
+          excludeStepTypes={excludeStepTypes}
+        />
       </div>
     </div>
   )
@@ -935,6 +1013,7 @@ function RuleEditor({
   onChange,
   fieldOptions,
   extraTargetOptions,
+  excludeStepTypes,
   basePath,
   errors
 }: {
@@ -942,6 +1021,7 @@ function RuleEditor({
   onChange: (rules: ImportHeaderRule[]) => void
   fieldOptions: Option[] | null
   extraTargetOptions?: Option[]
+  excludeStepTypes?: ImportStep['type'][]
   basePath: string
   errors: ConfigErrorDetail[]
 }) {
@@ -979,6 +1059,7 @@ function RuleEditor({
           isFirst={i === 0}
           isLast={i === rules.length - 1}
           fieldOptions={rowFieldOptions}
+          excludeStepTypes={excludeStepTypes}
           path={`${basePath}[${i}]`}
           errors={errors}
           onPatch={(patch) => updateRule(i, patch)}
@@ -1132,6 +1213,9 @@ function DisperseFields({
           onChange={(e) => onChange({ nested_target: e.target.value })}
           className='h-8 text-[12px]'
         />
+        <p className='text-[11px] text-slate-400'>
+          A physical JSON column or an O2M relation field on the line collection.
+        </p>
       </LabeledField>
     </div>
   )
@@ -1213,6 +1297,9 @@ function NestedFields({
           placeholder='unit_workflows'
           className='h-8 font-mono text-[12px]'
         />
+        <p className='text-[11px] text-slate-400'>
+          A physical JSON column or an O2M relation field on the line collection.
+        </p>
       </LabeledField>
       <div>
         <Label className='mb-1.5 block text-[11px] text-slate-500'>
