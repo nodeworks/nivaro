@@ -4481,8 +4481,8 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
                 ) : (
                   <div className='space-y-2'>
                     {rules.map((rule, i) => {
-                      // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
                       return typeof rule === 'string' ? (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
                         <div key={i} className='flex items-start gap-2'>
                           <Textarea
                             value={rule}
@@ -4507,6 +4507,7 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
                         </div>
                       ) : (
                         <SumCapRuleEditor
+                          // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
                           key={i}
                           tableName={tableName}
                           rule={rule}
