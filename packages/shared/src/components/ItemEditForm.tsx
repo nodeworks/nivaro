@@ -685,7 +685,9 @@ export function ItemEditForm({
         for (const line of result.lines) {
           o2mStagingCtx.queueRow(rel.many_collection, rel.many_field, {
             ...line.values,
-            ...(line.nested ? { [line.nested.field]: line.nested.rows } : {})
+            ...(line.nested
+              ? { [result.nested_relation ? `__o2m_${line.nested.field}` : line.nested.field]: line.nested.rows }
+              : {})
           })
         }
       } else {
@@ -1737,11 +1739,33 @@ export function ItemEditForm({
         }
         updateStep(stepId, { status: 'running', progress: { done: 0, total: rowList.length } })
         try {
+          let nestedFailures = 0
           await Promise.all(rowList.map(async (data) => {
-            await client.request(post(`/items/${rc}`, { ...data, [mf]: savedId }))
+            const o2mEntries = Object.entries(data).filter(([k]) => k.startsWith('__o2m_'))
+            const cleanData = Object.fromEntries(Object.entries(data).filter(([k]) => !k.startsWith('__o2m_')))
+            const res = await client.request<{ data: { id: unknown } }>(post(`/items/${rc}`, { ...cleanData, [mf]: savedId }))
+            const childId = res?.data?.id
             updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: rowList.length } }))
+            for (const [key, members] of o2mEntries) {
+              const field = key.slice('__o2m_'.length)
+              const grandRel = relations.find(r => r.one_collection === rc && r.one_field === field)
+              const memberList = Array.isArray(members) ? members as Record<string, unknown>[] : []
+              if (!grandRel?.many_collection || !grandRel.many_field) {
+                nestedFailures += memberList.length
+                continue
+              }
+              for (const member of memberList) {
+                try {
+                  await client.request(post(`/items/${grandRel.many_collection}`, { ...member, [grandRel.many_field]: childId }))
+                } catch {
+                  nestedFailures++
+                }
+              }
+            }
           }))
-          updateStep(stepId, { status: 'done' })
+          updateStep(stepId, nestedFailures > 0
+            ? { status: 'error', error: `${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed` }
+            : { status: 'done' })
         } catch (err) {
           updateStep(stepId, { status: 'error', error: errMsg(err) })
         }

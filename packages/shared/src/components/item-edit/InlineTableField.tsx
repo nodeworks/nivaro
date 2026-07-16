@@ -743,9 +743,12 @@ export function InlineTableField({
           setEditState(null)
           return
         }
-        // Strip __m2m_* staging keys before POST — those are handled separately below
+        // Strip __m2m_*/__o2m_* staging keys before POST — those are handled separately below
         const m2mEntries = Object.entries(editState.draft).filter(([k]) => k.startsWith('__m2m_'))
-        const cleanDraft = Object.fromEntries(Object.entries(editState.draft).filter(([k]) => !k.startsWith('__m2m_')))
+        const o2mEntries = Object.entries(editState.draft).filter(([k]) => k.startsWith('__o2m_'))
+        const cleanDraft = Object.fromEntries(
+          Object.entries(editState.draft).filter(([k]) => !k.startsWith('__m2m_') && !k.startsWith('__o2m_'))
+        )
         const newRowRes = await client.request<{ data: { id: unknown } }>(post(`/items/${relatedCollection}${pCtx}`, { ...cleanDraft, [manyField]: parentId }))
         const newRowId = newRowRes?.data?.id
         if (newRowId != null && m2mEntries.length) {
@@ -756,6 +759,17 @@ export function InlineTableField({
             if (!target) return Promise.resolve()
             return client.request(post(`/items/${target.junctionCollection}`, { [target.junctionManyField]: newRowId, [target.junctionOtherField]: relatedId }))
           }))
+        }
+        if (newRowId != null && o2mEntries.length) {
+          for (const [key, members] of o2mEntries) {
+            const fieldName = key.slice('__o2m_'.length)
+            const grandRel = childRelations.find(r => r.one_collection === relatedCollection && r.one_field === fieldName)
+            if (!grandRel?.many_collection || !grandRel.many_field) continue
+            const memberList = Array.isArray(members) ? members as Record<string, unknown>[] : []
+            for (const member of memberList) {
+              await client.request(post(`/items/${grandRel.many_collection}`, { ...member, [grandRel.many_field]: newRowId }))
+            }
+          }
         }
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       } else {
