@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { applyWorkspaceScope } from '../services/items.js'
+import { applyRowFilter, getRowFilter } from '../services/permissions.js'
 import { getAiCollectionSettings } from './ai-validation.js'
 import type { HookContext } from './registry.js'
 import { hooks } from './registry.js'
@@ -127,16 +129,31 @@ async function resolveM2oParent(collection: string, field: string): Promise<stri
  * NULL group value or NULL parent cap both skip silently (nothing to cap
  * against). Throws CapValidationError for 'block' severity when the running
  * total exceeds the cap; 'warn' severity notifies the acting user instead.
+ *
+ * Scoping: before-hooks run ahead of items.ts's own workspace/row-filter scoped
+ * previousData fetch (see updateOne, services/items.ts:1690-1698), so this hook
+ * must derive and apply the SAME scope itself — otherwise an update targeting
+ * another workspace's row id would reach the cap arithmetic (and leak a 422
+ * vs. 404 boolean oracle, plus the cap/total amounts) before the write path's
+ * own 404 check ever runs. Mirrors updateOne exactly: applyWorkspaceScope +
+ * getRowFilter/applyRowFilter, both keyed off ctx.req.workspaceId + ctx.user.
  */
 export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Promise<void> {
   const payload = ctx.payload ?? {}
   const currentId = ctx.action === 'update' ? ctx.keys?.[0] : undefined
+  const workspaceId = ctx.req?.workspaceId ?? undefined
+  const rowFilter = ctx.user ? await getRowFilter(ctx.user, ctx.action, ctx.collection) : null
 
   let currentRow: Record<string, unknown> | undefined
   if (currentId != null) {
-    currentRow = (await db(ctx.collection).where({ id: currentId }).first()) as
-      | Record<string, unknown>
-      | undefined
+    const currentRowQuery = db(ctx.collection).where({ id: currentId })
+    await applyWorkspaceScope(currentRowQuery, ctx.collection, workspaceId)
+    if (rowFilter)
+      applyRowFilter(currentRowQuery, rowFilter, ctx.user as NonNullable<typeof ctx.user>)
+    currentRow = (await currentRowQuery.first()) as Record<string, unknown> | undefined
+    // Invisible under this scope — the write path's own previousData fetch
+    // (run right after this hook) will 404. Never throw or leak from here.
+    if (!currentRow) return
   }
 
   const groupValue = payload[rule.group_by] ?? currentRow?.[rule.group_by] ?? null
@@ -145,8 +162,10 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
   const incomingRaw = payload[rule.sum_field] ?? currentRow?.[rule.sum_field] ?? 0
   const incoming = Number(incomingRaw ?? 0)
 
-  let sumQuery = db(ctx.collection).where(rule.group_by, groupValue as never)
-  if (currentId != null) sumQuery = sumQuery.whereNot({ id: currentId })
+  const sumQuery = db(ctx.collection).where(rule.group_by, groupValue as never)
+  await applyWorkspaceScope(sumQuery, ctx.collection, workspaceId)
+  if (rowFilter) applyRowFilter(sumQuery, rowFilter, ctx.user as NonNullable<typeof ctx.user>)
+  if (currentId != null) sumQuery.whereNot({ id: currentId })
   const sumRow = (await sumQuery.sum(`${rule.sum_field} as v`).first()) as
     | { v: string | number | null }
     | undefined

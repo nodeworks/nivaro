@@ -146,7 +146,7 @@ export async function workspaceColumnExists(collection: string): Promise<boolean
  * default workspace sees NULL rows plus its own; any other workspace sees only
  * rows explicitly tagged with its id.
  */
-async function applyWorkspaceScope(
+export async function applyWorkspaceScope(
   q: QB,
   collection: string,
   workspaceId: string | undefined

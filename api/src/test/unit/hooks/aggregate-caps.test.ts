@@ -314,6 +314,81 @@ describe('evaluateSumCapRule', () => {
 
     expect(notifChain.insert).toHaveBeenCalled()
   })
+
+  it("applies the caller's workspace scope to both the current-row fetch and the SUM query", async () => {
+    const collection = 'scoped_allocations_ws'
+    const columnInfo = vi.fn().mockResolvedValue({ workspace_id: {} })
+    const { chain, whereArgs, whereNotIds } = collectionChain([
+      { workflow_line: 'wl1', allocated_amount: 20 },
+      { v: '40' }
+    ])
+    ;(chain as unknown as Record<string, unknown>).columnInfo = columnInfo
+    const relChain = onceChain({ one_collection: 'workflow_lines' })
+    const parentChain = onceChain({ amount: 100 })
+
+    vi.mocked(db).mockImplementation((table: unknown) => {
+      if (table === collection) return chain as never
+      if (table === 'nivaro_relations') return relChain as never
+      if (table === 'workflow_lines') return parentChain as never
+      throw new Error(`unexpected table ${String(table)}`)
+    })
+
+    await expect(
+      evaluateSumCapRule(
+        rule(),
+        ctx({
+          collection,
+          action: 'update',
+          keys: ['row1'],
+          payload: { allocated_amount: 90 },
+          req: { workspaceId: 'ws-other' } as HookContext['req']
+        })
+      )
+    ).rejects.toBeInstanceOf(CapValidationError)
+
+    expect(columnInfo).toHaveBeenCalled()
+    // Both the current-row fetch and the sum query got the workspace filter —
+    // matching items.ts's updateOne, which scopes both its previousData fetch
+    // and its update query the same way.
+    expect(whereArgs.filter((args) => args[0] === `${collection}.workspace_id`)).toHaveLength(2)
+    expect(whereNotIds).toEqual(['row1'])
+  })
+
+  it("skips the rule without throwing when the scoped current-row fetch finds nothing (row invisible under this workspace) — the write path's own 404 check handles it", async () => {
+    const collection = 'scoped_allocations_missing'
+    const columnInfo = vi.fn().mockResolvedValue({ workspace_id: {} })
+    const first = vi.fn().mockResolvedValue(undefined)
+    const chain: Record<string, unknown> = {
+      where: vi.fn(() => chain),
+      whereNot: vi.fn(() => chain),
+      sum: vi.fn(() => chain),
+      select: vi.fn(() => chain),
+      columnInfo,
+      first
+    }
+
+    vi.mocked(db).mockImplementation((table: unknown) => {
+      if (table === collection) return chain as never
+      throw new Error(`unexpected table ${String(table)}`)
+    })
+
+    await expect(
+      evaluateSumCapRule(
+        rule(),
+        ctx({
+          collection,
+          action: 'update',
+          keys: ['other-workspace-row'],
+          payload: { allocated_amount: 999999 },
+          req: { workspaceId: 'ws-other' } as HookContext['req']
+        })
+      )
+    ).resolves.toBeUndefined()
+
+    // Only the scoped current-row fetch happened — never reached the sum
+    // query, the relation lookup, or the parent cap fetch.
+    expect(first).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('registerAggregateCapHooks', () => {
