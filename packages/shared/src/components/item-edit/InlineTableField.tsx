@@ -805,8 +805,10 @@ export function InlineTableField({
         }
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       } else {
-        // Filter to only visible (preset-effective) display columns — draft includes full API row (id, system fields, etc.)
-        const writableKeys = new Set(effectiveCols.map(c => c.field).filter(k => !k.startsWith('__m2m_')))
+        // Filter to display columns — draft includes full API row (id, system fields, etc.).
+        // Deliberately the FULL layout-gated set, not preset-effective: row rules may autofill
+        // preset-hidden fields, and a mid-edit preset switch must not drop typed values.
+        const writableKeys = new Set(displayCols.map(c => c.field).filter(k => !k.startsWith('__m2m_')))
         const rowPayload = Object.fromEntries(Object.entries(editState.draft).filter(([k]) => writableKeys.has(k)))
         if (isPendingMode && staging) {
           staging.queueEdit(relatedCollection, manyField, editState.rowId, rowPayload)
