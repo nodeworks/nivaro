@@ -953,7 +953,7 @@ function findO2MRelation(key: string, collection: string, rels: CMSRelation[]): 
  * Key matches one_field on a relation where one_collection=collection and junction_field≠null.
  * Returns { junction, fkToParent, fkToOther, otherCollection } or null.
  */
-function findM2MRelation(
+export function findM2MRelation(
   key: string,
   collection: string,
   rels: CMSRelation[]

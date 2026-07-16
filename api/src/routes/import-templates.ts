@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { getRelations } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { uploadFileBuffer } from '../services/files.js'
 import { IMPORT_ROW_CAP, readSpreadsheet } from '../services/import-spreadsheet.js'
@@ -16,7 +17,7 @@ import type {
   ImportTemplateConfig
 } from '../services/import-templates-config.js'
 import { normalizeImportTemplateConfig } from '../services/import-templates-config.js'
-import { applyFieldRules, createOne } from '../services/items.js'
+import { applyFieldRules, createOne, findM2MRelation } from '../services/items.js'
 import { can } from '../services/permissions.js'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -85,6 +86,17 @@ function parseArrayStrings(rows: Record<string, unknown>[]): Record<string, unkn
  *  error issue the route appends, instead of throwing a 500 out of the pipeline. */
 export function makeLookupFetcher(onError?: (message: string) => void): LookupFetcher {
   return async ({ collection, match_field, values, scope_filters }) => {
+    // $users is a sentinel, not a real collection — resolved against nivaro_users directly,
+    // scoped to non-redacted rows, ignoring scope_filters entirely. Must run BEFORE the
+    // nivaro_/identifier guards below (the sentinel's leading "$" fails COLLECTION_NAME_RE).
+    if (collection === '$users') {
+      return selectInChunks(values, 500, (chunk) =>
+        db('nivaro_users')
+          .select('id', 'email')
+          .where({ is_redacted: 0 })
+          .whereIn(match_field, chunk)
+      )
+    }
     if (/^nivaro_/i.test(collection) || !COLLECTION_NAME_RE.test(collection)) return []
     try {
       const rows = await selectInChunks(values, 500, (chunk) => {
@@ -130,6 +142,36 @@ async function resolveLineChildCollection(
   return relation?.collection ?? null
 }
 
+type M2mAliasInfo = { junction: string; fkToParent: string; fkToOther: string }
+
+/** Resolves every M2M alias field (a virtual `one_field` on a junction relation) for a
+ *  collection, keyed by field name — reuses the same mutual-pair matching
+ *  `findM2MRelation()` already performs for item reads/filters, so a one-sided/broken
+ *  junction row (see the junction_field gotcha) never resolves as a usable alias.
+ *  Called once per collection: parse/test call it unconditionally to build the
+ *  pipeline's m2mFields set; save-time validation only calls it lazily, once a header
+ *  target turns out not to be a plain column (see `getM2mAliasFieldsCached`). */
+async function resolveM2mAliasFields(collection: string): Promise<Map<string, M2mAliasInfo>> {
+  const rels = await getRelations(collection)
+  const candidateFields = new Set(
+    rels
+      .filter((r) => r.one_collection === collection && r.junction_field != null)
+      .map((r) => r.one_field as string)
+  )
+  const map = new Map<string, M2mAliasInfo>()
+  for (const field of candidateFields) {
+    const match = findM2MRelation(field, collection, rels)
+    if (match) {
+      map.set(field, {
+        junction: match.junction,
+        fkToParent: match.fkToParent,
+        fkToOther: match.fkToOther
+      })
+    }
+  }
+  return map
+}
+
 /** Resolves + caches a lookup target collection's field set. `null` means the
  *  collection is unknown, blocklisted, or not a valid identifier. */
 async function resolveLookupFieldSet(
@@ -166,6 +208,10 @@ async function validateLookupStep(
   errors: ConfigError[],
   fieldSetCache: Map<string, Set<string> | null>
 ): Promise<void> {
+  // $users is a sentinel, not a real nivaro_collections row — the normalizer already
+  // restricted match_field to the allowed set (email), so there's nothing left to check.
+  if (step.collection === '$users') return
+
   const fieldSet = await resolveLookupFieldSet(step.collection, fieldSetCache)
   if (!fieldSet) {
     errors.push({ path, message: `Unknown lookup collection "${step.collection}"` })
@@ -175,6 +221,12 @@ async function validateLookupStep(
     errors.push({
       path: `${path}.match_field`,
       message: `Unknown field "${step.match_field}" on ${step.collection}`
+    })
+  }
+  if (step.take === 'field' && !fieldSet.has(step.take_field ?? '')) {
+    errors.push({
+      path: `${path}.take_field`,
+      message: `Unknown field "${step.take_field}" on ${step.collection}`
     })
   }
   step.scope_filters.forEach((f, i) => {
@@ -205,6 +257,43 @@ async function validateLookupStepsInRules(
   }
 }
 
+/** Lazily resolves + caches a collection's M2M alias field map — only called once a
+ *  header target turns out not to be a plain column, since most templates never touch
+ *  an M2M field and the lookup costs an extra nivaro_relations round trip. */
+async function getM2mAliasFieldsCached(
+  collection: string,
+  cache: Map<string, Map<string, M2mAliasInfo>>
+): Promise<Map<string, M2mAliasInfo>> {
+  const cached = cache.get(collection)
+  if (cached) return cached
+  const resolved = await resolveM2mAliasFields(collection)
+  cache.set(collection, resolved)
+  return resolved
+}
+
+/** Validates that a nested-rows target field (disperse's `nested_target` or
+ *  `line_map.nested.target_field`) is a physical repeater/JSON column on the child
+ *  collection — never an alias relation field, since nested rows are written as a
+ *  plain JSON array, not through the relation machinery. */
+function validatePhysicalChildColumn(
+  field: string,
+  childCollection: string,
+  path: string,
+  details: { fieldSet: Set<string>; aliasFields: Set<string>; errors: ConfigError[] }
+): void {
+  if (!details.fieldSet.has(field)) {
+    details.errors.push({
+      path,
+      message: `Unknown field "${field}" on ${childCollection} — nested_target requires a repeater/JSON column`
+    })
+  } else if (details.aliasFields.has(field)) {
+    details.errors.push({
+      path,
+      message: `Field "${field}" on ${childCollection} is an alias field — nested_target requires a repeater/JSON column`
+    })
+  }
+}
+
 /** Validates a normalized config's field/collection targets against live schema
  *  metadata, appending ConfigError entries in place. Only called when the config
  *  normalized cleanly — no point validating targets on an already-invalid shape. */
@@ -223,14 +312,18 @@ async function validateConfigAgainstSchema(
     field: string
   }[]
   const fieldSet = new Set(fieldRows.map((r) => r.field))
-  config.header_map.forEach((rule, i) => {
-    if (!fieldSet.has(rule.target)) {
+  const m2mAliasCache = new Map<string, Map<string, M2mAliasInfo>>()
+  for (let i = 0; i < config.header_map.length; i++) {
+    const rule = config.header_map[i]
+    if (fieldSet.has(rule.target)) continue
+    const m2mMap = await getM2mAliasFieldsCached(collection, m2mAliasCache)
+    if (!m2mMap.has(rule.target)) {
       errors.push({
-        path: `header_map[${i}].target`,
-        message: `Unknown field "${rule.target}" on ${collection}`
+        path: `header_map[${i}]`,
+        message: `Header rule target "${rule.target}" is not a column or M2M field of ${collection}`
       })
     }
-  })
+  }
 
   const lookupFieldSetCache = new Map<string, Set<string> | null>()
   await validateLookupStepsInRules(config.header_map, 'header_map', errors, lookupFieldSetCache)
@@ -272,19 +365,11 @@ async function validateConfigAgainstSchema(
 
     const disperse = config.line_map.disperse
     if (disperse) {
-      // nested_target holds the split rows on each line child — it must be a physical
-      // (repeater/JSON) column on the child collection, never an alias relation field.
-      if (!childFieldSet.has(disperse.nested_target)) {
-        errors.push({
-          path: 'line_map.disperse',
-          message: `Unknown field "${disperse.nested_target}" on ${childCollection} — nested_target requires a repeater/JSON column`
-        })
-      } else if (childAliasFields.has(disperse.nested_target)) {
-        errors.push({
-          path: 'line_map.disperse',
-          message: `Field "${disperse.nested_target}" on ${childCollection} is an alias field — nested_target requires a repeater/JSON column`
-        })
-      }
+      validatePhysicalChildColumn(disperse.nested_target, childCollection, 'line_map.disperse', {
+        fieldSet: childFieldSet,
+        aliasFields: childAliasFields,
+        errors
+      })
 
       const mapFieldSet = await resolveLookupFieldSet(disperse.map_collection, lookupFieldSetCache)
       if (!mapFieldSet) {
@@ -304,6 +389,32 @@ async function validateConfigAgainstSchema(
         'line_map.disperse.member_columns',
         errors,
         lookupFieldSetCache
+      )
+    }
+
+    const nested = config.line_map.nested
+    if (nested) {
+      nested.columns.forEach((col, i) => {
+        if (!childFieldSet.has(col.target)) {
+          errors.push({
+            path: `line_map.nested.columns[${i}].target`,
+            message: `Unknown field "${col.target}" on ${childCollection}`
+          })
+        }
+      })
+
+      await validateLookupStepsInRules(
+        nested.columns,
+        'line_map.nested.columns',
+        errors,
+        lookupFieldSetCache
+      )
+
+      validatePhysicalChildColumn(
+        nested.target_field,
+        childCollection,
+        'line_map.nested.target_field',
+        { fieldSet: childFieldSet, aliasFields: childAliasFields, errors }
       )
     }
   }
@@ -530,6 +641,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       }
     }
 
+    const m2mMap = await resolveM2mAliasFields(collection)
+
     const lookupIssues: ImportIssue[] = []
     const result = await runImportPipeline({
       config,
@@ -537,7 +650,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       lookup: makeLookupFetcher((message) =>
         lookupIssues.push({ severity: 'error', rule: 'lookup', message })
       ),
-      applyLineFieldRules
+      applyLineFieldRules,
+      m2mFields: new Set(m2mMap.keys())
     })
     const issues = [...sheetIssues, ...result.issues, ...lookupIssues]
 
@@ -577,7 +691,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         lines: result.lines,
         issues,
         file_id,
-        line_target_field: config.line_map?.target_field ?? null
+        line_target_field: config.line_map?.target_field ?? null,
+        m2m: result.m2m
       }
     })
   })
@@ -817,6 +932,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       }
     }
 
+    const m2mMap =
+      typeof collection === 'string'
+        ? await resolveM2mAliasFields(collection)
+        : new Map<string, M2mAliasInfo>()
+
     const lookupIssues: ImportIssue[] = []
     const result = await runImportPipeline({
       config,
@@ -824,7 +944,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       lookup: makeLookupFetcher((message) =>
         lookupIssues.push({ severity: 'error', rule: 'lookup', message })
       ),
-      applyLineFieldRules
+      applyLineFieldRules,
+      m2mFields: new Set(m2mMap.keys())
     })
     const issues = [...sheetIssues, ...result.issues, ...lookupIssues]
 
@@ -834,7 +955,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         lines: result.lines,
         issues,
         file_id: null,
-        line_target_field: config.line_map?.target_field ?? null
+        line_target_field: config.line_map?.target_field ?? null,
+        m2m: result.m2m
       }
     })
   })

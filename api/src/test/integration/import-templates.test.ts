@@ -33,9 +33,30 @@ vi.mock('../../services/files.js', () => ({
   uploadFileBuffer: vi.fn().mockResolvedValue({ id: 'stored-file-1' })
 }))
 
+// findM2MRelation is a pure matcher over nivaro_relations rows — mirrored here (not
+// imported) so this mock doesn't have to pull in items.ts's full dependency graph
+// (encryption, quotas, realtime, tree, hooks, ...) just to exercise one small function.
 vi.mock('../../services/items.js', () => ({
   applyFieldRules: vi.fn().mockResolvedValue(undefined),
-  createOne: vi.fn()
+  createOne: vi.fn(),
+  findM2MRelation: (key: string, collection: string, rels: Record<string, unknown>[]) => {
+    for (const rel of rels) {
+      if (rel.one_collection !== collection) continue
+      if (rel.junction_field == null) continue
+      if (rel.one_field !== key) continue
+      const otherRel = rels.find(
+        (r) => r.many_collection === rel.many_collection && r.many_field === rel.junction_field
+      )
+      if (!otherRel?.one_collection) continue
+      return {
+        junction: rel.many_collection,
+        fkToParent: rel.many_field,
+        fkToOther: rel.junction_field,
+        otherCollection: otherRel.one_collection
+      }
+    }
+    return null
+  }
 }))
 
 import fastifyMultipart from '@fastify/multipart'
@@ -144,6 +165,7 @@ function makeChain(result: unknown) {
     orWhere: vi.fn().mockReturnThis(),
     whereNull: vi.fn().mockReturnThis(),
     whereIn: vi.fn().mockReturnThis(),
+    whereNotIn: vi.fn().mockReturnThis(),
     whereNot: vi.fn().mockReturnThis(),
     orderBy: vi.fn().mockReturnThis(),
     select: vi.fn().mockResolvedValue(result),
@@ -344,6 +366,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       .mockReturnValueOnce(
         makeChain([{ field: 'vendor_id' }, { field: 'amount' }]) as unknown as ReturnType<typeof db>
       ) // nivaro_fields.select
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations — no M2M aliases, target isn't one
 
     const app = await buildApp(user, true)
     const res = await app.inject({
@@ -358,9 +381,16 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     })
 
     expect(res.statusCode).toBe(400)
-    const body = JSON.parse(res.body) as { error: string; details: { path: string }[] }
+    const body = JSON.parse(res.body) as {
+      error: string
+      details: { path: string; message: string }[]
+    }
     expect(body.error).toBe('Invalid template config')
-    expect(body.details.some((d) => d.path === 'header_map[0].target')).toBe(true)
+    expect(
+      body.details.some(
+        (d) => d.path === 'header_map[0]' && d.message.includes('not a column or M2M field')
+      )
+    ).toBe(true)
   })
 
   it('POST /:id/parse runs a saved template against an uploaded xlsx file', async () => {
@@ -383,7 +413,9 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       role_id: null,
       created_by: 'user-1'
     }
-    vi.mocked(db).mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>)
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations — no M2M aliases
 
     const app = await buildApp(user, false)
     const xlsx = xlsxBuffer([{ Vendor: '  Acme Corp  ', Amount: 100 }])
@@ -548,7 +580,9 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       role_id: null,
       created_by: 'user-1'
     }
-    vi.mocked(db).mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>)
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations — no M2M aliases
 
     const app = await buildApp(user, false)
     const xlsx = xlsxBuffer([{ Vendor: '  Acme Corp  ' }])
@@ -936,6 +970,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     }
     vi.mocked(db)
       .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations — no M2M aliases
       .mockReturnValueOnce(makeThrowingLookupChain() as unknown as ReturnType<typeof db>) // lookup throws
 
     const app = await buildApp(user, false)
@@ -1256,6 +1291,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     vi.mocked(db)
       .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
       .mockReturnValueOnce(makeChain(undefined) as unknown as ReturnType<typeof db>) // line_map target_field relation lookup (none — apply_field_rules is false anyway)
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations — no M2M aliases
       .mockReturnValueOnce(
         makeLookupChain([{ id: 1, code: 'SUP-1', values: '["Router"]' }]) as unknown as ReturnType<
           typeof db
@@ -1334,6 +1370,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     vi.mocked(db)
       .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
       .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // line_map target_field relation resolve
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations — no M2M aliases
 
     vi.mocked(applyFieldRules).mockImplementationOnce(async (_collection, draft) => {
       ;(draft as Record<string, unknown>).priority = 'high'
@@ -1368,6 +1405,278 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'po_line_items',
       expect.objectContaining({ sku: 'A1' })
     )
+  })
+
+  it('POST /:id/parse resolves an M2M alias header target into the m2m response section', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-m2m',
+      name: 'Grant Import',
+      collection: 'grants',
+      mode: 'prefill',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([{ target: 'funding_years', source: 'FundingYear', steps: [] }]),
+      line_map: null,
+      attach_file_field: null,
+      is_active: true,
+      is_shared: false,
+      role_id: null,
+      created_by: 'user-1'
+    }
+    // A mutual M2M pair: grants -> grants_funding_years <- funding_years.
+    const relToJunction = {
+      one_collection: 'grants',
+      one_field: 'funding_years',
+      junction_field: 'year_id',
+      many_collection: 'grants_funding_years',
+      many_field: 'grant_id'
+    }
+    const relFromJunction = {
+      one_collection: 'funding_years',
+      one_field: 'grants',
+      junction_field: 'grant_id',
+      many_collection: 'grants_funding_years',
+      many_field: 'year_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(
+        makeChain([relToJunction, relFromJunction]) as unknown as ReturnType<typeof db>
+      ) // nivaro_relations direct
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations junction siblings
+
+    const app = await buildApp(user, false)
+    const xlsx = xlsxBuffer([{ FundingYear: '2026' }])
+    const { body, boundary } = buildMultipartPayload([
+      {
+        name: 'file',
+        value: xlsx,
+        filename: 'import.xlsx',
+        contentType: 'application/octet-stream'
+      }
+    ])
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-m2m/parse',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: body
+    })
+
+    expect(res.statusCode).toBe(200)
+    const parsed = JSON.parse(res.body) as {
+      data: { values: Record<string, unknown>; m2m: Record<string, unknown[]> }
+    }
+    expect(parsed.data.m2m).toEqual({ funding_years: ['2026'] })
+    expect(parsed.data.values.funding_years).toBeUndefined()
+  })
+
+  it('POST /:id/parse resolves a $users lookup against nivaro_users, scoped to non-redacted rows', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-users',
+      name: 'Contact Import',
+      collection: 'purchase_orders',
+      mode: 'prefill',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([
+        {
+          target: 'internal_contact',
+          source: 'Contact',
+          steps: [
+            {
+              type: 'lookup',
+              collection: '$users',
+              match_field: 'email',
+              scope_filters: [],
+              on_miss: 'leave_blank',
+              take: 'id'
+            }
+          ]
+        }
+      ]),
+      line_map: null,
+      attach_file_field: null,
+      is_active: true,
+      is_shared: false,
+      role_id: null,
+      created_by: 'user-1'
+    }
+    const usersChain = makeLookupChain([{ id: 'u-1', email: 'james@x.com' }])
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations — no M2M aliases
+      .mockReturnValueOnce(usersChain as unknown as ReturnType<typeof db>) // $users lookup
+
+    const app = await buildApp(user, false)
+    const xlsx = xlsxBuffer([{ Contact: 'james@x.com' }])
+    const { body, boundary } = buildMultipartPayload([
+      {
+        name: 'file',
+        value: xlsx,
+        filename: 'import.xlsx',
+        contentType: 'application/octet-stream'
+      }
+    ])
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-users/parse',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: body
+    })
+
+    expect(res.statusCode).toBe(200)
+    const parsed = JSON.parse(res.body) as { data: { values: Record<string, unknown> } }
+    expect(parsed.data.values.internal_contact).toBe('u-1')
+
+    expect(db).toHaveBeenCalledWith('nivaro_users')
+    expect(usersChain.select).toHaveBeenCalledWith('id', 'email')
+    expect(usersChain.where).toHaveBeenCalledWith({ is_redacted: 0 })
+    expect(usersChain.whereIn).toHaveBeenCalledWith('email', ['james@x.com'])
+  })
+
+  it('POST / rejects a header rule target that is neither a column nor a mutually-paired M2M alias', async () => {
+    const user = makeAdminUser()
+    // one-sided junction row — no sibling pointing back, so it never resolves as a
+    // usable M2M alias (mirrors the "healthy pairs only" junction_field gotcha).
+    const relToJunction = {
+      one_collection: 'grants',
+      one_field: 'funding_years',
+      junction_field: 'year_id',
+      many_collection: 'grants_funding_years',
+      many_field: 'grant_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'grants' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections.first() — primary collection
+      .mockReturnValueOnce(makeChain([{ field: 'name' }]) as unknown as ReturnType<typeof db>) // nivaro_fields.select — primary collection
+      .mockReturnValueOnce(makeChain([relToJunction]) as unknown as ReturnType<typeof db>) // nivaro_relations direct — no sibling
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations junction siblings — empty
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Grant Import',
+        collection: 'grants',
+        header_map: [{ target: 'funding_years', source: 'FundingYear', steps: [] }]
+      })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as {
+      error: string
+      details: { path: string; message: string }[]
+    }
+    expect(body.error).toBe('Invalid template config')
+    expect(
+      body.details.some(
+        (d) => d.path === 'header_map[0]' && d.message.includes('not a column or M2M field')
+      )
+    ).toBe(true)
+  })
+
+  it('POST / rejects a lookup take:"field" whose take_field is unknown on the target collection', async () => {
+    const user = makeAdminUser()
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'purchase_orders' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections.first() — primary collection
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // nivaro_fields.select — primary collection
+      .mockReturnValueOnce(
+        makeChain({ id: 2, collection: 'vendors' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections.first() — lookup target
+      .mockReturnValueOnce(
+        makeChain([{ field: 'id' }, { field: 'name' }]) as unknown as ReturnType<typeof db>
+      ) // nivaro_fields.select — lookup target
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Vendor Import',
+        collection: 'purchase_orders',
+        header_map: [
+          {
+            target: 'vendor_id',
+            source: 'Vendor',
+            steps: [
+              {
+                type: 'lookup',
+                collection: 'vendors',
+                match_field: 'name',
+                take: 'field',
+                take_field: 'nope'
+              }
+            ]
+          }
+        ]
+      })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as {
+      error: string
+      details: { path: string; message: string }[]
+    }
+    expect(body.error).toBe('Invalid template config')
+    expect(
+      body.details.some(
+        (d) => d.path === 'header_map[0].steps[0].take_field' && d.message.includes('nope')
+      )
+    ).toBe(true)
+  })
+
+  it('POST / rejects a line_map.nested.target_field that is an alias field on the child collection', async () => {
+    const user = makeAdminUser()
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'purchase_orders' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections primary
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // nivaro_fields primary
+      .mockReturnValueOnce(
+        makeChain({
+          many_collection: 'po_line_items',
+          many_field: 'purchase_order_id'
+        }) as unknown as ReturnType<typeof db>
+      ) // relation resolve
+      .mockReturnValueOnce(
+        makeChain([{ field: 'nested_items', type: 'alias' }]) as unknown as ReturnType<typeof db>
+      ) // child nivaro_fields (nested.target_field is an alias)
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Nested Import',
+        collection: 'purchase_orders',
+        line_map: {
+          target_field: 'line_items',
+          columns: [],
+          nested: {
+            target_field: 'nested_items',
+            columns: []
+          }
+        }
+      })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as { error: string; details: { path: string }[] }
+    expect(body.error).toBe('Invalid template config')
+    expect(body.details.some((d) => d.path === 'line_map.nested.target_field')).toBe(true)
   })
 })
 
