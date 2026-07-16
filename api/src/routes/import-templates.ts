@@ -415,15 +415,9 @@ async function validateConfigAgainstSchema(
 
     const nested = config.line_map.nested
     if (nested) {
-      nested.columns.forEach((col, i) => {
-        if (!childFieldSet.has(col.target)) {
-          errors.push({
-            path: `line_map.nested.columns[${i}].target`,
-            message: `Unknown field "${col.target}" on ${childCollection}`
-          })
-        }
-      })
-
+      // Member targets are keys inside the nested JSON value (like disperse
+      // member_columns), not columns of the child collection — only their
+      // lookup steps get schema validation.
       await validateLookupStepsInRules(
         nested.columns,
         'line_map.nested.columns',
