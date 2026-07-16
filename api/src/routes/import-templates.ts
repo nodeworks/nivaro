@@ -7,8 +7,17 @@ import { getRelations } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { uploadFileBuffer } from '../services/files.js'
 import { IMPORT_ROW_CAP, readSpreadsheet } from '../services/import-spreadsheet.js'
-import type { ImportIssue, LineDraft, LookupFetcher } from '../services/import-templates.js'
-import { runImportPipeline } from '../services/import-templates.js'
+import type {
+  CreateMiss,
+  ImportIssue,
+  LineDraft,
+  LookupFetcher
+} from '../services/import-templates.js'
+import {
+  collectCreateMisses,
+  resolveCreateDefaults,
+  runImportPipeline
+} from '../services/import-templates.js'
 import type {
   ConfigError,
   ImportHeaderRule,
@@ -194,6 +203,63 @@ async function resolveM2mAliasFields(collection: string): Promise<Map<string, M2
     }
   }
   return map
+}
+
+interface CreateGroup {
+  step: CreateMiss['step']
+  defaultsPayload: Record<string, unknown>
+  applies: Array<(id: unknown) => void>
+}
+
+/** Groups collectCreateMisses() output into one create per dedupe_by tuple, scoped
+ *  per lookup rule (a Map keyed by the step object itself, not just its collection —
+ *  two different columns creating into the same collection stay separate groups).
+ *  `resolvedCtx` is the execute body's header-resolved `values`. */
+function buildCreateGroups(
+  misses: CreateMiss[],
+  resolvedCtx: Record<string, unknown>
+): CreateGroup[] {
+  const groups: CreateGroup[] = []
+  const groupsByStep = new Map<CreateMiss['step'], Map<string, CreateGroup>>()
+  for (const miss of misses) {
+    const defaultsPayload = resolveCreateDefaults(
+      miss.step.create.defaults,
+      miss.values,
+      resolvedCtx
+    )
+    const dedupeKey = JSON.stringify(
+      miss.step.create.dedupe_by.map((field) => String(defaultsPayload[field] ?? ''))
+    )
+    let stepGroups = groupsByStep.get(miss.step)
+    if (!stepGroups) {
+      stepGroups = new Map()
+      groupsByStep.set(miss.step, stepGroups)
+    }
+    let group = stepGroups.get(dedupeKey)
+    if (!group) {
+      group = { step: miss.step, defaultsPayload, applies: [] }
+      stepGroups.set(dedupeKey, group)
+      groups.push(group)
+    }
+    group.applies.push(miss.apply)
+  }
+  return groups
+}
+
+/** Deletes a mixed set of records grouped by collection — shared by the create-records
+ *  compensation path and the main execute compensation path. */
+async function deleteGroupedByCollection(
+  records: Array<{ collection: string; id: string | number }>
+): Promise<void> {
+  const byCollection = new Map<string, (string | number)[]>()
+  for (const rec of records) {
+    const ids = byCollection.get(rec.collection) ?? []
+    ids.push(rec.id)
+    byCollection.set(rec.collection, ids)
+  }
+  for (const [coll, ids] of byCollection) {
+    await db(coll).whereIn('id', ids).del()
+  }
 }
 
 /** Resolves + caches a lookup target collection's field set. `null` means the
@@ -847,6 +913,12 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     const attachField = config.attach_file_field
     const wantsAttach = !!(attachField && body.file_id)
 
+    // on_miss: 'create' misses resolved + deduped up front — pure/sync — so the
+    // record-to-create count can join the row-cap guard below before anything is
+    // created.
+    const createMisses = collectCreateMisses(config, lines)
+    const createGroups = buildCreateGroups(createMisses, values)
+
     // Lines with no way to be persisted must fail loudly before anything is created,
     // rather than silently dropping the submitted rows. Resolved before the row-cap
     // guard below so a relation-mode nested target's grandchild rows can join the total.
@@ -869,7 +941,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     const totalMembers = nestedRelation
       ? lines.reduce((sum, line) => sum + (line.nested?.rows.length ?? 0), 0)
       : 0
-    const totalRows = lines.length + totalM2mIds + totalMembers
+    const totalCreates = createGroups.length
+    const totalRows = lines.length + totalM2mIds + totalMembers + totalCreates
     if (totalRows > IMPORT_ROW_CAP) {
       return reply.code(422).send({
         error: `Too many rows — the import cap is ${IMPORT_ROW_CAP} rows`,
@@ -878,7 +951,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           {
             severity: 'error',
             rule: 'execute',
-            message: `Submitted ${totalRows} rows (${lines.length} line items + ${totalM2mIds} linked records${totalMembers > 0 ? ` + ${totalMembers} nested members` : ''}); the import cap is ${IMPORT_ROW_CAP} rows`
+            message: `Submitted ${totalRows} rows (${lines.length} line items + ${totalM2mIds} linked records${totalMembers > 0 ? ` + ${totalMembers} nested members` : ''}${totalCreates > 0 ? ` + ${totalCreates} records to create` : ''}); the import cap is ${IMPORT_ROW_CAP} rows`
           }
         ]
       })
@@ -941,11 +1014,55 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     const createdChildIds: (string | number)[] = []
     const createdJunctions: Array<{ collection: string; id: string | number }> = []
     const createdGrandchildren: Array<{ collection: string; id: string | number }> = []
+    const createdLookupRecords: Array<{ collection: string; id: string | number }> = []
     let parent: { id: string | number } | null = null
     const childCollection: string | null = childRelation?.collection ?? null
     const fkField = childRelation?.fkField ?? null
     let failedAtLine = 0
     let failedM2mField: string | null = null
+
+    // on_miss: 'create' — bulk-create the deduped missing lookup records BEFORE the
+    // parent, so line/junction creates below can reference their ids. Nothing else
+    // exists yet at this point, so a failure here only needs to compensate the
+    // creates that already landed (no parent/children/junctions to unwind).
+    if (createGroups.length > 0) {
+      let failedCreateCollection: string | null = null
+      try {
+        for (const group of createGroups) {
+          failedCreateCollection = group.step.collection
+          const created = (await createOne(
+            req.user!,
+            group.step.collection,
+            group.defaultsPayload,
+            req,
+            workspaceId
+          )) as { id: string | number }
+          createdLookupRecords.push({ collection: group.step.collection, id: created.id })
+          for (const apply of group.applies) apply(created.id)
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        try {
+          await deleteGroupedByCollection(createdLookupRecords)
+        } catch (compensationErr) {
+          app.log.error(
+            compensationErr,
+            'import-template execute compensation failed — created rows may be orphaned'
+          )
+        }
+        return reply.code(422).send({
+          error: 'Import failed while creating referenced records — nothing was created',
+          issues: [
+            ...bodyIssues,
+            {
+              severity: 'error',
+              rule: 'execute',
+              message: `Creating a referenced record in "${failedCreateCollection}" failed: ${message}`
+            }
+          ]
+        })
+      }
+    }
 
     // The parent create is isolated: createOne inserts then reads the row back, so a
     // throw here (e.g. a row-level filter hiding the freshly-created row from this user)
@@ -1078,6 +1195,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         }
         if (parent) {
           await db(collection).where({ id: parent.id }).del()
+        }
+        // Lookup records created for on_miss: 'create' misses are deleted LAST — any
+        // child/grandchild row created above may FK to them.
+        if (createdLookupRecords.length > 0) {
+          await deleteGroupedByCollection(createdLookupRecords)
         }
       } catch (compensationErr) {
         app.log.error(

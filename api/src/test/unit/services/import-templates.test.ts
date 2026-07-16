@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { runImportPipeline } from '../../../services/import-templates.js'
+import type { LineDraft } from '../../../services/import-templates.js'
+import {
+  collectCreateMisses,
+  resolveCreateDefaults,
+  runImportPipeline
+} from '../../../services/import-templates.js'
 import { normalizeImportTemplateConfig } from '../../../services/import-templates-config.js'
 
 function cfg(partial: Record<string, unknown>) {
@@ -177,6 +182,44 @@ describe('runImportPipeline — lines', () => {
     expect(lines[1].values.unit).toBeUndefined()
     expect(lines[1].stubs).toEqual({ unit: { is_new: true, name: 'New Unit' } })
     expect(issues.some((i) => i.severity === 'warn' && i.row === 2)).toBe(true)
+  })
+
+  it('on_miss=create records a stub sidecar and warns "will be created on direct import"', async () => {
+    const createConfig = cfg({
+      line_map: {
+        target_field: 'lines',
+        row_filter: { column: 'Line Number', op: 'nnull' },
+        columns: [
+          {
+            target: 'unit',
+            source: 'Unit Name',
+            steps: [
+              {
+                type: 'lookup',
+                collection: 'units',
+                match_field: 'name',
+                on_miss: 'create',
+                create: {
+                  defaults: [{ target: 'name', source: 'Unit Name', steps: [] }],
+                  dedupe_by: ['name']
+                }
+              }
+            ]
+          }
+        ]
+      }
+    })
+    const { lines, issues } = await runImportPipeline({
+      config: createConfig,
+      rows: [{ 'Line Number': 1, 'Unit Name': 'New Unit' }],
+      lookup: NO_LOOKUP
+    })
+    expect(lines[0].values.unit).toBeUndefined()
+    expect(lines[0].stubs).toEqual({ unit: { is_new: true, name: 'New Unit' } })
+    expect(issues[0]).toMatchObject({
+      severity: 'warn',
+      message: 'No match for "New Unit" — will be created on direct import'
+    })
   })
 
   it('runs applyLineFieldRules per line', async () => {
@@ -579,5 +622,71 @@ describe('runImportPipeline — $line context (chained line rules)', () => {
     expect(
       issues.some((i) => i.severity === 'warn' && i.rule === 'line[1]:category')
     ).toBe(true)
+  })
+})
+
+describe('collectCreateMisses / resolveCreateDefaults', () => {
+  const config = cfg({
+    line_map: {
+      target_field: 'lines',
+      row_filter: null,
+      columns: [
+        { target: 'price', source: 'Line Price', steps: [] },
+        {
+          target: 'unit',
+          source: 'Unit Name',
+          steps: [
+            {
+              type: 'lookup',
+              collection: 'units',
+              match_field: 'name',
+              on_miss: 'create',
+              create: {
+                defaults: [{ target: 'name', source: 'unit_name', steps: [] }],
+                dedupe_by: ['name']
+              }
+            }
+          ]
+        }
+      ]
+    }
+  })
+
+  it('matches line stubs to create-policy steps and apply() writes the new id into line values', () => {
+    const lines: LineDraft[] = [
+      {
+        values: { price: 10, unit_name: 'New Unit' },
+        stubs: { unit: { is_new: true, name: 'New Unit' } }
+      },
+      { values: { price: 20, unit: 5 } }
+    ]
+    const misses = collectCreateMisses(config, lines)
+    expect(misses).toHaveLength(1)
+    expect(misses[0].name).toBe('New Unit')
+    expect(misses[0].values).toBe(lines[0].values)
+    expect(misses[0].step.collection).toBe('units')
+    misses[0].apply(99)
+    expect(lines[0].values.unit).toBe(99)
+  })
+
+  it('ignores stubs whose target has no create-policy lookup step', () => {
+    const lines: LineDraft[] = [
+      { values: { price: 10 }, stubs: { price: { is_new: true, name: 'X' } } }
+    ]
+    expect(collectCreateMisses(config, lines)).toEqual([])
+  })
+
+  it('resolveCreateDefaults folds rules against the miss row + $resolved ctx, omitting undefined', () => {
+    const defaults = [
+      { target: 'name', source: 'unit_name', steps: [] },
+      {
+        target: 'region',
+        source: null,
+        steps: [{ type: 'expression' as const, template: '{{$resolved.region}}' }]
+      },
+      { target: 'missing', source: 'nope', steps: [] }
+    ]
+    const payload = resolveCreateDefaults(defaults, { unit_name: 'New Unit' }, { region: 'NER' })
+    expect(payload).toEqual({ name: 'New Unit', region: 'NER' })
   })
 })

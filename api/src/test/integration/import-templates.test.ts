@@ -1661,6 +1661,261 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     expect(vi.mocked(createOne)).not.toHaveBeenCalled()
   })
 
+  it('POST /:id/execute — on_miss create dedupes two lines missing the same unit into ONE createOne, applies the new id to both', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-create-miss',
+      collection: 'purchase_orders_create_miss',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [
+          {
+            target: 'unit',
+            source: null,
+            steps: [
+              {
+                type: 'lookup',
+                collection: 'units_create_miss',
+                match_field: 'name',
+                on_miss: 'create',
+                create: {
+                  defaults: [{ target: 'name', source: 'unit_name', steps: [] }],
+                  dedupe_by: ['name']
+                }
+              }
+            ]
+          }
+        ],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = {
+      many_collection: 'po_line_items_create_miss',
+      many_field: 'purchase_order_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // relation resolve
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'unit-99' } as never) // deduped units create
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'line-1' } as never) // line 1
+      .mockResolvedValueOnce({ id: 'line-2' } as never) // line 2
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-create-miss/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: {},
+        lines: [
+          {
+            values: { sku: 'A1', unit_name: 'New Unit' },
+            stubs: { unit: { is_new: true, name: 'New Unit' } }
+          },
+          {
+            values: { sku: 'A2', unit_name: 'New Unit' },
+            stubs: { unit: { is_new: true, name: 'New Unit' } }
+          }
+        ],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(vi.mocked(createOne)).toHaveBeenCalledTimes(4)
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      1,
+      user,
+      'units_create_miss',
+      { name: 'New Unit' },
+      expect.anything(),
+      undefined
+    )
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      3,
+      user,
+      'po_line_items_create_miss',
+      { sku: 'A1', unit_name: 'New Unit', unit: 'unit-99', purchase_order_id: 'parent-1' },
+      expect.anything(),
+      undefined
+    )
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      4,
+      user,
+      'po_line_items_create_miss',
+      { sku: 'A2', unit_name: 'New Unit', unit: 'unit-99', purchase_order_id: 'parent-1' },
+      expect.anything(),
+      undefined
+    )
+  })
+
+  it('POST /:id/execute — on_miss create: a later line failure compensates, deleting the created lookup record LAST (after parent)', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-create-comp',
+      collection: 'purchase_orders_create_comp',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [
+          {
+            target: 'unit',
+            source: null,
+            steps: [
+              {
+                type: 'lookup',
+                collection: 'units_create_comp',
+                match_field: 'name',
+                on_miss: 'create',
+                create: {
+                  defaults: [{ target: 'name', source: 'unit_name', steps: [] }],
+                  dedupe_by: ['name']
+                }
+              }
+            ]
+          }
+        ],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = {
+      many_collection: 'po_line_items_create_comp',
+      many_field: 'purchase_order_id'
+    }
+    const childDeleteChain = makeChain(1)
+    const parentDeleteChain = makeChain(1)
+    const lookupRecordDeleteChain = makeChain(1)
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // relation resolve
+      .mockReturnValueOnce(childDeleteChain as unknown as ReturnType<typeof db>) // compensation: child delete
+      .mockReturnValueOnce(parentDeleteChain as unknown as ReturnType<typeof db>) // compensation: parent delete
+      .mockReturnValueOnce(lookupRecordDeleteChain as unknown as ReturnType<typeof db>) // compensation: unit delete (LAST)
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'unit-1' } as never) // deduped units create
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'line-1' } as never) // line 1
+      .mockRejectedValueOnce(new Error('line 2 validation failed')) // line 2 throws
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-create-comp/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: {},
+        lines: [
+          {
+            values: { sku: 'A1', unit_name: 'New Unit' },
+            stubs: { unit: { is_new: true, name: 'New Unit' } }
+          },
+          { values: { sku: 'A2' } }
+        ],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string; issues: { message: string }[] }
+    expect(body.error).toContain('line 2')
+    expect(body.issues.some((i) => i.message.includes('line 2 validation failed'))).toBe(true)
+
+    // Order matters: mocked db() calls are consumed in queue order, so a correct
+    // assertion here also proves the unit was deleted AFTER the parent.
+    expect(childDeleteChain.whereIn).toHaveBeenCalledWith('id', ['line-1'])
+    expect(childDeleteChain.del).toHaveBeenCalled()
+    expect(parentDeleteChain.where).toHaveBeenCalledWith({ id: 'parent-1' })
+    expect(parentDeleteChain.del).toHaveBeenCalled()
+    expect(lookupRecordDeleteChain.whereIn).toHaveBeenCalledWith('id', ['unit-1'])
+    expect(lookupRecordDeleteChain.del).toHaveBeenCalled()
+  })
+
+  it('POST /:id/execute — 422 when lines + records-to-create exceed the import cap, even though lines alone are under it', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-create-cap',
+      collection: 'purchase_orders_create_cap',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [
+          {
+            target: 'unit',
+            source: null,
+            steps: [
+              {
+                type: 'lookup',
+                collection: 'units_create_cap',
+                match_field: 'name',
+                on_miss: 'create',
+                create: {
+                  defaults: [{ target: 'name', source: 'unit_name', steps: [] }],
+                  dedupe_by: ['name']
+                }
+              }
+            ]
+          }
+        ],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = {
+      many_collection: 'po_line_items_create_cap',
+      many_field: 'purchase_order_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // relation resolve
+
+    // Distinct unit names so every line dedupes to its own create group — 2501 lines
+    // alone is under the 5000 cap, but 2501 lines + 2501 distinct records-to-create
+    // pushes the total over.
+    const lines = Array.from({ length: 2501 }, (_, i) => ({
+      values: { sku: `S${i}`, unit_name: `Unit ${i}` },
+      stubs: { unit: { is_new: true, name: `Unit ${i}` } }
+    }))
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-create-cap/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ values: {}, lines, issues: [] })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string; issues: { message: string }[] }
+    expect(body.error).toContain('5000')
+    expect(body.issues.some((i) => i.message.includes('records to create'))).toBe(true)
+    expect(vi.mocked(createOne)).not.toHaveBeenCalled()
+  })
+
   it('POST / rejects a disperse nested_target that is an alias field on the child collection', async () => {
     const user = makeAdminUser()
     vi.mocked(db)

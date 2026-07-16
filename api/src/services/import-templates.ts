@@ -1,6 +1,7 @@
 import type {
   ImportDisperseConfig,
   ImportHeaderRule,
+  ImportLookupCreate,
   ImportNestedConfig,
   ImportStep,
   ImportTemplateConfig
@@ -35,7 +36,7 @@ export type LookupFetcher = (req: {
   scope_filters: { field: string; op: 'eq' | 'neq'; value: unknown }[]
 }) => Promise<Record<string, unknown>[]>
 
-type LookupStepConfig = Extract<ImportStep, { type: 'lookup' }>
+export type LookupStepConfig = Extract<ImportStep, { type: 'lookup' }>
 
 type Stub = { is_new: true; name: string }
 
@@ -238,11 +239,13 @@ function resolveLookupOutcome(
     message:
       step.on_miss === 'create_stub'
         ? `No match for "${name}" — flagged as new`
-        : `No match for "${name}" in ${step.collection}`
+        : step.on_miss === 'create'
+          ? `No match for "${name}" — will be created on direct import`
+          : `No match for "${name}" in ${step.collection}`
   }
   if (rowNumber != null) issue.row = rowNumber
   issues.push(issue)
-  if (step.on_miss === 'create_stub') {
+  if (step.on_miss === 'create_stub' || step.on_miss === 'create') {
     return { value: undefined, stub: { is_new: true, name } }
   }
   return { value: undefined }
@@ -636,6 +639,82 @@ async function processPerLineNested(
       draft.nested = { field: nested.target_field, rows: [member] }
     }
   }
+}
+
+/** Folds a lookup step's `create.defaults` rules into a create payload for a single
+ *  miss. `row` is the miss's LINE VALUES (not the raw sheet row — the sheet is gone by
+ *  execute time), and `resolvedCtx` is the header-resolved `$resolved.*` context.
+ *  Defaults reaching for raw sheet columns must instead read a line-values key or use
+ *  `{{$resolved.*}}`. By Task-1 config normalization, defaults never contain lookup
+ *  steps, so no batching/resolver is needed. Keys whose rule resolves to undefined are
+ *  omitted from the payload. */
+export function resolveCreateDefaults(
+  defaults: ImportHeaderRule[],
+  row: Record<string, unknown>,
+  resolvedCtx: Record<string, unknown>
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {}
+  const scratchIssues: ImportIssue[] = []
+  for (const rule of defaults) {
+    const { value } = runRuleForRow(
+      rule,
+      row,
+      resolvedCtx,
+      null,
+      null,
+      scratchIssues,
+      `create:${rule.target}`,
+      undefined
+    )
+    if (value !== undefined) payload[rule.target] = value
+  }
+  return payload
+}
+
+export interface CreateMiss {
+  step: LookupStepConfig & { create: ImportLookupCreate }
+  name: string
+  values: Record<string, unknown>
+  apply: (id: unknown) => void
+}
+
+/** Walks submitted lines' `stubs` sidecars, matching each to the line_map column whose
+ *  lookup step carries an `on_miss: 'create'` policy. Line columns only — v1.2 has no
+ *  slot to apply a created id back into a header target or a nested member row (nested
+ *  member stubs are never persisted; see processDisperse/processPerLineNested). */
+export function collectCreateMisses(
+  config: ImportTemplateConfig,
+  lines: LineDraft[]
+): CreateMiss[] {
+  const misses: CreateMiss[] = []
+  const columns = config.line_map?.columns ?? []
+  const createStepByTarget = new Map<string, LookupStepConfig & { create: ImportLookupCreate }>()
+  for (const col of columns) {
+    const lookupStep = findLookupStep(col.steps)
+    if (lookupStep?.on_miss === 'create' && lookupStep.create) {
+      createStepByTarget.set(
+        col.target,
+        lookupStep as LookupStepConfig & { create: ImportLookupCreate }
+      )
+    }
+  }
+  if (createStepByTarget.size === 0) return misses
+  for (const line of lines) {
+    if (!line.stubs) continue
+    for (const [target, stub] of Object.entries(line.stubs)) {
+      const step = createStepByTarget.get(target)
+      if (!step) continue
+      misses.push({
+        step,
+        name: stub.name,
+        values: line.values,
+        apply: (id) => {
+          line.values[target] = id
+        }
+      })
+    }
+  }
+  return misses
 }
 
 export async function runImportPipeline(opts: {
