@@ -3,7 +3,7 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { selectInChunks } from '../services/db-batch.js'
+import { chunkArray } from '../services/db-batch.js'
 import {
   bustRollupContributorCache,
   parseRollupFormula,
@@ -902,14 +902,17 @@ export async function dataModelRoutes(app: FastifyInstance) {
       const idRows = (await db(table).select('id')) as Array<{ id: string | number }>
       const ids = idRows.map((r) => r.id)
 
-      const processed = await selectInChunks(ids, 500, async (chunk) => {
+      // sequential chunks: selectInChunks runs all chunks concurrently, which
+      // on a large table would flood the connection pool with recalc streams
+      let recalculated = 0
+      for (const chunk of chunkArray(ids, 500)) {
         for (const id of chunk) {
           await recalcRollupsForParent(entry, id)
         }
-        return chunk
-      })
+        recalculated += chunk.length
+      }
 
-      return reply.send({ recalculated: processed.length })
+      return reply.send({ recalculated })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return reply.code(500).send({ error: msg })
