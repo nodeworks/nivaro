@@ -376,6 +376,15 @@ function isRollupValid(cfg: RollupConfig): boolean {
   return cfg.sources.length > 0 && cfg.sources.every(isRollupSourceValid)
 }
 
+const NUMERIC_COLUMN_TYPES = new Set(['integer', 'bigInteger', 'decimal', 'float'])
+
+// A stored rollup's physical column must hold a real DB column type; the
+// generic Type picker defaults to 'string', which is wrong for an aggregate.
+// Keep the user's choice when it's already numeric-ish, else fall back to decimal.
+function rollupColumnType(t: string): CreateColumnBody['type'] {
+  return NUMERIC_COLUMN_TYPES.has(t) ? (t as CreateColumnBody['type']) : 'decimal'
+}
+
 function RollupSourceRow({
   source,
   currentCollection,
@@ -550,8 +559,8 @@ function RollupConfigEditor({
 
       <div className='space-y-2'>
         {config.sources.map((source, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: sources are positional
           <RollupSourceRow
+            // biome-ignore lint/suspicious/noArrayIndexKey: sources are positional
             key={i}
             source={source}
             currentCollection={currentCollection}
@@ -678,13 +687,20 @@ function AddColumnForm({
     if (!current) setFieldInterfaceRaw(ifaces[0]?.value ?? '')
   }
 
-  // Read-time + rollup computed = virtual; no DB column needed
-  const isVirtual = computedEnabled && (computedType === 'read' || computedType === 'rollup')
+  // Read-time computed is always virtual. A rollup is virtual only while
+  // unstored — a stored rollup needs a real physical column, same as 'write'.
   const isRollup = computedEnabled && computedType === 'rollup'
+  const isStoredRollup = isRollup && computedStore
+  const isVirtual = computedEnabled && (computedType === 'read' || (isRollup && !computedStore))
 
   // Stored value of computed_formula depends on type (JSON for rollup).
   const computedFormulaValue = isRollup ? serializeRollup(rollup) : computedFormula.trim()
   const computedReady = isRollup ? isRollupValid(rollup) : !!computedFormula.trim()
+
+  // A stored rollup's DB column must be numeric — the generic Type picker
+  // defaults to 'string', which is wrong for an aggregate; fall back to
+  // decimal when the picker isn't already holding a numeric type.
+  const columnType = isStoredRollup ? rollupColumnType(form.type) : form.type
 
   const addInterfaces = getInterfaces(form.type)
 
@@ -693,12 +709,12 @@ function AddColumnForm({
     setSaving(true)
     try {
       if (!isVirtual) {
-        await schemaApi.addColumn(table, form)
+        await schemaApi.addColumn(table, { ...form, type: columnType })
       }
       // Always save field metadata (interface, note, visibility flags)
       await api.post(`/collections/${table}/fields`, {
         field: form.name,
-        type: form.type,
+        type: columnType,
         interface: fieldInterface || null,
         note: note || null,
         hidden,
@@ -712,6 +728,13 @@ function AddColumnForm({
             }
           : {})
       })
+      if (isStoredRollup && computedReady) {
+        // Fire-and-forget backfill — the column starts NULL/0 otherwise until
+        // the next write to a contributing row triggers a recalc.
+        api.post(`/data-model/${table}/fields/${form.name}/rollup-recalc`).catch(() => {
+          toast.error(`"${form.name}" was added, but backfilling existing rows failed — recalc it manually`)
+        })
+      }
       toast.success(`${isVirtual ? 'Computed field' : 'Column'} "${form.name}" added`)
       onSuccess()
     } catch (err: unknown) {
@@ -1280,7 +1303,7 @@ function ColumnRow({
           key={col.name}
           col={col}
           tableName={tableName}
-          onSave={(body) => addFieldMeta.mutate(body)}
+          onSave={(body) => addFieldMeta.mutateAsync(body)}
           onRemove={col.field_meta ? () => removeFieldMeta.mutate() : undefined}
           saving={addFieldMeta.isPending}
         />
@@ -1523,7 +1546,7 @@ function FieldMetaEditor({
 }: {
   col: DBColumn
   tableName: string
-  onSave: (body: Record<string, unknown>) => void
+  onSave: (body: Record<string, unknown>) => Promise<unknown>
   onRemove?: () => void
   saving: boolean
 }) {
@@ -1595,6 +1618,8 @@ function FieldMetaEditor({
     fm?.computed_type === 'rollup' ? parseRollup(fm?.computed_formula) : emptyRollup()
   )
   const [formulaMode, setFormulaMode] = useState<'builder' | 'raw'>('builder')
+  // True while provisioning a physical column for a rollup that's toggling store on
+  const [provisioning, setProvisioning] = useState(false)
 
   // Encryption-at-rest flag
   const [isEncrypted, setIsEncrypted] = useState(
@@ -1699,6 +1724,61 @@ function FieldMetaEditor({
             computedType === 'write' || computedType === 'rollup' ? computedStore : false
         }
       : { computed_formula: null, computed_type: null, computed_store: false }
+
+  // col.is_virtual is the DB's own truth about whether a physical column
+  // exists yet (see data-model.ts: only computed fields with no matching
+  // dbColumnNames entry are marked virtual) — toggling store on for a rollup
+  // that's still virtual means we must provision the column before saving
+  // metadata, or every recalc write silently fails against a nonexistent column.
+  const isStoredRollup = computedEnabled && computedReady && computedType === 'rollup' && computedStore
+  const needsColumnProvisioning = isStoredRollup && col.is_virtual
+  const columnType = isStoredRollup ? rollupColumnType(fieldType) : (fieldType as CreateColumnBody['type'])
+
+  async function handleSave() {
+    if (needsColumnProvisioning) {
+      setProvisioning(true)
+      try {
+        await schemaApi.addColumn(tableName, { name: col.name, type: columnType, nullable: true })
+      } catch {
+        toast.error(`Failed to provision the "${col.name}" column — save aborted`)
+        setProvisioning(false)
+        return
+      }
+      setProvisioning(false)
+    }
+
+    try {
+      await onSave({
+        field: col.name,
+        type: columnType,
+        interface: fieldInterface || null,
+        display: display || null,
+        display_options: buildDisplayOptions(),
+        options: buildOptions(),
+        note: note || null,
+        hidden,
+        readonly,
+        required,
+        sort: sort === '' ? null : sort,
+        is_encrypted: isEncrypted,
+        is_inheritable: isInheritable,
+        ...computedPayload
+      })
+    } catch {
+      // onSave's own mutation already surfaced an error toast — nothing left to do,
+      // and the metadata never saved so backfilling now would run against stale config.
+      return
+    }
+
+    if (isStoredRollup) {
+      // Fire-and-forget backfill — the column starts NULL/0 otherwise until the
+      // next write to a contributing row triggers a recalc. Only reachable once
+      // the metadata save above actually succeeded, so nivaro_fields is current.
+      api.post(`/data-model/${tableName}/fields/${col.name}/rollup-recalc`).catch(() => {
+        toast.error(`"${col.name}" saved, but backfilling existing rows failed — recalc it manually`)
+      })
+    }
+  }
 
   const interfaces = getInterfaces(fieldType)
   const displays = getDisplays(fieldType)
@@ -2192,27 +2272,10 @@ function FieldMetaEditor({
             type='button'
             size='sm'
             className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan-dark'
-            disabled={saving}
-            onClick={() =>
-              onSave({
-                field: col.name,
-                type: fieldType,
-                interface: fieldInterface || null,
-                display: display || null,
-                display_options: buildDisplayOptions(),
-                options: buildOptions(),
-                note: note || null,
-                hidden,
-                readonly,
-                required,
-                sort: sort === '' ? null : sort,
-                is_encrypted: isEncrypted,
-                is_inheritable: isInheritable,
-                ...computedPayload
-              })
-            }
+            disabled={saving || provisioning}
+            onClick={handleSave}
           >
-            {saving ? (
+            {saving || provisioning ? (
               'Saving…'
             ) : (
               <>
@@ -4417,9 +4480,9 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
                   </p>
                 ) : (
                   <div className='space-y-2'>
-                    {rules.map((rule, i) =>
-                      typeof rule === 'string' ? (
-                        // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
+                    {rules.map((rule, i) => {
+                      // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
+                      return typeof rule === 'string' ? (
                         <div key={i} className='flex items-start gap-2'>
                           <Textarea
                             value={rule}
@@ -4443,7 +4506,6 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
                           </Button>
                         </div>
                       ) : (
-                        // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
                         <SumCapRuleEditor
                           key={i}
                           tableName={tableName}
@@ -4454,7 +4516,7 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
                           onRemove={() => setRules((prev) => prev.filter((_, idx) => idx !== i))}
                         />
                       )
-                    )}
+                    })}
                   </div>
                 )}
               </div>
