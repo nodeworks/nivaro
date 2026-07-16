@@ -1633,7 +1633,7 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
   const targetFieldOptions = fields
     .filter(isPlainField)
     .map((f) => ({ value: f.field, label: fieldLabel(f) }))
-  const fileFieldOptions = fields
+  const scalarFileFieldOptions = fields
     .filter(isFileField)
     .map((f) => ({ value: f.field, label: fieldLabel(f) }))
 
@@ -1661,6 +1661,28 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
       )
     )
     .map((f) => ({ value: f.field, label: `${fieldLabel(f)} (M2M)` }))
+
+  // Attach targets: scalar file-id columns plus M2M aliases whose junction pairs
+  // with nivaro_files — the parse response routes the uploaded file id into the
+  // m2m section for those, and the save path creates the junction row.
+  const fileM2mOptions = fields
+    .filter((f) => f.type === 'alias')
+    .filter((f) => {
+      const parent = relations.find(
+        (r) =>
+          r.one_collection === collection && r.one_field === f.field && r.junction_field != null
+      )
+      if (!parent) return false
+      return relations.some(
+        (r) =>
+          r.id !== parent.id &&
+          r.many_collection === parent.many_collection &&
+          r.many_field === parent.junction_field &&
+          r.one_collection === 'nivaro_files'
+      )
+    })
+    .map((f) => ({ value: f.field, label: `${fieldLabel(f)} (M2M)` }))
+  const attachFieldOptions = [...scalarFileFieldOptions, ...fileM2mOptions]
 
   const childCollection = useMemo(() => {
     const rel = relations.find(
@@ -1827,7 +1849,7 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
           <BasicsFields
             draft={draft}
             patch={patch}
-            fileFieldOptions={fileFieldOptions}
+            fileFieldOptions={attachFieldOptions}
             roleOptions={roleOptions}
           />
         </Section>

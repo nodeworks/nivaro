@@ -714,8 +714,16 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     }
 
     const values = { ...result.values }
+    const m2m = { ...result.m2m }
     if (config.attach_file_field && file_id) {
-      values[config.attach_file_field] = file_id
+      // An M2M alias attach field (e.g. a nivaro_files junction) rides the m2m
+      // section so prefill stages it in the picker and execute creates the
+      // junction row; a scalar file column stays in values as before.
+      if (m2mMap.has(config.attach_file_field)) {
+        m2m[config.attach_file_field] = [...(m2m[config.attach_file_field] ?? []), file_id]
+      } else {
+        values[config.attach_file_field] = file_id
+      }
     }
 
     return reply.send({
@@ -725,7 +733,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         issues,
         file_id,
         line_target_field: config.line_map?.target_field ?? null,
-        m2m: result.m2m
+        m2m
       }
     })
   })
@@ -796,9 +804,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       })
     }
     const config = templateRowToConfig(template)
-    if (config.attach_file_field && body.file_id) {
-      values[config.attach_file_field] = body.file_id
-    }
+    const attachField = config.attach_file_field
+    const wantsAttach = !!(attachField && body.file_id)
 
     // Lines with no way to be persisted must fail loudly before anything is created,
     // rather than silently dropping the submitted rows.
@@ -826,7 +833,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     // junction relation before anything is created — a dropped/renamed field would
     // otherwise fail mid-way through the create sequence, after the parent exists.
     let m2mAliasMap = new Map<string, M2mAliasInfo>()
-    if (m2mEntries.length > 0) {
+    if (m2mEntries.length > 0 || wantsAttach) {
       m2mAliasMap = await resolveM2mAliasFields(collection)
       const unresolved = m2mEntries.filter(([field]) => !m2mAliasMap.has(field))
       if (unresolved.length > 0) {
@@ -841,6 +848,23 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
             }))
           ]
         })
+      }
+    }
+
+    // Attach the uploaded file: M2M alias attach fields become a junction link
+    // (deduped — the parse response usually already carried it in body.m2m);
+    // scalar file columns take the id directly.
+    if (wantsAttach) {
+      const fileId = body.file_id as string
+      if (m2mAliasMap.has(attachField as string)) {
+        const existing = m2mEntries.find(([field]) => field === attachField)
+        if (existing) {
+          if (!existing[1].map(String).includes(String(fileId))) existing[1].push(fileId)
+        } else {
+          m2mEntries.push([attachField as string, [fileId]])
+        }
+      } else {
+        values[attachField as string] = fileId
       }
     }
 
