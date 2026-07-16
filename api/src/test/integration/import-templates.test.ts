@@ -1059,6 +1059,236 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     expect(vi.mocked(createOne)).not.toHaveBeenCalled()
   })
 
+  it('POST /:id/execute — m2m happy path creates junction rows before line creates', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-m2m-exec',
+      collection: 'workflows',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = { many_collection: 'workflow_line_items', many_field: 'workflow_id' }
+    const relToJunction = {
+      one_collection: 'workflows',
+      one_field: 'funding_years',
+      junction_field: 'year_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'workflow_id'
+    }
+    const relFromJunction = {
+      one_collection: 'funding_years',
+      one_field: 'workflows',
+      junction_field: 'workflow_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'year_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // line child relation resolve
+      .mockReturnValueOnce(
+        makeChain([relToJunction, relFromJunction]) as unknown as ReturnType<typeof db>
+      ) // nivaro_relations direct (m2m resolve)
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations junction siblings
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'junction-1' } as never) // m2m junction row
+      .mockResolvedValueOnce({ id: 'line-1' } as never) // line
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-m2m-exec/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { name: 'WF' },
+        lines: [{ values: { sku: 'A1' } }],
+        issues: [],
+        m2m: { funding_years: ['2026-id'] }
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    const body = JSON.parse(res.body) as { data: { id: string; line_ids: string[] } }
+    expect(body.data.id).toBe('parent-1')
+    expect(body.data.line_ids).toEqual(['line-1'])
+
+    expect(vi.mocked(createOne)).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      2,
+      user,
+      'workflows_funding_years',
+      { workflow_id: 'parent-1', year_id: '2026-id' },
+      expect.anything(),
+      undefined
+    )
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      3,
+      user,
+      'workflow_line_items',
+      expect.objectContaining({ sku: 'A1', workflow_id: 'parent-1' }),
+      expect.anything(),
+      undefined
+    )
+  })
+
+  it('POST /:id/execute — line create throws after a junction was created; compensation deletes junction then parent', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-m2m-comp',
+      collection: 'workflows',
+      mode: 'both',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = { many_collection: 'workflow_line_items', many_field: 'workflow_id' }
+    const relToJunction = {
+      one_collection: 'workflows',
+      one_field: 'funding_years',
+      junction_field: 'year_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'workflow_id'
+    }
+    const relFromJunction = {
+      one_collection: 'funding_years',
+      one_field: 'workflows',
+      junction_field: 'workflow_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'year_id'
+    }
+    const junctionDeleteChain = makeChain(1)
+    const parentDeleteChain = makeChain(1)
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // line child relation resolve
+      .mockReturnValueOnce(
+        makeChain([relToJunction, relFromJunction]) as unknown as ReturnType<typeof db>
+      ) // nivaro_relations direct (m2m resolve)
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations junction siblings
+      .mockReturnValueOnce(junctionDeleteChain as unknown as ReturnType<typeof db>) // compensation: junction delete
+      .mockReturnValueOnce(parentDeleteChain as unknown as ReturnType<typeof db>) // compensation: parent delete (no child rows created)
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'junction-1' } as never) // m2m junction row
+      .mockRejectedValueOnce(new Error('line 1 validation failed')) // line 1 throws
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-m2m-comp/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { name: 'WF' },
+        lines: [{ values: { sku: 'A1' } }],
+        issues: [],
+        m2m: { funding_years: ['2026-id'] }
+      })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string; issues: { message: string }[] }
+    expect(body.error).toContain('nothing was created')
+    expect(body.issues.some((i) => i.message.includes('line 1 validation failed'))).toBe(true)
+
+    expect(junctionDeleteChain.whereIn).toHaveBeenCalledWith('id', ['junction-1'])
+    expect(junctionDeleteChain.del).toHaveBeenCalled()
+    expect(parentDeleteChain.where).toHaveBeenCalledWith({ id: 'parent-1' })
+    expect(parentDeleteChain.del).toHaveBeenCalled()
+  })
+
+  it('POST /:id/execute — 422 when an m2m field cannot be resolved to a junction, zero creates', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-stale-m2m',
+      collection: 'workflows',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: null,
+      attach_file_field: null
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations direct — no matching relation at all
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-stale-m2m/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { name: 'WF' },
+        lines: [],
+        issues: [],
+        m2m: { funding_years: ['2026-id'] }
+      })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string; issues: { message: string }[] }
+    expect(body.issues.some((i) => i.message.includes('funding_years'))).toBe(true)
+    expect(vi.mocked(createOne)).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/execute — 422 when lines + m2m ids exceed the import cap, no rows created', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-1',
+      collection: 'workflows',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: null,
+      attach_file_field: null
+    }
+    vi.mocked(db).mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>)
+
+    const lines = Array.from({ length: 4999 }, (_, i) => ({ values: { sku: `S${i}` } }))
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-1/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: {},
+        lines,
+        issues: [],
+        m2m: { funding_years: ['a', 'b'] }
+      })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string }
+    expect(body.error).toContain('5000')
+    expect(vi.mocked(createOne)).not.toHaveBeenCalled()
+  })
+
   it('POST / rejects a disperse nested_target that is an alias field on the child collection', async () => {
     const user = makeAdminUser()
     vi.mocked(db)

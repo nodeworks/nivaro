@@ -144,6 +144,15 @@ async function resolveLineChildCollection(
 
 type M2mAliasInfo = { junction: string; fkToParent: string; fkToOther: string }
 
+/** Shallow-validates an execute request's optional `m2m` body: a plain object whose
+ *  every value is an array of string|number ids to link via M2M junction rows. */
+function isValidM2mBody(value: unknown): value is Record<string, Array<string | number>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Object.values(value as Record<string, unknown>).every(
+    (arr) => Array.isArray(arr) && arr.every((v) => typeof v === 'string' || typeof v === 'number')
+  )
+}
+
 /** Resolves every M2M alias field (a virtual `one_field` on a junction relation) for a
  *  collection, keyed by field name — reuses the same mutual-pair matching
  *  `findM2MRelation()` already performs for item reads/filters, so a one-sided/broken
@@ -722,16 +731,20 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       lines?: unknown
       issues?: unknown
       file_id?: string | null
+      m2m?: unknown
     }
     if (
       typeof body.values !== 'object' ||
       body.values === null ||
       Array.isArray(body.values) ||
       !Array.isArray(body.lines) ||
-      !Array.isArray(body.issues)
+      !Array.isArray(body.issues) ||
+      (body.m2m !== undefined && !isValidM2mBody(body.m2m))
     ) {
       return reply.code(400).send({ error: 'values, lines, and issues are required' })
     }
+    const m2mBody = (body.m2m as Record<string, Array<string | number>> | undefined) ?? {}
+    const m2mEntries = Object.entries(m2mBody)
 
     const bodyIssues = body.issues as ImportIssue[]
     if (bodyIssues.some((issue) => issue.severity === 'error')) {
@@ -743,15 +756,17 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
 
     const values = { ...(body.values as Record<string, unknown>) }
     const lines = body.lines as LineDraft[]
-    if (lines.length > IMPORT_ROW_CAP) {
+    const totalM2mIds = m2mEntries.reduce((sum, [, ids]) => sum + ids.length, 0)
+    const totalRows = lines.length + totalM2mIds
+    if (totalRows > IMPORT_ROW_CAP) {
       return reply.code(422).send({
-        error: `Too many line items — the import cap is ${IMPORT_ROW_CAP} rows`,
+        error: `Too many rows — the import cap is ${IMPORT_ROW_CAP} rows`,
         issues: [
           ...bodyIssues,
           {
             severity: 'error',
             rule: 'execute',
-            message: `Submitted ${lines.length} line items; the import cap is ${IMPORT_ROW_CAP} rows`
+            message: `Submitted ${totalRows} rows (${lines.length} line items + ${totalM2mIds} linked records); the import cap is ${IMPORT_ROW_CAP} rows`
           }
         ]
       })
@@ -783,12 +798,36 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       }
     }
 
+    // Stale-template guard: every body.m2m key must still resolve to a real M2M
+    // junction relation before anything is created — a dropped/renamed field would
+    // otherwise fail mid-way through the create sequence, after the parent exists.
+    let m2mAliasMap = new Map<string, M2mAliasInfo>()
+    if (m2mEntries.length > 0) {
+      m2mAliasMap = await resolveM2mAliasFields(collection)
+      const unresolved = m2mEntries.filter(([field]) => !m2mAliasMap.has(field))
+      if (unresolved.length > 0) {
+        return reply.code(422).send({
+          error: 'Template references an M2M field that could not be resolved',
+          issues: [
+            ...bodyIssues,
+            ...unresolved.map(([field]) => ({
+              severity: 'error' as const,
+              rule: 'execute',
+              message: `M2M field "${field}" could not be resolved to a relation on ${collection} — the template may be stale`
+            }))
+          ]
+        })
+      }
+    }
+
     const workspaceId = req.workspaceId ?? undefined
     const createdChildIds: (string | number)[] = []
+    const createdJunctions: Array<{ collection: string; id: string | number }> = []
     let parent: { id: string | number } | null = null
     const childCollection: string | null = childRelation?.collection ?? null
     const fkField = childRelation?.fkField ?? null
     let failedAtLine = 0
+    let failedM2mField: string | null = null
 
     // The parent create is isolated: createOne inserts then reads the row back, so a
     // throw here (e.g. a row-level filter hiding the freshly-created row from this user)
@@ -820,6 +859,24 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     }
 
     try {
+      // Junction rows go before line items — a line's data never depends on an M2M
+      // link, but keeping the order fixed makes compensation easy to reason about.
+      for (const [field, ids] of m2mEntries) {
+        failedM2mField = field
+        const info = m2mAliasMap.get(field)!
+        for (const idValue of ids) {
+          const junctionRow = (await createOne(
+            req.user!,
+            info.junction,
+            { [info.fkToParent]: parent.id, [info.fkToOther]: idValue },
+            req,
+            workspaceId
+          )) as { id: string | number }
+          createdJunctions.push({ collection: info.junction, id: junctionRow.id })
+        }
+      }
+      failedM2mField = null
+
       if (childCollection && fkField) {
         for (let i = 0; i < lines.length; i++) {
           failedAtLine = i + 1
@@ -841,10 +898,27 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      const compensationIssues: ImportIssue[] = [
-        { severity: 'error', rule: 'execute', row: failedAtLine, message }
-      ]
+      const compensationIssues: ImportIssue[] = failedM2mField
+        ? [
+            {
+              severity: 'error',
+              rule: 'execute',
+              message: `Linking "${failedM2mField}" failed: ${message}`
+            }
+          ]
+        : [{ severity: 'error', rule: 'execute', row: failedAtLine, message }]
       try {
+        // Junctions first (they FK to both the parent and the lines' collection is
+        // irrelevant here), then children, then the parent — mirrors create order.
+        const junctionsByCollection = new Map<string, (string | number)[]>()
+        for (const junction of createdJunctions) {
+          const ids = junctionsByCollection.get(junction.collection) ?? []
+          ids.push(junction.id)
+          junctionsByCollection.set(junction.collection, ids)
+        }
+        for (const [junctionCollection, ids] of junctionsByCollection) {
+          await db(junctionCollection).whereIn('id', ids).del()
+        }
         if (childCollection && createdChildIds.length > 0) {
           await db(childCollection).whereIn('id', createdChildIds).del()
         }
@@ -864,7 +938,9 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         })
       }
       return reply.code(422).send({
-        error: `Import failed on line ${failedAtLine} — nothing was created`,
+        error: failedM2mField
+          ? `Import failed while linking "${failedM2mField}" — nothing was created`
+          : `Import failed on line ${failedAtLine} — nothing was created`,
         issues: [...bodyIssues, ...compensationIssues]
       })
     }
