@@ -28,6 +28,7 @@ import type {
 import { normalizeImportTemplateConfig } from '../services/import-templates-config.js'
 import { applyFieldRules, createOne, findM2MRelation, getActualColumns } from '../services/items.js'
 import { can } from '../services/permissions.js'
+import { recalcCollectionsParents } from '../services/rollups.js'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 const MODES = ['prefill', 'direct', 'both'] as const
@@ -1018,7 +1019,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
 
     const workspaceId = req.workspaceId ?? undefined
     const createdChildIds: (string | number)[] = []
-    const createdJunctions: Array<{ collection: string; id: string | number }> = []
+    // otherId is the M2M-linked record on the far side of the junction (an existing
+    // row, never part of the created tree) — tracked so compensation can recalc its
+    // rollup after the junction row that contributed to it is raw-deleted.
+    const createdJunctions: Array<{ collection: string; id: string | number; otherId: string | number }> =
+      []
     const createdGrandchildren: Array<{ collection: string; id: string | number }> = []
     const createdLookupRecords: Array<{ collection: string; id: string | number }> = []
     let parent: { id: string | number } | null = null
@@ -1122,7 +1127,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
             req,
             workspaceId
           )) as { id: string | number }
-          createdJunctions.push({ collection: info.junction, id: junctionRow.id })
+          createdJunctions.push({ collection: info.junction, id: junctionRow.id, otherId: idValue })
         }
       }
       failedM2mField = null
@@ -1219,6 +1224,34 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           message: 'Compensation failed — some created rows may be orphaned'
         })
       }
+
+      // The compensation deletes above are raw db calls that bypass items-service
+      // hooks, so any stored rollup on a still-existing record that contributed a
+      // now-deleted junction row is stale. The parent/child/grandchild rows are
+      // themselves part of the raw-deleted tree — no recalc needed there, they're
+      // gone. Only the M2M "other side" (a pre-existing record only linked, never
+      // created) survives compensation and needs its rollup recomputed. Swallowed:
+      // compensation already reported the real error; a recalc failure must not
+      // mask it.
+      try {
+        if (createdJunctions.length > 0) {
+          const otherIdsByJunction = new Map<string, Set<string | number>>()
+          for (const junction of createdJunctions) {
+            const ids = otherIdsByJunction.get(junction.collection) ?? new Set<string | number>()
+            ids.add(junction.otherId)
+            otherIdsByJunction.set(junction.collection, ids)
+          }
+          await recalcCollectionsParents(
+            [...otherIdsByJunction].map(([childCollection, ids]) => ({
+              childCollection,
+              parentIds: [...ids]
+            }))
+          )
+        }
+      } catch {
+        // swallow
+      }
+
       return reply.code(422).send({
         error: failedM2mField
           ? `Import failed while linking "${failedM2mField}" — nothing was created`

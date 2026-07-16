@@ -33,6 +33,10 @@ vi.mock('../../services/files.js', () => ({
   uploadFileBuffer: vi.fn().mockResolvedValue({ id: 'stored-file-1' })
 }))
 
+vi.mock('../../services/rollups.js', () => ({
+  recalcCollectionsParents: vi.fn().mockResolvedValue(undefined)
+}))
+
 // findM2MRelation is a pure matcher over nivaro_relations rows — mirrored here (not
 // imported) so this mock doesn't have to pull in items.ts's full dependency graph
 // (encryption, quotas, realtime, tree, hooks, ...) just to exercise one small function.
@@ -74,6 +78,7 @@ import { makeLookupFetcher } from '../../routes/import-templates.js'
 import { uploadFileBuffer } from '../../services/files.js'
 import { applyFieldRules, createOne } from '../../services/items.js'
 import { can } from '../../services/permissions.js'
+import { recalcCollectionsParents } from '../../services/rollups.js'
 import type { User } from '../../types.js'
 import { makeAdminUser, makeRegularUser } from '../helpers.js'
 
@@ -1353,6 +1358,149 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     expect(junctionDeleteChain.del).toHaveBeenCalled()
     expect(parentDeleteChain.where).toHaveBeenCalledWith({ id: 'parent-1' })
     expect(parentDeleteChain.del).toHaveBeenCalled()
+  })
+
+  it('POST /:id/execute — junction compensation recalcs the M2M-linked existing record, not the deleted parent', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-m2m-recalc',
+      collection: 'workflows',
+      mode: 'both',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = { many_collection: 'workflow_line_items', many_field: 'workflow_id' }
+    const relToJunction = {
+      one_collection: 'workflows',
+      one_field: 'funding_years',
+      junction_field: 'year_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'workflow_id'
+    }
+    const relFromJunction = {
+      one_collection: 'funding_years',
+      one_field: 'workflows',
+      junction_field: 'workflow_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'year_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // line child relation resolve
+      .mockReturnValueOnce(
+        makeChain([relToJunction, relFromJunction]) as unknown as ReturnType<typeof db>
+      ) // nivaro_relations direct (m2m resolve)
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations junction siblings
+      .mockReturnValueOnce(makeChain(1) as unknown as ReturnType<typeof db>) // compensation: junction delete
+      .mockReturnValueOnce(makeChain(1) as unknown as ReturnType<typeof db>) // compensation: parent delete
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'junction-1' } as never) // m2m junction row
+      .mockRejectedValueOnce(new Error('line 1 validation failed')) // line 1 throws
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-m2m-recalc/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { name: 'WF' },
+        lines: [{ values: { sku: 'A1' } }],
+        issues: [],
+        m2m: { funding_years: ['2026-id'] }
+      })
+    })
+
+    expect(res.statusCode).toBe(422)
+    expect(vi.mocked(recalcCollectionsParents)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(recalcCollectionsParents)).toHaveBeenCalledWith([
+      { childCollection: 'workflows_funding_years', parentIds: ['2026-id'] }
+    ])
+  })
+
+  it('POST /:id/execute — a throwing recalc after compensation does not change the error response', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-m2m-recalc-throws',
+      collection: 'workflows',
+      mode: 'both',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = { many_collection: 'workflow_line_items', many_field: 'workflow_id' }
+    const relToJunction = {
+      one_collection: 'workflows',
+      one_field: 'funding_years',
+      junction_field: 'year_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'workflow_id'
+    }
+    const relFromJunction = {
+      one_collection: 'funding_years',
+      one_field: 'workflows',
+      junction_field: 'workflow_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'year_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // line child relation resolve
+      .mockReturnValueOnce(
+        makeChain([relToJunction, relFromJunction]) as unknown as ReturnType<typeof db>
+      ) // nivaro_relations direct (m2m resolve)
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations junction siblings
+      .mockReturnValueOnce(makeChain(1) as unknown as ReturnType<typeof db>) // compensation: junction delete
+      .mockReturnValueOnce(makeChain(1) as unknown as ReturnType<typeof db>) // compensation: parent delete
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'junction-1' } as never) // m2m junction row
+      .mockRejectedValueOnce(new Error('line 1 validation failed')) // line 1 throws
+    vi.mocked(recalcCollectionsParents).mockRejectedValueOnce(new Error('recalc boom'))
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-m2m-recalc-throws/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { name: 'WF' },
+        lines: [{ values: { sku: 'A1' } }],
+        issues: [],
+        m2m: { funding_years: ['2026-id'] }
+      })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as {
+      error: string
+      issues: { message: string; rule?: string }[]
+    }
+    expect(body.error).toContain('nothing was created')
+    expect(body.issues.some((i) => i.message.includes('line 1 validation failed'))).toBe(true)
+    expect(body.issues.some((i) => i.rule === 'execute-compensation')).toBe(false)
+    expect(vi.mocked(recalcCollectionsParents)).toHaveBeenCalledTimes(1)
   })
 
   it('POST /:id/execute — 422 when an m2m field cannot be resolved to a junction, zero creates', async () => {
