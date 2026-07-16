@@ -1907,6 +1907,130 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     expect(usersChain.whereIn).toHaveBeenCalledWith('email', ['james@x.com'])
   })
 
+  it('POST /:id/parse — relation-mode nested target resolves nested_relation', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-nested-rel',
+      name: 'Deployment Import',
+      collection: 'deployment_orders',
+      mode: 'both',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'deployment_lines',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: false,
+        disperse: null,
+        nested: { target_field: 'unit_workflows', when: null, columns: [] }
+      }),
+      attach_file_field: null,
+      is_active: true,
+      is_shared: false,
+      role_id: null,
+      created_by: 'user-1'
+    }
+
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(
+        makeChain({
+          many_collection: 'unit_workflow_lines',
+          many_field: 'deployment_order_id'
+        }) as unknown as ReturnType<typeof db>
+      ) // line_map.target_field relation resolve — child collection
+      .mockReturnValueOnce(
+        makeChain({
+          many_collection: 'unit_workflows',
+          many_field: 'workflow_line'
+        }) as unknown as ReturnType<typeof db>
+      ) // nested.target_field relation resolve against the child collection
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations — no M2M aliases
+
+    const app = await buildApp(user, false)
+    const xlsx = xlsxBuffer([{ Foo: 'bar' }])
+    const { body, boundary } = buildMultipartPayload([
+      {
+        name: 'file',
+        value: xlsx,
+        filename: 'import.xlsx',
+        contentType: 'application/octet-stream'
+      }
+    ])
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-nested-rel/parse',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: body
+    })
+
+    expect(res.statusCode).toBe(200)
+    const parsed = JSON.parse(res.body) as {
+      data: { nested_relation: { collection: string; fk_field: string } | null }
+    }
+    expect(parsed.data.nested_relation).toEqual({
+      collection: 'unit_workflows',
+      fk_field: 'workflow_line'
+    })
+  })
+
+  it('POST /test — JSON-column nested target resolves nested_relation to null', async () => {
+    const user = makeAdminUser()
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({
+          many_collection: 'unit_workflow_lines',
+          many_field: 'deployment_order_id'
+        }) as unknown as ReturnType<typeof db>
+      ) // line_map.target_field relation resolve — child collection
+      .mockReturnValueOnce(makeChain(undefined) as unknown as ReturnType<typeof db>) // nested.target_field — no relation, JSON-column mode
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations — no M2M aliases
+
+    const app = await buildApp(user, true)
+    const xlsx = xlsxBuffer([{ Foo: 'bar' }])
+    const config = {
+      collection: 'deployment_orders',
+      file_types: ['xlsx', 'csv'],
+      sheet_match: null,
+      header_row: 1,
+      header_map: [],
+      line_map: {
+        target_field: 'deployment_lines',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: false,
+        disperse: null,
+        nested: { target_field: 'notes_json', when: null, columns: [] }
+      },
+      attach_file_field: null
+    }
+    const { body, boundary } = buildMultipartPayload([
+      { name: 'config', value: JSON.stringify(config) },
+      {
+        name: 'file',
+        value: xlsx,
+        filename: 'import.xlsx',
+        contentType: 'application/octet-stream'
+      }
+    ])
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/test',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: body
+    })
+
+    expect(res.statusCode).toBe(200)
+    const parsed = JSON.parse(res.body) as {
+      data: { nested_relation: { collection: string; fk_field: string } | null }
+    }
+    expect(parsed.data.nested_relation).toBeNull()
+  })
+
   it('POST / rejects a header rule target that is neither a column nor a mutually-paired M2M alias', async () => {
     const user = makeAdminUser()
     // one-sided junction row — no sibling pointing back, so it never resolves as a

@@ -142,6 +142,21 @@ async function resolveLineChildCollection(
   return relation?.collection ?? null
 }
 
+/** Resolves the nested/disperse target field (nested + disperse share one target when
+ *  either is relation-mode, per validateNestedTarget) against the already-resolved line
+ *  child collection. Null when there's no nested/disperse config, the line child
+ *  collection didn't resolve, or the target is a physical repeater/JSON column rather
+ *  than an O2M relation. */
+async function resolveNestedRelation(
+  lineMap: ImportLineConfig | null,
+  childCollection: string | null
+): Promise<{ collection: string; fk_field: string } | null> {
+  const nestedTarget = lineMap?.nested?.target_field ?? lineMap?.disperse?.nested_target ?? null
+  if (!nestedTarget || !childCollection) return null
+  const relation = await resolveLineChildRelation(childCollection, nestedTarget)
+  return relation ? { collection: relation.collection, fk_field: relation.fkField } : null
+}
+
 type M2mAliasInfo = { junction: string; fkToParent: string; fkToOther: string }
 
 /** Shallow-validates an execute request's optional `m2m` body: a plain object whose
@@ -703,15 +718,15 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     }
 
     let applyLineFieldRules: ((draft: Record<string, unknown>) => Promise<void>) | undefined
+    let childCollection: string | null = null
     if (config.line_map) {
-      const childCollection = await resolveLineChildCollection(
-        collection,
-        config.line_map.target_field
-      )
+      childCollection = await resolveLineChildCollection(collection, config.line_map.target_field)
       if (childCollection) {
-        applyLineFieldRules = (draft) => applyFieldRules(childCollection, draft)
+        const resolvedChildCollection = childCollection
+        applyLineFieldRules = (draft) => applyFieldRules(resolvedChildCollection, draft)
       }
     }
+    const nestedRelation = await resolveNestedRelation(config.line_map, childCollection)
 
     const m2mMap = await resolveM2mAliasFields(collection)
 
@@ -772,6 +787,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         issues,
         file_id,
         line_target_field: config.line_map?.target_field ?? null,
+        nested_relation: nestedRelation,
         m2m
       }
     })
@@ -1093,16 +1109,16 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     }
 
     let applyLineFieldRules: ((draft: Record<string, unknown>) => Promise<void>) | undefined
+    let childCollection: string | null = null
     const collection = (raw as { collection?: unknown })?.collection
     if (config.line_map && typeof collection === 'string') {
-      const childCollection = await resolveLineChildCollection(
-        collection,
-        config.line_map.target_field
-      )
+      childCollection = await resolveLineChildCollection(collection, config.line_map.target_field)
       if (childCollection) {
-        applyLineFieldRules = (draft) => applyFieldRules(childCollection, draft)
+        const resolvedChildCollection = childCollection
+        applyLineFieldRules = (draft) => applyFieldRules(resolvedChildCollection, draft)
       }
     }
+    const nestedRelation = await resolveNestedRelation(config.line_map, childCollection)
 
     const m2mMap =
       typeof collection === 'string'
@@ -1128,6 +1144,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         issues,
         file_id: null,
         line_target_field: config.line_map?.target_field ?? null,
+        nested_relation: nestedRelation,
         m2m: result.m2m
       }
     })

@@ -19,6 +19,7 @@ export interface ImportParseResponse {
   issues: { severity: 'warn' | 'error'; rule: string; row?: number; column?: string; message: string }[]
   file_id: string | null
   line_target_field: string | null
+  nested_relation: { collection: string; fk_field: string } | null
   m2m: Record<string, Array<string | number>>
 }
 
