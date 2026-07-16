@@ -5981,6 +5981,26 @@ const ROW_RULE_SKIP_TYPES = new Set([
   'divider'
 ])
 
+const NUMERIC_FIELD_TYPES = new Set([
+  'integer',
+  'bigInteger',
+  'decimal',
+  'float',
+  'money',
+  'smallmoney',
+  'tinyint',
+  'smallint',
+  'bigint'
+])
+
+function reorder<T>(arr: T[], from: number, to: number): T[] {
+  if (to < 0 || to >= arr.length) return arr
+  const next = [...arr]
+  const [item] = next.splice(from, 1)
+  next.splice(to, 0, item)
+  return next
+}
+
 function toFriendlyFieldLabel(field: string): string {
   return field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
@@ -7754,6 +7774,283 @@ function RowRuleRow({
   )
 }
 
+// _key is a client-only React list key (never serialized — save() reads only
+// the named fields below), so reordering keeps identity stable across moves.
+type ColumnPresetItem = { name: string; columns: string[]; _key: string }
+type DrawerRelationItem = { field: string; sumField: string; capField: string; _key: string }
+
+function ColumnPresetRow({
+  preset,
+  fieldOptions,
+  onChange,
+  onRemove,
+  onMoveUp,
+  onMoveDown,
+  isFirst,
+  isLast
+}: {
+  preset: ColumnPresetItem
+  fieldOptions: Array<{ field: string; label?: string | null; type?: string }>
+  onChange: (p: ColumnPresetItem) => void
+  onRemove: () => void
+  onMoveUp: () => void
+  onMoveDown: () => void
+  isFirst: boolean
+  isLast: boolean
+}) {
+  const [colsOpen, setColsOpen] = useState(false)
+  return (
+    <div className='space-y-1.5 rounded border border-slate-200 p-2'>
+      <div className='flex items-center gap-1.5'>
+        <Input
+          value={preset.name}
+          onChange={(e) => onChange({ ...preset, name: e.target.value })}
+          placeholder='Preset name'
+          className='h-7 flex-1 text-[11px]'
+        />
+        <button
+          type='button'
+          onClick={onMoveUp}
+          disabled={isFirst}
+          className='shrink-0 text-slate-400 hover:text-nvr-cyan disabled:opacity-30 disabled:hover:text-slate-400'
+        >
+          <ChevronUp className='h-3.5 w-3.5' />
+        </button>
+        <button
+          type='button'
+          onClick={onMoveDown}
+          disabled={isLast}
+          className='shrink-0 text-slate-400 hover:text-nvr-cyan disabled:opacity-30 disabled:hover:text-slate-400'
+        >
+          <ChevronDown className='h-3.5 w-3.5' />
+        </button>
+        <button
+          type='button'
+          onClick={onRemove}
+          className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'
+        >
+          ✕
+        </button>
+      </div>
+      <Popover open={colsOpen} onOpenChange={setColsOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            className='w-full flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-left hover:border-slate-400'
+          >
+            <span
+              className={cn('truncate', preset.columns.length ? 'text-slate-700' : 'text-slate-400')}
+            >
+              {preset.columns.length
+                ? preset.columns
+                    .map((f) => fieldOptions.find((o) => o.field === f)?.label || f)
+                    .join(', ')
+                : 'No columns selected'}
+            </span>
+            <ChevronDown className='h-3.5 w-3.5 text-slate-400 ml-1 shrink-0' />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-64 p-0' align='start'>
+          <Command>
+            <CommandInput placeholder='Search fields…' className='h-8 text-[12px]' />
+            <CommandList className='max-h-[220px]'>
+              <CommandGroup>
+                {fieldOptions.map((f) => {
+                  const checked = preset.columns.includes(f.field)
+                  return (
+                    <CommandItem
+                      key={f.field}
+                      value={`${f.label || f.field} ${f.field}`}
+                      onSelect={() =>
+                        onChange({
+                          ...preset,
+                          columns: checked
+                            ? preset.columns.filter((x) => x !== f.field)
+                            : [...preset.columns, f.field]
+                        })
+                      }
+                      className='text-[11px] flex items-center gap-2'
+                    >
+                      <Check className={cn('h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')} />
+                      <span className='flex-1 truncate'>{f.label || f.field}</span>
+                      <span className='font-mono text-[9px] text-slate-400 shrink-0'>{f.field}</span>
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+}
+
+function DrawerRelationRow({
+  entry,
+  relationOptions,
+  numericFieldOptions,
+  onChange,
+  onRemove
+}: {
+  entry: DrawerRelationItem
+  relationOptions: Array<{ value: string; label: string }>
+  numericFieldOptions: Array<{ field: string; label?: string | null }>
+  onChange: (e: DrawerRelationItem) => void
+  onRemove: () => void
+}) {
+  const [fieldOpen, setFieldOpen] = useState(false)
+  const [sumOpen, setSumOpen] = useState(false)
+  const [capOpen, setCapOpen] = useState(false)
+  return (
+    <div className='space-y-1.5 rounded border border-slate-200 p-2'>
+      <div className='flex items-center gap-1.5'>
+        <Popover open={fieldOpen} onOpenChange={setFieldOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type='button'
+              className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'
+            >
+              {entry.field ? (
+                (relationOptions.find((f) => f.value === entry.field)?.label ?? entry.field)
+              ) : (
+                <span className='text-slate-400'>relation…</span>
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-56 p-0' align='start'>
+            <Command>
+              <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
+              <CommandList>
+                <CommandGroup>
+                  {relationOptions.map((f) => (
+                    <CommandItem
+                      key={f.value}
+                      value={f.value}
+                      onSelect={() => {
+                        onChange({ ...entry, field: f.value })
+                        setFieldOpen(false)
+                      }}
+                      className='text-[12px]'
+                    >
+                      {f.label}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+        <button
+          type='button'
+          onClick={onRemove}
+          className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'
+        >
+          ✕
+        </button>
+      </div>
+      <div className='flex items-center gap-1.5'>
+        <span className='text-[10px] text-slate-400 shrink-0 w-6'>sum</span>
+        <Popover open={sumOpen} onOpenChange={setSumOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type='button'
+              className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'
+            >
+              {entry.sumField ? (
+                (numericFieldOptions.find((f) => f.field === entry.sumField)?.label ??
+                  entry.sumField)
+              ) : (
+                <span className='text-slate-400'>none</span>
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-48 p-0' align='start'>
+            <Command>
+              <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
+              <CommandList>
+                <CommandGroup>
+                  <CommandItem
+                    value='__none__'
+                    onSelect={() => {
+                      onChange({ ...entry, sumField: '' })
+                      setSumOpen(false)
+                    }}
+                    className='text-[12px] text-slate-500'
+                  >
+                    — None
+                  </CommandItem>
+                  {numericFieldOptions.map((f) => (
+                    <CommandItem
+                      key={f.field}
+                      value={f.field}
+                      onSelect={() => {
+                        onChange({ ...entry, sumField: f.field })
+                        setSumOpen(false)
+                      }}
+                      className='text-[12px]'
+                    >
+                      {f.label || f.field}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+        <span className='text-[10px] text-slate-400 shrink-0 w-6'>cap</span>
+        <Popover open={capOpen} onOpenChange={setCapOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type='button'
+              className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'
+            >
+              {entry.capField ? (
+                (numericFieldOptions.find((f) => f.field === entry.capField)?.label ??
+                  entry.capField)
+              ) : (
+                <span className='text-slate-400'>none</span>
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-48 p-0' align='start'>
+            <Command>
+              <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
+              <CommandList>
+                <CommandGroup>
+                  <CommandItem
+                    value='__none__'
+                    onSelect={() => {
+                      onChange({ ...entry, capField: '' })
+                      setCapOpen(false)
+                    }}
+                    className='text-[12px] text-slate-500'
+                  >
+                    — None
+                  </CommandItem>
+                  {numericFieldOptions.map((f) => (
+                    <CommandItem
+                      key={f.field}
+                      value={f.field}
+                      onSelect={() => {
+                        onChange({ ...entry, capField: f.field })
+                        setCapOpen(false)
+                      }}
+                      className='text-[12px]'
+                    >
+                      {f.label || f.field}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+      </div>
+    </div>
+  )
+}
+
 function RoleConditionRow({
   roleIds,
   onRoleIdsChange
@@ -7987,6 +8284,8 @@ function FieldSettingsPopover({
   >([])
   const [rowRulesLocal, setRowRulesLocal] = useState<RowRuleItem[]>([])
   const [parentContextFieldsLocal, setParentContextFieldsLocal] = useState<string[]>([])
+  const [columnPresetsLocal, setColumnPresetsLocal] = useState<ColumnPresetItem[]>([])
+  const [drawerRelationsLocal, setDrawerRelationsLocal] = useState<DrawerRelationItem[]>([])
   const [uniqueBy, setUniqueBy] = useState<string[]>([])
   const [uniqueByOpen, setUniqueByOpen] = useState(false)
   const [sortField, setSortField] = useState<string>('')
@@ -8075,6 +8374,17 @@ function FieldSettingsPopover({
     [childRelationsRaw, relatedCollection]
   )
 
+  // drawer_relations picker — O2M aliases defined on the child collection,
+  // resolved the same way ImportTemplatesSection's lineTargetOptions does.
+  const drawerRelationOptions = useMemo(
+    () =>
+      childO2MRels.map((r) => ({
+        value: r.one_field,
+        label: `${r.one_field} → ${r.many_collection}`
+      })),
+    [childO2MRels]
+  )
+
   const parentM2OFields = useMemo(
     () =>
       (m2oFields ?? [])
@@ -8156,6 +8466,12 @@ function FieldSettingsPopover({
     [childAllFields]
   )
 
+  // drawer_relations hint pickers — numeric fields on the child collection.
+  const childNumericFieldOptions = useMemo(
+    () => uniqueByOptions.filter((f) => NUMERIC_FIELD_TYPES.has(f.type ?? '')),
+    [uniqueByOptions]
+  )
+
   // Reset local state when popover opens
   function handleOpenChange(next: boolean) {
     if (next) {
@@ -8206,6 +8522,33 @@ function FieldSettingsPopover({
         setParentContextFieldsLocal(
           Array.isArray(opts.parent_context_fields) ? (opts.parent_context_fields as string[]) : []
         )
+        setColumnPresetsLocal(
+          Array.isArray(opts.column_presets)
+            ? (opts.column_presets as Array<{ name?: string; columns?: string[] }>).map((p) => ({
+                name: p.name ?? '',
+                columns: Array.isArray(p.columns) ? p.columns : [],
+                _key: crypto.randomUUID()
+              }))
+            : []
+        )
+        setDrawerRelationsLocal(
+          Array.isArray(opts.drawer_relations)
+            ? (
+                opts.drawer_relations as Array<
+                  string | { field: string; hint?: { sum_field: string; cap_field: string } }
+                >
+              ).map((dr) =>
+                typeof dr === 'string'
+                  ? { field: dr, sumField: '', capField: '', _key: crypto.randomUUID() }
+                  : {
+                      field: dr.field,
+                      sumField: dr.hint?.sum_field ?? '',
+                      capField: dr.hint?.cap_field ?? '',
+                      _key: crypto.randomUUID()
+                    }
+              )
+            : []
+        )
         setUniqueBy(Array.isArray(opts.unique_by) ? (opts.unique_by as string[]) : [])
         setSortField((opts.sort_field as string) ?? '')
         setSortDir((opts.sort_dir as 'asc' | 'desc') === 'desc' ? 'desc' : 'asc')
@@ -8228,6 +8571,8 @@ function FieldSettingsPopover({
         setParentCascades([])
         setRowRulesLocal([])
         setParentContextFieldsLocal([])
+        setColumnPresetsLocal([])
+        setDrawerRelationsLocal([])
         setUniqueBy([])
         setSortField('')
         setSortDir('asc')
@@ -8283,6 +8628,16 @@ function FieldSettingsPopover({
         } else if (isNumericAbstractType) {
           delete existing.aggregate
         }
+        const validColumnPresets = columnPresetsLocal
+          .filter((p) => p.name.trim() && p.columns.length > 0)
+          .map((p) => ({ name: p.name.trim(), columns: p.columns }))
+        const validDrawerRelations = drawerRelationsLocal
+          .filter((d) => d.field)
+          .map((d) =>
+            d.sumField && d.capField
+              ? { field: d.field, hint: { sum_field: d.sumField, cap_field: d.capField } }
+              : d.field
+          )
         const o2mOpts =
           abstractType === 'o2m' && (iface === 'inline-grid' || iface === 'inline-table')
             ? {
@@ -8301,6 +8656,12 @@ function FieldSettingsPopover({
                       ...(parentContextFieldsLocal.length > 0
                         ? { parent_context_fields: parentContextFieldsLocal }
                         : { parent_context_fields: undefined }),
+                      ...(validColumnPresets.length > 0
+                        ? { column_presets: validColumnPresets }
+                        : { column_presets: undefined }),
+                      ...(validDrawerRelations.length > 0
+                        ? { drawer_relations: validDrawerRelations }
+                        : { drawer_relations: undefined }),
                       ...(uniqueBy.length > 0 ? { unique_by: uniqueBy } : { unique_by: undefined }),
                       ...(sortField
                         ? { sort_field: sortField, sort_dir: sortDir }
@@ -9218,6 +9579,97 @@ function FieldSettingsPopover({
                         </button>
                       )}
                     </div>
+                  </div>
+                )}
+
+                {/* Column presets (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-2'>
+                    <div className='flex items-center justify-between'>
+                      <Label className='text-[11px] text-slate-600'>Column presets</Label>
+                      <button
+                        type='button'
+                        onClick={() =>
+                          setColumnPresetsLocal([
+                            ...columnPresetsLocal,
+                            { name: '', columns: [], _key: crypto.randomUUID() }
+                          ])
+                        }
+                        className='text-[10px] text-nvr-cyan hover:underline'
+                      >
+                        + Add preset
+                      </button>
+                    </div>
+                    {columnPresetsLocal.length === 0 && (
+                      <p className='text-[10px] text-slate-400'>
+                        No presets. Presets let users switch which columns the table shows.
+                      </p>
+                    )}
+                    {columnPresetsLocal.map((preset, idx) => (
+                      <ColumnPresetRow
+                        key={preset._key}
+                        preset={preset}
+                        fieldOptions={uniqueByOptions}
+                        onChange={(updated) =>
+                          setColumnPresetsLocal(
+                            columnPresetsLocal.map((p, i) => (i === idx ? updated : p))
+                          )
+                        }
+                        onRemove={() =>
+                          setColumnPresetsLocal(columnPresetsLocal.filter((_, i) => i !== idx))
+                        }
+                        onMoveUp={() =>
+                          setColumnPresetsLocal(reorder(columnPresetsLocal, idx, idx - 1))
+                        }
+                        onMoveDown={() =>
+                          setColumnPresetsLocal(reorder(columnPresetsLocal, idx, idx + 1))
+                        }
+                        isFirst={idx === 0}
+                        isLast={idx === columnPresetsLocal.length - 1}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Drawer relations (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-2'>
+                    <div className='flex items-center justify-between'>
+                      <Label className='text-[11px] text-slate-600'>Drawer relations</Label>
+                      <button
+                        type='button'
+                        onClick={() =>
+                          setDrawerRelationsLocal([
+                            ...drawerRelationsLocal,
+                            { field: '', sumField: '', capField: '', _key: crypto.randomUUID() }
+                          ])
+                        }
+                        className='text-[10px] text-nvr-cyan hover:underline'
+                      >
+                        + Add relation
+                      </button>
+                    </div>
+                    {drawerRelationsLocal.length === 0 && (
+                      <p className='text-[10px] text-slate-400'>
+                        No nested relations. Shown in each row's expanded drawer.
+                      </p>
+                    )}
+                    {drawerRelationsLocal.map((entry, idx) => (
+                      <DrawerRelationRow
+                        key={entry._key}
+                        entry={entry}
+                        relationOptions={drawerRelationOptions}
+                        numericFieldOptions={childNumericFieldOptions}
+                        onChange={(updated) =>
+                          setDrawerRelationsLocal(
+                            drawerRelationsLocal.map((d, i) => (i === idx ? updated : d))
+                          )
+                        }
+                        onRemove={() =>
+                          setDrawerRelationsLocal(drawerRelationsLocal.filter((_, i) => i !== idx))
+                        }
+                      />
+                    ))}
                   </div>
                 )}
 
