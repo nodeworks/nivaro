@@ -890,7 +890,11 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
     try {
       const fieldRow = await db('nivaro_fields').where({ collection: table, field }).first()
-      if (fieldRow?.computed_type !== 'rollup' || !fieldRow.computed_formula) {
+      if (
+        fieldRow?.computed_type !== 'rollup' ||
+        !fieldRow.computed_formula ||
+        !fieldRow.computed_store
+      ) {
         return reply.code(400).send({ error: 'Field is not a stored rollup' })
       }
 
