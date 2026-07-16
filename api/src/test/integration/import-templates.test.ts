@@ -2038,6 +2038,186 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     expect(body.error).toBe('Invalid template config')
     expect(body.details.some((d) => d.path === 'line_map.nested.target_field')).toBe(true)
   })
+
+  it('POST / accepts a line_map.nested.target_field that resolves as an O2M relation on the child collection', async () => {
+    const user = makeAdminUser()
+    const createdRow = {
+      id: 'tmpl-relation',
+      name: 'Relation Nested Import',
+      collection: 'purchase_orders',
+      mode: 'prefill',
+      file_types: JSON.stringify(['xlsx', 'xlsm', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null,
+        nested: { target_field: 'unit_workflows', when: null, columns: [] }
+      }),
+      attach_file_field: null,
+      is_active: 1,
+      is_shared: 0,
+      role_id: null,
+      created_by: user.id,
+      created_at: new Date(),
+      updated_at: new Date()
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'purchase_orders' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections primary
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // nivaro_fields primary
+      .mockReturnValueOnce(
+        makeChain({
+          many_collection: 'po_line_items',
+          many_field: 'purchase_order_id'
+        }) as unknown as ReturnType<typeof db>
+      ) // relation resolve — line_map.target_field
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // child nivaro_fields — 'unit_workflows' not registered as a plain field
+      .mockReturnValueOnce(
+        makeChain({
+          one_collection: 'po_line_items',
+          one_field: 'unit_workflows',
+          many_collection: 'unit_workflows',
+          many_field: 'workflow_line'
+        }) as unknown as ReturnType<typeof db>
+      ) // nivaro_relations — nested.target_field resolves as an O2M alias
+      .mockReturnValueOnce(makeChain(undefined) as unknown as ReturnType<typeof db>) // insert
+      .mockReturnValueOnce(makeChain(createdRow) as unknown as ReturnType<typeof db>) // select-by-id after insert
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Relation Nested Import',
+        collection: 'purchase_orders',
+        line_map: {
+          target_field: 'line_items',
+          columns: [],
+          nested: {
+            target_field: 'unit_workflows',
+            columns: []
+          }
+        }
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    const body = JSON.parse(res.body) as { data: { id: string } }
+    expect(body.data.id).toBe('tmpl-relation')
+  })
+
+  it('POST / rejects a line_map.nested.target_field that is neither a physical column nor a relation', async () => {
+    const user = makeAdminUser()
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'purchase_orders' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections primary
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // nivaro_fields primary
+      .mockReturnValueOnce(
+        makeChain({
+          many_collection: 'po_line_items',
+          many_field: 'purchase_order_id'
+        }) as unknown as ReturnType<typeof db>
+      ) // relation resolve — line_map.target_field
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // child nivaro_fields — no match for the nested target
+      .mockReturnValueOnce(makeChain(undefined) as unknown as ReturnType<typeof db>) // nivaro_relations — no matching relation either
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Bogus Nested Import',
+        collection: 'purchase_orders',
+        line_map: {
+          target_field: 'line_items',
+          columns: [],
+          nested: {
+            target_field: 'not_a_field_or_relation',
+            columns: []
+          }
+        }
+      })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as {
+      error: string
+      details: { path: string; message: string }[]
+    }
+    expect(body.error).toBe('Invalid template config')
+    const detail = body.details.find((d) => d.path === 'line_map.nested.target_field')
+    expect(detail?.message).toBe(
+      'Unknown field "not_a_field_or_relation" on po_line_items — nested_target requires a repeater/JSON column'
+    )
+  })
+
+  it('POST / rejects a create.defaults target absent from the lookup collection field set', async () => {
+    const user = makeAdminUser()
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'purchase_orders' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections primary
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // nivaro_fields primary
+      .mockReturnValueOnce(
+        makeChain({ id: 2, collection: 'units' }) as unknown as ReturnType<typeof db>
+      ) // lookup target collection
+      .mockReturnValueOnce(
+        makeChain([{ field: 'id' }, { field: 'code' }]) as unknown as ReturnType<typeof db>
+      ) // lookup target fields
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Create Default Import',
+        collection: 'purchase_orders',
+        header_map: [
+          {
+            target: 'vendor_id',
+            source: 'Unit',
+            steps: [
+              {
+                type: 'lookup',
+                collection: 'units',
+                match_field: 'code',
+                on_miss: 'create',
+                take: 'id',
+                create: {
+                  defaults: [{ target: 'nope', source: null, steps: [] }],
+                  dedupe_by: ['code']
+                }
+              }
+            ]
+          }
+        ]
+      })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as {
+      error: string
+      details: { path: string; message: string }[]
+    }
+    expect(body.error).toBe('Invalid template config')
+    expect(
+      body.details.some(
+        (d) =>
+          d.path === 'header_map[0].steps[0].create.defaults[0].target' &&
+          d.message.includes('nope')
+      )
+    ).toBe(true)
+  })
 })
 
 describe('makeLookupFetcher', () => {

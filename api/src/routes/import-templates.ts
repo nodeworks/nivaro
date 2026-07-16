@@ -246,6 +246,14 @@ async function validateLookupStep(
       })
     }
   })
+  step.create?.defaults.forEach((rule, i) => {
+    if (!fieldSet.has(rule.target)) {
+      errors.push({
+        path: `${path}.create.defaults[${i}].target`,
+        message: `Unknown field "${rule.target}" on ${step.collection}`
+      })
+    }
+  })
 }
 
 /** Finds every `lookup` step across a set of header rules and validates each. */
@@ -280,40 +288,50 @@ async function getM2mAliasFieldsCached(
   return resolved
 }
 
-/** Validates that a nested-rows target field (disperse's `nested_target` or
- *  `line_map.nested.target_field`) is a physical repeater/JSON column on the child
- *  collection — never an alias relation field, since nested rows are written as a
- *  plain JSON array, not through the relation machinery. */
-async function validatePhysicalChildColumn(
+/** Validates a nested-rows target field (disperse's `nested_target` or
+ *  `line_map.nested.target_field`) — accepted as EITHER a physical repeater/JSON
+ *  column on the child collection (never an alias relation field, since nested rows
+ *  written this way are a plain JSON array, not routed through relation machinery),
+ *  OR an O2M alias resolvable via `nivaro_relations` (`one_collection = childCollection,
+ *  one_field = field`), in which case the physical checks are skipped entirely — the
+ *  pipeline writes those rows as real child records through the relation instead.
+ *  Returns whether the target resolved in relation mode, so callers can cross-check
+ *  disperse/nested targets that both land on a relation. */
+async function validateNestedTarget(
   field: string,
   childCollection: string,
   path: string,
-  details: { fieldSet: Set<string>; aliasFields: Set<string>; errors: ConfigError[] }
-): Promise<void> {
-  if (!details.fieldSet.has(field)) {
-    details.errors.push({
-      path,
-      message: `Unknown field "${field}" on ${childCollection} — nested_target requires a repeater/JSON column`
-    })
-    return
+  ctx: { fieldSet: Set<string>; aliasFields: Set<string>; errors: ConfigError[] }
+): Promise<{ isRelation: boolean }> {
+  if (ctx.fieldSet.has(field)) {
+    if (ctx.aliasFields.has(field)) {
+      ctx.errors.push({
+        path,
+        message: `Field "${field}" on ${childCollection} is an alias field — nested_target requires a repeater/JSON column`
+      })
+      return { isRelation: false }
+    }
+    // nivaro_fields metadata can drift from the physical table (e.g. a field row
+    // registered for what is really a related table) — verify the column exists,
+    // since createOne silently drops keys without a physical column.
+    const actualCols = await getActualColumns(childCollection)
+    if (!actualCols.has(field)) {
+      ctx.errors.push({
+        path,
+        message: `Field "${field}" is registered on ${childCollection} but has no physical column — nested rows would be dropped on save. Use a repeater/JSON column.`
+      })
+    }
+    return { isRelation: false }
   }
-  if (details.aliasFields.has(field)) {
-    details.errors.push({
-      path,
-      message: `Field "${field}" on ${childCollection} is an alias field — nested_target requires a repeater/JSON column`
-    })
-    return
-  }
-  // nivaro_fields metadata can drift from the physical table (e.g. a field row
-  // registered for what is really a related table) — verify the column exists,
-  // since createOne silently drops keys without a physical column.
-  const actualCols = await getActualColumns(childCollection)
-  if (!actualCols.has(field)) {
-    details.errors.push({
-      path,
-      message: `Field "${field}" is registered on ${childCollection} but has no physical column — nested rows would be dropped on save. Use a repeater/JSON column.`
-    })
-  }
+
+  const relation = await resolveLineChildRelation(childCollection, field)
+  if (relation) return { isRelation: true }
+
+  ctx.errors.push({
+    path,
+    message: `Unknown field "${field}" on ${childCollection} — nested_target requires a repeater/JSON column`
+  })
+  return { isRelation: false }
 }
 
 /** Validates a normalized config's field/collection targets against live schema
@@ -397,9 +415,12 @@ async function validateConfigAgainstSchema(
       lookupFieldSetCache
     )
 
+    let disperseIsRelation = false
+    let nestedIsRelation = false
+
     const disperse = config.line_map.disperse
     if (disperse) {
-      await validatePhysicalChildColumn(
+      const result = await validateNestedTarget(
         disperse.nested_target,
         childCollection,
         'line_map.disperse',
@@ -409,6 +430,7 @@ async function validateConfigAgainstSchema(
           errors
         }
       )
+      disperseIsRelation = result.isRelation
 
       const mapFieldSet = await resolveLookupFieldSet(disperse.map_collection, lookupFieldSetCache)
       if (!mapFieldSet) {
@@ -443,12 +465,29 @@ async function validateConfigAgainstSchema(
         lookupFieldSetCache
       )
 
-      await validatePhysicalChildColumn(
+      const result = await validateNestedTarget(
         nested.target_field,
         childCollection,
         'line_map.nested.target_field',
         { fieldSet: childFieldSet, aliasFields: childAliasFields, errors }
       )
+      nestedIsRelation = result.isRelation
+    }
+
+    // A disperse and a nested block can independently target the same child field —
+    // fine when both write plain JSON. But once either target resolves as an O2M
+    // relation, the pipeline writes real child rows through that relation, and two
+    // configs pointed at different relations would race to create/own the same rows.
+    if (
+      disperse &&
+      nested &&
+      (disperseIsRelation || nestedIsRelation) &&
+      disperse.nested_target !== nested.target_field
+    ) {
+      errors.push({
+        path: 'line_map',
+        message: 'nested and disperse must target the same field when a relation target is used'
+      })
     }
   }
 }
