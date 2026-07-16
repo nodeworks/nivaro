@@ -7889,19 +7889,41 @@ function ColumnPresetRow({
 function DrawerRelationRow({
   entry,
   relationOptions,
-  numericFieldOptions,
+  capFieldOptions,
   onChange,
   onRemove
 }: {
   entry: DrawerRelationItem
-  relationOptions: Array<{ value: string; label: string }>
-  numericFieldOptions: Array<{ field: string; label?: string | null }>
+  relationOptions: Array<{ value: string; label: string; collection: string }>
+  capFieldOptions: Array<{ field: string; label?: string | null }>
   onChange: (e: DrawerRelationItem) => void
   onRemove: () => void
 }) {
   const [fieldOpen, setFieldOpen] = useState(false)
   const [sumOpen, setSumOpen] = useState(false)
   const [capOpen, setCapOpen] = useState(false)
+
+  // sum_field is summed over the GRANDCHILD rows the relation points at
+  // (NestedRelationEditor reads it off each nested row), not the child row
+  // itself — so its options must come from the selected relation's target
+  // collection, resolved fresh per entry.
+  const grandCollection = relationOptions.find((r) => r.value === entry.field)?.collection ?? null
+  const { data: grandFields = [] } = useQuery<
+    Array<{ field: string; label?: string | null; type?: string; hidden?: boolean }>
+  >({
+    queryKey: ['field-config-all', grandCollection],
+    queryFn: () => api.get(`/field-config/${grandCollection}`).then((r) => r.data.data ?? []),
+    enabled: !!grandCollection,
+    staleTime: 5 * 60 * 1000
+  })
+  const sumFieldOptions = useMemo(
+    () =>
+      grandFields.filter(
+        (f) => !f.hidden && f.field !== 'id' && NUMERIC_FIELD_TYPES.has(f.type ?? '')
+      ),
+    [grandFields]
+  )
+
   return (
     <div className='space-y-1.5 rounded border border-slate-200 p-2'>
       <div className='flex items-center gap-1.5'>
@@ -7928,7 +7950,9 @@ function DrawerRelationRow({
                       key={f.value}
                       value={f.value}
                       onSelect={() => {
-                        onChange({ ...entry, field: f.value })
+                        // Changing the relation changes the grandchild collection,
+                        // so a previously-chosen sum_field can no longer be valid.
+                        onChange({ ...entry, field: f.value, sumField: '' })
                         setFieldOpen(false)
                       }}
                       className='text-[12px]'
@@ -7955,13 +7979,15 @@ function DrawerRelationRow({
           <PopoverTrigger asChild>
             <button
               type='button'
-              className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'
+              disabled={!grandCollection}
+              className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0 disabled:opacity-50 disabled:hover:border-slate-200'
             >
               {entry.sumField ? (
-                (numericFieldOptions.find((f) => f.field === entry.sumField)?.label ??
-                  entry.sumField)
+                (sumFieldOptions.find((f) => f.field === entry.sumField)?.label ?? entry.sumField)
               ) : (
-                <span className='text-slate-400'>none</span>
+                <span className='text-slate-400'>
+                  {grandCollection ? 'none' : 'select relation first'}
+                </span>
               )}
             </button>
           </PopoverTrigger>
@@ -7980,7 +8006,7 @@ function DrawerRelationRow({
                   >
                     — None
                   </CommandItem>
-                  {numericFieldOptions.map((f) => (
+                  {sumFieldOptions.map((f) => (
                     <CommandItem
                       key={f.field}
                       value={f.field}
@@ -8006,8 +8032,7 @@ function DrawerRelationRow({
               className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'
             >
               {entry.capField ? (
-                (numericFieldOptions.find((f) => f.field === entry.capField)?.label ??
-                  entry.capField)
+                (capFieldOptions.find((f) => f.field === entry.capField)?.label ?? entry.capField)
               ) : (
                 <span className='text-slate-400'>none</span>
               )}
@@ -8028,7 +8053,7 @@ function DrawerRelationRow({
                   >
                     — None
                   </CommandItem>
-                  {numericFieldOptions.map((f) => (
+                  {capFieldOptions.map((f) => (
                     <CommandItem
                       key={f.field}
                       value={f.field}
@@ -8380,7 +8405,8 @@ function FieldSettingsPopover({
     () =>
       childO2MRels.map((r) => ({
         value: r.one_field,
-        label: `${r.one_field} → ${r.many_collection}`
+        label: `${r.one_field} → ${r.many_collection}`,
+        collection: r.many_collection
       })),
     [childO2MRels]
   )
@@ -9659,7 +9685,7 @@ function FieldSettingsPopover({
                         key={entry._key}
                         entry={entry}
                         relationOptions={drawerRelationOptions}
-                        numericFieldOptions={childNumericFieldOptions}
+                        capFieldOptions={childNumericFieldOptions}
                         onChange={(updated) =>
                           setDrawerRelationsLocal(
                             drawerRelationsLocal.map((d, i) => (i === idx ? updated : d))
