@@ -559,42 +559,6 @@ export function ItemEditForm({
   const [importIssues, setImportIssues] = useState<ImportParseResponse['issues']>([])
   const appliedInitialImportRef = useRef(false)
 
-  const applyImportResult = useCallback((result: ImportParseResponse) => {
-    draftRef.current = { ...draftRef.current, ...result.values }
-    setDraft((prev) => ({ ...prev, ...result.values }))
-
-    const issues = [...result.issues]
-    if (result.lines.length > 0) {
-      const rel = result.line_target_field
-        ? relations.find(
-            (r) => r.one_collection === collection && r.one_field === result.line_target_field
-          )
-        : null
-      if (rel?.many_collection && rel.many_field) {
-        for (const line of result.lines) {
-          o2mStagingCtx.queueRow(rel.many_collection, rel.many_field, {
-            ...line.values,
-            ...(line.nested ? { [line.nested.field]: line.nested.rows } : {})
-          })
-        }
-      } else {
-        issues.push({
-          severity: 'error',
-          rule: 'import-apply',
-          message: 'No matching relation found for the imported line items — they were not added.'
-        })
-      }
-    }
-    setImportIssues(issues)
-  }, [collection, relations, o2mStagingCtx])
-
-  useEffect(() => {
-    if (!isNew || !initialImportResult || appliedInitialImportRef.current) return
-    if (initialImportResult.lines.length > 0 && !relationsFetched) return
-    appliedInitialImportRef.current = true
-    applyImportResult(initialImportResult)
-  }, [isNew, initialImportResult, relationsFetched, applyImportResult])
-
   // ── M2M staging ────────────────────────────────────────────────────────────
   const [m2mLinks, setM2mLinks] = useState<Map<string, unknown[]>>(new Map())
   const [m2mUnlinks, setM2mUnlinks] = useState<Map<string, Set<unknown>>>(new Map())
@@ -639,6 +603,105 @@ export function ItemEditForm({
     }),
     [m2mLinks, m2mUnlinks]
   )
+
+  const applyImportResult = useCallback(async (result: ImportParseResponse) => {
+    draftRef.current = { ...draftRef.current, ...result.values }
+    setDraft((prev) => ({ ...prev, ...result.values }))
+
+    const issues = [...result.issues]
+    if (result.lines.length > 0) {
+      const rel = result.line_target_field
+        ? relations.find(
+            (r) => r.one_collection === collection && r.one_field === result.line_target_field
+          )
+        : null
+      if (rel?.many_collection && rel.many_field) {
+        const lineFieldRow = (fieldConfig ?? []).find((f) => f.field === result.line_target_field)
+        const rawOpts = lineFieldRow?.options
+        const opts = (
+          typeof rawOpts === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(rawOpts)
+                } catch {
+                  return {}
+                }
+              })()
+            : (rawOpts ?? {})
+        ) as { row_rules?: unknown[]; parent_context_fields?: string[] }
+        const rowRules = Array.isArray(opts.row_rules) ? opts.row_rules : []
+        if (rowRules.length > 0) {
+          const mergedDraft = { ...draftRef.current }
+          const parentCtx: Record<string, unknown> = {}
+          for (const f of opts.parent_context_fields ?? []) parentCtx[f] = mergedDraft[f] ?? null
+          for (const rule of rowRules) {
+            const tf = (rule as { trigger_field?: unknown }).trigger_field
+            if (typeof tf === 'string' && tf.startsWith('$parent.')) {
+              const key = tf.slice(8)
+              if (!(key in parentCtx)) parentCtx[key] = mergedDraft[key] ?? null
+            }
+          }
+          const evaluated = await Promise.all(
+            result.lines.map((line) =>
+              client
+                .request<{ updates: Record<string, unknown> }>(
+                  post('/field-rules/evaluate', {
+                    collection: rel.many_collection,
+                    data: line.values,
+                    parent_context: parentCtx,
+                    row_rules: rowRules
+                  })
+                )
+                .then((res) => res.updates ?? {})
+                .catch(() => ({}))
+            )
+          )
+          result.lines.forEach((line, i) => {
+            line.values = { ...line.values, ...evaluated[i] }
+          })
+        }
+        for (const line of result.lines) {
+          o2mStagingCtx.queueRow(rel.many_collection, rel.many_field, {
+            ...line.values,
+            ...(line.nested ? { [line.nested.field]: line.nested.rows } : {})
+          })
+        }
+      } else {
+        issues.push({
+          severity: 'error',
+          rule: 'import-apply',
+          message: 'No matching relation found for the imported line items — they were not added.'
+        })
+      }
+    }
+
+    const m2mEntries = Object.entries(result.m2m ?? {})
+    for (const [field, ids] of m2mEntries) {
+      const m2mRel = relations.find(
+        (r) => r.one_collection === collection && r.one_field === field && r.junction_field != null
+      )
+      if (m2mRel) {
+        for (const id of ids) m2mStagingCtx.stageLink(field, id)
+      } else {
+        issues.push({
+          severity: 'error',
+          rule: 'import-apply',
+          message: `No M2M relation found for "${field}" — the imported selection was not applied.`
+        })
+      }
+    }
+
+    setImportIssues(issues)
+  }, [collection, relations, o2mStagingCtx, m2mStagingCtx, fieldConfig, client])
+
+  useEffect(() => {
+    if (!isNew || !initialImportResult || appliedInitialImportRef.current) return
+    const needsRelations =
+      initialImportResult.lines.length > 0 || Object.keys(initialImportResult.m2m ?? {}).length > 0
+    if (needsRelations && !relationsFetched) return
+    appliedInitialImportRef.current = true
+    void applyImportResult(initialImportResult)
+  }, [isNew, initialImportResult, relationsFetched, applyImportResult])
 
   useEffect(() => {
     if (itemData) {
