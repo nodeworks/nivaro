@@ -58,6 +58,57 @@ Authorization: Bearer <token>
     {
       type: 'note',
       text: 'Hard rules are also enforced server-side via a before-create/before-update hook — direct API writes that violate a blocking rule receive a 422 regardless of which client sent them. Requires an Anthropic API key (env or Settings → AI Features); without a key, validation is skipped entirely.'
+    },
+    { type: 'h3', id: 'aggregate-cap-rules', text: 'Aggregate cap rules (sum_cap)' },
+    {
+      type: 'p',
+      text: 'A `sum_cap` rule caps the running SUM of a numeric field across rows sharing a group value against a limit read from a related parent record — e.g. "the sum of allocated_amount across all workflows for a unit must not exceed that unit\'s total_budget". It lives in the SAME `validation_rules` array as the plain-text AI rules above (a typed object instead of a string), evaluated by its own hook rather than by Claude — no API key needed.'
+    },
+    {
+      type: 'p',
+      text: 'Add one from Data Model → table → Settings tab → "AI Features" card → Rules → Sum Cap (next to AI Prompt). Configure: Sum field (the numeric column being summed), Group by (an M2O field on this collection — rows are grouped by its value), Cap relation (usually the same M2O field, resolved to the parent collection) and Cap field (the numeric field on that parent holding the limit), a Block/Warn severity, and a Message shown to the editor when the cap is exceeded.'
+    },
+    {
+      type: 'pre',
+      code: `{
+  "type": "sum_cap",
+  "severity": "block",
+  "sum_field": "allocated_amount",
+  "group_by": "unit_id",
+  "cap": { "relation": "unit_id", "field": "total_budget" },
+  "message": "Allocations would exceed the unit's budget"
+}`
+    },
+    {
+      type: 'p',
+      text: "On create/update, the hook sums `sum_field` across every other row with the same `group_by` value, adds the incoming write's own value, and compares against `cap.field` on the parent found by following `cap.relation` (an M2O field) to its related collection. `block` throws a `422` and lets the write through only if the total stays under the cap; `warn` sends the acting user an in-app notification and lets the write through regardless."
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/units/abc123
+{ "allocated_amount": 5000 }
+
+→ 422 {
+  "statusCode": 422,
+  "error": "Unprocessable Entity",
+  "message": "Aggregate cap exceeded: Allocations would exceed the unit's budget (18000 exceeds cap of 15000)",
+  "code": "VALIDATION_CAP_EXCEEDED",
+  "violations": [
+    { "rule": "sum_cap", "field": "allocated_amount", "explanation": "Allocations would exceed the unit's budget (18000 exceeds cap of 15000)" }
+  ]
+}`
+    },
+    {
+      type: 'note',
+      text: 'This is the SAME error envelope shape a hard AI validation rule produces on a blocked write (`code: "AI_VALIDATION_FAILED"` there instead) — both are before-hook errors carrying a `statusCode` that the hook registry rethrows instead of swallowing, and server.ts\'s global error handler attaches `code`/`violations` onto the response whenever both are present on the thrown error. The one difference: an AI violation has no `field` key (the rule is free text), while a sum_cap violation always does.'
+    },
+    {
+      type: 'warn',
+      text: "sum_cap has known limitations, by design: (1) the check is lock-free — two concurrent writes to the same group can each individually pass the check and jointly exceed the cap (TOCTOU). (2) The SUM is computed under the CALLER's own row-level-security/workspace scope, matching how the rest of the write path scopes reads — under a row-filtered role the cap is effectively enforced per-visible-rows, not across the whole group. (3) Like the AI-validation hook, this hook fails OPEN on any non-HTTP error (a transient DB error skips the check rather than blocking the write) — only errors that carry an explicit `statusCode` (i.e. the cap itself firing) block. (4) A NULL group value or a NULL/missing cap on the parent both skip the check silently rather than erroring."
+    },
+    {
+      type: 'note',
+      text: 'The admin PATCH endpoint (`PATCH /api/ai-settings/:collection`) preserves plain-text rule strings as-is but validates every typed rule object against the full sum_cap shape on save — a malformed or garbage object in the array is silently dropped rather than coerced (this used to render as the literal string `"[object Object]"` before the fix). The GET side is deliberately more lenient, so a rule that no longer validates still displays in the editor for the admin to fix or remove instead of vanishing.'
     }
   ]
 }

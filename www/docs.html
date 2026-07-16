@@ -960,7 +960,7 @@ emitNotification(app.io, targetUserId, {
           <!-- /SYNC:comments -->
         </div>
 
-        <div class="doc-section" id="s-computed-fields" data-toc='[{"id":"computed-fields","label":"Computed Fields"},{"id":"computed-rollup","label":"Rollup fields"}]'>
+        <div class="doc-section" id="s-computed-fields" data-toc='[{"id":"computed-fields","label":"Computed Fields"},{"id":"computed-rollup","label":"Rollup fields"},{"id":"computed-rollup-stored","label":"Stored rollups"}]'>
           <!-- SYNC:computed-fields -->
           <h1 class="doc-h1" id="computed-fields">Computed Fields</h1>
           <p class="doc-p">Fields can have a formula that is evaluated automatically. Formulas use <code class="doc-code">expr-eval</code> — a safe, sandboxed arithmetic/logical expression evaluator. No arbitrary code execution.</p>
@@ -970,10 +970,11 @@ emitNotification(app.io, targetUserId, {
             <tbody><tr><tr><td>read</td><td>On every GET request</td><td>No — virtual key added to response</td><td>Derived display values (full name, total price)</td></tr>
               <tr><td>write (not stored)</td><td>Before INSERT / UPDATE</td><td>No</td><td>Transformations that should not persist</td></tr>
               <tr><td>write + store</td><td>Before INSERT / UPDATE</td><td>Yes — written to the DB column</td><td>Searchable / sortable derived columns</td></tr>
-              <tr><td>rollup</td><td>On every GET request</td><td>No — virtual key added to response</td><td>Aggregates of related items (sum of line totals, child count)</td></tr></tr></tbody>
+              <tr><td>rollup (virtual)</td><td>On every GET request</td><td>No — virtual key added to response</td><td>Aggregates of related items (sum of line totals, child count)</td></tr>
+              <tr><td>rollup (stored)</td><td>On every write to a CONTRIBUTING row (the related collection), via a recalc pass</td><td>Yes — written to the DB column</td><td>A rollup that needs to be filtered, sorted, or read cheaply at scale</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3" id="computed-rollup">Rollup fields</h3>
-          <p class="doc-p">A rollup field returns an aggregate (sum / count / avg / min / max) of related items in another collection. Instead of an expression, the formula is a JSON config object describing what to aggregate. Like read-time fields, rollups are virtual — computed fresh on every read, never stored.</p>
+          <p class="doc-p">A rollup field returns an aggregate (sum / count / avg / min / max) of related items in another collection. Instead of an expression, the formula is a JSON config object describing what to aggregate. By default rollups are virtual — computed fresh on every read, never stored — but a rollup can optionally be stored (see below).</p>
           <pre class="doc-pre"><code>{
   "related_collection": "line_items",  // table to aggregate from
   "fk_field": "workflow_id",            // column on related_collection → this item's id
@@ -982,10 +983,29 @@ emitNotification(app.io, targetUserId, {
   "recursive": false                    // optional — see below
 }</code></pre>
           <p class="doc-p">Example: on a workflow record, a rollup with <code class="doc-code">related_collection: "line_items"</code>, <code class="doc-code">fk_field: "workflow_id"</code>, <code class="doc-code">aggregate: "sum"</code>, <code class="doc-code">value_field: "amount"</code> returns the total of all line item amounts pointing at that workflow.</p>
+          <h3 class="doc-h3">Multi-source rollups</h3>
+          <p class="doc-p">A single rollup field can combine more than one source — each source contributes its own aggregate and the results are summed together. Wrap the sources in a <code class="doc-code">sources</code> array instead of a bare config object:</p>
+          <pre class="doc-pre"><code>{
+  "sources": [
+    { "related_collection": "unit_workflows", "fk_field": "unit_id", "aggregate": "sum", "value_field": "allocated_amount" },
+    { "related_collection": "unit_materials",  "fk_field": "unit_id", "aggregate": "sum", "value_field": "total" }
+  ]
+}</code></pre>
+          <p class="doc-p">Both shapes are accepted by the server: a bare single-source object (legacy, shown above) is treated as a one-element <code class="doc-code">sources</code> array. A source that returns no matching rows contributes <code class="doc-code">0</code> to the sum; if every source has no matching rows, the field value is <code class="doc-code">null</code> (distinguishing "no data" from "sums to zero"). The builder UI always writes the <code class="doc-code">sources</code> array form — use Add source to add more than one.</p>
+          <h3 class="doc-h3" id="computed-rollup-stored">Stored rollups</h3>
+          <p class="doc-p">Enabling "Store value (recalculate on writes)" makes a rollup persist to a real DB column instead of computing on every read. The column is kept current by a recalc pass: whenever a row is created, updated, or deleted in ANY of the rollup's source collections, the field's owning items are recomputed and written with a raw DB update (bypassing hooks, validation, and rules — this is deliberate, see below). On an update where the contributing row's FK value itself changed, BOTH the old and new parent are recomputed. The write is skipped when the recomputed total matches the value already stored.</p>
+          <div class="doc-note">The raw recalc write intentionally bypasses hooks/rules to avoid re-triggering itself recursively. One consequence: if a stored rollup's source collection is ITSELF the target collection of another stored rollup ("chained" rollups), the outer rollup does not automatically cascade — it goes stale until something else writes to its own direct contributor collection. Recalc failures are also swallowed silently (a write never fails because a rollup recalc failed) — a broken rollup config shows a stale value with no visible error; check server logs.</div>
+          <p class="doc-p">Turning Store on for an existing virtual rollup automatically provisions the physical column (matching the aggregate's numeric type) if it doesn't exist yet, then kicks off a backfill so existing rows aren't left at <code class="doc-code">NULL</code>/<code class="doc-code">0</code> until their next contributing write. The backfill runs fire-and-forget after the save — a toast reports if it failed, and it can be re-run manually (see Backfill below).</p>
+          <h3 class="doc-h3">Backfill</h3>
+          <pre class="doc-pre"><code>POST /api/data-model/:table/fields/:field/rollup-recalc
+Authorization: Bearer &lt;admin token&gt;
+
+→ { "recalculated": 4213 }</code></pre>
+          <p class="doc-p">Admin-only. Recomputes every row's stored rollup value from scratch, in chunks of 500 (sequential, not parallel, to avoid flooding the connection pool on a large table). Returns a 400 if the field isn't a rollup, isn't stored, or has an invalid formula. Use this after enabling Store on a rollup that already has data, or any time a stored rollup's value looks stale and no contributing write is expected soon.</p>
           <h3 class="doc-h3">Recursive (tree) rollups</h3>
           <p class="doc-p">Set <code class="doc-code">recursive: true</code> when <code class="doc-code">related_collection</code> is the SAME collection as the field's own collection and that collection forms a self-referential tree (the <code class="doc-code">fk_field</code> points at a parent row's id). The rollup then aggregates every descendant at any depth — children, grandchildren, and beyond — using a recursive SQL CTE (capped at 100 levels). Use this for "sum of all costs under this node" style totals across an org/category tree.</p>
           <div class="doc-note">The Recursive checkbox in the UI only appears when the related collection equals the collection being edited. When the related collection differs, recursive is ignored and a plain single-level aggregate runs.</div>
-          <p class="doc-p">Configure rollups in Data Model → table → expand a field → Computed Formula → enable → choose Rollup (aggregate). Pick the related collection, FK field, aggregate function, and value field from the comboboxes. The value field is disabled for count.</p>
+          <p class="doc-p">Configure rollups in Data Model → table → expand a field → Computed Formula → enable → choose Rollup (aggregate). Pick the related collection, FK field, aggregate function, and value field from the comboboxes (Add source for more than one). The value field is disabled for count. The "Store value (recalculate on writes)" switch toggles between virtual and stored — see Stored rollups above.</p>
           <h3 class="doc-h3">Configuring in the UI</h3>
           <p class="doc-p">Go to Data Model in the sidebar → click a table → expand any field row → scroll to the Computed Formula section:</p>
           <p class="doc-p">1. Check Enable to activate the formula editor. 2. Choose Read (virtual) or Write (before save). 3. Enter a formula using <code class="doc-code">item.fieldName</code> syntax. 4. For write-type, optionally check Store result in database column. 5. Click Save on the field row.</p>
@@ -1024,14 +1044,14 @@ item.status == "active" ? 1 : 0</code></pre>
   "computed_store": false     // true = persist result to DB column (write-type only)
 }
 
-// Rollup — computed_formula is a JSON string config:
+// Rollup — computed_formula is a JSON string config (single- or multi-source):
 {
   "field": "line_total",
   "computed_type": "rollup",
-  "computed_formula": "{\"related_collection\":\"line_items\",\"fk_field\":\"workflow_id\",\"aggregate\":\"sum\",\"value_field\":\"amount\"}",
-  "computed_store": false
+  "computed_formula": "{\"sources\":[{\"related_collection\":\"line_items\",\"fk_field\":\"workflow_id\",\"aggregate\":\"sum\",\"value_field\":\"amount\"}]}",
+  "computed_store": true    // true = persist + recalc on every contributing write; requires the column to exist
 }</code></pre>
-          <div class="doc-note">Write-time + stored computed fields require the target column to already exist in the database schema. Read-time fields add a virtual key to API responses without touching the schema.</div>
+          <div class="doc-note">Write-time + stored computed fields, and stored rollups, both require the target column to already exist in the database schema — the admin UI provisions it automatically, but a direct API caller must add the column first (<code class="doc-code">POST /data-model/tables/:table/columns</code>) or the recalc silently fails against a nonexistent column. Read-time and virtual (unstored) rollup fields add a virtual key to API responses without touching the schema.</div>
           <h3 class="doc-h3">GraphQL</h3>
           <p class="doc-p">Computed fields appear in the auto-generated GraphQL schema exactly like regular scalar fields — no special handling required. Read-time virtual fields are populated by the query resolver (which calls <code class="doc-code">readItems</code> server-side). Write-time fields reflect the stored or last-evaluated value.</p>
           <pre class="doc-pre"><code>query {
@@ -6779,7 +6799,7 @@ ANTHROPIC_API_KEY=sk-ant-...</code></pre>
           <!-- /SYNC:ai-summarize -->
         </div>
 
-        <div class="doc-section" id="s-ai-content-validation" data-toc='[{"id":"ai-content-validation","label":"AI Content Validation"}]'>
+        <div class="doc-section" id="s-ai-content-validation" data-toc='[{"id":"ai-content-validation","label":"AI Content Validation"},{"id":"aggregate-cap-rules","label":"Aggregate cap rules (sum_cap)"}]'>
           <!-- SYNC:ai-content-validation -->
           <h1 class="doc-h1" id="ai-content-validation">AI Content Validation</h1>
           <p class="doc-p">AI content validation checks items against natural-language rules before they are saved. Rules are written in plain English per collection ("the title must not contain pricing information", "the summary must be in a professional tone") and evaluated by Claude against the submitted values. Each rule is either soft (warn) or hard (block).</p>
@@ -6813,6 +6833,33 @@ Authorization: Bearer &lt;token&gt;
   }
 }</code></pre>
           <div class="doc-note">Hard rules are also enforced server-side via a before-create/before-update hook — direct API writes that violate a blocking rule receive a 422 regardless of which client sent them. Requires an Anthropic API key (env or Settings → AI Features); without a key, validation is skipped entirely.</div>
+          <h3 class="doc-h3" id="aggregate-cap-rules">Aggregate cap rules (sum_cap)</h3>
+          <p class="doc-p">A <code class="doc-code">sum_cap</code> rule caps the running SUM of a numeric field across rows sharing a group value against a limit read from a related parent record — e.g. "the sum of allocated_amount across all workflows for a unit must not exceed that unit's total_budget". It lives in the SAME <code class="doc-code">validation_rules</code> array as the plain-text AI rules above (a typed object instead of a string), evaluated by its own hook rather than by Claude — no API key needed.</p>
+          <p class="doc-p">Add one from Data Model → table → Settings tab → "AI Features" card → Rules → Sum Cap (next to AI Prompt). Configure: Sum field (the numeric column being summed), Group by (an M2O field on this collection — rows are grouped by its value), Cap relation (usually the same M2O field, resolved to the parent collection) and Cap field (the numeric field on that parent holding the limit), a Block/Warn severity, and a Message shown to the editor when the cap is exceeded.</p>
+          <pre class="doc-pre"><code>{
+  "type": "sum_cap",
+  "severity": "block",
+  "sum_field": "allocated_amount",
+  "group_by": "unit_id",
+  "cap": { "relation": "unit_id", "field": "total_budget" },
+  "message": "Allocations would exceed the unit's budget"
+}</code></pre>
+          <p class="doc-p">On create/update, the hook sums <code class="doc-code">sum_field</code> across every other row with the same <code class="doc-code">group_by</code> value, adds the incoming write's own value, and compares against <code class="doc-code">cap.field</code> on the parent found by following <code class="doc-code">cap.relation</code> (an M2O field) to its related collection. <code class="doc-code">block</code> throws a <code class="doc-code">422</code> and lets the write through only if the total stays under the cap; <code class="doc-code">warn</code> sends the acting user an in-app notification and lets the write through regardless.</p>
+          <pre class="doc-pre"><code>PATCH /api/units/abc123
+{ "allocated_amount": 5000 }
+
+→ 422 {
+  "statusCode": 422,
+  "error": "Unprocessable Entity",
+  "message": "Aggregate cap exceeded: Allocations would exceed the unit's budget (18000 exceeds cap of 15000)",
+  "code": "VALIDATION_CAP_EXCEEDED",
+  "violations": [
+    { "rule": "sum_cap", "field": "allocated_amount", "explanation": "Allocations would exceed the unit's budget (18000 exceeds cap of 15000)" }
+  ]
+}</code></pre>
+          <div class="doc-note">This is the SAME error envelope shape a hard AI validation rule produces on a blocked write (<code class="doc-code">code: "AI_VALIDATION_FAILED"</code> there instead) — both are before-hook errors carrying a <code class="doc-code">statusCode</code> that the hook registry rethrows instead of swallowing, and server.ts's global error handler attaches <code class="doc-code">code</code>/<code class="doc-code">violations</code> onto the response whenever both are present on the thrown error. The one difference: an AI violation has no <code class="doc-code">field</code> key (the rule is free text), while a sum_cap violation always does.</div>
+          <div class="doc-note doc-warn">sum_cap has known limitations, by design: (1) the check is lock-free — two concurrent writes to the same group can each individually pass the check and jointly exceed the cap (TOCTOU). (2) The SUM is computed under the CALLER's own row-level-security/workspace scope, matching how the rest of the write path scopes reads — under a row-filtered role the cap is effectively enforced per-visible-rows, not across the whole group. (3) Like the AI-validation hook, this hook fails OPEN on any non-HTTP error (a transient DB error skips the check rather than blocking the write) — only errors that carry an explicit <code class="doc-code">statusCode</code> (i.e. the cap itself firing) block. (4) A NULL group value or a NULL/missing cap on the parent both skip the check silently rather than erroring.</div>
+          <div class="doc-note">The admin PATCH endpoint (<code class="doc-code">PATCH /api/ai-settings/:collection</code>) preserves plain-text rule strings as-is but validates every typed rule object against the full sum_cap shape on save — a malformed or garbage object in the array is silently dropped rather than coerced (this used to render as the literal string <code class="doc-code">"[object Object]"</code> before the fix). The GET side is deliberately more lenient, so a rule that no longer validates still displays in the editor for the admin to fix or remove instead of vanishing.</div>
           <!-- /SYNC:ai-content-validation -->
         </div>
 

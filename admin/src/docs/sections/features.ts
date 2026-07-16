@@ -409,17 +409,23 @@ export const userComputedFields: DocSection = {
           'Searchable / sortable derived columns'
         ],
         [
-          'rollup',
+          'rollup (virtual)',
           'On every GET request',
           'No — virtual key added to response',
           'Aggregates of related items (sum of line totals, child count)'
+        ],
+        [
+          'rollup (stored)',
+          'On every write to a CONTRIBUTING row (the related collection), via a recalc pass',
+          'Yes — written to the DB column',
+          'A rollup that needs to be filtered, sorted, or read cheaply at scale'
         ]
       ]
     },
     { type: 'h3', id: 'computed-rollup', text: 'Rollup fields' },
     {
       type: 'p',
-      text: 'A rollup field returns an aggregate (sum / count / avg / min / max) of related items in another collection. Instead of an expression, the formula is a JSON config object describing what to aggregate. Like read-time fields, rollups are virtual — computed fresh on every read, never stored.'
+      text: 'A rollup field returns an aggregate (sum / count / avg / min / max) of related items in another collection. Instead of an expression, the formula is a JSON config object describing what to aggregate. By default rollups are virtual — computed fresh on every read, never stored — but a rollup can optionally be stored (see below).'
     },
     {
       type: 'pre',
@@ -435,6 +441,49 @@ export const userComputedFields: DocSection = {
       type: 'p',
       text: 'Example: on a workflow record, a rollup with `related_collection: "line_items"`, `fk_field: "workflow_id"`, `aggregate: "sum"`, `value_field: "amount"` returns the total of all line item amounts pointing at that workflow.'
     },
+    { type: 'h3', text: 'Multi-source rollups' },
+    {
+      type: 'p',
+      text: 'A single rollup field can combine more than one source — each source contributes its own aggregate and the results are summed together. Wrap the sources in a `sources` array instead of a bare config object:'
+    },
+    {
+      type: 'pre',
+      code: `{
+  "sources": [
+    { "related_collection": "unit_workflows", "fk_field": "unit_id", "aggregate": "sum", "value_field": "allocated_amount" },
+    { "related_collection": "unit_materials",  "fk_field": "unit_id", "aggregate": "sum", "value_field": "total" }
+  ]
+}`
+    },
+    {
+      type: 'p',
+      text: 'Both shapes are accepted by the server: a bare single-source object (legacy, shown above) is treated as a one-element `sources` array. A source that returns no matching rows contributes `0` to the sum; if every source has no matching rows, the field value is `null` (distinguishing "no data" from "sums to zero"). The builder UI always writes the `sources` array form — use Add source to add more than one.'
+    },
+    { type: 'h3', id: 'computed-rollup-stored', text: 'Stored rollups' },
+    {
+      type: 'p',
+      text: "Enabling \"Store value (recalculate on writes)\" makes a rollup persist to a real DB column instead of computing on every read. The column is kept current by a recalc pass: whenever a row is created, updated, or deleted in ANY of the rollup's source collections, the field's owning items are recomputed and written with a raw DB update (bypassing hooks, validation, and rules — this is deliberate, see below). On an update where the contributing row's FK value itself changed, BOTH the old and new parent are recomputed. The write is skipped when the recomputed total matches the value already stored."
+    },
+    {
+      type: 'note',
+      text: 'The raw recalc write intentionally bypasses hooks/rules to avoid re-triggering itself recursively. One consequence: if a stored rollup\'s source collection is ITSELF the target collection of another stored rollup ("chained" rollups), the outer rollup does not automatically cascade — it goes stale until something else writes to its own direct contributor collection. Recalc failures are also swallowed silently (a write never fails because a rollup recalc failed) — a broken rollup config shows a stale value with no visible error; check server logs.'
+    },
+    {
+      type: 'p',
+      text: "Turning Store on for an existing virtual rollup automatically provisions the physical column (matching the aggregate's numeric type) if it doesn't exist yet, then kicks off a backfill so existing rows aren't left at `NULL`/`0` until their next contributing write. The backfill runs fire-and-forget after the save — a toast reports if it failed, and it can be re-run manually (see Backfill below)."
+    },
+    { type: 'h3', text: 'Backfill' },
+    {
+      type: 'pre',
+      code: `POST /api/data-model/:table/fields/:field/rollup-recalc
+Authorization: Bearer <admin token>
+
+→ { "recalculated": 4213 }`
+    },
+    {
+      type: 'p',
+      text: "Admin-only. Recomputes every row's stored rollup value from scratch, in chunks of 500 (sequential, not parallel, to avoid flooding the connection pool on a large table). Returns a 400 if the field isn't a rollup, isn't stored, or has an invalid formula. Use this after enabling Store on a rollup that already has data, or any time a stored rollup's value looks stale and no contributing write is expected soon."
+    },
     { type: 'h3', text: 'Recursive (tree) rollups' },
     {
       type: 'p',
@@ -446,7 +495,7 @@ export const userComputedFields: DocSection = {
     },
     {
       type: 'p',
-      text: 'Configure rollups in Data Model → table → expand a field → Computed Formula → enable → choose Rollup (aggregate). Pick the related collection, FK field, aggregate function, and value field from the comboboxes. The value field is disabled for count.'
+      text: 'Configure rollups in Data Model → table → expand a field → Computed Formula → enable → choose Rollup (aggregate). Pick the related collection, FK field, aggregate function, and value field from the comboboxes (Add source for more than one). The value field is disabled for count. The "Store value (recalculate on writes)" switch toggles between virtual and stored — see Stored rollups above.'
     },
     { type: 'h3', text: 'Configuring in the UI' },
     {
@@ -506,17 +555,17 @@ item.status == "active" ? 1 : 0`
   "computed_store": false     // true = persist result to DB column (write-type only)
 }
 
-// Rollup — computed_formula is a JSON string config:
+// Rollup — computed_formula is a JSON string config (single- or multi-source):
 {
   "field": "line_total",
   "computed_type": "rollup",
-  "computed_formula": "{\\"related_collection\\":\\"line_items\\",\\"fk_field\\":\\"workflow_id\\",\\"aggregate\\":\\"sum\\",\\"value_field\\":\\"amount\\"}",
-  "computed_store": false
+  "computed_formula": "{\\"sources\\":[{\\"related_collection\\":\\"line_items\\",\\"fk_field\\":\\"workflow_id\\",\\"aggregate\\":\\"sum\\",\\"value_field\\":\\"amount\\"}]}",
+  "computed_store": true    // true = persist + recalc on every contributing write; requires the column to exist
 }`
     },
     {
       type: 'note',
-      text: 'Write-time + stored computed fields require the target column to already exist in the database schema. Read-time fields add a virtual key to API responses without touching the schema.'
+      text: 'Write-time + stored computed fields, and stored rollups, both require the target column to already exist in the database schema — the admin UI provisions it automatically, but a direct API caller must add the column first (`POST /data-model/tables/:table/columns`) or the recalc silently fails against a nonexistent column. Read-time and virtual (unstored) rollup fields add a virtual key to API responses without touching the schema.'
     },
     { type: 'h3', text: 'GraphQL' },
     {
