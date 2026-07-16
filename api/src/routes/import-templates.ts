@@ -17,7 +17,7 @@ import type {
   ImportTemplateConfig
 } from '../services/import-templates-config.js'
 import { normalizeImportTemplateConfig } from '../services/import-templates-config.js'
-import { applyFieldRules, createOne, findM2MRelation } from '../services/items.js'
+import { applyFieldRules, createOne, findM2MRelation, getActualColumns } from '../services/items.js'
 import { can } from '../services/permissions.js'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -284,21 +284,34 @@ async function getM2mAliasFieldsCached(
  *  `line_map.nested.target_field`) is a physical repeater/JSON column on the child
  *  collection — never an alias relation field, since nested rows are written as a
  *  plain JSON array, not through the relation machinery. */
-function validatePhysicalChildColumn(
+async function validatePhysicalChildColumn(
   field: string,
   childCollection: string,
   path: string,
   details: { fieldSet: Set<string>; aliasFields: Set<string>; errors: ConfigError[] }
-): void {
+): Promise<void> {
   if (!details.fieldSet.has(field)) {
     details.errors.push({
       path,
       message: `Unknown field "${field}" on ${childCollection} — nested_target requires a repeater/JSON column`
     })
-  } else if (details.aliasFields.has(field)) {
+    return
+  }
+  if (details.aliasFields.has(field)) {
     details.errors.push({
       path,
       message: `Field "${field}" on ${childCollection} is an alias field — nested_target requires a repeater/JSON column`
+    })
+    return
+  }
+  // nivaro_fields metadata can drift from the physical table (e.g. a field row
+  // registered for what is really a related table) — verify the column exists,
+  // since createOne silently drops keys without a physical column.
+  const actualCols = await getActualColumns(childCollection)
+  if (!actualCols.has(field)) {
+    details.errors.push({
+      path,
+      message: `Field "${field}" is registered on ${childCollection} but has no physical column — nested rows would be dropped on save. Use a repeater/JSON column.`
     })
   }
 }
@@ -386,11 +399,16 @@ async function validateConfigAgainstSchema(
 
     const disperse = config.line_map.disperse
     if (disperse) {
-      validatePhysicalChildColumn(disperse.nested_target, childCollection, 'line_map.disperse', {
-        fieldSet: childFieldSet,
-        aliasFields: childAliasFields,
-        errors
-      })
+      await validatePhysicalChildColumn(
+        disperse.nested_target,
+        childCollection,
+        'line_map.disperse',
+        {
+          fieldSet: childFieldSet,
+          aliasFields: childAliasFields,
+          errors
+        }
+      )
 
       const mapFieldSet = await resolveLookupFieldSet(disperse.map_collection, lookupFieldSetCache)
       if (!mapFieldSet) {
@@ -425,7 +443,7 @@ async function validateConfigAgainstSchema(
         lookupFieldSetCache
       )
 
-      validatePhysicalChildColumn(
+      await validatePhysicalChildColumn(
         nested.target_field,
         childCollection,
         'line_map.nested.target_field',

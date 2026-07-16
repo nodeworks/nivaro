@@ -79,7 +79,7 @@ type QB = Knex.QueryBuilder
 // Per-process cache of actual DB columns per table. Schema is fixed at runtime.
 const columnCache = new Map<string, Set<string>>()
 
-async function getActualColumns(table: string): Promise<Set<string>> {
+export async function getActualColumns(table: string): Promise<Set<string>> {
   const cached = columnCache.get(table)
   if (cached) return cached
   const rows = rawRows<{ COLUMN_NAME: string }>(await db.raw(
