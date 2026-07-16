@@ -1,6 +1,7 @@
 import type {
   ImportDisperseConfig,
   ImportHeaderRule,
+  ImportNestedConfig,
   ImportStep,
   ImportTemplateConfig
 } from './import-templates-config.js'
@@ -23,6 +24,7 @@ export interface ImportParseResult {
   values: Record<string, unknown>
   lines: LineDraft[]
   issues: ImportIssue[]
+  m2m: Record<string, Array<string | number>>
 }
 
 // Dependency-injected so the pipeline is pure and unit-testable without a DB.
@@ -149,7 +151,23 @@ function resolveLookupOutcome(
   if (key === '') return { value: undefined }
   const record = matchMap.get(key)
   if (record) {
-    return { value: step.take === 'record' ? record : record.id }
+    if (step.take === 'record') return { value: record }
+    if (step.take === 'field') {
+      const fieldName = step.take_field as string
+      if (!(fieldName in record)) {
+        const missingIssue: ImportIssue = {
+          severity: 'warn',
+          rule: ruleId,
+          column,
+          message: `take_field "${fieldName}" not present on matched ${step.collection} record`
+        }
+        if (rowNumber != null) missingIssue.row = rowNumber
+        issues.push(missingIssue)
+        return { value: undefined }
+      }
+      return { value: record[fieldName] }
+    }
+    return { value: record.id }
   }
   const name = candidate == null ? '' : String(candidate)
   const issue: ImportIssue = {
@@ -256,10 +274,16 @@ async function runHeaderPhase(
   headerMap: ImportHeaderRule[],
   headerRow: Record<string, unknown>,
   issues: ImportIssue[],
-  lookup: LookupFetcher
-): Promise<{ values: Record<string, unknown>; resolved: Record<string, unknown> }> {
+  lookup: LookupFetcher,
+  m2mFields: Set<string> | undefined
+): Promise<{
+  values: Record<string, unknown>
+  resolved: Record<string, unknown>
+  m2m: Record<string, Array<string | number>>
+}> {
   const values: Record<string, unknown> = {}
   const resolved: Record<string, unknown> = {}
+  const m2m: Record<string, Array<string | number>> = {}
   for (const rule of headerMap) {
     const lookupStep = findLookupStep(rule.steps)
     let matchMap: Map<string, Record<string, unknown>> | null = null
@@ -277,10 +301,14 @@ async function runHeaderPhase(
       ruleId,
       undefined
     )
-    values[rule.target] = value
     resolved[rule.target] = value
+    if (m2mFields?.has(rule.target)) {
+      if (value !== undefined) m2m[rule.target] = [value as string | number]
+    } else {
+      values[rule.target] = value
+    }
   }
-  return { values, resolved }
+  return { values, resolved, m2m }
 }
 
 // Shared by the line phase (columns against every filtered row) and disperse
@@ -332,19 +360,24 @@ async function runColumnsBatched(
   })
 }
 
+function matchesRowFilter(
+  row: Record<string, unknown>,
+  filter: { column: string; op: 'nnull' | 'eq' | 'neq'; value?: string } | null
+): boolean {
+  if (!filter) return true
+  const value = row[filter.column]
+  if (filter.op === 'nnull') return value !== null && value !== undefined && value !== ''
+  const compare = value == null ? '' : String(value)
+  if (filter.op === 'eq') return compare === (filter.value ?? '')
+  return compare !== (filter.value ?? '')
+}
+
 function filterRows(
   rows: Record<string, unknown>[],
   filter: { column: string; op: 'nnull' | 'eq' | 'neq'; value?: string } | null
 ): RowEntry[] {
   const withIndex = rows.map((row, i) => ({ row, rowNumber: i + 1 }))
-  if (!filter) return withIndex
-  return withIndex.filter(({ row }) => {
-    const value = row[filter.column]
-    if (filter.op === 'nnull') return value !== null && value !== undefined && value !== ''
-    const compare = value == null ? '' : String(value)
-    if (filter.op === 'eq') return compare === (filter.value ?? '')
-    return compare !== (filter.value ?? '')
-  })
+  return withIndex.filter(({ row }) => matchesRowFilter(row, filter))
 }
 
 function splitEven(total: number, count: number): string[] {
@@ -454,13 +487,56 @@ async function processDisperse(
   }
 }
 
+// Per-line nested rows: a second, simpler member-per-line channel alongside disperse
+// (one-to-many split from a trigger row). Runs AFTER disperse — any line whose draft
+// already carries `.nested` (from disperse) is left alone, disperse wins.
+async function processPerLineNested(
+  nested: ImportNestedConfig,
+  filteredRows: RowEntry[],
+  resolvedCtx: Record<string, unknown>,
+  lookup: LookupFetcher,
+  issues: ImportIssue[],
+  lineDraftByRowNumber: Map<number, LineDraft>
+): Promise<void> {
+  const gatedEntries = filteredRows.filter(({ row, rowNumber }) => {
+    const draft = lineDraftByRowNumber.get(rowNumber)
+    if (draft?.nested) return false
+    return matchesRowFilter(row, nested.when)
+  })
+  if (gatedEntries.length === 0) return
+
+  const memberResults = await runColumnsBatched(
+    nested.columns,
+    gatedEntries,
+    resolvedCtx,
+    lookup,
+    issues,
+    (rowNumber, target) => `line[${rowNumber}]:nested:${target}`
+  )
+
+  for (const result of memberResults) {
+    const draft = lineDraftByRowNumber.get(result.rowNumber)
+    if (!draft) continue
+    // Member stubs are NOT written into the stored row — same rationale as disperse's
+    // nestedRows above: create_stub misses already surface as warn issues.
+    const member: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(result.values)) {
+      if (value !== undefined) member[key] = value
+    }
+    if (Object.keys(member).length > 0) {
+      draft.nested = { field: nested.target_field, rows: [member] }
+    }
+  }
+}
+
 export async function runImportPipeline(opts: {
   config: ImportTemplateConfig
   rows: Record<string, unknown>[]
   lookup: LookupFetcher
   applyLineFieldRules?: (draft: Record<string, unknown>) => Promise<void>
+  m2mFields?: Set<string>
 }): Promise<ImportParseResult> {
-  const { config, rows, lookup, applyLineFieldRules } = opts
+  const { config, rows, lookup, applyLineFieldRules, m2mFields } = opts
   const issues: ImportIssue[] = []
   const headerRow = rows[0] ?? {}
 
@@ -475,7 +551,13 @@ export async function runImportPipeline(opts: {
     }
   }
 
-  const { values, resolved } = await runHeaderPhase(config.header_map, headerRow, issues, lookup)
+  const { values, resolved, m2m } = await runHeaderPhase(
+    config.header_map,
+    headerRow,
+    issues,
+    lookup,
+    m2mFields
+  )
 
   const lines: LineDraft[] = []
   const lineDraftByRowNumber = new Map<number, LineDraft>()
@@ -528,7 +610,18 @@ export async function runImportPipeline(opts: {
         lineDraftByRowNumber
       )
     }
+
+    if (lm.nested) {
+      await processPerLineNested(
+        lm.nested,
+        filteredRows,
+        resolved,
+        lookup,
+        issues,
+        lineDraftByRowNumber
+      )
+    }
   }
 
-  return { values, lines, issues }
+  return { values, lines, issues, m2m }
 }

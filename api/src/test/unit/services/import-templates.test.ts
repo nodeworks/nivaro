@@ -266,6 +266,172 @@ describe('runImportPipeline — disperse', () => {
   })
 })
 
+describe('runImportPipeline — m2m routing', () => {
+  it('routes in-set header targets into m2m as one-element arrays', async () => {
+    const config = cfg({
+      header_map: [
+        { target: 'funding_years', source: 'Funding Year', steps: [] },
+        { target: 'description', source: 'Name / Description', steps: [] }
+      ]
+    })
+    const { values, m2m } = await runImportPipeline({
+      config,
+      rows: [{ 'Funding Year': 2026, 'Name / Description': 'X' }],
+      lookup: NO_LOOKUP,
+      m2mFields: new Set(['funding_years'])
+    })
+    expect(m2m).toEqual({ funding_years: [2026] })
+    expect(values.funding_years).toBeUndefined()
+    expect(values.description).toBe('X')
+  })
+
+  it('omits unresolved m2m targets entirely', async () => {
+    const config = cfg({ header_map: [{ target: 'regions', source: 'Region', steps: [] }] })
+    const { m2m } = await runImportPipeline({
+      config,
+      rows: [{}],
+      lookup: NO_LOOKUP,
+      m2mFields: new Set(['regions'])
+    })
+    expect(m2m).toEqual({})
+  })
+})
+
+describe('runImportPipeline — take:field', () => {
+  const config = cfg({
+    header_map: [
+      {
+        target: 'regions',
+        source: 'Region',
+        steps: [{ type: 'lookup', collection: 'regions', match_field: 'short_name' }]
+      },
+      {
+        target: 'divisions',
+        source: null,
+        steps: [
+          { type: 'expression', template: '{{$resolved.regions}}' },
+          {
+            type: 'lookup',
+            collection: 'regions',
+            match_field: 'id',
+            take: 'field',
+            take_field: 'division'
+          }
+        ]
+      }
+    ]
+  })
+  const lookup = async ({ match_field }: { match_field: string }) =>
+    match_field === 'short_name'
+      ? [{ id: 3, short_name: 'NER', division: 2 }]
+      : [{ id: 3, division: 2 }]
+
+  it('resolves the extracted field value', async () => {
+    const { values, issues } = await runImportPipeline({
+      config,
+      rows: [{ Region: 'NER' }],
+      lookup
+    })
+    expect(values.divisions).toBe(2)
+    expect(issues).toEqual([])
+  })
+
+  it('warns when take_field is absent on the matched record', async () => {
+    // short_name included so the first rule's own lookup actually resolves (matching
+    // "on the matched record"); division intentionally omitted to trigger the warning.
+    const missing = async () => [{ id: 3, short_name: 'NER' }]
+    const { values, issues } = await runImportPipeline({
+      config,
+      rows: [{ Region: 'NER' }],
+      lookup: missing
+    })
+    expect(values.divisions).toBeUndefined()
+    expect(issues.some((i) => i.severity === 'warn' && i.message.includes('division'))).toBe(true)
+  })
+})
+
+describe('runImportPipeline — per-line nested', () => {
+  const config = cfg({
+    line_map: {
+      target_field: 'lines',
+      row_filter: { column: 'Line Number', op: 'nnull' },
+      columns: [{ target: 'price', source: 'Line Price', steps: [] }],
+      nested: {
+        target_field: 'unit_workflows',
+        when: { column: 'Unit Type', op: 'nnull' },
+        columns: [
+          {
+            target: 'unit_type',
+            source: 'Unit Type',
+            steps: [{ type: 'lookup', collection: 'deployment_part_types', match_field: 'name' }]
+          },
+          { target: 'allocated_amount', source: 'Line Total', steps: [] }
+        ]
+      }
+    }
+  })
+
+  it('builds one member per gated row, batching the lookup once', async () => {
+    const lookup = vi.fn(async (_req: unknown) => [{ id: 9, name: 'XMFR' }])
+    const { lines } = await runImportPipeline({
+      config,
+      rows: [
+        { 'Line Number': 1, 'Line Price': 5, 'Unit Type': 'XMFR', 'Line Total': 100 },
+        { 'Line Number': 2, 'Line Price': 6, 'Line Total': 50 } // no Unit Type → gated out
+      ],
+      lookup: async (req) => lookup(req)
+    })
+    expect(lookup).toHaveBeenCalledTimes(1)
+    expect(lines[0].nested).toEqual({
+      field: 'unit_workflows',
+      rows: [{ unit_type: 9, allocated_amount: 100 }]
+    })
+    expect(lines[1].nested).toBeUndefined()
+  })
+
+  it('disperse wins — nested skipped when disperse already attached', async () => {
+    const both = cfg({
+      line_map: {
+        target_field: 'lines',
+        row_filter: { column: 'Line Number', op: 'nnull' },
+        columns: [{ target: 'amount', source: 'Line Total', steps: [] }],
+        nested: {
+          target_field: 'unit_workflows',
+          when: null,
+          columns: [{ target: 'note', source: 'Line Number', steps: [] }]
+        },
+        disperse: {
+          map_collection: 'supplier_unit_type_map',
+          map_key_column: 'Supplier Item',
+          map_key_field: 'supplier_id',
+          map_values_path: 'unit_type_names',
+          map_all_field: 'is_all',
+          member_match_column: 'Unit Type',
+          group_by_column: 'Unit Name',
+          amount_column: 'Line Total',
+          nested_target: 'unit_workflows',
+          member_columns: [{ target: 'unit_name', source: 'Unit Name', steps: [] }]
+        }
+      }
+    })
+    const lookup = async ({ collection }: { collection: string }) =>
+      collection === 'supplier_unit_type_map'
+        ? [{ id: 1, supplier_id: 'SUP-1', unit_type_names: ['R'], is_all: false }]
+        : []
+    const { lines } = await runImportPipeline({
+      config: both,
+      rows: [
+        { 'Line Number': 1, 'Supplier Item': 'SUP-1', 'Line Total': 100 },
+        { 'Line Number': 2, 'Unit Type': 'R', 'Unit Name': 'U1', 'Line Total': 10 }
+      ],
+      lookup
+    })
+    const disperseLine = lines[0]
+    expect(disperseLine.nested?.rows[0]).toHaveProperty('unit_name') // disperse member, not per-line
+    expect(lines[1].nested?.rows[0]).toEqual({ note: 2 }) // per-line nested on the member row
+  })
+})
+
 describe('runImportPipeline — missing columns', () => {
   it('header: warns when a rule source column is absent from the first data row', async () => {
     const config = cfg({
