@@ -1746,11 +1746,14 @@ export function ItemEditForm({
             const res = await client.request<{ data: { id: unknown } }>(post(`/items/${rc}`, { ...cleanData, [mf]: savedId }))
             const childId = res?.data?.id
             updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: rowList.length } }))
-            for (const [key, members] of o2mEntries) {
-              const field = key.slice('__o2m_'.length)
+            for (const [o2mKey, members] of o2mEntries) {
+              const field = o2mKey.slice('__o2m_'.length)
               const grandRel = relations.find(r => r.one_collection === rc && r.one_field === field)
               const memberList = Array.isArray(members) ? members as Record<string, unknown>[] : []
-              if (!grandRel?.many_collection || !grandRel.many_field) {
+              // A missing child id would silently orphan members (undefined FK drops
+              // from the JSON body) — count them as failures instead, like the
+              // InlineTableField path's newRowId guard.
+              if (childId == null || !grandRel?.many_collection || !grandRel.many_field) {
                 nestedFailures += memberList.length
                 continue
               }
