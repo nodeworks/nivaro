@@ -19,6 +19,7 @@ export interface ImportParseResponse {
   issues: { severity: 'warn' | 'error'; rule: string; row?: number; column?: string; message: string }[]
   file_id: string | null
   line_target_field: string | null
+  m2m: Record<string, Array<string | number>>
 }
 
 export const listImportTemplates = (collection: string): Command<{ data: ImportTemplateSummary[] }> =>
@@ -31,6 +32,7 @@ export const executeImportTemplate = (
     lines: ImportParseResponse['lines']
     issues: ImportParseResponse['issues']
     file_id?: string | null
+    m2m?: Record<string, Array<string | number>>
   }
 ): Command<{ data: { id: string; line_ids: string[] } }> =>
   cmd('POST', `/import-templates/${id}/execute`, undefined, payload)
