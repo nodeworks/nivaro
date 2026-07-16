@@ -1,6 +1,6 @@
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, GripVertical, History, Loader2, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 
 export interface RowRule {
   trigger_field?: string | null
@@ -31,6 +31,7 @@ import {
 import { useO2MStaging } from './O2MStagingContext'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { FieldRenderer } from './FieldRenderer'
+import { NestedRelationEditor } from './NestedRelationEditor'
 import { RelationCombobox } from './RelationCombobox'
 import { applyDisplayTemplate, parseJson, SENTINEL_FIELDS } from './helpers'
 import type { CMSField, CMSRelation } from './types'
@@ -1046,6 +1047,13 @@ export function InlineTableField({
 
   const isEditingNew = editState?.rowId === 'new'
 
+  // Same arithmetic as the empty-state colSpan below — reused for the nested
+  // relation editor's expandable section row so it spans the full grid width.
+  const nestedColSpan =
+    effectiveCols.length +
+    ((isNew || isPendingMode) ? 2 : 1) +
+    (rowOrderField || isNew || isPendingMode ? 1 : 0)
+
   const presetSwitcher = columnPresets && columnPresets.length >= 2 && (
     <div className='flex items-center gap-1 text-[11px]'>
       {columnPresets.map(p => (
@@ -1231,7 +1239,8 @@ export function InlineTableField({
             const isPDropTarget = dropIdx === ri && dragIdx !== ri
             const isPrefilled = !!row.__prefilled
             return (
-              <tr key={ri}
+              <Fragment key={ri}>
+              <tr
                 draggable={enableReorder && !isEditing}
                 onDragStart={() => handleDragStart(ri)}
                 onDragOver={(e) => handleDragOver(e, ri)}
@@ -1344,6 +1353,33 @@ export function InlineTableField({
                   )}
                 </td>
               </tr>
+              {isEditing && drawerRelations && drawerRelations.length > 0 && (
+                <tr className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
+                  <td colSpan={nestedColSpan} className='px-3 py-2'>
+                    <div className='space-y-2'>
+                      {drawerRelations.map((dr) => {
+                        const relField = typeof dr === 'string' ? dr : dr.field
+                        const relHint = typeof dr === 'string' ? undefined : dr.hint
+                        return (
+                          <NestedRelationEditor
+                            key={relField}
+                            parentCollection={relatedCollection}
+                            relationField={relField}
+                            parentRowId={null}
+                            stagedMembers={
+                              (editState!.draft[`__o2m_${relField}`] as Record<string, unknown>[] | undefined) ?? []
+                            }
+                            onStagedChange={(next) => setDraftField(`__o2m_${relField}`, next)}
+                            parentDraft={editState!.draft}
+                            hint={relHint}
+                          />
+                        )
+                      })}
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             )
           })}
 
@@ -1358,7 +1394,8 @@ export function InlineTableField({
             // Merge pending edit changes into display values
             const displayRow = isPendingEdit ? { ...row, ...pendingEdits.get(id) } : row
             return (
-              <tr key={id}
+              <Fragment key={id}>
+              <tr
                 draggable={enableReorder && !!rowOrderField && !isEditing && !isPendingDelete}
                 onDragStart={() => handleDragStart(ri)}
                 onDragOver={(e) => handleDragOver(e, ri)}
@@ -1476,6 +1513,29 @@ export function InlineTableField({
                   )}
                 </td>
               </tr>
+              {isEditing && !isPendingDelete && drawerRelations && drawerRelations.length > 0 && (
+                <tr className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
+                  <td colSpan={nestedColSpan} className='px-3 py-2'>
+                    <div className='space-y-2'>
+                      {drawerRelations.map((dr) => {
+                        const relField = typeof dr === 'string' ? dr : dr.field
+                        const relHint = typeof dr === 'string' ? undefined : dr.hint
+                        return (
+                          <NestedRelationEditor
+                            key={relField}
+                            parentCollection={relatedCollection}
+                            relationField={relField}
+                            parentRowId={id}
+                            parentDraft={editState?.draft ?? displayRow}
+                            hint={relHint}
+                          />
+                        )
+                      })}
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             )
           })}
 
