@@ -2771,6 +2771,9 @@ export function ItemEditForm({
               )}
             </div>
             <div className='ml-auto flex items-center gap-1.5'>
+              {isNew && (
+                <ImportFromFileButton collection={collection} onParsed={applyImportResult} />
+              )}
               {(effectiveShowRevisions && !isNew) || (effectiveShowClone && !isNew && isAdmin) || canDelete ? (
                 <>
                   {effectiveShowRevisions && !isNew && (
@@ -3009,9 +3012,6 @@ export function ItemEditForm({
             )}
           >
             {extraTopContent}
-            {isNew && (
-              <ImportFromFileButton collection={collection} onParsed={applyImportResult} />
-            )}
             {importIssues.length > 0 && (
               <ImportIssuesPanel issues={importIssues} onDismiss={() => setImportIssues([])} />
             )}
