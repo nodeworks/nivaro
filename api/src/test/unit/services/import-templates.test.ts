@@ -491,3 +491,93 @@ describe('runImportPipeline — missing columns', () => {
     ])
   })
 })
+
+describe('runImportPipeline — $line context (chained line rules)', () => {
+  const config = cfg({
+    line_map: {
+      target_field: 'lines',
+      row_filter: { column: 'Line Number', op: 'nnull' },
+      columns: [
+        {
+          target: 'category_type',
+          source: 'Category Type',
+          steps: [
+            { type: 'remap', map: { Material: 'Materials' }, passthrough: true },
+            { type: 'lookup', collection: 'category_types', match_field: 'name' }
+          ]
+        },
+        {
+          target: 'core_category',
+          source: 'Core Category',
+          steps: [{ type: 'lookup', collection: 'core_categories', match_field: 'name' }]
+        },
+        {
+          target: 'category',
+          source: null,
+          steps: [
+            { type: 'expression', template: '{{$line.core_category}}' },
+            {
+              type: 'lookup',
+              collection: 'categories',
+              match_field: 'core_category',
+              scope_filters: [
+                { field: 'sub_category', op: 'eq', value: '{{$line.category_type}}' }
+              ],
+              on_miss: 'leave_blank'
+            }
+          ]
+        }
+      ]
+    }
+  })
+
+  const lookup = vi.fn(async (req: { collection: string }) => {
+    if (req.collection === 'category_types') {
+      return [
+        { id: 1, name: 'Materials' },
+        { id: 2, name: 'Labor' }
+      ]
+    }
+    if (req.collection === 'core_categories') {
+      return [{ id: 3, name: 'Installation' }]
+    }
+    // categories: same core_category, different sub_category — the row-scoped
+    // filter must pick the right one per row.
+    return [
+      { id: 71, core_category: 3, sub_category: 1 },
+      { id: 72, core_category: 3, sub_category: 2 }
+    ]
+  })
+
+  it('resolves a composite lookup from earlier line-rule results, one query per rule', async () => {
+    const { lines, issues } = await runImportPipeline({
+      config,
+      rows: [
+        { 'Line Number': 1, 'Category Type': 'Material', 'Core Category': 'Installation' },
+        { 'Line Number': 2, 'Category Type': 'Labor', 'Core Category': 'Installation' }
+      ],
+      lookup: async (req) => lookup(req)
+    })
+    expect(lookup).toHaveBeenCalledTimes(3)
+    expect(lines[0].values).toMatchObject({ category_type: 1, core_category: 3, category: 71 })
+    expect(lines[1].values).toMatchObject({ category_type: 2, core_category: 3, category: 72 })
+    expect(issues).toEqual([])
+  })
+
+  it('row-scoped filter with no surviving record follows on_miss semantics', async () => {
+    const noSub = async (req: { collection: string }) => {
+      if (req.collection === 'category_types') return [{ id: 9, name: 'Freight' }]
+      if (req.collection === 'core_categories') return [{ id: 3, name: 'Installation' }]
+      return [{ id: 71, core_category: 3, sub_category: 1 }]
+    }
+    const { lines, issues } = await runImportPipeline({
+      config,
+      rows: [{ 'Line Number': 1, 'Category Type': 'Freight', 'Core Category': 'Installation' }],
+      lookup: noSub
+    })
+    expect(lines[0].values.category).toBeUndefined()
+    expect(
+      issues.some((i) => i.severity === 'warn' && i.rule === 'line[1]:category')
+    ).toBe(true)
+  })
+})
