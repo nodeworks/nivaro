@@ -1426,6 +1426,241 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     expect(vi.mocked(createOne)).not.toHaveBeenCalled()
   })
 
+  it('POST /:id/execute — relation-mode nested creates grandchild rows per member, excluded from child payload', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-nested-exec',
+      collection: 'deployment_orders_exec',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'deployment_lines',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null,
+        nested: { target_field: 'unit_workflows_exec', when: null, columns: [] }
+      }),
+      attach_file_field: null
+    }
+    const childRelation = {
+      many_collection: 'unit_workflow_lines_exec',
+      many_field: 'deployment_order_id'
+    }
+    const nestedRelationRow = { many_collection: 'unit_workflows_exec', many_field: 'workflow_line' }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(childRelation) as unknown as ReturnType<typeof db>) // line child relation resolve
+      .mockReturnValueOnce(makeChain(nestedRelationRow) as unknown as ReturnType<typeof db>) // nested target relation resolve
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'child-1' } as never) // line 1 child
+      .mockResolvedValueOnce({ id: 'grandchild-1' } as never) // member m1
+      .mockResolvedValueOnce({ id: 'grandchild-2' } as never) // member m2
+      .mockResolvedValueOnce({ id: 'child-2' } as never) // line 2 child
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-nested-exec/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { name: 'Deploy' },
+        lines: [
+          {
+            values: { sku: 'A1' },
+            nested: {
+              field: 'unit_workflows_exec',
+              rows: [{ workflow_id: 'w1' }, { workflow_id: 'w2' }]
+            }
+          },
+          { values: { sku: 'A2' } }
+        ],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    const body = JSON.parse(res.body) as { data: { id: string; line_ids: string[] } }
+    expect(body.data.id).toBe('parent-1')
+    expect(body.data.line_ids).toEqual(['child-1', 'child-2'])
+
+    expect(vi.mocked(createOne)).toHaveBeenCalledTimes(5)
+    // parent, child-1 (no nested key in payload), grandchild m1, grandchild m2, child-2
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      2,
+      user,
+      'unit_workflow_lines_exec',
+      { sku: 'A1', deployment_order_id: 'parent-1' },
+      expect.anything(),
+      undefined
+    )
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      3,
+      user,
+      'unit_workflows_exec',
+      { workflow_id: 'w1', workflow_line: 'child-1' },
+      expect.anything(),
+      undefined
+    )
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      4,
+      user,
+      'unit_workflows_exec',
+      { workflow_id: 'w2', workflow_line: 'child-1' },
+      expect.anything(),
+      undefined
+    )
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      5,
+      user,
+      'unit_workflow_lines_exec',
+      { sku: 'A2', deployment_order_id: 'parent-1' },
+      expect.anything(),
+      undefined
+    )
+  })
+
+  it('POST /:id/execute — grandchild create throws, compensates by deleting grandchildren then children then parent', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-nested-comp',
+      collection: 'deployment_orders_comp',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'deployment_lines',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null,
+        nested: { target_field: 'workflows_comp', when: null, columns: [] }
+      }),
+      attach_file_field: null
+    }
+    const childRelation = {
+      many_collection: 'deployment_lines_comp',
+      many_field: 'deployment_order_id'
+    }
+    const nestedRelationRow = { many_collection: 'workflows_comp', many_field: 'line_id' }
+    const grandchildDeleteChain = makeChain(1)
+    const childDeleteChain = makeChain(1)
+    const parentDeleteChain = makeChain(1)
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(childRelation) as unknown as ReturnType<typeof db>) // line child relation resolve
+      .mockReturnValueOnce(makeChain(nestedRelationRow) as unknown as ReturnType<typeof db>) // nested target relation resolve
+      .mockReturnValueOnce(grandchildDeleteChain as unknown as ReturnType<typeof db>) // compensation: grandchild delete
+      .mockReturnValueOnce(childDeleteChain as unknown as ReturnType<typeof db>) // compensation: child delete
+      .mockReturnValueOnce(parentDeleteChain as unknown as ReturnType<typeof db>) // compensation: parent delete
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'child-1' } as never) // line 1 child
+      .mockResolvedValueOnce({ id: 'grandchild-1' } as never) // member m1
+      .mockRejectedValueOnce(new Error('member m2 validation failed')) // member m2 throws
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-nested-comp/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { name: 'Deploy' },
+        lines: [
+          {
+            values: { sku: 'A1' },
+            nested: {
+              field: 'workflows_comp',
+              rows: [{ workflow_id: 'w1' }, { workflow_id: 'w2' }]
+            }
+          }
+        ],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string; issues: { message: string }[] }
+    expect(body.error).toContain('line 1')
+    expect(body.error).toContain('nothing was created')
+    expect(body.issues.some((i) => i.message.includes('member m2 validation failed'))).toBe(true)
+
+    // Order matters: mocked db() calls are consumed in queue order, so a correct
+    // assertion here also proves grandchildren were deleted before children/parent.
+    expect(grandchildDeleteChain.whereIn).toHaveBeenCalledWith('id', ['grandchild-1'])
+    expect(grandchildDeleteChain.del).toHaveBeenCalled()
+    expect(childDeleteChain.whereIn).toHaveBeenCalledWith('id', ['child-1'])
+    expect(childDeleteChain.del).toHaveBeenCalled()
+    expect(parentDeleteChain.where).toHaveBeenCalledWith({ id: 'parent-1' })
+    expect(parentDeleteChain.del).toHaveBeenCalled()
+  })
+
+  it('POST /:id/execute — 422 when line count + relation-mode nested members exceed the import cap', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-nested-cap',
+      collection: 'deployment_orders_cap',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'deployment_lines',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null,
+        nested: { target_field: 'workflows_cap', when: null, columns: [] }
+      }),
+      attach_file_field: null
+    }
+    const childRelation = { many_collection: 'deployment_lines_cap', many_field: 'deployment_order_id' }
+    const nestedRelationRow = { many_collection: 'workflows_cap', many_field: 'line_id' }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(childRelation) as unknown as ReturnType<typeof db>) // line child relation resolve
+      .mockReturnValueOnce(makeChain(nestedRelationRow) as unknown as ReturnType<typeof db>) // nested target relation resolve
+
+    const lines = [
+      {
+        values: { sku: 'A1' },
+        nested: {
+          field: 'workflows_cap',
+          rows: Array.from({ length: 2500 }, (_, i) => ({ workflow_id: `w${i}` }))
+        }
+      },
+      {
+        values: { sku: 'A2' },
+        nested: {
+          field: 'workflows_cap',
+          rows: Array.from({ length: 2499 }, (_, i) => ({ workflow_id: `x${i}` }))
+        }
+      }
+    ]
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-nested-cap/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ values: {}, lines, issues: [] })
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as { error: string }
+    expect(body.error).toContain('5000')
+    expect(vi.mocked(createOne)).not.toHaveBeenCalled()
+  })
+
   it('POST / rejects a disperse nested_target that is an alias field on the child collection', async () => {
     const user = makeAdminUser()
     vi.mocked(db)

@@ -843,8 +843,33 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
 
     const values = { ...(body.values as Record<string, unknown>) }
     const lines = body.lines as LineDraft[]
+    const config = templateRowToConfig(template)
+    const attachField = config.attach_file_field
+    const wantsAttach = !!(attachField && body.file_id)
+
+    // Lines with no way to be persisted must fail loudly before anything is created,
+    // rather than silently dropping the submitted rows. Resolved before the row-cap
+    // guard below so a relation-mode nested target's grandchild rows can join the total.
+    let childRelation: { collection: string; fkField: string } | null = null
+    let nestedRelation: { collection: string; fk_field: string } | null = null
+    if (lines.length > 0) {
+      childRelation = config.line_map
+        ? await resolveLineChildRelation(collection, config.line_map.target_field)
+        : null
+      nestedRelation = await resolveNestedRelation(
+        config.line_map,
+        childRelation?.collection ?? null
+      )
+    }
+
     const totalM2mIds = m2mEntries.reduce((sum, [, ids]) => sum + ids.length, 0)
-    const totalRows = lines.length + totalM2mIds
+    // Relation-mode nested rows become real grandchild creates, so they count toward
+    // the cap same as line items; JSON-mode nested rows stay a plain column on the
+    // line and never count.
+    const totalMembers = nestedRelation
+      ? lines.reduce((sum, line) => sum + (line.nested?.rows.length ?? 0), 0)
+      : 0
+    const totalRows = lines.length + totalM2mIds + totalMembers
     if (totalRows > IMPORT_ROW_CAP) {
       return reply.code(422).send({
         error: `Too many rows — the import cap is ${IMPORT_ROW_CAP} rows`,
@@ -853,35 +878,24 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           {
             severity: 'error',
             rule: 'execute',
-            message: `Submitted ${totalRows} rows (${lines.length} line items + ${totalM2mIds} linked records); the import cap is ${IMPORT_ROW_CAP} rows`
+            message: `Submitted ${totalRows} rows (${lines.length} line items + ${totalM2mIds} linked records${totalMembers > 0 ? ` + ${totalMembers} nested members` : ''}); the import cap is ${IMPORT_ROW_CAP} rows`
           }
         ]
       })
     }
-    const config = templateRowToConfig(template)
-    const attachField = config.attach_file_field
-    const wantsAttach = !!(attachField && body.file_id)
 
-    // Lines with no way to be persisted must fail loudly before anything is created,
-    // rather than silently dropping the submitted rows.
-    let childRelation: { collection: string; fkField: string } | null = null
-    if (lines.length > 0) {
-      childRelation = config.line_map
-        ? await resolveLineChildRelation(collection, config.line_map.target_field)
-        : null
-      if (!childRelation) {
-        return reply.code(422).send({
-          error: 'Template has no line mapping for the submitted lines',
-          issues: [
-            ...bodyIssues,
-            {
-              severity: 'error',
-              rule: 'execute',
-              message: 'Template has no line mapping for the submitted lines'
-            }
-          ]
-        })
-      }
+    if (lines.length > 0 && !childRelation) {
+      return reply.code(422).send({
+        error: 'Template has no line mapping for the submitted lines',
+        issues: [
+          ...bodyIssues,
+          {
+            severity: 'error',
+            rule: 'execute',
+            message: 'Template has no line mapping for the submitted lines'
+          }
+        ]
+      })
     }
 
     // Stale-template guard: every body.m2m key must still resolve to a real M2M
@@ -926,6 +940,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     const workspaceId = req.workspaceId ?? undefined
     const createdChildIds: (string | number)[] = []
     const createdJunctions: Array<{ collection: string; id: string | number }> = []
+    const createdGrandchildren: Array<{ collection: string; id: string | number }> = []
     let parent: { id: string | number } | null = null
     const childCollection: string | null = childRelation?.collection ?? null
     const fkField = childRelation?.fkField ?? null
@@ -993,11 +1008,16 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         for (let i = 0; i < lines.length; i++) {
           failedAtLine = i + 1
           const line = lines[i]
-          const childData: Record<string, unknown> = {
-            ...line.values,
-            [fkField]: parent.id,
-            ...(line.nested ? { [line.nested.field]: line.nested.rows } : {})
-          }
+          // Relation-mode: nested rows become real grandchild creates below, so the
+          // nested key is excluded from childData entirely. JSON-mode (nestedRelation
+          // null): unchanged — nested rows ride along as a plain JSON column.
+          const childData: Record<string, unknown> = nestedRelation
+            ? { ...line.values, [fkField]: parent.id }
+            : {
+                ...line.values,
+                [fkField]: parent.id,
+                ...(line.nested ? { [line.nested.field]: line.nested.rows } : {})
+              }
           const child = (await createOne(
             req.user!,
             childCollection,
@@ -1006,6 +1026,19 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
             workspaceId
           )) as { id: string | number }
           createdChildIds.push(child.id)
+
+          if (nestedRelation && line.nested) {
+            for (const member of line.nested.rows) {
+              const grandchild = (await createOne(
+                req.user!,
+                nestedRelation.collection,
+                { ...member, [nestedRelation.fk_field]: child.id },
+                req,
+                workspaceId
+              )) as { id: string | number }
+              createdGrandchildren.push({ collection: nestedRelation.collection, id: grandchild.id })
+            }
+          }
         }
       }
     } catch (err) {
@@ -1020,8 +1053,17 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           ]
         : [{ severity: 'error', rule: 'execute', row: failedAtLine, message }]
       try {
-        // Junctions first (they FK to both the parent and the lines' collection is
-        // irrelevant here), then children, then the parent — mirrors create order.
+        // Grandchildren first (they FK to the child rows), then junctions, then
+        // children, then the parent — reverse of create order.
+        const grandchildrenByCollection = new Map<string, (string | number)[]>()
+        for (const grandchild of createdGrandchildren) {
+          const ids = grandchildrenByCollection.get(grandchild.collection) ?? []
+          ids.push(grandchild.id)
+          grandchildrenByCollection.set(grandchild.collection, ids)
+        }
+        for (const [grandchildCollection, ids] of grandchildrenByCollection) {
+          await db(grandchildCollection).whereIn('id', ids).del()
+        }
         const junctionsByCollection = new Map<string, (string | number)[]>()
         for (const junction of createdJunctions) {
           const ids = junctionsByCollection.get(junction.collection) ?? []
