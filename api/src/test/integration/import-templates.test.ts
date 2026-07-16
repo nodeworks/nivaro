@@ -2181,9 +2181,10 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
         }) as unknown as ReturnType<typeof db>
       ) // relation resolve — line_map.target_field
       .mockReturnValueOnce(
-        makeChain([{ field: 'sku' }, { field: 'nested_items', type: null }, { field: 'other_workflow', type: null }]) as unknown as ReturnType<typeof db>
-      ) // child nivaro_fields
-      .mockReturnValueOnce(makeChain(undefined) as unknown as ReturnType<typeof db>) // nivaro_relations — disperse.nested_target resolves as null (plain JSON field)
+        makeChain([{ field: 'sku' }, { field: 'nested_items', type: null }]) as unknown as ReturnType<typeof db>
+      ) // child nivaro_fields — 'other_workflow' deliberately absent so nested.target_field
+      // falls through to the relation-resolve branch below, and 'nested_items' resolves
+      // via the fully-mocked getActualColumns() (services/items.js mock) with zero db() calls
       .mockReturnValueOnce(
         makeChain({ id: 2, collection: 'disperse_maps' }) as unknown as ReturnType<typeof db>
       ) // nivaro_collections for disperse map_collection
