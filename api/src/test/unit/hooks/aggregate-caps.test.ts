@@ -389,6 +389,48 @@ describe('evaluateSumCapRule', () => {
     // query, the relation lookup, or the parent cap fetch.
     expect(first).toHaveBeenCalledTimes(1)
   })
+
+  it("skips the rule (NULL-cap path, no throw) when the parent cap row is invisible under the caller's workspace scope", async () => {
+    const collection = 'scoped_parent_test_child'
+    const parentCollection = 'scoped_parent_test_parent'
+
+    const childChain: Record<string, unknown> = {
+      where: vi.fn(() => childChain),
+      whereNot: vi.fn(() => childChain),
+      sum: vi.fn(() => childChain),
+      columnInfo: vi.fn().mockResolvedValue({}), // no workspace_id column on the child here
+      first: vi.fn().mockResolvedValue({ v: '10' })
+    }
+    const relChain = onceChain({ one_collection: parentCollection })
+    const parentFirst = vi.fn().mockResolvedValue(undefined) // invisible under this scope
+    const parentChain: Record<string, unknown> = {
+      where: vi.fn(() => parentChain),
+      select: vi.fn(() => parentChain),
+      columnInfo: vi.fn().mockResolvedValue({ workspace_id: {} }),
+      first: parentFirst
+    }
+
+    vi.mocked(db).mockImplementation((table: unknown) => {
+      if (table === collection) return childChain as never
+      if (table === 'nivaro_relations') return relChain as never
+      if (table === parentCollection) return parentChain as never
+      throw new Error(`unexpected table ${String(table)}`)
+    })
+
+    await expect(
+      evaluateSumCapRule(
+        rule(),
+        ctx({
+          collection,
+          action: 'create',
+          payload: { workflow_line: 'wl-other-workspace', allocated_amount: 5 },
+          req: { workspaceId: 'ws-other' } as HookContext['req']
+        })
+      )
+    ).resolves.toBeUndefined()
+
+    expect(parentFirst).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('registerAggregateCapHooks', () => {

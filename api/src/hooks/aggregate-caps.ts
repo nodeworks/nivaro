@@ -172,13 +172,19 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
   const existingSum = Number(sumRow?.v ?? 0)
   const total = existingSum + incoming
 
+  // nivaro_relations is global schema metadata, not workspace data — left unscoped.
   const parentCollection = await resolveM2oParent(ctx.collection, rule.cap.relation)
   if (!parentCollection) return
 
-  const parentRow = (await db(parentCollection)
-    .where({ id: groupValue })
-    .select(rule.cap.field)
-    .first()) as Record<string, unknown> | undefined
+  // Reading the parent row, not writing it — 'read' is the right action here
+  // (matches readOne's own getRowFilter(user, 'read', collection) call).
+  const parentRowFilter = ctx.user ? await getRowFilter(ctx.user, 'read', parentCollection) : null
+  const parentQuery = db(parentCollection).where({ id: groupValue }).select(rule.cap.field)
+  await applyWorkspaceScope(parentQuery, parentCollection, workspaceId)
+  if (parentRowFilter)
+    applyRowFilter(parentQuery, parentRowFilter, ctx.user as NonNullable<typeof ctx.user>)
+  const parentRow = (await parentQuery.first()) as Record<string, unknown> | undefined
+  // Parent row invisible under this scope — same as a NULL cap: skip silently.
   const capRaw = parentRow?.[rule.cap.field]
   if (capRaw == null) return
   const cap = Number(capRaw)
