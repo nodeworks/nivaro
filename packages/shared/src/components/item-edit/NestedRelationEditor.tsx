@@ -228,7 +228,7 @@ export function NestedRelationEditor({
     queryKey: [
       'nested-m2o-display',
       grandCollection,
-      ...Array.from(m2oLookupIds.entries()).flat(2)
+      ...Array.from(m2oLookupIds.entries()).flatMap(([col, ids]) => [col, ...ids])
     ],
     queryFn: async () => {
       const result: Record<string, Record<string, string>> = {}
