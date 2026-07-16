@@ -1,4 +1,9 @@
-export type ImportOnMiss = 'leave_blank' | 'error' | 'create_stub'
+export type ImportOnMiss = 'leave_blank' | 'error' | 'create_stub' | 'create'
+
+export interface ImportLookupCreate {
+  defaults: ImportHeaderRule[]
+  dedupe_by: string[]
+}
 
 export type ImportStep =
   | { type: 'trim' }
@@ -12,6 +17,7 @@ export type ImportStep =
       on_miss: ImportOnMiss
       take: 'id' | 'record' | 'field'
       take_field?: string
+      create?: ImportLookupCreate
     }
   | { type: 'wrap_richtext' }
   | { type: 'const'; value: unknown }
@@ -65,7 +71,7 @@ export interface ConfigError {
   message: string
 }
 
-const ON_MISS = ['leave_blank', 'error', 'create_stub'] as const
+const ON_MISS = ['leave_blank', 'error', 'create_stub', 'create'] as const
 const TAKE = ['id', 'record', 'field'] as const
 const FILE_TYPES = ['xlsx', 'xlsm', 'xls', 'csv'] as const
 const DEFAULT_FILE_TYPES: ImportTemplateConfig['file_types'] = ['xlsx', 'xlsm', 'csv']
@@ -116,6 +122,9 @@ function normalizeStep(raw: unknown, path: string, errors: ConfigError[]): Impor
         ? (src.take as 'id' | 'record' | 'field')
         : 'id'
       let takeField = typeof src.take_field === 'string' ? src.take_field : ''
+      let onMiss: ImportOnMiss = ON_MISS.includes(src.on_miss as ImportOnMiss)
+        ? (src.on_miss as ImportOnMiss)
+        : 'leave_blank'
       if (collection === USERS_SENTINEL) {
         take = 'id'
         takeField = ''
@@ -125,9 +134,33 @@ function normalizeStep(raw: unknown, path: string, errors: ConfigError[]): Impor
             message: `$users lookups may only match on: ${USERS_ALLOWED_MATCH_FIELDS.join(', ')}`
           })
         }
+        if (onMiss === 'create') {
+          errors.push({ path, message: '$users lookups may not use on_miss "create"' })
+          onMiss = 'leave_blank'
+        }
       }
       if (take === 'field' && takeField === '') {
         errors.push({ path, message: 'take "field" requires "take_field"' })
+      }
+      let create: ImportLookupCreate | undefined
+      if (onMiss === 'create') {
+        const createSrc = asObject(src.create)
+        const defaultsRaw = Array.isArray(createSrc.defaults) ? createSrc.defaults : []
+        const defaults: ImportHeaderRule[] = []
+        defaultsRaw.forEach((rule, i) => {
+          const normalized = normalizeRule(rule, `${path}.create.defaults[${i}]`, errors)
+          if (normalized) defaults.push(normalized)
+        })
+        if (defaults.some((d) => d.steps.some((s) => s.type === 'lookup'))) {
+          errors.push({ path, message: 'create defaults may not contain lookup steps' })
+        }
+        const dedupeBy = Array.isArray(createSrc.dedupe_by)
+          ? createSrc.dedupe_by.filter((v): v is string => typeof v === 'string' && v !== '')
+          : []
+        if (dedupeBy.length === 0) {
+          errors.push({ path, message: 'create requires a non-empty "dedupe_by"' })
+        }
+        create = { defaults, dedupe_by: dedupeBy }
       }
       return {
         type: 'lookup',
@@ -141,11 +174,10 @@ function normalizeStep(raw: unknown, path: string, errors: ConfigError[]): Impor
             op: f.op === 'neq' ? ('neq' as const) : ('eq' as const),
             value: f.value as string
           })),
-        on_miss: ON_MISS.includes(src.on_miss as ImportOnMiss)
-          ? (src.on_miss as ImportOnMiss)
-          : 'leave_blank',
+        on_miss: onMiss,
         take,
-        ...(take === 'field' ? { take_field: takeField } : {})
+        ...(take === 'field' ? { take_field: takeField } : {}),
+        ...(create ? { create } : {})
       }
     }
     case 'wrap_richtext':

@@ -196,4 +196,131 @@ describe('normalizeImportTemplateConfig', () => {
     })
     expect(errors[0].path).toBe('line_map.nested')
   })
+
+  it('normalizes on_miss create with defaults and dedupe_by', () => {
+    const { config, errors } = normalizeImportTemplateConfig({
+      header_map: [],
+      line_map: {
+        target_field: 'lines',
+        columns: [
+          {
+            target: 'unit',
+            source: 'Unit Name',
+            steps: [
+              {
+                type: 'lookup',
+                collection: 'units',
+                match_field: 'name',
+                on_miss: 'create',
+                create: {
+                  defaults: [{ target: 'name', source: 'Unit Name', steps: [{ type: 'trim' }] }],
+                  dedupe_by: ['name']
+                }
+              }
+            ]
+          }
+        ]
+      }
+    })
+    expect(errors).toEqual([])
+    const step = config.line_map?.columns[0].steps[0] as { on_miss: string; create?: unknown }
+    expect(step.on_miss).toBe('create')
+    expect(step.create).toEqual({
+      defaults: [{ target: 'name', source: 'Unit Name', steps: [{ type: 'trim' }] }],
+      dedupe_by: ['name']
+    })
+  })
+
+  it('rejects create without dedupe_by, with lookup defaults, and on $users', () => {
+    const bad1 = normalizeImportTemplateConfig({
+      header_map: [
+        {
+          target: 'x',
+          source: 'X',
+          steps: [
+            {
+              type: 'lookup',
+              collection: 'units',
+              match_field: 'name',
+              on_miss: 'create',
+              create: { defaults: [], dedupe_by: [] }
+            }
+          ]
+        }
+      ]
+    })
+    expect(bad1.errors.map((e) => e.message)).toContain('create requires a non-empty "dedupe_by"')
+
+    const bad2 = normalizeImportTemplateConfig({
+      header_map: [
+        {
+          target: 'x',
+          source: 'X',
+          steps: [
+            {
+              type: 'lookup',
+              collection: 'units',
+              match_field: 'name',
+              on_miss: 'create',
+              create: {
+                defaults: [
+                  {
+                    target: 'n',
+                    source: 'N',
+                    steps: [{ type: 'lookup', collection: 'a', match_field: 'b' }]
+                  }
+                ],
+                dedupe_by: ['n']
+              }
+            }
+          ]
+        }
+      ]
+    })
+    expect(bad2.errors.map((e) => e.message)).toContain(
+      'create defaults may not contain lookup steps'
+    )
+
+    const bad3 = normalizeImportTemplateConfig({
+      header_map: [
+        {
+          target: 'x',
+          source: 'X',
+          steps: [
+            {
+              type: 'lookup',
+              collection: '$users',
+              match_field: 'email',
+              on_miss: 'create',
+              create: { defaults: [], dedupe_by: ['email'] }
+            }
+          ]
+        }
+      ]
+    })
+    expect(bad3.errors.map((e) => e.message)).toContain(
+      '$users lookups may not use on_miss "create"'
+    )
+  })
+
+  it('strips a create block when on_miss is not create', () => {
+    const { config } = normalizeImportTemplateConfig({
+      header_map: [
+        {
+          target: 'x',
+          source: 'X',
+          steps: [
+            {
+              type: 'lookup',
+              collection: 'units',
+              match_field: 'name',
+              on_miss: 'leave_blank',
+              create: { defaults: [], dedupe_by: ['name'] }
+            }
+          ]
+        }
+      ]
+    })
+    expect((config.header_map[0].steps[0] as { create?: unknown }).create).toBeUndefined()
+  })
 })
