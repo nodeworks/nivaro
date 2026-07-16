@@ -363,12 +363,16 @@ export function FieldRenderer({
           ? (opts.parent_cascades as Array<{ parent_field: string; child_field: string }>)
           : undefined
         const rowRules = Array.isArray(opts.row_rules) ? opts.row_rules : undefined
+        const columnPresets = Array.isArray(opts.column_presets) ? opts.column_presets : undefined
+        const drawerRelations = Array.isArray(opts.drawer_relations)
+          ? opts.drawer_relations
+          : undefined
         const parentContextFields = Array.isArray(opts.parent_context_fields) ? opts.parent_context_fields as string[] : undefined
         const uniqueBy = Array.isArray(opts.unique_by) ? opts.unique_by as string[] : undefined
         const sortField = typeof opts.sort_field === 'string' && opts.sort_field ? opts.sort_field : undefined
         const sortDir = opts.sort_dir === 'desc' ? 'desc' as const : 'asc' as const
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} prefillParentId={prefillParentId} parentFieldKey={field.field} readOnly={field.readonly} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} columnPresets={columnPresets} drawerRelations={drawerRelations} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} prefillParentId={prefillParentId} parentFieldKey={field.field} readOnly={field.readonly} />
         )
       }
     }

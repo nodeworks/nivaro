@@ -12,6 +12,13 @@ export interface RowRule {
   only_if_empty?: boolean
   sort?: number
 }
+export interface ColumnPreset {
+  name: string
+  columns: string[]
+}
+export type DrawerRelationConfig =
+  | string
+  | { field: string; hint?: { sum_field: string; cap_field: string } }
 import { useNivaroClient, useParentDraft, useDrilldown, fieldDrilldownConfig } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
@@ -135,6 +142,8 @@ export function InlineTableField({
   enableReorder = true,
   parentCascades,
   rowRules,
+  columnPresets,
+  drawerRelations,
   parentContextFields,
   uniqueBy,
   sortField,
@@ -158,6 +167,8 @@ export function InlineTableField({
   enableReorder?: boolean
   parentCascades?: CascadeRule[]
   rowRules?: RowRule[]
+  columnPresets?: ColumnPreset[]
+  drawerRelations?: DrawerRelationConfig[]
   parentContextFields?: string[]
   uniqueBy?: string[]
   sortField?: string
