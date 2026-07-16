@@ -61,7 +61,7 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
@@ -309,12 +309,16 @@ function O2MAggFieldCombobox({
 
 type RollupAggregate = 'sum' | 'count' | 'avg' | 'min' | 'max'
 
-interface RollupConfig {
+interface RollupSourceConfig {
   related_collection: string
   fk_field: string
   aggregate: RollupAggregate
   value_field: string
   recursive?: boolean
+}
+
+interface RollupConfig {
+  sources: RollupSourceConfig[]
 }
 
 const ROLLUP_AGGREGATE_OPTIONS: { value: RollupAggregate; label: string }[] = [
@@ -325,7 +329,7 @@ const ROLLUP_AGGREGATE_OPTIONS: { value: RollupAggregate; label: string }[] = [
   { value: 'max', label: 'max' }
 ]
 
-const EMPTY_ROLLUP: RollupConfig = {
+const EMPTY_ROLLUP_SOURCE: RollupSourceConfig = {
   related_collection: '',
   fk_field: '',
   aggregate: 'sum',
@@ -333,30 +337,55 @@ const EMPTY_ROLLUP: RollupConfig = {
   recursive: false
 }
 
+function emptyRollup(): RollupConfig {
+  return { sources: [{ ...EMPTY_ROLLUP_SOURCE }] }
+}
+
+// Accepts both the legacy single-source object shape and `{ sources: [...] }`
+// — mirrors api/src/services/rollups.ts parseRollupFormula exactly, so a
+// formula written by either shape loads into the same row-list UI.
 function parseRollup(formula: string | null | undefined): RollupConfig {
-  if (!formula) return { ...EMPTY_ROLLUP }
+  if (!formula) return emptyRollup()
   try {
-    const parsed = JSON.parse(formula) as Partial<RollupConfig>
-    return { ...EMPTY_ROLLUP, ...parsed }
+    const parsed = JSON.parse(formula) as Record<string, unknown>
+    const rawSources = Array.isArray(parsed?.sources) ? parsed.sources : [parsed]
+    const sources = (rawSources as Partial<RollupSourceConfig>[]).map((s) => ({
+      ...EMPTY_ROLLUP_SOURCE,
+      ...s
+    }))
+    return { sources: sources.length ? sources : [{ ...EMPTY_ROLLUP_SOURCE }] }
   } catch {
-    return { ...EMPTY_ROLLUP }
+    return emptyRollup()
   }
 }
 
-function isRollupValid(cfg: RollupConfig): boolean {
+// Serializes back to the legacy single-source object when there's exactly one
+// source (round-trip safe with older formulas), else `{ sources: [...] }`.
+function serializeRollup(cfg: RollupConfig): string {
+  if (cfg.sources.length === 1) return JSON.stringify(cfg.sources[0])
+  return JSON.stringify({ sources: cfg.sources })
+}
+
+function isRollupSourceValid(cfg: RollupSourceConfig): boolean {
   if (!cfg.related_collection || !cfg.fk_field) return false
   if (cfg.aggregate !== 'count' && !cfg.value_field) return false
   return true
 }
 
-function RollupConfigEditor({
-  config,
+function isRollupValid(cfg: RollupConfig): boolean {
+  return cfg.sources.length > 0 && cfg.sources.every(isRollupSourceValid)
+}
+
+function RollupSourceRow({
+  source,
   currentCollection,
-  onChange
+  onChange,
+  onRemove
 }: {
-  config: RollupConfig
+  source: RollupSourceConfig
   currentCollection: string
-  onChange: (next: RollupConfig) => void
+  onChange: (next: RollupSourceConfig) => void
+  onRemove?: () => void
 }) {
   const { data: collectionsData } = useQuery({
     queryKey: ['collections'],
@@ -366,14 +395,14 @@ function RollupConfigEditor({
   })
 
   const { data: relatedMeta } = useQuery({
-    queryKey: ['collection-meta', config.related_collection],
+    queryKey: ['collection-meta', source.related_collection],
     queryFn: () =>
       api
         .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(
-          `/collections/${config.related_collection}`
+          `/collections/${source.related_collection}`
         )
         .then((r) => r.data.data),
-    enabled: !!config.related_collection,
+    enabled: !!source.related_collection,
     staleTime: 30_000
   })
 
@@ -384,29 +413,24 @@ function RollupConfigEditor({
     label: `${f.field} (${f.type})`
   }))
   const isSameCollection =
-    !!config.related_collection && config.related_collection === currentCollection
+    !!source.related_collection && source.related_collection === currentCollection
 
   return (
-    <div className='space-y-3'>
-      <p className='text-[11px] text-slate-400'>
-        Aggregate values from related items in another collection. The value is computed fresh on
-        every read.
-      </p>
-
+    <div className='space-y-3 rounded-md border border-slate-200 bg-white p-3'>
       <div className='grid grid-cols-2 gap-3'>
         {/* Related collection */}
         <div className='space-y-1'>
           <Label className='text-[11px] text-slate-500'>Related collection</Label>
           <Combobox
-            value={config.related_collection}
+            value={source.related_collection}
             onChange={(v) =>
               onChange({
-                ...config,
+                ...source,
                 related_collection: v,
                 fk_field: '',
                 value_field: '',
                 // recursive only valid when same collection — clear if it no longer applies
-                recursive: v === currentCollection ? config.recursive : false
+                recursive: v === currentCollection ? source.recursive : false
               })
             }
             options={collections.map((c) => ({ value: c.collection, label: c.collection }))}
@@ -418,11 +442,11 @@ function RollupConfigEditor({
         <div className='space-y-1'>
           <Label className='text-[11px] text-slate-500'>FK field</Label>
           <Combobox
-            value={config.fk_field}
-            onChange={(v) => onChange({ ...config, fk_field: v })}
+            value={source.fk_field}
+            onChange={(v) => onChange({ ...source, fk_field: v })}
             options={fieldOptions}
-            placeholder={config.related_collection ? 'Select field…' : 'Select collection first'}
-            disabled={!config.related_collection}
+            placeholder={source.related_collection ? 'Select field…' : 'Select collection first'}
+            disabled={!source.related_collection}
           />
         </div>
 
@@ -430,8 +454,8 @@ function RollupConfigEditor({
         <div className='space-y-1'>
           <Label className='text-[11px] text-slate-500'>Aggregate</Label>
           <Combobox
-            value={config.aggregate}
-            onChange={(v) => onChange({ ...config, aggregate: (v || 'sum') as RollupAggregate })}
+            value={source.aggregate}
+            onChange={(v) => onChange({ ...source, aggregate: (v || 'sum') as RollupAggregate })}
             options={ROLLUP_AGGREGATE_OPTIONS}
             placeholder='Select function…'
           />
@@ -441,17 +465,17 @@ function RollupConfigEditor({
         <div className='space-y-1'>
           <Label className='text-[11px] text-slate-500'>Value field</Label>
           <Combobox
-            value={config.value_field}
-            onChange={(v) => onChange({ ...config, value_field: v })}
+            value={source.value_field}
+            onChange={(v) => onChange({ ...source, value_field: v })}
             options={fieldOptions}
             placeholder={
-              config.aggregate === 'count'
+              source.aggregate === 'count'
                 ? 'Not used for count'
-                : config.related_collection
+                : source.related_collection
                   ? 'Select field…'
                   : 'Select collection first'
             }
-            disabled={config.aggregate === 'count' || !config.related_collection}
+            disabled={source.aggregate === 'count' || !source.related_collection}
           />
         </div>
       </div>
@@ -461,21 +485,105 @@ function RollupConfigEditor({
         <label className='flex cursor-pointer items-center gap-1.5 text-[12px]'>
           <input
             type='checkbox'
-            checked={!!config.recursive}
-            onChange={(e) => onChange({ ...config, recursive: e.target.checked })}
+            checked={!!source.recursive}
+            onChange={(e) => onChange({ ...source, recursive: e.target.checked })}
             className='rounded'
           />
           Recursive — aggregate all descendants at any depth (same-collection tree)
         </label>
       )}
 
+      <div className='flex items-center justify-between'>
+        <p className='text-[11px] text-slate-400'>
+          FK field is the column on{' '}
+          <code className='rounded bg-slate-100 px-1'>
+            {source.related_collection || 'the related collection'}
+          </code>{' '}
+          that points to this item's id.
+        </p>
+        {onRemove && (
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            className='h-6 shrink-0 px-2 text-[11px] text-destructive hover:text-destructive'
+            onClick={onRemove}
+          >
+            <Trash2 className='mr-1 h-3 w-3' />
+            Remove source
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function RollupConfigEditor({
+  config,
+  currentCollection,
+  onChange,
+  computedStore,
+  onComputedStoreChange
+}: {
+  config: RollupConfig
+  currentCollection: string
+  onChange: (next: RollupConfig) => void
+  computedStore: boolean
+  onComputedStoreChange: (next: boolean) => void
+}) {
+  const updateSource = (i: number, next: RollupSourceConfig) => {
+    onChange({ sources: config.sources.map((s, idx) => (idx === i ? next : s)) })
+  }
+  const addSource = () => {
+    onChange({ sources: [...config.sources, { ...EMPTY_ROLLUP_SOURCE }] })
+  }
+  const removeSource = (i: number) => {
+    onChange({ sources: config.sources.filter((_, idx) => idx !== i) })
+  }
+
+  return (
+    <div className='space-y-3'>
       <p className='text-[11px] text-slate-400'>
-        FK field is the column on{' '}
-        <code className='rounded bg-slate-100 px-1'>
-          {config.related_collection || 'the related collection'}
-        </code>{' '}
-        that points to this item's id.
+        Aggregate values from related items in one or more collections — each source's aggregate
+        is summed together.
       </p>
+
+      <div className='space-y-2'>
+        {config.sources.map((source, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: sources are positional
+          <RollupSourceRow
+            key={i}
+            source={source}
+            currentCollection={currentCollection}
+            onChange={(next) => updateSource(i, next)}
+            onRemove={config.sources.length > 1 ? () => removeSource(i) : undefined}
+          />
+        ))}
+      </div>
+
+      <Button
+        type='button'
+        variant='outline'
+        size='sm'
+        className='h-7 text-[12px]'
+        onClick={addSource}
+      >
+        <Plus className='mr-1 h-3 w-3' />
+        Add source
+      </Button>
+
+      <div className='flex items-center justify-between rounded-md border border-slate-200 bg-white p-3'>
+        <div>
+          <p className='text-[11px] font-medium text-slate-600'>
+            Store value (recalculate on writes)
+          </p>
+          <p className='text-[11px] text-slate-400'>
+            Off: computed fresh on every read. On: cached in the DB column and recalculated
+            whenever a contributing row changes.
+          </p>
+        </div>
+        <Switch checked={computedStore} onCheckedChange={onComputedStoreChange} />
+      </div>
     </div>
   )
 }
@@ -556,7 +664,7 @@ function AddColumnForm({
   const [computedType, setComputedType] = useState<'read' | 'write' | 'rollup'>('read')
   const [computedFormula, setComputedFormula] = useState('')
   const [computedStore, setComputedStore] = useState(false)
-  const [rollup, setRollup] = useState<RollupConfig>({ ...EMPTY_ROLLUP })
+  const [rollup, setRollup] = useState<RollupConfig>(emptyRollup)
   const [formulaMode, setFormulaMode] = useState<'builder' | 'raw'>('builder')
   const [saving, setSaving] = useState(false)
 
@@ -575,7 +683,7 @@ function AddColumnForm({
   const isRollup = computedEnabled && computedType === 'rollup'
 
   // Stored value of computed_formula depends on type (JSON for rollup).
-  const computedFormulaValue = isRollup ? JSON.stringify(rollup) : computedFormula.trim()
+  const computedFormulaValue = isRollup ? serializeRollup(rollup) : computedFormula.trim()
   const computedReady = isRollup ? isRollupValid(rollup) : !!computedFormula.trim()
 
   const addInterfaces = getInterfaces(form.type)
@@ -600,7 +708,7 @@ function AddColumnForm({
           ? {
               computed_formula: computedFormulaValue,
               computed_type: computedType,
-              computed_store: computedType === 'write' ? computedStore : false
+              computed_store: computedType === 'write' || computedType === 'rollup' ? computedStore : false
             }
           : {})
       })
@@ -767,7 +875,13 @@ function AddColumnForm({
               </p>
             )}
             {isRollup ? (
-              <RollupConfigEditor config={rollup} currentCollection={table} onChange={setRollup} />
+              <RollupConfigEditor
+                config={rollup}
+                currentCollection={table}
+                onChange={setRollup}
+                computedStore={computedStore}
+                onComputedStoreChange={setComputedStore}
+              />
             ) : (
               <>
                 <div>
@@ -1478,7 +1592,7 @@ function FieldMetaEditor({
   )
   const [computedStore, setComputedStore] = useState(() => fm?.computed_store ?? false)
   const [rollup, setRollup] = useState<RollupConfig>(() =>
-    fm?.computed_type === 'rollup' ? parseRollup(fm?.computed_formula) : { ...EMPTY_ROLLUP }
+    fm?.computed_type === 'rollup' ? parseRollup(fm?.computed_formula) : emptyRollup()
   )
   const [formulaMode, setFormulaMode] = useState<'builder' | 'raw'>('builder')
 
@@ -1579,9 +1693,10 @@ function FieldMetaEditor({
     computedEnabled && computedReady
       ? {
           computed_formula:
-            computedType === 'rollup' ? JSON.stringify(rollup) : computedFormula.trim(),
+            computedType === 'rollup' ? serializeRollup(rollup) : computedFormula.trim(),
           computed_type: computedType,
-          computed_store: computedType === 'write' ? computedStore : false
+          computed_store:
+            computedType === 'write' || computedType === 'rollup' ? computedStore : false
         }
       : { computed_formula: null, computed_type: null, computed_store: false }
 
@@ -1920,6 +2035,8 @@ function FieldMetaEditor({
                 config={rollup}
                 currentCollection={tableName}
                 onChange={setRollup}
+                computedStore={computedStore}
+                onComputedStoreChange={setComputedStore}
               />
             ) : (
               <>
@@ -3979,13 +4096,189 @@ function PickerFilterSection({ tableName }: { tableName: string }) {
 
 // ─── AI Features card (Settings tab) ───────────────────────────────────────────
 
+// Mirrors api/src/hooks/aggregate-caps.ts isSumCapRule — a typed rule entry
+// living alongside plain AI-prompt strings in the same validation_rules array.
+interface SumCapRule {
+  type: 'sum_cap'
+  severity: 'block' | 'warn'
+  sum_field: string
+  group_by: string
+  cap: { relation: string; field: string }
+  message: string
+}
+
+type ValidationRuleEntry = string | SumCapRule
+
+const EMPTY_SUM_CAP_RULE: SumCapRule = {
+  type: 'sum_cap',
+  severity: 'block',
+  sum_field: '',
+  group_by: '',
+  cap: { relation: '', field: '' },
+  message: ''
+}
+
 interface AiCollectionSettings {
   collection: string
   validation_enabled: boolean
   validation_mode: 'soft' | 'hard'
-  validation_rules: string[]
+  validation_rules: ValidationRuleEntry[]
   duplicate_detection_enabled: boolean
   duplicate_threshold: number
+}
+
+// Sum cap rule editor — sum field / group-by / cap relation / cap field
+// Comboboxes, severity radio, message input. Group-by and cap-relation share
+// the same option set: M2O fields on this collection (falls back to all
+// fields when relations haven't loaded yet). Cap field lists the fields of
+// whichever collection the chosen cap relation points to.
+function SumCapRuleEditor({
+  tableName,
+  rule,
+  onChange,
+  onRemove
+}: {
+  tableName: string
+  rule: SumCapRule
+  onChange: (next: SumCapRule) => void
+  onRemove: () => void
+}) {
+  const severityName = useId()
+
+  const { data: fieldsMeta } = useQuery({
+    queryKey: ['collection-meta', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(
+          `/collections/${tableName}`
+        )
+        .then((r) => r.data.data),
+    staleTime: 30_000
+  })
+  const fieldOptions = (fieldsMeta?.fields ?? [])
+    .filter((f) => !f.hidden)
+    .map((f) => ({ value: f.field, label: `${f.field} (${f.type})` }))
+
+  const { data: relData } = useQuery({
+    queryKey: ['cms-relations', tableName],
+    queryFn: () => schemaApi.getCMSRelations(tableName)
+  })
+  const m2oRelations = (relData?.data ?? []).filter(
+    (r) => r.many_collection === tableName && !r.junction_field
+  )
+  const relationOptions = m2oRelations.length
+    ? m2oRelations.map((r) => ({
+        value: r.many_field,
+        label: `${r.many_field} → ${r.one_collection}`
+      }))
+    : fieldOptions
+
+  const selectedRelation = m2oRelations.find((r) => r.many_field === rule.cap.relation)
+  const parentCollection = selectedRelation?.one_collection ?? null
+
+  const { data: parentFieldsMeta } = useQuery({
+    queryKey: ['collection-meta', parentCollection],
+    queryFn: () =>
+      api
+        .get<{ data: { fields: { field: string; type: string; hidden?: boolean }[] } }>(
+          `/collections/${parentCollection}`
+        )
+        .then((r) => r.data.data),
+    enabled: !!parentCollection,
+    staleTime: 30_000
+  })
+  const parentFieldOptions = (parentFieldsMeta?.fields ?? [])
+    .filter((f) => !f.hidden)
+    .map((f) => ({ value: f.field, label: `${f.field} (${f.type})` }))
+
+  return (
+    <div className='space-y-2.5 rounded-md border border-slate-200 p-3'>
+      <div className='flex items-center justify-between'>
+        <p className='text-[11px] font-medium text-slate-600'>Sum Cap Rule</p>
+        <Button
+          type='button'
+          variant='ghost'
+          size='icon'
+          className='h-6 w-6 shrink-0 text-destructive hover:text-destructive'
+          onClick={onRemove}
+        >
+          <Trash2 className='h-3.5 w-3.5' />
+        </Button>
+      </div>
+
+      <div className='grid grid-cols-2 gap-3'>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-slate-500'>Sum field</Label>
+          <Combobox
+            value={rule.sum_field}
+            onChange={(v) => onChange({ ...rule, sum_field: v })}
+            options={fieldOptions}
+            placeholder='Select field…'
+          />
+        </div>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-slate-500'>Group by</Label>
+          <Combobox
+            value={rule.group_by}
+            onChange={(v) => onChange({ ...rule, group_by: v })}
+            options={relationOptions}
+            placeholder='Select field…'
+          />
+        </div>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-slate-500'>Cap relation</Label>
+          <Combobox
+            value={rule.cap.relation}
+            onChange={(v) => onChange({ ...rule, cap: { relation: v, field: '' } })}
+            options={relationOptions}
+            placeholder='Select relation…'
+          />
+        </div>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-slate-500'>Cap field</Label>
+          <Combobox
+            value={rule.cap.field}
+            onChange={(v) => onChange({ ...rule, cap: { ...rule.cap, field: v } })}
+            options={parentFieldOptions}
+            placeholder={parentCollection ? 'Select field…' : 'Select cap relation first'}
+            disabled={!parentCollection}
+          />
+        </div>
+      </div>
+
+      <div className='flex items-center gap-4 text-[12px]'>
+        <span className='text-[11px] text-slate-500'>Severity:</span>
+        <label className='flex cursor-pointer items-center gap-1.5'>
+          <input
+            type='radio'
+            name={severityName}
+            checked={rule.severity === 'block'}
+            onChange={() => onChange({ ...rule, severity: 'block' })}
+          />
+          Block
+        </label>
+        <label className='flex cursor-pointer items-center gap-1.5'>
+          <input
+            type='radio'
+            name={severityName}
+            checked={rule.severity === 'warn'}
+            onChange={() => onChange({ ...rule, severity: 'warn' })}
+          />
+          Warn
+        </label>
+      </div>
+
+      <div className='space-y-1'>
+        <Label className='text-[11px] text-slate-500'>Message</Label>
+        <Input
+          value={rule.message}
+          onChange={(e) => onChange({ ...rule, message: e.target.value })}
+          placeholder='Shown to the editor when the cap is exceeded'
+          className='h-7 text-[12px]'
+        />
+      </div>
+    </div>
+  )
 }
 
 function AiFeaturesCard({ tableName }: { tableName: string }) {
@@ -3998,7 +4291,7 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
 
   const [validationEnabled, setValidationEnabled] = useState(false)
   const [validationMode, setValidationMode] = useState<'soft' | 'hard'>('soft')
-  const [rules, setRules] = useState<string[]>([])
+  const [rules, setRules] = useState<ValidationRuleEntry[]>([])
   const [dupEnabled, setDupEnabled] = useState(false)
   const [dupThreshold, setDupThreshold] = useState(0.85)
   const [seeded, setSeeded] = useState(false)
@@ -4019,7 +4312,9 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
       api.patch(`/ai-settings/${tableName}`, {
         validation_enabled: validationEnabled,
         validation_mode: validationMode,
-        validation_rules: rules.map((r) => r.trim()).filter((r) => r.length > 0),
+        validation_rules: rules
+          .map((r) => (typeof r === 'string' ? r.trim() : r))
+          .filter((r) => (typeof r === 'string' ? r.length > 0 : true)),
         duplicate_detection_enabled: dupEnabled,
         duplicate_threshold: Number(dupThreshold)
       }),
@@ -4093,16 +4388,28 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
               <div>
                 <div className='mb-1 flex items-center justify-between'>
                   <Label className='text-[12px]'>Rules</Label>
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    className='h-6 px-2 text-[11px]'
-                    onClick={() => setRules((prev) => [...prev, ''])}
-                  >
-                    <Plus className='mr-1 h-3 w-3' />
-                    Add Rule
-                  </Button>
+                  <div className='flex gap-1.5'>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      className='h-6 px-2 text-[11px]'
+                      onClick={() => setRules((prev) => [...prev, ''])}
+                    >
+                      <Plus className='mr-1 h-3 w-3' />
+                      AI Prompt
+                    </Button>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      className='h-6 px-2 text-[11px]'
+                      onClick={() => setRules((prev) => [...prev, { ...EMPTY_SUM_CAP_RULE }])}
+                    >
+                      <Plus className='mr-1 h-3 w-3' />
+                      Sum Cap
+                    </Button>
+                  </div>
                 </div>
                 {rules.length === 0 ? (
                   <p className='text-[11px] text-slate-400'>
@@ -4110,31 +4417,44 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
                   </p>
                 ) : (
                   <div className='space-y-2'>
-                    {rules.map((rule, i) => (
-                      // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
-                      <div key={i} className='flex items-start gap-2'>
-                        <Textarea
-                          value={rule}
-                          onChange={(e) =>
-                            setRules((prev) =>
-                              prev.map((r, idx) => (idx === i ? e.target.value : r))
-                            )
+                    {rules.map((rule, i) =>
+                      typeof rule === 'string' ? (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
+                        <div key={i} className='flex items-start gap-2'>
+                          <Textarea
+                            value={rule}
+                            onChange={(e) =>
+                              setRules((prev) =>
+                                prev.map((r, idx) => (idx === i ? e.target.value : r))
+                              )
+                            }
+                            placeholder='e.g. "description must be at least 50 words"'
+                            rows={2}
+                            className='min-h-0 text-[12px]'
+                          />
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            size='icon'
+                            className='h-7 w-7 shrink-0 text-destructive hover:text-destructive'
+                            onClick={() => setRules((prev) => prev.filter((_, idx) => idx !== i))}
+                          >
+                            <Trash2 className='h-3.5 w-3.5' />
+                          </Button>
+                        </div>
+                      ) : (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
+                        <SumCapRuleEditor
+                          key={i}
+                          tableName={tableName}
+                          rule={rule}
+                          onChange={(next) =>
+                            setRules((prev) => prev.map((r, idx) => (idx === i ? next : r)))
                           }
-                          placeholder='e.g. "description must be at least 50 words"'
-                          rows={2}
-                          className='min-h-0 text-[12px]'
+                          onRemove={() => setRules((prev) => prev.filter((_, idx) => idx !== i))}
                         />
-                        <Button
-                          type='button'
-                          variant='ghost'
-                          size='icon'
-                          className='h-7 w-7 shrink-0 text-destructive hover:text-destructive'
-                          onClick={() => setRules((prev) => prev.filter((_, idx) => idx !== i))}
-                        >
-                          <Trash2 className='h-3.5 w-3.5' />
-                        </Button>
-                      </div>
-                    ))}
+                      )
+                    )}
                   </div>
                 )}
               </div>

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { isSumCapRule, type SumCapRule } from '../hooks/aggregate-caps.js'
 import {
   AI_SETTINGS_DEFAULTS,
   type AiCollectionSettings,
@@ -11,11 +12,27 @@ import { logActivity } from '../services/activity.js'
 // Per-collection AI feature configuration (content validation + duplicate detection).
 // Registered under /api/ai-settings; admin only.
 
-function parseRules(raw: unknown): string[] {
+// validation_rules is a mixed array: legacy free-text rule strings evaluated by
+// the AI validator, plus typed rule objects (e.g. sum_cap) evaluated by their
+// own hooks — see hooks/ai-validation.ts and hooks/aggregate-caps.ts. Both
+// shapes must round-trip through this admin-facing route unchanged.
+type ValidationRuleEntry = string | SumCapRule
+
+function isRuleLikeObject(v: unknown): v is Record<string, unknown> & { type: string } {
+  return !!v && typeof v === 'object' && typeof (v as Record<string, unknown>).type === 'string'
+}
+
+// GET-side parsing is deliberately loose (string, or object with a string
+// `type`) so the admin UI can display — and let the user fix — any typed rule
+// ever written, not only ones that currently pass strict validation.
+function parseRules(raw: unknown): ValidationRuleEntry[] {
   if (typeof raw !== 'string' || !raw) return []
   try {
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter((r): r is string => typeof r === 'string') : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (r): r is ValidationRuleEntry => typeof r === 'string' || isRuleLikeObject(r)
+    )
   } catch {
     return []
   }
@@ -73,12 +90,20 @@ export async function aiSettingsRoutes(app: FastifyInstance) {
         patch.validation_mode = body.validation_mode
       }
       if ('validation_rules' in body) {
-        if (body.validation_rules != null && !Array.isArray(body.validation_rules)) {
-          return reply.code(400).send({ error: 'validation_rules must be an array of strings' })
+        const raw = body.validation_rules
+        if (raw != null && !Array.isArray(raw)) {
+          return reply.code(400).send({ error: 'validation_rules must be an array' })
         }
-        const rules = (body.validation_rules ?? [])
-          .map((r) => String(r).trim())
-          .filter((r) => r.length > 0)
+        // Strings are trimmed/filtered as before; typed rule objects (sum_cap)
+        // are kept only when they pass strict validation — anything else
+        // (garbage objects, stray numbers, malformed sum_cap) is dropped
+        // rather than coerced, which used to turn objects into "[object Object]".
+        const rules: ValidationRuleEntry[] = (Array.isArray(raw) ? raw : [])
+          .map((r) => (typeof r === 'string' ? r.trim() : r))
+          .filter((r): r is ValidationRuleEntry => {
+            if (typeof r === 'string') return r.length > 0
+            return isSumCapRule(r)
+          })
         patch.validation_rules = JSON.stringify(rules)
       }
       if (body.duplicate_detection_enabled != null) {
