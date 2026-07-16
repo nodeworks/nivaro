@@ -80,13 +80,42 @@ export const importTemplatesGuide: DocSection = {
         [
           'create_stub',
           'Flags the miss as a warn issue and an `{ is_new: true, name }` `stubs` sidecar on the parse response; no record is created and nothing extra is persisted (v1). A header-level create_stub is warn-only (no sidecar slot exists for header values, only for line values), and nested disperse-member stubs surface as warn issues only — never written into the stored row.'
+        ],
+        [
+          'create',
+          'Like `create_stub` at parse time (warn issue + `stubs` sidecar, nothing persisted) — but direct execute additionally bulk-creates the missing records. Requires a `create: { defaults, dedupe_by }` block on the step; not available on `$users` lookups. See below.'
         ]
       ]
+    },
+    { type: 'h3', text: "on_miss: 'create' — bulk-creating missing lookup records" },
+    {
+      type: 'p',
+      text: "A lookup step with `on_miss: 'create'` carries a `create: { defaults, dedupe_by }` block. `defaults` is a list of header-rule-shaped entries (`{ target, steps }`, lookup steps excluded) that build the payload for the record to create; `dedupe_by` is the tuple of created-field names that determines whether two misses collapse into a single created record."
+    },
+    {
+      type: 'warn',
+      text: "Parse NEVER creates anything, even with `on_miss: 'create'` configured — a miss is a warn issue and a stub, same as `create_stub`, so the pipeline stays read-only through prefill and the test panel. Only `POST /:id/execute` (direct mode) performs the create. Prefill-mode templates leave the stub for a human to resolve in the form; there is no client-side create-and-link path outside execute."
+    },
+    {
+      type: 'p',
+      text: "At execute time, every submitted line's `stubs` sidecar is matched back to the line_map column whose lookup step declared `on_miss: 'create'`. Misses are deduped per lookup step by their normalized `dedupe_by` tuple (`.trim().toLowerCase()` on each field's resolved value — the same normalization the lookup match itself uses, so a miss that WOULD have matched case/whitespace-insensitively never creates a duplicate), then bulk-created via the items service (full RBAC/validation/RLS/hooks, same as `POST /items`) BEFORE the parent record, so the new ids are ready to substitute into `values`/`line.values` before the parent and children are created."
+    },
+    {
+      type: 'p',
+      text: "Defaults resolve per miss against the LINE's mapped values — the keys already produced by that line's other header rules — not the raw sheet columns (the sheet is gone by execute time; only the parsed/edited `values`/`lines` payload is submitted). A default's `expression` step can also reach `{{$resolved.*}}` to pull in an already-resolved header value (e.g. a region resolved once for the whole import, reused as a scope default on every created record)."
+    },
+    {
+      type: 'p',
+      text: "Example — a Unit Name column with no matching `units` row: `system_id`/`name` default to `{{Unit Name}}` (the line's own mapped Unit Name value), a `scope`/`region` field defaults to `{{$resolved.region}}` (an already-resolved header value shared across the whole import), and `dedupe_by: ['name', 'unit_type']` collapses two sheet rows naming the same unit and type into one created `units` record, whose id is then substituted into every line that missed on it."
     },
     { type: 'h3', text: '$users — looking up system users' },
     {
       type: 'p',
       text: "`$users` is a sentinel lookup collection — not a real `nivaro_collections` row — for matching a sheet column against system users. It's the only system-collection lookup a template is permitted to reference (every other `nivaro_*` collection is blocked, both at save time and at fetch time). The server resolves it directly against `nivaro_users`, selecting only `id` and `email` and filtering to `is_redacted = 0` — redacted users never match. `match_field` is restricted to `email` (enforced by the config normalizer at save time) and `take` is forced to `id` regardless of what's configured. Typical use: an 'Assigned To' column matched by email, resolving straight to a user id for an M2O owner field."
+    },
+    {
+      type: 'warn',
+      text: "A `$users` lookup may not use `on_miss: 'create'` — rejected at save time. There's no sanctioned path for a template to provision system user accounts; the builder hides the 'create' radio option entirely once a lookup step's collection is switched to `$users`, and clears any `create` block already configured."
     },
     { type: 'h3', text: 'M2M alias targets' },
     {
@@ -95,7 +124,7 @@ export const importTemplatesGuide: DocSection = {
     },
     {
       type: 'note',
-      text: "Prefill stages M2M ids into the form's existing M2M picker via the same M2MStagingContext the picker itself uses — junction row writes are still the ordinary per-field fire-and-forget POSTs the picker already fires on save; nothing new was added to the save path. Direct execute creates junction rows itself: AFTER the parent record (so the FK exists) but BEFORE the line items, inside the same all-or-nothing compensation as everything else — on any later failure, junction rows are raw-deleted first, then child lines, then the parent. Junction row counts add to the line count against the shared IMPORT_ROW_CAP (5,000 rows)."
+      text: "Prefill stages M2M ids into the form's existing M2M picker via the same M2MStagingContext the picker itself uses — junction row writes are still the ordinary per-field fire-and-forget POSTs the picker already fires on save; nothing new was added to the save path. Direct execute creates junction rows itself: AFTER the parent record (so the FK exists) but BEFORE the line items, inside the same all-or-nothing compensation as everything else. Junction row counts add to the line count against the shared IMPORT_ROW_CAP (5,000 rows); see Relation-mode nested targets below for the full compensation order once relation-mode grandchildren and `on_miss: 'create'` records are also in play."
     },
     { type: 'h3', text: 'Line mapping (child rows)' },
     {
@@ -104,7 +133,7 @@ export const importTemplatesGuide: DocSection = {
     },
     {
       type: 'note',
-      text: "The O2M field's layout row_rules (client-side rules configured on the inline grid field itself) and the \"Apply field rules to each line\" checkbox above are two different mechanisms. Prefill applies BOTH: staged lines also run through the O2M field's layout row_rules via POST /field-rules/evaluate, with a `$parent.*` context built from the already-imported header draft — so a staged line looks the way it would if a user had just typed it into the inline grid. Direct execute applies only the persisted Field Rules (\"Apply field rules to each line\"); layout row_rules are layout-scoped UI curation, not something the server-side execute path evaluates. Either way, any grid column driven by a client write-computed formula only shows its computed value after the row's first edit or save — never at staging time, since nothing has triggered the client compute yet."
+      text: 'The O2M field\'s layout row_rules (client-side rules configured on the inline grid field itself) and the "Apply field rules to each line" checkbox above are two different mechanisms. Prefill applies BOTH: staged lines also run through the O2M field\'s layout row_rules via POST /field-rules/evaluate, with a `$parent.*` context built from the already-imported header draft — so a staged line looks the way it would if a user had just typed it into the inline grid. Direct execute applies only the persisted Field Rules ("Apply field rules to each line"); layout row_rules are layout-scoped UI curation, not something the server-side execute path evaluates. Either way, any grid column driven by a client write-computed formula only shows its computed value after the row\'s first edit or save — never at staging time, since nothing has triggered the client compute yet.'
     },
     { type: 'h3', text: 'Disperse — splitting an amount across grouped rows' },
     {
@@ -127,6 +156,23 @@ export const importTemplatesGuide: DocSection = {
     {
       type: 'note',
       text: 'Every lookup in the pipeline — header, line, disperse member, and per-line nested member — is batched: candidate values across all rows for one rule are deduped and resolved with a single query, never one query per row.'
+    },
+    { type: 'h3', text: 'Relation-mode nested targets' },
+    {
+      type: 'p',
+      text: "The nested/disperse target field (`line_map.nested.target_field` or `disperse.nested_target`) may name EITHER a physical JSON/repeater column on the line's child collection (JSON mode — members are written as a plain JSON array on the line row, as above) OR an O2M relation field on the child collection (relation mode — members become REAL rows in the related collection, one row per member, FK'd to the line). Nested and disperse must agree on target once either resolves as a relation (a save-time check), since two configs pointed at different relations racing to own the same generated rows would be ambiguous."
+    },
+    {
+      type: 'p',
+      text: 'Parse and test-panel responses carry a `nested_relation` field: `{ collection, fk_field } | null`, resolved once per request against the line child collection. `null` means JSON mode (or no nested/disperse config at all); a populated object means relation mode, and callers use it to decide how to stage and how to submit.'
+    },
+    {
+      type: 'note',
+      text: "Prefill staging (relation mode): instead of the ordinary `line.nested.field` key on the queued O2M row draft, the client stages members under `__o2m_<field>` — a reserved prefix meaning \"these are grandchild rows to flush after this row is created,\" not a value for the row itself. Both `ItemEditForm`'s bulk O2M flush and the inline grid's per-row save (`InlineTableField`) recognize the prefix: they strip `__o2m_*` keys before POSTing the row, then — once the row's real id comes back — POST each staged member to the resolved grandchild relation's `many_collection`, setting its `many_field` to the new row's id. A row create that fails to yield an id (e.g. an RLS filter hiding the just-created row) fails its staged members loudly (counted as errors) rather than posting them with an undefined FK."
+    },
+    {
+      type: 'p',
+      text: "Direct execute (relation mode): after each line/child row is created, its `nested.rows` members are created as real grandchild rows via the items service (`createOne` — full RBAC/validation/RLS/hooks), FK'd to the line's new id — the `nested` key is excluded from the child row's own payload entirely. This is inside the same all-or-nothing flow as everything else; on a later failure, compensation deletes in reverse-create order: grandchildren first (grouped by collection), then M2M junction rows, then child lines, then the parent, then any records created for `on_miss: 'create'` lookup misses last (they may be FK'd from rows created above). Relation-mode member rows join the shared `IMPORT_ROW_CAP` (5,000) total alongside line items, M2M linked-record ids, and `on_miss: 'create'` records-to-create; JSON-mode nested rows never count, since they ride along as a column value rather than a separate row."
     },
     { type: 'h3', text: 'Test panel' },
     {
@@ -175,8 +221,8 @@ export const importTemplatesGuide: DocSection = {
         'Files are capped at 25MB and 5,000 data rows per sheet; a sheet over the row cap is truncated to the first 5,000 rows, reported as a warn-severity issue (never a silent drop).',
         'The pipeline never throws for data problems — every miss or coercion failure becomes an issue (warn or error). Only structural failures (unreadable file, no matching sheet, empty sheet) abort the parse.',
         'Direct execute is blocked while any error-severity issue remains: the error-issue block validates the SUBMITTED issues array as an advisory UX guard. Actual enforcement is the items service (RBAC, validation rules, RLS, hooks) applied to every created row — the same guarantees as POST /items.',
-        'Direct execute is all-or-nothing: the parent record, M2M junction rows, and every child row are created in sequence, and any failure compensates by deleting everything already created for that import (raw deletes, not through trash) rather than leaving a partial record behind.',
-        'The same IMPORT_ROW_CAP (5,000) governs both the parse-time sheet truncation and the execute-time submission — at execute, line items and M2M linked-record ids share one combined cap.'
+        "Direct execute is all-or-nothing: records created for `on_miss: 'create'` lookup misses, then the parent record, M2M junction rows, every child row, and any relation-mode nested/disperse grandchild rows are created in that sequence. Any failure compensates by deleting everything already created for that import (raw deletes, not through trash), in reverse order — grandchildren, then junctions, then children, then the parent, then created-lookup-records last — rather than leaving a partial record behind.",
+        "The same IMPORT_ROW_CAP (5,000) governs both the parse-time sheet truncation and the execute-time submission — at execute, line items, M2M linked-record ids, relation-mode nested/disperse member rows, and records created for `on_miss: 'create'` misses all share one combined cap."
       ]
     },
     { type: 'h3', text: 'REST API' },
@@ -199,7 +245,7 @@ export const importTemplatesGuide: DocSection = {
         [
           'POST /import-templates/:id/parse',
           'authenticated + create permission on the target collection',
-          "Multipart file upload; runs the saved template's pipeline and returns `{ values, lines, issues, file_id, line_target_field, m2m }`. The only side effect is uploading the file when an attach field is configured — it never writes business data."
+          "Multipart file upload; runs the saved template's pipeline and returns `{ values, lines, issues, file_id, line_target_field, nested_relation, m2m }`. The only side effect is uploading the file when an attach field is configured — it never writes business data."
         ],
         [
           'POST /import-templates/:id/execute',
@@ -229,7 +275,7 @@ const { data: templates } = await cms.request(listImportTemplates('purchase_orde
 
 // Parse a file against a saved template (multipart upload, not a Command)
 const parsed = await cms.importParse(templates[0].id, file)
-// → { values, lines, issues, file_id, line_target_field, m2m }
+// → { values, lines, issues, file_id, line_target_field, nested_relation, m2m }
 
 // Direct-mode templates: create the parent + lines from a (possibly edited) parse result
 const { data: created } = await cms.request(
