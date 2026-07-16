@@ -1724,8 +1724,9 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
             stubs: { unit: { is_new: true, name: 'New Unit' } }
           },
           {
-            values: { sku: 'A2', unit_name: 'New Unit' },
-            stubs: { unit: { is_new: true, name: 'New Unit' } }
+            // Case/whitespace variant — must dedupe with line 1 (lookup-layer normalization)
+            values: { sku: 'A2', unit_name: ' new unit ' },
+            stubs: { unit: { is_new: true, name: ' new unit ' } }
           }
         ],
         issues: []
@@ -1754,7 +1755,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       4,
       user,
       'po_line_items_create_miss',
-      { sku: 'A2', unit_name: 'New Unit', unit: 'unit-99', purchase_order_id: 'parent-1' },
+      { sku: 'A2', unit_name: ' new unit ', unit: 'unit-99', purchase_order_id: 'parent-1' },
       expect.anything(),
       undefined
     )

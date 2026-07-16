@@ -227,8 +227,14 @@ function buildCreateGroups(
       miss.values,
       resolvedCtx
     )
+    // Normalized like the lookup matchMap (trim + lowercase) so values the lookup
+    // layer would treat as one match never dedupe into two created records.
     const dedupeKey = JSON.stringify(
-      miss.step.create.dedupe_by.map((field) => String(defaultsPayload[field] ?? ''))
+      miss.step.create.dedupe_by.map((field) =>
+        String(defaultsPayload[field] ?? '')
+          .trim()
+          .toLowerCase()
+      )
     )
     let stepGroups = groupsByStep.get(miss.step)
     if (!stepGroups) {
