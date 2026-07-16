@@ -270,8 +270,10 @@ interface ComputedFieldRow {
 /**
  * Rollup computed field config — stored as JSON in `computed_formula` when
  * `computed_type === 'rollup'`. Aggregates related items in another collection.
+ * A single field may combine multiple sources; each source contributes its own
+ * aggregate and the results are summed (count contributes its count).
  */
-interface RollupFormula {
+export interface RollupSource {
   related_collection: string // table to aggregate from
   fk_field: string // column on related_collection pointing to this item's id
   aggregate: 'sum' | 'count' | 'avg' | 'min' | 'max'
@@ -279,7 +281,42 @@ interface RollupFormula {
   recursive?: boolean // if true: aggregate all descendants in same-collection tree
 }
 
+export interface NormalizedRollup {
+  sources: RollupSource[]
+}
+
 const ROLLUP_AGGREGATES = new Set(['sum', 'count', 'avg', 'min', 'max'])
+
+function isValidRollupSource(v: unknown): v is RollupSource {
+  if (!v || typeof v !== 'object') return false
+  const s = v as Record<string, unknown>
+  if (typeof s.related_collection !== 'string' || !s.related_collection) return false
+  if (typeof s.fk_field !== 'string' || !s.fk_field) return false
+  if (typeof s.aggregate !== 'string' || !ROLLUP_AGGREGATES.has(s.aggregate)) return false
+  if (typeof s.value_field !== 'string') return false
+  if (s.aggregate !== 'count' && !s.value_field) return false
+  if (s.recursive !== undefined && typeof s.recursive !== 'boolean') return false
+  return true
+}
+
+/**
+ * Normalize a stored rollup config into `{ sources: [...] }`.
+ * Accepts either the legacy single-source object shape or `{ sources: [...] }`.
+ * Returns null when the JSON is unparseable or any source is invalid.
+ */
+export function parseRollupFormula(raw: string | null): NormalizedRollup | null {
+  const parsed = parseJson<Record<string, unknown>>(raw)
+  if (!parsed || typeof parsed !== 'object') return null
+
+  const rawSources = Array.isArray((parsed as { sources?: unknown }).sources)
+    ? (parsed as { sources: unknown[] }).sources
+    : [parsed]
+
+  if (!rawSources.length) return null
+  if (!rawSources.every(isValidRollupSource)) return null
+
+  return { sources: rawSources as RollupSource[] }
+}
 
 /**
  * Compute a single rollup value for one item id.
@@ -287,11 +324,7 @@ const ROLLUP_AGGREGATES = new Set(['sum', 'count', 'avg', 'min', 'max'])
  * Recursive (same-collection tree): aggregate over all descendants via CTE.
  * Returns null on any error or invalid config.
  */
-async function computeRollupValue(
-  collection: string,
-  cfg: RollupFormula,
-  id: unknown
-): Promise<number | null> {
+async function computeRollupValue(cfg: RollupSource, id: unknown): Promise<number | null> {
   if (!cfg.related_collection || !cfg.fk_field || !ROLLUP_AGGREGATES.has(cfg.aggregate)) {
     return null
   }
@@ -299,7 +332,7 @@ async function computeRollupValue(
   if (id == null) return null
 
   try {
-    if (cfg.recursive && cfg.related_collection === collection) {
+    if (cfg.recursive) {
       // MSSQL recursive CTE — gather all descendant ids at any depth, then aggregate.
       // Identifiers are bound via ?? (escaped); the id value via ?.
       // MSSQL CTEs never use the RECURSIVE keyword; MAXRECURSION guards depth.
@@ -324,15 +357,22 @@ OPTION (MAXRECURSION 100)`
       //   ?? related_collection (final FROM)
       const binds: Knex.RawBinding[] =
         cfg.aggregate === 'count'
-          ? [collection, cfg.fk_field, id as Knex.Value, collection, cfg.fk_field, collection]
-          : [
-              collection,
+          ? [
+              cfg.related_collection,
               cfg.fk_field,
               id as Knex.Value,
-              collection,
+              cfg.related_collection,
+              cfg.fk_field,
+              cfg.related_collection
+            ]
+          : [
+              cfg.related_collection,
+              cfg.fk_field,
+              id as Knex.Value,
+              cfg.related_collection,
               cfg.fk_field,
               cfg.value_field,
-              collection
+              cfg.related_collection
             ]
 
       const raw = (await db.raw(sql, binds)) as
@@ -360,6 +400,21 @@ OPTION (MAXRECURSION 100)`
   } catch {
     return null
   }
+}
+
+/**
+ * Compute the combined value of a (possibly multi-source) rollup: each source's
+ * aggregate via `computeRollupValue`, summed together. A source that returns
+ * null contributes 0 to the sum; if every source returns null, the result is
+ * null (distinguishing "no data" from "sums to zero").
+ */
+export async function computeRollupTotal(
+  cfg: NormalizedRollup,
+  id: unknown
+): Promise<number | null> {
+  const values = await Promise.all(cfg.sources.map((source) => computeRollupValue(source, id)))
+  if (values.every((v) => v == null)) return null
+  return values.reduce((sum: number, v) => sum + (v ?? 0), 0)
 }
 
 /**
@@ -399,14 +454,17 @@ async function applyReadComputedFields(
     }
 
     // Rollup fields aggregate related items. N+1 over items × rollup fields is
-    // acceptable for now; each rollup runs its own query per item.
+    // acceptable for now; each rollup runs its own query per item. Fields with
+    // computed_store are written at write time and already sit on the row —
+    // recomputing them here would be redundant and defeats the point of storing.
     for (const f of rollupFields) {
-      const cfg = parseJson<RollupFormula>(f.computed_formula as string)
+      if (f.computed_store === true || f.computed_store === 1) continue
+      const cfg = parseRollupFormula(f.computed_formula as string)
       if (!cfg) {
         item[f.field] = null
         continue
       }
-      item[f.field] = await computeRollupValue(collection, cfg, item.id)
+      item[f.field] = await computeRollupTotal(cfg, item.id)
     }
   }
 }
