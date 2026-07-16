@@ -53,6 +53,10 @@ export const importTemplatesGuide: DocSection = {
       text: "A lookup step names a target collection, a match field, optional scope filters (AND-ed, each `{{token}}`-substitutable), and `take` — what to pull off the matched record once it's found. What happens when nothing matches is the `on_miss` policy:"
     },
     {
+      type: 'p',
+      text: 'Line rules run in order and each result lands in a per-row `{{$line.*}}` context, so a later rule can chain off earlier ones — in expressions and in scope-filter values. Composite lookups fall out of this: resolve `category_type` and `core_category` first, then a `category` rule with an expression `{{$line.core_category}}` and a scope filter `sub_category = {{$line.category_type}}` picks the exact record matching both, per row. Row-varying scope filters are applied in memory after the single batched query, so lookups stay one query per rule.'
+    },
+    {
       type: 'table',
       head: ['take', 'Behavior'],
       rows: [

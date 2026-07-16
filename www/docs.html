@@ -7043,6 +7043,7 @@ Authorization: Bearer &lt;token&gt;
           </table></div>
           <h3 class="doc-h3">Lookup step and on_miss policies</h3>
           <p class="doc-p">A lookup step names a target collection, a match field, optional scope filters (AND-ed, each <code class="doc-code">{{token}}</code>-substitutable), and <code class="doc-code">take</code> — what to pull off the matched record once it's found. What happens when nothing matches is the <code class="doc-code">on_miss</code> policy:</p>
+          <p class="doc-p">Line rules run in order and each result lands in a per-row <code class="doc-code">{{$line.*}}</code> context, so a later rule can chain off earlier ones — in expressions and in scope-filter values. Composite lookups fall out of this: resolve <code class="doc-code">category_type</code> and <code class="doc-code">core_category</code> first, then a <code class="doc-code">category</code> rule with an expression <code class="doc-code">{{$line.core_category}}</code> and a scope filter <code class="doc-code">sub_category = {{$line.category_type}}</code> picks the exact record matching both, per row. Row-varying scope filters are applied in memory after the single batched query, so lookups stay one query per rule.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>take</th><th>Behavior</th></tr></thead>
             <tbody><tr><tr><td>id (default)</td><td>Resolves to the matched record's id — the typical FK-fill case.</td></tr>
