@@ -616,7 +616,11 @@ function LookupEditor({
                 collection: v,
                 match_field: v === '$users' ? 'email' : '',
                 take: v === '$users' ? 'id' : step.take,
-                take_field: v === '$users' ? null : step.take_field
+                take_field: v === '$users' ? null : step.take_field,
+                // $users forbids on_miss 'create' — coerce so the radio group
+                // never renders with an orphaned selection.
+                on_miss: v === '$users' && step.on_miss === 'create' ? 'leave_blank' : step.on_miss,
+                create: v === '$users' ? undefined : step.create
               })
             }
             options={lookupCollectionOptions}
