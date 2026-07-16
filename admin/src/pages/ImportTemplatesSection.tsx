@@ -17,7 +17,13 @@ import { createContext, type ReactNode, useContext, useMemo, useRef, useState } 
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
+import {
+  Command,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -31,7 +37,7 @@ import { cn } from '@/lib/utils'
 type ImportMode = 'prefill' | 'direct' | 'both'
 type FileType = 'xlsx' | 'xlsm' | 'xls' | 'csv'
 type OnMiss = 'leave_blank' | 'error' | 'create_stub'
-type Take = 'id' | 'record'
+type Take = 'id' | 'record' | 'field'
 type RowFilterOp = 'nnull' | 'eq' | 'neq'
 
 interface ScopeFilter {
@@ -51,6 +57,7 @@ type ImportStep =
       scope_filters: ScopeFilter[]
       on_miss: OnMiss
       take: Take
+      take_field: string | null
     }
   | { type: 'wrap_richtext' }
   | { type: 'const'; value: unknown }
@@ -59,6 +66,14 @@ interface ImportHeaderRule {
   target: string
   source: string | null
   steps: ImportStep[]
+}
+
+type RowFilterValue = { column: string; op: RowFilterOp; value?: string } | null
+
+interface ImportNestedConfig {
+  target_field: string
+  when: RowFilterValue
+  columns: ImportHeaderRule[]
 }
 
 interface ImportDisperseConfig {
@@ -77,10 +92,11 @@ interface ImportDisperseConfig {
 
 interface ImportLineConfig {
   target_field: string
-  row_filter: { column: string; op: RowFilterOp; value?: string } | null
+  row_filter: RowFilterValue
   columns: ImportHeaderRule[]
   apply_field_rules: boolean
   disperse: ImportDisperseConfig | null
+  nested: ImportNestedConfig | null
 }
 
 interface ConfigErrorDetail {
@@ -132,6 +148,7 @@ interface RelationRow {
   many_field: string
   one_collection: string | null
   one_field: string | null
+  junction_field: string | null
 }
 
 type Option = { value: string; label: string }
@@ -141,8 +158,17 @@ const DEFAULT_LINE_CONFIG: ImportLineConfig = {
   row_filter: null,
   columns: [],
   apply_field_rules: true,
-  disperse: null
+  disperse: null,
+  nested: null
 }
+
+const DEFAULT_NESTED: ImportNestedConfig = {
+  target_field: '',
+  when: null,
+  columns: []
+}
+
+const USERS_LOOKUP_OPTION: Option = { value: '$users', label: 'Users (system)' }
 
 const DEFAULT_DISPERSE: ImportDisperseConfig = {
   map_collection: '',
@@ -180,7 +206,8 @@ function defaultStepFor(type: ImportStep['type']): ImportStep {
         match_field: '',
         scope_filters: [],
         on_miss: 'leave_blank',
-        take: 'id'
+        take: 'id',
+        take_field: null
       }
     case 'const':
       return { type: 'const', value: '' }
@@ -316,6 +343,7 @@ function Combobox({
       </PopoverTrigger>
       <PopoverContent className='p-0' align='start' style={{ width }}>
         <Command>
+          <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
           <CommandList>
             <CommandGroup>
               {options.map((opt) => (
@@ -543,7 +571,11 @@ function LookupEditor({
   path: string
 }) {
   const collectionOptions = useCollectionOptions()
-  const { data: lookupFields = [] } = useFieldOptions(step.collection || null)
+  const lookupCollectionOptions = [USERS_LOOKUP_OPTION, ...collectionOptions]
+  const isUsersLookup = step.collection === '$users'
+  const { data: lookupFields = [] } = useFieldOptions(
+    !isUsersLookup ? step.collection || null : null
+  )
   const matchFieldOptions = lookupFields
     .filter(isPlainField)
     .map((f) => ({ value: f.field, label: fieldLabel(f) }))
@@ -558,19 +590,33 @@ function LookupEditor({
         <div className='w-[180px]'>
           <Combobox
             value={step.collection}
-            onChange={(v) => onChange({ ...step, collection: v, match_field: '' })}
-            options={collectionOptions}
+            onChange={(v) =>
+              onChange({
+                ...step,
+                collection: v,
+                match_field: v === '$users' ? 'email' : '',
+                take: v === '$users' ? 'id' : step.take,
+                take_field: v === '$users' ? null : step.take_field
+              })
+            }
+            options={lookupCollectionOptions}
             placeholder='collection…'
           />
         </div>
         <div className='w-[180px]'>
-          <Combobox
-            value={step.match_field}
-            onChange={(v) => onChange({ ...step, match_field: v })}
-            options={matchFieldOptions}
-            placeholder='match field…'
-            disabled={!step.collection}
-          />
+          {isUsersLookup ? (
+            <div className='flex h-8 items-center rounded-md border border-slate-200 bg-slate-50 px-2 font-mono text-[12px] text-slate-500 dark:border-border dark:bg-muted/20'>
+              email
+            </div>
+          ) : (
+            <Combobox
+              value={step.match_field}
+              onChange={(v) => onChange({ ...step, match_field: v })}
+              options={matchFieldOptions}
+              placeholder='match field…'
+              disabled={!step.collection}
+            />
+          )}
         </div>
       </div>
       <div className='space-y-1'>
@@ -655,20 +701,39 @@ function LookupEditor({
             </label>
           ))}
         </div>
-        <div className='flex items-center gap-2'>
-          <span className='text-slate-400'>Take:</span>
-          {(['id', 'record'] as const).map((v) => (
-            <label key={v} className='flex cursor-pointer items-center gap-1 text-slate-600'>
-              <input
-                type='radio'
-                name={`take-${path}`}
-                checked={step.take === v}
-                onChange={() => onChange({ ...step, take: v })}
-              />
-              {v}
-            </label>
-          ))}
-        </div>
+        {!isUsersLookup && (
+          <div className='flex items-center gap-2'>
+            <span className='text-slate-400'>Take:</span>
+            {(['id', 'record', 'field'] as const).map((v) => (
+              <label key={v} className='flex cursor-pointer items-center gap-1 text-slate-600'>
+                <input
+                  type='radio'
+                  name={`take-${path}`}
+                  checked={step.take === v}
+                  onChange={() =>
+                    onChange({
+                      ...step,
+                      take: v,
+                      take_field: v === 'field' ? step.take_field : null
+                    })
+                  }
+                />
+                {v === 'field' ? 'field of record' : v}
+              </label>
+            ))}
+          </div>
+        )}
+        {!isUsersLookup && step.take === 'field' && (
+          <div className='w-[180px]'>
+            <Combobox
+              value={step.take_field ?? ''}
+              onChange={(v) => onChange({ ...step, take_field: v || null })}
+              options={matchFieldOptions}
+              placeholder='field to take…'
+              disabled={!step.collection}
+            />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -869,15 +934,23 @@ function RuleEditor({
   rules,
   onChange,
   fieldOptions,
+  extraTargetOptions,
   basePath,
   errors
 }: {
   rules: ImportHeaderRule[]
   onChange: (rules: ImportHeaderRule[]) => void
   fieldOptions: Option[] | null
+  extraTargetOptions?: Option[]
   basePath: string
   errors: ConfigErrorDetail[]
 }) {
+  const rowFieldOptions = fieldOptions
+    ? extraTargetOptions?.length
+      ? [...fieldOptions, ...extraTargetOptions]
+      : fieldOptions
+    : null
+
   function addRule() {
     onChange([...rules, { target: '', source: '', steps: [] }])
   }
@@ -905,7 +978,7 @@ function RuleEditor({
           rule={rule}
           isFirst={i === 0}
           isLast={i === rules.length - 1}
-          fieldOptions={fieldOptions}
+          fieldOptions={rowFieldOptions}
           path={`${basePath}[${i}]`}
           errors={errors}
           onPatch={(patch) => updateRule(i, patch)}
@@ -1115,6 +1188,87 @@ function DisperseSection({
               onChange={(cols) => onChange({ ...disperse, member_columns: cols })}
               fieldOptions={null}
               basePath='line_map.disperse.member_columns'
+              errors={errors}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NestedFields({
+  nested,
+  onChange
+}: {
+  nested: ImportNestedConfig
+  onChange: (patch: Partial<ImportNestedConfig>) => void
+}) {
+  return (
+    <div className='space-y-3'>
+      <LabeledField label='Target field'>
+        <Input
+          value={nested.target_field}
+          onChange={(e) => onChange({ target_field: e.target.value })}
+          placeholder='unit_workflows'
+          className='h-8 font-mono text-[12px]'
+        />
+      </LabeledField>
+      <div>
+        <Label className='mb-1.5 block text-[11px] text-slate-500'>
+          Only create the nested row when
+        </Label>
+        <RowFilterEditor value={nested.when} onChange={(w) => onChange({ when: w })} />
+      </div>
+    </div>
+  )
+}
+
+function NestedSection({
+  nested,
+  onChange,
+  errors
+}: {
+  nested: ImportNestedConfig | null
+  onChange: (n: ImportNestedConfig | null) => void
+  errors: ConfigErrorDetail[]
+}) {
+  const [open, setOpen] = useState(false)
+  const enabled = nested != null
+  return (
+    <div className='rounded-lg border border-slate-200 dark:border-border'>
+      <div className='flex items-center justify-between px-3 py-2.5'>
+        <button
+          type='button'
+          onClick={() => setOpen((o) => !o)}
+          className='flex items-center gap-1.5 text-[12px] font-medium text-slate-700 dark:text-slate-200'
+        >
+          {open ? (
+            <ChevronDown className='h-3.5 w-3.5' />
+          ) : (
+            <ChevronRight className='h-3.5 w-3.5' />
+          )}
+          Per-line nested row (advanced)
+        </button>
+        <Switch
+          checked={enabled}
+          onCheckedChange={(v) => {
+            onChange(v ? DEFAULT_NESTED : null)
+            if (v) setOpen(true)
+          }}
+        />
+      </div>
+      {open && enabled && nested && (
+        <div className='space-y-3 border-t border-slate-100 p-3 dark:border-border'>
+          <NestedFields nested={nested} onChange={(patch) => onChange({ ...nested, ...patch })} />
+          <InlineErrors errors={errorsUnder(errors, 'line_map.nested')} ownPath='line_map.nested' />
+          <div>
+            <Label className='mb-1.5 block text-[11px] text-slate-500'>Member columns</Label>
+            <RuleEditor
+              rules={nested.columns}
+              onChange={(cols) => onChange({ ...nested, columns: cols })}
+              fieldOptions={null}
+              basePath='line_map.nested.columns'
               errors={errors}
             />
           </div>
@@ -1498,6 +1652,16 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
     )
     .map((r) => ({ value: r.one_field, label: `${r.one_field} → ${r.many_collection}` }))
 
+  const m2mAliasOptions = fields
+    .filter((f) => f.type === 'alias')
+    .filter((f) =>
+      relations.some(
+        (r) =>
+          r.one_collection === collection && r.one_field === f.field && r.junction_field != null
+      )
+    )
+    .map((f) => ({ value: f.field, label: `${fieldLabel(f)} (M2M)` }))
+
   const childCollection = useMemo(() => {
     const rel = relations.find(
       (r) => r.one_collection === collection && r.one_field === draft.line_map?.target_field
@@ -1674,6 +1838,7 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
               rules={draft.header_map}
               onChange={(rules) => patch({ header_map: rules })}
               fieldOptions={targetFieldOptions}
+              extraTargetOptions={m2mAliasOptions}
               basePath='header_map'
               errors={errors}
             />
@@ -1751,6 +1916,16 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
                   disperse={draft.line_map.disperse}
                   onChange={(d) =>
                     patch({ line_map: { ...(draft.line_map as ImportLineConfig), disperse: d } })
+                  }
+                  errors={errors}
+                />
+              </CollectionOptionsContext.Provider>
+
+              <CollectionOptionsContext.Provider value={collectionOptions}>
+                <NestedSection
+                  nested={draft.line_map.nested}
+                  onChange={(n) =>
+                    patch({ line_map: { ...(draft.line_map as ImportLineConfig), nested: n } })
                   }
                   errors={errors}
                 />
