@@ -45,7 +45,9 @@ export interface AiCollectionSettings {
   collection: string
   validation_enabled: boolean
   validation_mode: 'soft' | 'hard'
-  validation_rules: string[]
+  // Mixed array: legacy free-text rule strings evaluated by the AI validator,
+  // plus typed rule objects (e.g. sum_cap) evaluated by their own hooks.
+  validation_rules: unknown[]
   duplicate_detection_enabled: boolean
   duplicate_threshold: number
 }
@@ -61,13 +63,11 @@ export const AI_SETTINGS_DEFAULTS: Omit<AiCollectionSettings, 'collection'> = {
   duplicate_threshold: 0.85
 }
 
-function parseRules(raw: unknown): string[] {
+function parseRules(raw: unknown): unknown[] {
   if (typeof raw !== 'string' || !raw) return []
   try {
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed)
-      ? parsed.filter((r): r is string => typeof r === 'string' && r.trim().length > 0)
-      : []
+    return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
   }
@@ -147,9 +147,14 @@ let loggedNoKey = false
 export async function runAiValidation(
   collection: string,
   data: Record<string, unknown>,
-  rules: string[]
+  rules: unknown[]
 ): Promise<AiViolation[]> {
-  if (rules.length === 0) return []
+  // validation_rules may also carry typed rule objects (e.g. sum_cap) owned by
+  // other hooks — back-compat: only free-text string rules go to the model.
+  const stringRules = rules.filter(
+    (r): r is string => typeof r === 'string' && r.trim().length > 0
+  )
+  if (stringRules.length === 0) return []
 
   const client = await getAnthropicClient()
   if (!client) {
@@ -172,7 +177,7 @@ export async function runAiValidation(
 
   const userContent = [
     'Rules:',
-    ...rules.map((r, i) => `${i + 1}. ${r}`),
+    ...stringRules.map((r, i) => `${i + 1}. ${r}`),
     '',
     `Record: ${JSON.stringify(data).slice(0, 8000)}`
   ].join('\n')

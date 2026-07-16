@@ -130,24 +130,27 @@ export async function buildServer() {
   }
 
   // ─── Error tracking: 5xx → nivaro_issues (deduped, fire-and-forget) ───────
-  app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
-    const status = err.statusCode ?? 500
-    if (status >= 500 && req.url.startsWith('/api/')) {
-      trackError({
-        source: 'server',
-        route: `${req.method} ${req.routeOptions?.url ?? req.url}`,
+  app.setErrorHandler(
+    (err: Error & { statusCode?: number; code?: string; violations?: unknown }, req, reply) => {
+      const status = err.statusCode ?? 500
+      if (status >= 500 && req.url.startsWith('/api/')) {
+        trackError({
+          source: 'server',
+          route: `${req.method} ${req.routeOptions?.url ?? req.url}`,
+          message: err.message,
+          stack: err.stack,
+          userId: req.user?.id ?? null
+        }).catch(() => {})
+      }
+      req.log.error(err)
+      reply.code(status).send({
+        statusCode: status,
+        error: STATUS_CODES[status] ?? 'Error',
         message: err.message,
-        stack: err.stack,
-        userId: req.user?.id ?? null
-      }).catch(() => {})
+        ...(err.code && err.violations ? { code: err.code, violations: err.violations } : {})
+      })
     }
-    req.log.error(err)
-    reply.code(status).send({
-      statusCode: status,
-      error: STATUS_CODES[status] ?? 'Error',
-      message: err.message
-    })
-  })
+  )
 
   // Mission-control pulse — activity broadcasts need the io instance
   setPulseApp(app)

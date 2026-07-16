@@ -1,6 +1,7 @@
 import { config } from './config.js'
 import { closeDb, migrationSource, runMigrationsSafely } from './db/index.js'
 import { registerActivityHooks } from './hooks/activity.js'
+import { registerAggregateCapHooks, setApp as setAggregateCapApp } from './hooks/aggregate-caps.js'
 import { registerAiValidationHooks, setApp as setAiValidationApp } from './hooks/ai-validation.js'
 import { registerAlertHooks, setApp as setAlertApp } from './hooks/alerts.js'
 import { registerCrossTriggerHooks, setApp as setCrossTriggerApp } from './hooks/cross-triggers.js'
@@ -29,6 +30,7 @@ async function main() {
     registerEmbeddingHooks()
     registerCrossTriggerHooks()
     registerAiValidationHooks()
+    registerAggregateCapHooks()
     registerQueueMaterializationHooks()
   }
 
@@ -79,6 +81,7 @@ async function main() {
     setEmbeddingApp(app)
     setCrossTriggerApp(app)
     setAiValidationApp(app)
+    setAggregateCapApp(app)
   }
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' })
