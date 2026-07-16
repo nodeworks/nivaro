@@ -39,6 +39,13 @@ vi.mock('../../services/files.js', () => ({
 vi.mock('../../services/items.js', () => ({
   applyFieldRules: vi.fn().mockResolvedValue(undefined),
   createOne: vi.fn(),
+  getActualColumns: vi.fn(async (collection: string) => {
+    // Return a set of physical columns for the given collection
+    if (collection === 'po_line_items') {
+      return new Set(['id', 'sku', 'nested_items', 'other_workflow'])
+    }
+    return new Set(['id'])
+  }),
   findM2MRelation: (key: string, collection: string, rels: Record<string, unknown>[]) => {
     for (const rel of rels) {
       if (rel.one_collection !== collection) continue
@@ -2158,6 +2165,88 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     expect(detail?.message).toBe(
       'Unknown field "not_a_field_or_relation" on po_line_items — nested_target requires a repeater/JSON column'
     )
+  })
+
+  it('POST / rejects mismatched nested and disperse targets when a relation target is used', async () => {
+    const user = makeAdminUser()
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'purchase_orders' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections primary
+      .mockReturnValueOnce(makeChain([{ field: 'vendor_id' }]) as unknown as ReturnType<typeof db>) // nivaro_fields primary
+      .mockReturnValueOnce(
+        makeChain({
+          many_collection: 'po_line_items',
+          many_field: 'purchase_order_id'
+        }) as unknown as ReturnType<typeof db>
+      ) // relation resolve — line_map.target_field
+      .mockReturnValueOnce(
+        makeChain([{ field: 'sku' }, { field: 'nested_items', type: null }, { field: 'other_workflow', type: null }]) as unknown as ReturnType<typeof db>
+      ) // child nivaro_fields
+      .mockReturnValueOnce(makeChain(undefined) as unknown as ReturnType<typeof db>) // nivaro_relations — disperse.nested_target resolves as null (plain JSON field)
+      .mockReturnValueOnce(
+        makeChain({ id: 2, collection: 'disperse_maps' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections for disperse map_collection
+      .mockReturnValueOnce(
+        makeChain([{ field: 'code' }]) as unknown as ReturnType<typeof db>
+      ) // nivaro_fields for disperse map_collection
+      .mockReturnValueOnce(
+        makeChain({
+          one_collection: 'po_line_items',
+          one_field: 'other_workflow',
+          many_collection: 'workflows',
+          many_field: 'line_ref'
+        }) as unknown as ReturnType<typeof db>
+      ) // nivaro_relations — nested.target_field resolves as relation
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Nested Disperse Mismatch Import',
+        collection: 'purchase_orders',
+        line_map: {
+          target_field: 'line_items',
+          row_filter: null,
+          columns: [],
+          apply_field_rules: true,
+          disperse: {
+            map_collection: 'disperse_maps',
+            map_key_column: 'Line Ref',
+            map_key_field: 'code',
+            map_values_path: 'values',
+            map_all_field: null,
+            member_match_column: 'Unit Type',
+            group_by_column: 'Unit Name',
+            amount_column: 'Line Total',
+            nested_target: 'nested_items',
+            split: 'even',
+            member_columns: []
+          },
+          nested: {
+            target_field: 'other_workflow',
+            when: null,
+            columns: []
+          }
+        }
+      })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as {
+      error: string
+      details: { path: string; message: string }[]
+    }
+    expect(body.error).toBe('Invalid template config')
+    expect(
+      body.details.some(
+        (d) =>
+          d.path === 'line_map' &&
+          d.message === 'nested and disperse must target the same field when a relation target is used'
+      )
+    ).toBe(true)
   })
 
   it('POST / rejects a create.defaults target absent from the lookup collection field set', async () => {
