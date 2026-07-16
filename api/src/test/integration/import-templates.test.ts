@@ -393,6 +393,73 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     ).toBe(true)
   })
 
+  it('POST / rejects an M2M header target whose lookup takes the whole record', async () => {
+    const user = makeAdminUser()
+    const relToJunction = {
+      one_collection: 'workflows',
+      one_field: 'funding_years',
+      junction_field: 'year_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'workflow_id'
+    }
+    const relFromJunction = {
+      one_collection: 'funding_years',
+      one_field: 'workflows',
+      junction_field: 'workflow_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'year_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(
+        makeChain({ id: 1, collection: 'workflows' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections.first — primary
+      .mockReturnValueOnce(makeChain([{ field: 'name' }]) as unknown as ReturnType<typeof db>) // nivaro_fields.select — primary (funding_years not physical)
+      .mockReturnValueOnce(
+        makeChain([relToJunction, relFromJunction]) as unknown as ReturnType<typeof db>
+      ) // nivaro_relations direct (m2m resolve)
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations junction siblings
+      .mockReturnValueOnce(
+        makeChain({ id: 2, collection: 'funding_years' }) as unknown as ReturnType<typeof db>
+      ) // nivaro_collections.first — lookup target
+      .mockReturnValueOnce(
+        makeChain([{ field: 'id' }, { field: 'name' }]) as unknown as ReturnType<typeof db>
+      ) // nivaro_fields.select — lookup target
+
+    const app = await buildApp(user, true)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        name: 'Funding Import',
+        collection: 'workflows',
+        header_map: [
+          {
+            target: 'funding_years',
+            source: 'Funding Year',
+            steps: [
+              { type: 'lookup', collection: 'funding_years', match_field: 'name', take: 'record' }
+            ]
+          }
+        ]
+      })
+    })
+
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.body) as {
+      error: string
+      details: { path: string; message: string }[]
+    }
+    expect(body.error).toBe('Invalid template config')
+    expect(
+      body.details.some(
+        (d) =>
+          d.path === 'header_map[0]' &&
+          d.message === 'M2M targets require lookups that resolve to ids (take "id")'
+      )
+    ).toBe(true)
+  })
+
   it('POST /:id/parse runs a saved template against an uploaded xlsx file', async () => {
     const user = makeRegularUser({ id: 'user-1' })
     const template = {
@@ -1138,6 +1205,69 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       user,
       'workflow_line_items',
       expect.objectContaining({ sku: 'A1', workflow_id: 'parent-1' }),
+      expect.anything(),
+      undefined
+    )
+  })
+
+  it('POST /:id/execute — duplicate m2m ids dedupe to a single junction create', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-m2m-dupe',
+      collection: 'workflows',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: null,
+      attach_file_field: null
+    }
+    const relToJunction = {
+      one_collection: 'workflows',
+      one_field: 'funding_years',
+      junction_field: 'year_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'workflow_id'
+    }
+    const relFromJunction = {
+      one_collection: 'funding_years',
+      one_field: 'workflows',
+      junction_field: 'workflow_id',
+      many_collection: 'workflows_funding_years',
+      many_field: 'year_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(
+        makeChain([relToJunction, relFromJunction]) as unknown as ReturnType<typeof db>
+      ) // nivaro_relations direct (m2m resolve)
+      .mockReturnValueOnce(makeChain([]) as unknown as ReturnType<typeof db>) // nivaro_relations junction siblings
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'junction-1' } as never) // single deduped junction row
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-m2m-dupe/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { name: 'WF' },
+        lines: [],
+        issues: [],
+        m2m: { funding_years: ['2026-id', '2026-id'] }
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(vi.mocked(createOne)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      2,
+      user,
+      'workflows_funding_years',
+      { workflow_id: 'parent-1', year_id: '2026-id' },
       expect.anything(),
       undefined
     )

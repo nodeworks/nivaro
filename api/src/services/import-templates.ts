@@ -303,7 +303,10 @@ async function runHeaderPhase(
     )
     resolved[rule.target] = value
     if (m2mFields?.has(rule.target)) {
-      if (value !== undefined) m2m[rule.target] = [value as string | number]
+      // Only scalar lookup results are linkable M2M ids — a lookup that resolved to a
+      // whole record (take 'record'/'field' yielding an object), an array, or null/
+      // undefined can't become a junction row, so the key is omitted from m2m entirely.
+      if (typeof value === 'string' || typeof value === 'number') m2m[rule.target] = [value]
     } else {
       values[rule.target] = value
     }

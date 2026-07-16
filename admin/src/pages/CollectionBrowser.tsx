@@ -1305,6 +1305,13 @@ export function CollectionBrowserPage() {
                 {Object.keys(directImport.result.values).length === 1 ? '' : 's'} resolved ·{' '}
                 {directImport.result.lines.length} line
                 {directImport.result.lines.length === 1 ? '' : 's'}
+                {(() => {
+                  const linked = Object.values(directImport.result.m2m ?? {}).reduce(
+                    (sum, ids) => sum + ids.length,
+                    0
+                  )
+                  return linked > 0 ? ` · ${linked} linked record${linked === 1 ? '' : 's'}` : ''
+                })()}
               </p>
             )}
             <ImportIssuesPanel issues={directIssues} />

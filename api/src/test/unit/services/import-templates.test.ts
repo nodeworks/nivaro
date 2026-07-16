@@ -295,6 +295,26 @@ describe('runImportPipeline — m2m routing', () => {
     })
     expect(m2m).toEqual({})
   })
+
+  it('omits m2m targets whose lookup resolves a whole record (non-scalar)', async () => {
+    const config = cfg({
+      header_map: [
+        {
+          target: 'regions',
+          source: 'Region',
+          steps: [{ type: 'lookup', collection: 'regions', match_field: 'name', take: 'record' }]
+        }
+      ]
+    })
+    const lookup = vi.fn(async () => [{ id: 3, name: 'NER' }])
+    const { m2m } = await runImportPipeline({
+      config,
+      rows: [{ Region: 'NER' }],
+      lookup,
+      m2mFields: new Set(['regions'])
+    })
+    expect(m2m).toEqual({})
+  })
 })
 
 describe('runImportPipeline — take:field', () => {

@@ -306,7 +306,7 @@ export function ItemEditForm({
 
   const layoutId = activeLayoutData?.layout?.id ?? null
 
-  const { data: fieldConfig, isLoading: fieldsLoading } = useQuery<CMSField[]>({
+  const { data: fieldConfig, isLoading: fieldsLoading, isFetched: fieldConfigFetched } = useQuery<CMSField[]>({
     queryKey: ['field-config', collection, layoutId],
     queryFn: () =>
       client
@@ -641,21 +641,43 @@ export function ItemEditForm({
               if (!(key in parentCtx)) parentCtx[key] = mergedDraft[key] ?? null
             }
           }
-          const evaluated = await Promise.all(
-            result.lines.map((line) =>
-              client
-                .request<{ updates: Record<string, unknown> }>(
-                  post('/field-rules/evaluate', {
-                    collection: rel.many_collection,
-                    data: line.values,
-                    parent_context: parentCtx,
-                    row_rules: rowRules
+          // Bounded concurrency (10 at a time) rather than firing every line's
+          // evaluate at once — a large import could otherwise open hundreds of
+          // simultaneous requests. Failed rows degrade to {} and are surfaced as one
+          // aggregate warning so the user knows some autofill didn't run.
+          const evaluated: Record<string, unknown>[] = []
+          let anyEvalFailed = false
+          const EVAL_CHUNK = 10
+          for (let i = 0; i < result.lines.length; i += EVAL_CHUNK) {
+            const chunk = result.lines.slice(i, i + EVAL_CHUNK)
+            const chunkResults = await Promise.all(
+              chunk.map((line) =>
+                client
+                  .request<{ updates: Record<string, unknown> }>(
+                    post('/field-rules/evaluate', {
+                      collection: rel.many_collection,
+                      data: line.values,
+                      parent_context: parentCtx,
+                      row_rules: rowRules
+                    })
+                  )
+                  .then((res) => res.updates ?? {})
+                  .catch(() => {
+                    anyEvalFailed = true
+                    return {}
                   })
-                )
-                .then((res) => res.updates ?? {})
-                .catch(() => ({}))
+              )
             )
-          )
+            evaluated.push(...chunkResults)
+          }
+          if (anyEvalFailed) {
+            issues.push({
+              severity: 'warn',
+              rule: 'import-apply',
+              message:
+                'Some line autofill rules could not be evaluated — check the affected rows before saving.'
+            })
+          }
           result.lines.forEach((line, i) => {
             line.values = { ...line.values, ...evaluated[i] }
           })
@@ -699,9 +721,12 @@ export function ItemEditForm({
     const needsRelations =
       initialImportResult.lines.length > 0 || Object.keys(initialImportResult.m2m ?? {}).length > 0
     if (needsRelations && !relationsFetched) return
+    // Line row-rules read fieldConfig (options.row_rules) — wait for that query too, or
+    // an early apply would evaluate against an empty field config and skip the rules.
+    if (initialImportResult.lines.length > 0 && !fieldConfigFetched) return
     appliedInitialImportRef.current = true
     void applyImportResult(initialImportResult)
-  }, [isNew, initialImportResult, relationsFetched, applyImportResult])
+  }, [isNew, initialImportResult, relationsFetched, fieldConfigFetched, applyImportResult])
 
   useEffect(() => {
     if (itemData) {

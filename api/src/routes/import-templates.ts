@@ -331,6 +331,18 @@ async function validateConfigAgainstSchema(
         path: `header_map[${i}]`,
         message: `Header rule target "${rule.target}" is not a column or M2M field of ${collection}`
       })
+    } else {
+      // An M2M target must resolve to ids — a lookup taking the whole record ('record')
+      // or an arbitrary field ('field') can't become a junction row.
+      const lookupStep = rule.steps.find(
+        (s): s is Extract<ImportStep, { type: 'lookup' }> => s.type === 'lookup'
+      )
+      if (lookupStep && (lookupStep.take === 'record' || lookupStep.take === 'field')) {
+        errors.push({
+          path: `header_map[${i}]`,
+          message: 'M2M targets require lookups that resolve to ids (take "id")'
+        })
+      }
     }
   }
 
@@ -864,7 +876,16 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       for (const [field, ids] of m2mEntries) {
         failedM2mField = field
         const info = m2mAliasMap.get(field)!
-        for (const idValue of ids) {
+        // Dedupe by string key while preserving each id's first original value — a
+        // duplicated id would otherwise create redundant junction rows for one link.
+        const seen = new Set<string>()
+        const uniqueIds = ids.filter((idValue) => {
+          const key = String(idValue)
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+        for (const idValue of uniqueIds) {
           const junctionRow = (await createOne(
             req.user!,
             info.junction,
