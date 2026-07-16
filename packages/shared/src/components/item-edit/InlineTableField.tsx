@@ -297,6 +297,17 @@ export function InlineTableField({
   const [saving, setSaving] = useState(false)
   const [uniqueError, setUniqueError] = useState<string | null>(null)
   const activeView = useAddendumView()
+  // Column view preset selection, persisted per grid instance
+  const presetStorageKey = `nvr_grid_preset_${relatedCollection}_${parentFieldKey ?? manyField}`
+  const [activePreset, setActivePreset] = useState<string | undefined>(() => {
+    const stored = localStorage.getItem(presetStorageKey)
+    if (stored && columnPresets?.some(p => p.name === stored)) return stored
+    return columnPresets?.[0]?.name
+  })
+  function selectPreset(name: string) {
+    setActivePreset(name)
+    localStorage.setItem(presetStorageKey, name)
+  }
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Auto-detect table-type layout for the related collection when no explicit layoutId is given.
@@ -527,6 +538,16 @@ export function InlineTableField({
       !SENTINEL_FIELDS.has(c.field) &&
       !SPECIAL_GROUP_KEYS.has(c.group_key ?? '')
   )
+
+  // Column view preset: which named subset of displayCols is currently shown.
+  // Presets can only FILTER displayCols — they never reveal a column the layout hid.
+  const resolvedPreset = columnPresets && columnPresets.length >= 2
+    ? columnPresets.find(p => p.name === activePreset)
+    : undefined
+  const presetCols = resolvedPreset
+    ? resolvedPreset.columns.map(name => displayCols.find(c => c.field === name)).filter((c): c is CMSField => !!c)
+    : []
+  const effectiveCols = presetCols.length > 0 ? presetCols : displayCols
 
   // Fields configured for the apply values form (group_key === '__apply_values__')
   const applyValuesCols = useMemo(() =>
@@ -784,8 +805,8 @@ export function InlineTableField({
         }
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       } else {
-        // Filter to only configured display columns — draft includes full API row (id, system fields, etc.)
-        const writableKeys = new Set(displayCols.map(c => c.field).filter(k => !k.startsWith('__m2m_')))
+        // Filter to only visible (preset-effective) display columns — draft includes full API row (id, system fields, etc.)
+        const writableKeys = new Set(effectiveCols.map(c => c.field).filter(k => !k.startsWith('__m2m_')))
         const rowPayload = Object.fromEntries(Object.entries(editState.draft).filter(([k]) => writableKeys.has(k)))
         if (isPendingMode && staging) {
           staging.queueEdit(relatedCollection, manyField, editState.rowId, rowPayload)
@@ -1023,6 +1044,26 @@ export function InlineTableField({
 
   const isEditingNew = editState?.rowId === 'new'
 
+  const presetSwitcher = columnPresets && columnPresets.length >= 2 && (
+    <div className='flex items-center gap-1 text-[11px]'>
+      {columnPresets.map(p => (
+        <button
+          key={p.name}
+          type='button'
+          onClick={() => selectPreset(p.name)}
+          className={cn(
+            'h-6 px-2.5 rounded border transition-colors',
+            (resolvedPreset?.name ?? columnPresets[0]?.name) === p.name
+              ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+              : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
+          )}
+        >
+          {p.name}
+        </button>
+      ))}
+    </div>
+  )
+
   return (
     <div className='space-y-1.5'>
       {!readOnly && <div className='flex items-center gap-2 text-[11px]'>
@@ -1072,6 +1113,7 @@ export function InlineTableField({
           </button>
         )}
         {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
+        {presetSwitcher}
         {showRowRevisions && allowRevisionRestore && !isNew && (
           <button
             type='button'
@@ -1120,6 +1162,8 @@ export function InlineTableField({
         <div className='h-8 rounded bg-slate-100 animate-pulse' />
       </div>
     )}
+    {/* readOnly grids skip the !readOnly toolbar above, so the preset switcher gets its own strip */}
+    {readOnly && presetSwitcher}
     <div className={isPrefilling ? 'hidden' : 'relative rounded-lg border border-slate-200 text-[12px]'}>
       {reordering && (
         <div className='absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px]'>
@@ -1135,7 +1179,7 @@ export function InlineTableField({
             {enableReorder && (rowOrderField || isNew || isPendingMode) && <th className='w-6' />}
             {showLineNumbers && <th className='w-8 px-2 py-2 text-left font-medium text-slate-400 text-[11px]'>#</th>}
             {(isNew || isPendingMode) && <th className='px-3 py-2 text-left font-medium text-slate-400 text-[11px] w-20'>Status</th>}
-            {displayCols.map((c) => (
+            {effectiveCols.map((c) => (
               <th key={c.field} className='px-3 py-2 text-left font-medium text-slate-500 text-[11px]'>
                 {c.label ?? titleCase(c.field)}
               </th>
@@ -1227,7 +1271,7 @@ export function InlineTableField({
                     <span className='inline-flex text-[10px] font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5'>Edited</span>
                   )}
                 </td>
-                {displayCols.map((c) => {
+                {effectiveCols.map((c) => {
                   const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
                   const isMM = isM2MIface(c.interface)
                   const m2mKey = `__m2m_${c.field}`
@@ -1354,7 +1398,7 @@ export function InlineTableField({
                     }
                   </td>
                 )}
-                {displayCols.map((c) => {
+                {effectiveCols.map((c) => {
                   const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
                   const computedDisplayVal = isComputedWrite
                     ? (evalClientFormula(c.computed_formula as string, isEditing ? (editState?.draft ?? displayRow) : displayRow) ?? displayRow[c.field])
@@ -1438,7 +1482,7 @@ export function InlineTableField({
             <tr className='border-b border-slate-100 bg-[#f0fbff] dark:bg-nvr-cyan/5'>
               {(rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
               {(isNew || isPendingMode) && <td className='px-3 py-1.5' />}
-              {displayCols.map((c) => {
+              {effectiveCols.map((c) => {
                 const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
                 const isMM = isM2MIface(c.interface)
                 const m2mKey = `__m2m_${c.field}`
@@ -1491,7 +1535,7 @@ export function InlineTableField({
 
           {(isNew || isPendingMode ? pendingRows : rows).length === 0 && (!isPendingMode || rows.length === 0) && !isEditingNew && (
             <tr>
-              <td colSpan={displayCols.length + ((isNew || isPendingMode) ? 2 : 1) + (rowOrderField || isNew || isPendingMode ? 1 : 0)} className='px-3 py-14 text-center text-slate-400'>
+              <td colSpan={effectiveCols.length + ((isNew || isPendingMode) ? 2 : 1) + (rowOrderField || isNew || isPendingMode ? 1 : 0)} className='px-3 py-14 text-center text-slate-400'>
                 {isNew ? 'No pending rows' : 'No rows yet'}
               </td>
             </tr>
@@ -1504,7 +1548,7 @@ export function InlineTableField({
               (enableReorder && (rowOrderField || isPendingMode) ? 1 : 0) +
               (showLineNumbers ? 1 : 0) +
               (isPendingMode ? 1 : 0) +
-              displayCols.length + 1
+              effectiveCols.length + 1
             if (!entry || entry.rows.length === 0) return (
               <tr>
                 <td colSpan={colCount} className='px-3 py-8 text-center text-[11px] text-amber-500'>
@@ -1525,7 +1569,7 @@ export function InlineTableField({
                   {enableReorder && (rowOrderField || isPendingMode) && <td className='w-6' />}
                   {showLineNumbers && <td className={`w-8 px-2 align-middle text-[11px] select-none ${rowChanged ? 'text-amber-400' : 'text-slate-400'}`}>{ri + 1}</td>}
                   {isPendingMode && <td className='w-20' />}
-                  {displayCols.map((c) => (
+                  {effectiveCols.map((c) => (
                     <td key={c.field} className={`px-2 py-1.5 text-[11px] ${changedFields.has(c.field) ? 'bg-amber-50 text-amber-900' : 'text-slate-700'}`}>
                       {renderCell(c, row[c.field], row.id != null ? String(row.id) : undefined)}
                     </td>
@@ -1543,7 +1587,7 @@ export function InlineTableField({
           })()}
         </tbody>
         {activeView === 'original' && (() => {
-          const aggCols = displayCols.filter(c => {
+          const aggCols = effectiveCols.filter(c => {
             const opts = c.options ? (typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown> : {}
             return !!opts.aggregate
           })
@@ -1563,7 +1607,7 @@ export function InlineTableField({
                 {enableReorder && (rowOrderField || isNew || isPendingMode) && <td />}
                 {showLineNumbers && <td />}
                 {(isNew || isPendingMode) && <td />}
-                {displayCols.map(c => {
+                {effectiveCols.map(c => {
                   const opts = c.options ? (typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown> : {}
                   const agg = opts.aggregate as string | undefined
                   if (!agg) return <td key={c.field} className='px-3 py-1.5' />
