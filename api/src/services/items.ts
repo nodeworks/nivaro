@@ -324,7 +324,11 @@ export function parseRollupFormula(raw: string | null): NormalizedRollup | null 
  * Recursive (same-collection tree): aggregate over all descendants via CTE.
  * Returns null on any error or invalid config.
  */
-async function computeRollupValue(cfg: RollupSource, id: unknown): Promise<number | null> {
+async function computeRollupValue(
+  cfg: RollupSource,
+  id: unknown,
+  hostCollection?: string
+): Promise<number | null> {
   if (!cfg.related_collection || !cfg.fk_field || !ROLLUP_AGGREGATES.has(cfg.aggregate)) {
     return null
   }
@@ -332,7 +336,11 @@ async function computeRollupValue(cfg: RollupSource, id: unknown): Promise<numbe
   if (id == null) return null
 
   try {
-    if (cfg.recursive) {
+    // Recursive rollups only make sense over a same-collection tree — the CTE
+    // self-joins related_collection on fk_field, which is defined as pointing at
+    // the HOST collection's ids. A mismatched recursive config (only reachable via
+    // hand-authored JSON) falls back to the flat aggregate, as it always has.
+    if (cfg.recursive && hostCollection === cfg.related_collection) {
       // MSSQL recursive CTE — gather all descendant ids at any depth, then aggregate.
       // Identifiers are bound via ?? (escaped); the id value via ?.
       // MSSQL CTEs never use the RECURSIVE keyword; MAXRECURSION guards depth.
@@ -410,9 +418,12 @@ OPTION (MAXRECURSION 100)`
  */
 export async function computeRollupTotal(
   cfg: NormalizedRollup,
-  id: unknown
+  id: unknown,
+  hostCollection?: string
 ): Promise<number | null> {
-  const values = await Promise.all(cfg.sources.map((source) => computeRollupValue(source, id)))
+  const values = await Promise.all(
+    cfg.sources.map((source) => computeRollupValue(source, id, hostCollection))
+  )
   if (values.every((v) => v == null)) return null
   return values.reduce((sum: number, v) => sum + (v ?? 0), 0)
 }
@@ -464,7 +475,7 @@ async function applyReadComputedFields(
         item[f.field] = null
         continue
       }
-      item[f.field] = await computeRollupTotal(cfg, item.id)
+      item[f.field] = await computeRollupTotal(cfg, item.id, collection)
     }
   }
 }
