@@ -41,8 +41,10 @@ export function AutoIdPreviewField({
   // typing in unrelated fields must not re-trigger the debounce/request cycle.
   const depsKey = useMemo(() => JSON.stringify(deps.map((d) => draft[d])), [deps, draft])
   const stored = draft[field.field]
+  // New records start blank until the first preview response; existing records
+  // show the stored value immediately.
   const [preview, setPreview] = useState<string>(() =>
-    itemId === 'new' ? 'CR26-####' : typeof stored === 'string' ? stored : ''
+    itemId !== 'new' && typeof stored === 'string' ? stored : ''
   )
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
