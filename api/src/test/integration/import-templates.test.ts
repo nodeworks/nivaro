@@ -2644,6 +2644,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       .mockReturnValueOnce(
         makeChain([{ field: 'nested_items', type: 'alias' }]) as unknown as ReturnType<typeof db>
       ) // child nivaro_fields (nested_target is an alias)
+      .mockReturnValueOnce(makeChain(undefined) as unknown as ReturnType<typeof db>) // alias relation resolve: none backing it
       .mockReturnValueOnce(
         makeChain({ id: 2, collection: 'disperse_maps' }) as unknown as ReturnType<typeof db>
       ) // map collection
