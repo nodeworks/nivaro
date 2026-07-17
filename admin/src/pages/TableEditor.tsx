@@ -13463,7 +13463,11 @@ function FieldGroupsTab({
   })
 
   const { data: fieldConfigResult } = useQuery({
-    queryKey: ['field-config', tableName, layoutId],
+    // Own namespace: shared components cache the same endpoint as a bare ARRAY under
+    // ['field-config', collection, layoutId]; this query caches the wrapper OBJECT.
+    // Sharing the key poisons whichever consumer reads second (an array here made
+    // fieldConfig a fresh [] every render — infinite init-effect loop).
+    queryKey: ['layout-field-config', tableName, layoutId],
     queryFn: () =>
       api
         .get<{
@@ -14041,7 +14045,10 @@ function FieldGroupsTab({
     [qc, tableName]
   )
   const invalidateFieldConfig = useCallback(
-    () => qc.invalidateQueries({ queryKey: ['field-config', tableName] }),
+    () => {
+      qc.invalidateQueries({ queryKey: ['field-config', tableName] })
+      qc.invalidateQueries({ queryKey: ['layout-field-config', tableName] })
+    },
     [qc, tableName]
   )
   const invalidateMeta = useCallback(
@@ -16635,6 +16642,7 @@ function useFieldConfig(tableName: string) {
   const patchField = async (fieldName: string, patch: Record<string, unknown>) => {
     await api.patch(`/field-config/${tableName}/${fieldName}`, patch)
     qc.invalidateQueries({ queryKey: ['field-config', tableName] })
+    qc.invalidateQueries({ queryKey: ['layout-field-config', tableName] })
   }
 
   return { fieldConfig, isLoading, patchField }
