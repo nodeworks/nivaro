@@ -1784,39 +1784,69 @@ export function ItemEditForm({
         updateStep(stepId, { status: 'running', progress: { done: 0, total: edits.size } })
         let hasErr = false
         let nestedFailures = 0
+        // Rows that still have unapplied work after this pass (main PATCH failed, or some
+        // nested ops failed) — rebuilt per-row so a retry only re-attempts what actually
+        // failed, instead of re-running every op (which would duplicate creates/deletes).
+        const remainingRows = new Map<string, Record<string, unknown>>()
         await Promise.all([...edits.entries()].map(async ([rowId, changes]) => {
           // __nested_ops_* keys stage a NestedRelationEditor's grandchild ops (F3) — strip
           // them from the PATCH payload and apply them against the resolved relation instead.
           const nestedOpsEntries = Object.entries(changes).filter(([k]) => k.startsWith('__nested_ops_'))
           const cleanChanges = Object.fromEntries(Object.entries(changes).filter(([k]) => !k.startsWith('__nested_ops_')))
+          let rowPatchFailed = false
           if (Object.keys(cleanChanges).length > 0) {
-            await client.request(patch(`/items/${rc}/${rowId}`, cleanChanges)).catch(err => { hasErr = true; updateStep(stepId, { status: 'error', error: errMsg(err) }) })
+            await client.request(patch(`/items/${rc}/${rowId}`, cleanChanges)).catch(err => {
+              hasErr = true
+              rowPatchFailed = true
+              updateStep(stepId, { status: 'error', error: errMsg(err) })
+            })
           }
+          if (rowPatchFailed) {
+            // Gate: the row's own edit didn't land — retain the queued edit UNCHANGED (nested
+            // ops included) rather than attempting grandchild writes for a rejected parent edit.
+            remainingRows.set(rowId, changes)
+            updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: edits.size } }))
+            return
+          }
+          const remainingChanges: Record<string, unknown> = {}
           for (const [opsKey, opsVal] of nestedOpsEntries) {
             const field = opsKey.slice('__nested_ops_'.length)
             const grandRel = relations.find(r => r.one_collection === rc && r.one_field === field)
             const ops = opsVal as NestedOps
             if (!grandRel?.many_collection || !grandRel.many_field) {
               nestedFailures += ops.created.length + ops.updated.length + ops.deleted.length
+              remainingChanges[opsKey] = ops
               continue
             }
             const { many_collection, many_field } = grandRel
+            const failedCreated: Record<string, unknown>[] = []
+            const failedUpdated: { id: string; changes: Record<string, unknown> }[] = []
+            const failedDeleted: string[] = []
             await Promise.all(ops.created.map(draftRow =>
-              client.request(post(`/items/${many_collection}`, { ...draftRow, [many_field]: rowId })).catch(() => { nestedFailures++ })
+              client.request(post(`/items/${many_collection}`, { ...draftRow, [many_field]: rowId }))
+                .catch(() => { nestedFailures++; failedCreated.push(draftRow) })
             ))
-            await Promise.all(ops.updated.map(({ id, changes: uChanges }) =>
-              client.request(patch(`/items/${many_collection}/${id}`, uChanges)).catch(() => { nestedFailures++ })
+            await Promise.all(ops.updated.map(u =>
+              client.request(patch(`/items/${many_collection}/${u.id}`, u.changes))
+                .catch(() => { nestedFailures++; failedUpdated.push(u) })
             ))
             // Deletes last, after creates/updates for this same flush have had a chance to land.
             await Promise.all(ops.deleted.map(id =>
-              client.request(del(`/items/${many_collection}/${id}`)).catch(() => { nestedFailures++ })
+              client.request(del(`/items/${many_collection}/${id}`))
+                .catch(() => { nestedFailures++; failedDeleted.push(id) })
             ))
+            // Prune: only the ops that actually failed ride along on a retry.
+            if (failedCreated.length || failedUpdated.length || failedDeleted.length) {
+              remainingChanges[opsKey] = { created: failedCreated, updated: failedUpdated, deleted: failedDeleted }
+            }
           }
+          if (Object.keys(remainingChanges).length > 0) remainingRows.set(rowId, remainingChanges)
           updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: edits.size } }))
         }))
+        if (remainingRows.size > 0) nextEdits.set(key, remainingRows)
+        else nextEdits.delete(key)
         if (!hasErr && nestedFailures === 0) {
           updateStep(stepId, { status: 'done' })
-          nextEdits.delete(key)
         } else if (!hasErr) {
           updateStep(stepId, { status: 'error', error: `${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed` })
         }
