@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  type AutoIdLookups,
   extractSuffix,
   parseAutoIdPattern,
   renderAutoIdPattern,
+  resolveAutoIdTokens,
   validateAutoIdPattern
 } from '../../../services/auto-ids.js'
 
@@ -80,5 +82,94 @@ describe('extractSuffix', () => {
   })
   it('null when separator absent', () => {
     expect(extractSuffix(p, 'test')).toBeNull()
+  })
+})
+
+const rels = [
+  {
+    many_collection: 'workflows',
+    many_field: 'project',
+    one_collection: 'projects',
+    one_field: null,
+    junction_field: null
+  },
+  {
+    many_collection: 'projects',
+    many_field: 'project_type',
+    one_collection: 'project_types',
+    one_field: null,
+    junction_field: null
+  },
+  {
+    many_collection: 'workflows_funding_years',
+    many_field: 'workflows_id',
+    one_collection: 'workflows',
+    one_field: 'funding_years',
+    junction_field: 'funding_years_year'
+  }
+]
+
+const rows: Record<string, Record<string, Record<string, unknown>>> = {
+  projects: { '123': { id: 123, project_type: 7 } },
+  project_types: { '7': { id: 7, short_code: 'CR' } }
+}
+
+const lookups: AutoIdLookups = {
+  relationsFor: async () => rels,
+  readRow: async (c, id, _f) => rows[c]?.[String(id)] ?? null,
+  firstJunctionValue: async (junction, fk, parentId, valueField) =>
+    junction === 'workflows_funding_years' &&
+    String(parentId) === '55' &&
+    fk === 'workflows_id' &&
+    valueField === 'funding_years_year'
+      ? 2026
+      : null
+}
+
+describe('resolveAutoIdTokens', () => {
+  const parsed = parseAutoIdPattern(
+    '{project.project_type.short_code}{funding_years[0] % 100}-{seq}'
+  )
+
+  it('walks M2O hops and uses draft array for M2M', async () => {
+    const out = await resolveAutoIdTokens(parsed, {
+      collection: 'workflows',
+      values: { project: 123, funding_years: [2026] },
+      lookups,
+      seqValue: '####'
+    })
+    expect(out).toBe('CR26-####')
+  })
+
+  it('resolves M2M via junction when recordId present and no draft value', async () => {
+    const out = await resolveAutoIdTokens(parsed, {
+      collection: 'workflows',
+      values: { project: 123 },
+      recordId: 55,
+      lookups,
+      seqValue: '76800'
+    })
+    expect(out).toBe('CR26-76800')
+  })
+
+  it('renders empty for unresolvable tokens', async () => {
+    const out = await resolveAutoIdTokens(parsed, {
+      collection: 'workflows',
+      values: {},
+      lookups,
+      seqValue: '####'
+    })
+    expect(out).toBe('-####')
+  })
+
+  it('applies modulo to numeric values', async () => {
+    const p = parseAutoIdPattern('{funding_years[0] % 100}-{seq}')
+    const out = await resolveAutoIdTokens(p, {
+      collection: 'workflows',
+      values: { funding_years: [2026] },
+      lookups,
+      seqValue: '1'
+    })
+    expect(out).toBe('26-1')
   })
 })
