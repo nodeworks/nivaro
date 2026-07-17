@@ -806,7 +806,14 @@ export function InlineTableField({
     return parts.length > 0 ? parts.join(', ') : '—'
   }
 
-  const effectiveCols = resolvedPreset ? [...presetCols, ...summaryCols] : displayCols
+  // Empty-result guard: a preset whose stored columns have ALL gone stale (fields
+  // unassigned from the layout, drawer relation removed) must not render a zero-column
+  // grid — fall back to the full display set. A dot-token-only preset that RESOLVES
+  // still shows just its summary columns.
+  const effectiveCols =
+    resolvedPreset && (presetCols.length > 0 || summaryCols.length > 0)
+      ? [...presetCols, ...summaryCols]
+      : displayCols
 
   // Fields configured for the apply values form (group_key === '__apply_values__')
   const applyValuesCols = useMemo(() =>
