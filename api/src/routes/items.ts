@@ -4,6 +4,15 @@ import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
 import {
+  type AutoIdToken,
+  autoIdFieldsFor,
+  dbLookups,
+  extractSuffix,
+  parseAutoIdPattern,
+  resolveAutoIdTokens,
+  validateAutoIdPattern
+} from '../services/auto-ids.js'
+import {
   CollectionNotFoundError,
   createOne,
   deleteOne,
@@ -19,7 +28,7 @@ import {
   resolveTransitionTarget,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
-import type { ItemsQuery } from '../types.js'
+import type { ItemsQuery, User } from '../types.js'
 
 function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   if (err instanceof CollectionNotFoundError) {
@@ -332,6 +341,56 @@ export async function itemsRoutes(app: FastifyInstance) {
       }
     }
     return reply.send({ succeeded, failed })
+  })
+
+  // POST /items/:collection/auto-id-preview — render an auto_id pattern against
+  // draft form values (and, when editing, the record's own persisted suffix) so
+  // the admin UI can show a live preview before the value is actually generated.
+  app.post('/:collection/auto-id-preview', async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    const body = (req.body ?? {}) as {
+      field?: string
+      values?: Record<string, unknown>
+      record_id?: string | number
+    }
+    const user = req.user as User
+    if (!(await can(user, 'read', collection))) return reply.code(403).send({ error: 'Forbidden' })
+    if (!body.field) return reply.code(400).send({ error: 'field is required' })
+
+    const fields = await autoIdFieldsFor(db, collection)
+    const target = fields.find((f) => f.field === body.field)
+    if (!target) return reply.code(400).send({ error: 'Field has no auto_id config' })
+    const err = validateAutoIdPattern(target.config.pattern)
+    if (err) return reply.code(400).send({ error: err })
+
+    const parsed = parseAutoIdPattern(target.config.pattern)
+    const seqToken = parsed.tokens[parsed.tokens.length - 1] as Extract<
+      AutoIdToken,
+      { kind: 'seq' }
+    >
+    const width = Math.max(
+      4,
+      target.config.padding ?? 0,
+      seqToken.name === 'seq6' ? 6 : seqToken.name === 'seq4' ? 4 : 0
+    )
+    let seqValue = '#'.repeat(width)
+    if (body.record_id != null) {
+      const row = (await db(collection).where({ id: body.record_id }).first(body.field)) as
+        | Record<string, unknown>
+        | undefined
+      const current = row?.[body.field]
+      if (typeof current === 'string' && current) {
+        seqValue = extractSuffix(parsed, current) ?? seqValue
+      }
+    }
+    const preview = await resolveAutoIdTokens(parsed, {
+      collection,
+      values: body.values ?? {},
+      recordId: body.record_id,
+      lookups: dbLookups(db),
+      seqValue
+    })
+    return reply.send({ preview })
   })
 
   // ─────────────────────────────────────────────────────────────────────────

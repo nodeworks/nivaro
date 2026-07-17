@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { parseAutoIdPattern, validateAutoIdPattern } from '../services/auto-ids.js'
 import { chunkArray } from '../services/db-batch.js'
 import {
   bustRollupContributorCache,
@@ -773,6 +774,22 @@ export async function dataModelRoutes(app: FastifyInstance) {
     if (!body.field) return reply.code(400).send({ error: 'field is required' })
     if (!body.type) return reply.code(400).send({ error: 'type is required' })
 
+    if (body.options) {
+      try {
+        const parsedOptions = JSON.parse(body.options) as Record<string, unknown>
+        if (parsedOptions && typeof parsedOptions === 'object' && 'auto_id' in parsedOptions) {
+          const autoId = parsedOptions.auto_id as { pattern?: unknown } | null
+          if (!autoId || typeof autoId.pattern !== 'string') {
+            return reply.code(400).send({ error: 'auto_id.pattern is required' })
+          }
+          const patternErr = validateAutoIdPattern(autoId.pattern)
+          if (patternErr) return reply.code(400).send({ error: patternErr })
+        }
+      } catch {
+        // options isn't valid JSON — leave validation to existing behavior
+      }
+    }
+
     try {
       const existing = await db<CMSField>('nivaro_fields')
         .where({ collection: table, field: body.field })
@@ -877,6 +894,110 @@ export async function dataModelRoutes(app: FastifyInstance) {
         req
       })
       return reply.code(204).send()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return reply.code(500).send({ error: msg })
+    }
+  })
+
+  // ─── GET /:table/fields/:field/auto-id-seed — current + suggested seed ────
+
+  app.get('/:table/fields/:field/auto-id-seed', async (req, reply) => {
+    const { table, field } = req.params as { table: string; field: string }
+
+    if (!TABLE_NAME_RE.test(table) || !COLUMN_NAME_RE.test(field)) {
+      return reply.code(400).send({ error: 'Invalid table or column name' })
+    }
+
+    try {
+      const fieldRow = await db<CMSField>('nivaro_fields')
+        .where({ collection: table, field })
+        .first()
+
+      let pattern: string | undefined
+      if (fieldRow?.options) {
+        try {
+          const opts = JSON.parse(fieldRow.options) as { auto_id?: { pattern?: string } }
+          pattern = opts?.auto_id?.pattern
+        } catch {
+          pattern = undefined
+        }
+      }
+      if (!pattern) return reply.code(400).send({ error: 'Field has no auto_id config' })
+
+      const patternErr = validateAutoIdPattern(pattern)
+      if (patternErr) return reply.code(400).send({ error: patternErr })
+      const parsed = parseAutoIdPattern(pattern)
+
+      const seqKey = `${table}.${field}`
+      const seqRow = await db('nivaro_sequences').where({ id: seqKey }).first()
+      const current = seqRow ? Number(seqRow.next_val) : null
+
+      const maxRows = rawRows<{ max_suffix: number | null }>(
+        await db.raw(
+          `SELECT MAX(TRY_CAST(SUBSTRING([${field}], CHARINDEX(?, [${field}]) + 1, 30) AS INT)) AS max_suffix
+           FROM [${table}]
+           WHERE [${field}] LIKE ?`,
+          [parsed.separator, `%${parsed.separator}%`]
+        )
+      )
+      const maxSuffix = maxRows[0]?.max_suffix
+      const suggested = Math.max(1, (maxSuffix != null ? Number(maxSuffix) : 0) + 1)
+
+      return reply.send({ current, suggested })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return reply.code(500).send({ error: msg })
+    }
+  })
+
+  // ─── PUT /:table/fields/:field/auto-id-seed — set the sequence's next_val ──
+
+  app.put('/:table/fields/:field/auto-id-seed', async (req, reply) => {
+    const { table, field } = req.params as { table: string; field: string }
+    const body = req.body as { next_val?: number }
+
+    if (!TABLE_NAME_RE.test(table) || !COLUMN_NAME_RE.test(field)) {
+      return reply.code(400).send({ error: 'Invalid table or column name' })
+    }
+    if (typeof body.next_val !== 'number' || !Number.isFinite(body.next_val)) {
+      return reply.code(400).send({ error: 'next_val must be a number' })
+    }
+
+    try {
+      const fieldRow = await db<CMSField>('nivaro_fields')
+        .where({ collection: table, field })
+        .first()
+
+      let pattern: string | undefined
+      if (fieldRow?.options) {
+        try {
+          const opts = JSON.parse(fieldRow.options) as { auto_id?: { pattern?: string } }
+          pattern = opts?.auto_id?.pattern
+        } catch {
+          pattern = undefined
+        }
+      }
+      if (!pattern) return reply.code(400).send({ error: 'Field has no auto_id config' })
+
+      const seqKey = `${table}.${field}`
+      const existingSeq = await db('nivaro_sequences').where({ id: seqKey }).first()
+      if (existingSeq) {
+        await db('nivaro_sequences').where({ id: seqKey }).update({ next_val: body.next_val })
+      } else {
+        await db('nivaro_sequences').insert({ id: seqKey, next_val: body.next_val })
+      }
+
+      await logActivity({
+        action: 'update',
+        collection: 'nivaro_sequences',
+        item: seqKey,
+        user: req.user?.id,
+        req,
+        comment: `set auto-id seed → ${body.next_val}`
+      })
+
+      return reply.send({ current: body.next_val })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return reply.code(500).send({ error: msg })
