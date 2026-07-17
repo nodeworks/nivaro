@@ -77,6 +77,7 @@ import { db } from '../../db/index.js'
 import { requireAdmin } from '../../middleware/authenticate.js'
 import { chunkedDelete, makeLookupFetcher } from '../../routes/import-templates.js'
 import { uploadFileBuffer } from '../../services/files.js'
+import { runImportPipeline } from '../../services/import-templates.js'
 import { applyFieldRules, createOne } from '../../services/items.js'
 import { can } from '../../services/permissions.js'
 import { getRollupContributors, recalcRollupsForParent } from '../../services/rollups.js'
@@ -2090,6 +2091,135 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       user,
       'unit_workflows_ncm',
       { workflow_id: 'w2', unit: 'unit-99', workflow_line: 'child-2' },
+      expect.anything(),
+      undefined,
+      { skipRollupRecalc: true }
+    )
+  })
+
+  it('POST /:id/execute — nested member whose ONLY column is a create-miss lookup still creates the record and links the grandchild (parse output round-tripped, not hand-built)', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+
+    // The template's nested block has a single column: the create-miss lookup itself
+    // (the exact shape from the live repro). Run the real parse pipeline
+    // (runImportPipeline -> processPerLineNested) to produce `lines` — this is the
+    // reviewer-flagged gap: previously an all-miss member row left `member` empty, so
+    // draft.nested was never set at all (no member_stubs, no grandchild row possible).
+    const lineMap = {
+      target_field: 'deployment_lines_scm',
+      row_filter: null,
+      columns: [
+        { target: 'sku', source: 'SKU', steps: [] },
+        { target: 'unit_name', source: 'Unit Type', steps: [] }
+      ],
+      apply_field_rules: true,
+      disperse: null,
+      nested: {
+        target_field: 'unit_workflows_scm',
+        when: { column: 'Unit Type', op: 'nnull' as const },
+        columns: [
+          {
+            target: 'unit',
+            source: 'Unit Type',
+            steps: [
+              {
+                type: 'lookup' as const,
+                collection: 'units_scm',
+                match_field: 'name',
+                scope_filters: [],
+                on_miss: 'create' as const,
+                take: 'id' as const,
+                create: {
+                  defaults: [{ target: 'name', source: 'unit_name', steps: [] }],
+                  dedupe_by: ['name']
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+    const { lines: parsedLines, issues } = await runImportPipeline({
+      config: {
+        file_types: ['xlsx', 'csv'],
+        sheet_match: null,
+        header_row: 1,
+        header_map: [],
+        attach_file_field: null,
+        line_map: lineMap
+      },
+      rows: [{ SKU: 'A1', 'Unit Type': 'xmfr99.milford.ma' }],
+      lookup: async () => [] // no match anywhere
+    })
+
+    expect(parsedLines[0].nested).toEqual({
+      field: 'unit_workflows_scm',
+      rows: [{}], // unit missed -> the member row itself carries no other values
+      member_stubs: [{ unit: { is_new: true, name: 'xmfr99.milford.ma' } }]
+    })
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        severity: 'warn',
+        rule: 'line[1]:nested:unit',
+        message: 'No match for "xmfr99.milford.ma" — will be created on direct import'
+      })
+    )
+
+    const template = {
+      id: 'tmpl-nested-single-col-cm',
+      collection: 'deployment_orders_scm',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify(lineMap),
+      attach_file_field: null
+    }
+    const childRelation = {
+      many_collection: 'deployment_lines_scm',
+      many_field: 'deployment_order_id'
+    }
+    const nestedRelationRow = { many_collection: 'unit_workflows_scm', many_field: 'workflow_line' }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(childRelation) as unknown as ReturnType<typeof db>) // line child relation resolve
+      .mockReturnValueOnce(makeChain(nestedRelationRow) as unknown as ReturnType<typeof db>) // nested target relation resolve
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'unit-1' } as never) // the create-miss lookup record
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'child-1' } as never) // line child
+      .mockResolvedValueOnce({ id: 'grandchild-1' } as never) // member
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-nested-single-col-cm/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: {},
+        lines: parsedLines, // exact parse output, not a hand-built wire payload
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(vi.mocked(createOne)).toHaveBeenCalledTimes(4)
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      1,
+      user,
+      'units_scm',
+      { name: 'xmfr99.milford.ma' },
+      expect.anything(),
+      undefined,
+      { skipRollupRecalc: true }
+    )
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      4,
+      user,
+      'unit_workflows_scm',
+      { unit: 'unit-1', workflow_line: 'child-1' }, // created id is the only FK-bearing member value
       expect.anything(),
       undefined,
       { skipRollupRecalc: true }

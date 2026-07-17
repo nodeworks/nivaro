@@ -649,13 +649,17 @@ async function processPerLineNested(
     for (const [key, value] of Object.entries(result.values)) {
       if (value !== undefined) member[key] = value
     }
-    if (Object.keys(member).length > 0) {
+    const memberStub: Record<string, Stub> = {}
+    for (const [target, stub] of Object.entries(result.stubs)) {
+      if (createTargets.has(target)) memberStub[target] = stub
+    }
+    const hasStub = Object.keys(memberStub).length > 0
+    // A member row with ONLY a create-miss column (its lone value resolves to undefined)
+    // still needs draft.nested set — the create-miss id lands in rows[0] via apply() at
+    // execute time, and the grandchild loop requires line.nested to exist at all.
+    if (Object.keys(member).length > 0 || hasStub) {
       draft.nested = { field: nested.target_field, rows: [member] }
-      const memberStub: Record<string, Stub> = {}
-      for (const [target, stub] of Object.entries(result.stubs)) {
-        if (createTargets.has(target)) memberStub[target] = stub
-      }
-      if (Object.keys(memberStub).length > 0) draft.nested.member_stubs = [memberStub]
+      if (hasStub) draft.nested.member_stubs = [memberStub]
     }
   }
 }
