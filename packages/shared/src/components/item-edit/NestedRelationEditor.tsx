@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Pencil, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatNumber, titleCase } from '../../lib/utils'
@@ -30,6 +30,29 @@ interface NestedRelationEditorProps {
   parentDraft: Record<string, unknown>
   hint?: { sum_field: string; cap_field: string }
   readOnly?: boolean
+  // Outer grid's own o2m-rows query key (['o2m-rows', relatedCollection, manyField, parentId]) —
+  // invalidated alongside this editor's nested-rows key so stored-rollup columns on the outer
+  // grid refresh after a grandchild write. Only meaningful when the outer row is already saved.
+  outerGridInvalidateKey?: unknown[]
+}
+
+function parseSaveError(err: unknown): string {
+  const resp = (
+    err as {
+      response?: { violations?: { explanation?: string }[]; message?: string; error?: string }
+    }
+  )?.response
+  if (resp?.violations?.length) {
+    const text = resp.violations
+      .map((v) => v.explanation)
+      .filter(Boolean)
+      .join('; ')
+    if (text) return text
+  }
+  if (resp?.message) return resp.message
+  if (resp?.error) return resp.error
+  if (err instanceof Error && err.message) return err.message
+  return 'Save failed'
 }
 
 export function NestedRelationEditor({
@@ -40,7 +63,8 @@ export function NestedRelationEditor({
   onStagedChange,
   parentDraft,
   hint,
-  readOnly = false
+  readOnly = false,
+  outerGridInvalidateKey
 }: NestedRelationEditorProps) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -129,41 +153,57 @@ export function NestedRelationEditor({
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [rowError, setRowError] = useState<string | null>(null)
 
   function setDraftField(k: string, v: unknown) {
     setDraft((prev) => ({ ...prev, [k]: v }))
+    setRowError(null)
   }
   function startAdd() {
     if (readOnly) return
     setEditingKey('new')
     setDraft({})
+    setRowError(null)
   }
   function startEdit(key: string, data: Record<string, unknown>) {
     if (readOnly) return
     setEditingKey(key)
     setDraft({ ...data })
+    setRowError(null)
   }
   function cancelEdit() {
     setEditingKey(null)
     setDraft({})
+    setRowError(null)
+  }
+
+  function invalidateOuterGrid() {
+    qc.invalidateQueries({ queryKey: nestedRowsKey })
+    if (outerGridInvalidateKey) qc.invalidateQueries({ queryKey: outerGridInvalidateKey })
   }
 
   async function save() {
     if (!editingKey) return
     if (parentRowId != null && grandCollection && fkField) {
       setSaving(true)
+      // draft starts from the full API row on edit (id, fkField, system fields, etc.) —
+      // only send back the fields this editor actually renders.
+      const writableKeys = new Set(displayCols.map((c) => c.field))
+      const rowPayload = Object.fromEntries(
+        Object.entries(draft).filter(([k]) => writableKeys.has(k))
+      )
       try {
         if (editingKey === 'new') {
           await client.request(
-            post(`/items/${grandCollection}`, { ...draft, [fkField]: parentRowId })
+            post(`/items/${grandCollection}`, { ...rowPayload, [fkField]: parentRowId })
           )
         } else {
-          await client.request(patch(`/items/${grandCollection}/${editingKey}`, draft))
+          await client.request(patch(`/items/${grandCollection}/${editingKey}`, rowPayload))
         }
-        qc.invalidateQueries({ queryKey: nestedRowsKey })
+        invalidateOuterGrid()
         cancelEdit()
-      } catch {
-        /* ignore */
+      } catch (err) {
+        setRowError(parseSaveError(err))
       } finally {
         setSaving(false)
       }
@@ -185,15 +225,18 @@ export function NestedRelationEditor({
     if (parentRowId != null && grandCollection) {
       try {
         await client.request(del(`/items/${grandCollection}/${key}`))
-        qc.invalidateQueries({ queryKey: nestedRowsKey })
-      } catch {
-        /* ignore */
+        invalidateOuterGrid()
+      } catch (err) {
+        // Leave confirmDeleteKey set so the error renders next to the Delete? prompt.
+        setRowError(parseSaveError(err))
+        return
       }
     } else {
       const idx = parseInt(key.slice('staged:'.length), 10)
       onStagedChange?.((stagedMembers ?? []).filter((_, i) => i !== idx))
     }
     setConfirmDeleteKey(null)
+    setRowError(null)
     if (editingKey === key) cancelEdit()
   }
 
@@ -347,8 +390,8 @@ export function NestedRelationEditor({
               const isEditingRow = editingKey === key
               const isConfirmingDelete = confirmDeleteKey === key
               return (
+                <Fragment key={key}>
                 <tr
-                  key={key}
                   onClick={() => !isEditingRow && !readOnly && startEdit(key, data)}
                   className={cn(
                     'border-b border-slate-100 transition-colors',
@@ -420,6 +463,7 @@ export function NestedRelationEditor({
                             onClick={(e) => {
                               e.stopPropagation()
                               setConfirmDeleteKey(null)
+                              setRowError(null)
                             }}
                             className='rounded px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-slate-700 border border-slate-200'
                           >
@@ -443,6 +487,7 @@ export function NestedRelationEditor({
                             onClick={(e) => {
                               e.stopPropagation()
                               setConfirmDeleteKey(key)
+                              setRowError(null)
                             }}
                             className='rounded p-0.5 text-slate-300 hover:text-red-500'
                           >
@@ -453,6 +498,14 @@ export function NestedRelationEditor({
                     </td>
                   )}
                 </tr>
+                {(isEditingRow || isConfirmingDelete) && rowError && (
+                  <tr className='border-b border-slate-100 bg-red-50/50'>
+                    <td colSpan={emptyColSpan} className='px-2 py-1 text-[11px] text-red-600'>
+                      {rowError}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               )
             })}
           {editingKey === 'new' && (
@@ -487,6 +540,13 @@ export function NestedRelationEditor({
                     ✕
                   </button>
                 </div>
+              </td>
+            </tr>
+          )}
+          {editingKey === 'new' && rowError && (
+            <tr className='border-b border-slate-100 bg-red-50/50'>
+              <td colSpan={emptyColSpan} className='px-2 py-1 text-[11px] text-red-600'>
+                {rowError}
               </td>
             </tr>
           )}

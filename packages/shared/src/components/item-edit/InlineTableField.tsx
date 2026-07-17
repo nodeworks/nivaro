@@ -1528,6 +1528,7 @@ export function InlineTableField({
                             parentRowId={id}
                             parentDraft={editState?.draft ?? displayRow}
                             hint={relHint}
+                            outerGridInvalidateKey={['o2m-rows', relatedCollection, manyField, parentId]}
                           />
                         )
                       })}
