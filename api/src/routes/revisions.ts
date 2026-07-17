@@ -2,8 +2,31 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { chunkArray } from '../services/db-batch.js'
 import { can } from '../services/permissions.js'
 import { getRevision, listRevisions } from '../services/revisions.js'
+
+// Candidate child item ids for a parent's O2M history: rows currently linked
+// plus items whose delete revision carried the parent FK. Filtering revisions
+// by these ids hits the (collection, item) activity index — JSON_VALUE over
+// every revision of a churn-heavy collection (1M+ rows post legacy import)
+// times out even with the activity indexes in place.
+async function o2mCandidateItemIds(
+  collection: string,
+  many_field: string,
+  parent_id: string
+): Promise<string[]> {
+  const currentIds = (await db(collection)
+    .where({ [many_field]: parent_id })
+    .pluck('id')) as Array<string | number>
+  const deletedRows = (await db('nivaro_revisions as r')
+    .join('nivaro_activity as a', 'r.activity', 'a.id')
+    .where('a.collection', collection)
+    .where('a.action', 'delete')
+    .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
+    .select('a.item')) as Array<{ item: string | number }>
+  return [...new Set([...currentIds.map(String), ...deletedRows.map((r) => String(r.item))])]
+}
 
 export async function revisionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
@@ -69,24 +92,34 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
-    const rows = await db('nivaro_revisions as r')
-      .join('nivaro_activity as a', 'r.activity', 'a.id')
-      .leftJoin('nivaro_users as u', 'a.user', 'u.id')
-      .where('a.collection', collection)
-      .whereIn('a.action', ['create', 'update', 'delete'])
-      .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
-      .select(
-        'a.item as item_id',
-        'a.action',
-        'a.timestamp',
-        'a.user as user_id',
-        'u.first_name',
-        'u.last_name',
-        'u.email as user_email',
-        'r.id as revision_id',
-        'r.data'
-      )
-      .orderBy('a.timestamp', 'desc')
+    const itemIds = await o2mCandidateItemIds(collection, many_field, String(parent_id))
+    if (!itemIds.length) return reply.send({ data: [] })
+    const rows: Record<string, unknown>[] = []
+    for (const chunk of chunkArray(itemIds, 1000)) {
+      const part = await db('nivaro_revisions as r')
+        .join('nivaro_activity as a', 'r.activity', 'a.id')
+        .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+        .where('a.collection', collection)
+        .whereIn('a.action', ['create', 'update', 'delete'])
+        .whereIn('a.item', chunk)
+        // Items can move between parents; keep only revisions taken while the
+        // row carried THIS parent's FK. Cheap now — the id filter has already
+        // narrowed the candidate set.
+        .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
+        .select(
+          'a.item as item_id',
+          'a.action',
+          'a.timestamp',
+          'a.user as user_id',
+          'u.first_name',
+          'u.last_name',
+          'u.email as user_email',
+          'r.id as revision_id',
+          'r.data'
+        )
+      rows.push(...(part as Record<string, unknown>[]))
+    }
+    rows.sort((x, y) => String(y.timestamp).localeCompare(String(x.timestamp)))
     const data = rows.map((row: Record<string, unknown>) => ({
       ...row,
       data: typeof row.data === 'string' ? (() => { try { return JSON.parse(row.data as string) } catch { return {} } })() : (row.data ?? {})
@@ -125,13 +158,19 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (target_timestamp) {
       // Reconstruct: for each item that ever belonged to this parent, find its latest revision
       // at or before target_timestamp; include if not deleted.
-      const allRevisions = await db('nivaro_revisions as r')
-        .join('nivaro_activity as a', 'r.activity', 'a.id')
-        .where('a.collection', collection)
-        .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
-        .where('a.timestamp', '<=', target_timestamp)
-        .select('a.item as item_id', 'a.action', 'a.timestamp', 'r.data')
-        .orderBy('a.timestamp', 'asc') as Array<{ item_id: string; action: string; timestamp: string; data: string | Record<string, unknown> }>
+      const itemIds = await o2mCandidateItemIds(collection, many_field, String(parent_id))
+      const allRevisions: Array<{ item_id: string; action: string; timestamp: string; data: string | Record<string, unknown> }> = []
+      for (const chunk of chunkArray(itemIds, 1000)) {
+        const part = await db('nivaro_revisions as r')
+          .join('nivaro_activity as a', 'r.activity', 'a.id')
+          .where('a.collection', collection)
+          .whereIn('a.item', chunk)
+          .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
+          .where('a.timestamp', '<=', target_timestamp)
+          .select('a.item as item_id', 'a.action', 'a.timestamp', 'r.data') as Array<{ item_id: string; action: string; timestamp: string; data: string | Record<string, unknown> }>
+        allRevisions.push(...part)
+      }
+      allRevisions.sort((x, y) => String(x.timestamp).localeCompare(String(y.timestamp)))
 
       // For each item_id, keep only the latest revision (last in ordered list)
       const latestByItem = new Map<string, { action: string; data: Record<string, unknown> }>()
