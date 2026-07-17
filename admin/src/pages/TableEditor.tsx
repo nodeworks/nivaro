@@ -8598,13 +8598,16 @@ function FieldSettingsPopover({
       layout_assigned?: boolean
     }>
   >({
-    queryKey: ['field-config', relatedCollection, gridLayoutId],
+    // Own namespace: the generic ['field-config', collection, layoutId] key is cached
+    // as a bare ARRAY by the shared components but as a wrapper OBJECT by this page's
+    // layout query — layout ids are global, so the shapes can collide across visits.
+    queryKey: ['preset-picker-fields', relatedCollection, gridLayoutId],
     queryFn: () =>
       api
         .get(`/field-config/${relatedCollection}`, {
           params: gridLayoutId ? { layout_id: gridLayoutId } : {}
         })
-        .then((r) => r.data.data ?? []),
+        .then((r) => (Array.isArray(r.data.data) ? r.data.data : [])),
     enabled: !!relatedCollection && isInlineTable,
     staleTime: 60 * 1000
   })
