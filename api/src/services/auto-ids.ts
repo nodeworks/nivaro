@@ -188,6 +188,38 @@ async function resolveRelationToken(
   }
 }
 
+export async function resolveAutoIdTokensDetailed(
+  parsed: ParsedAutoIdPattern,
+  ctx: {
+    collection: string
+    values: Record<string, unknown>
+    recordId?: unknown
+    lookups: AutoIdLookups
+    seqValue: string
+  }
+): Promise<{ rendered: string; complete: boolean }> {
+  const now = new Date()
+  const tokenValues: string[] = []
+  // `complete` = every relation token resolved to a non-empty value (date and
+  // seq tokens always render). Consumers like the live preview hide partial
+  // IDs; the save path ignores it and writes whatever rendered.
+  let complete = true
+  for (const t of parsed.tokens) {
+    if (t.kind === 'date') {
+      if (t.name === 'YY') tokenValues.push(String(now.getFullYear()).slice(-2))
+      else if (t.name === 'YYYY') tokenValues.push(String(now.getFullYear()))
+      else tokenValues.push(String(now.getMonth() + 1).padStart(2, '0'))
+    } else if (t.kind === 'seq') {
+      tokenValues.push(ctx.seqValue)
+    } else {
+      const v = await resolveRelationToken(t, ctx)
+      if (v === '') complete = false
+      tokenValues.push(v)
+    }
+  }
+  return { rendered: renderAutoIdPattern(parsed, tokenValues), complete }
+}
+
 export async function resolveAutoIdTokens(
   parsed: ParsedAutoIdPattern,
   ctx: {
@@ -198,20 +230,7 @@ export async function resolveAutoIdTokens(
     seqValue: string
   }
 ): Promise<string> {
-  const now = new Date()
-  const tokenValues: string[] = []
-  for (const t of parsed.tokens) {
-    if (t.kind === 'date') {
-      if (t.name === 'YY') tokenValues.push(String(now.getFullYear()).slice(-2))
-      else if (t.name === 'YYYY') tokenValues.push(String(now.getFullYear()))
-      else tokenValues.push(String(now.getMonth() + 1).padStart(2, '0'))
-    } else if (t.kind === 'seq') {
-      tokenValues.push(ctx.seqValue)
-    } else {
-      tokenValues.push(await resolveRelationToken(t, ctx))
-    }
-  }
-  return renderAutoIdPattern(parsed, tokenValues)
+  return (await resolveAutoIdTokensDetailed(parsed, ctx)).rendered
 }
 
 // ─── DB-backed helpers ─────────────────────────────────────────────────────────

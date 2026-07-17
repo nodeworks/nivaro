@@ -9,7 +9,7 @@ import {
   dbLookups,
   extractSuffix,
   parseAutoIdPattern,
-  resolveAutoIdTokens,
+  resolveAutoIdTokensDetailed,
   validateAutoIdPattern
 } from '../services/auto-ids.js'
 import {
@@ -383,14 +383,14 @@ export async function itemsRoutes(app: FastifyInstance) {
         seqValue = extractSuffix(parsed, current) ?? seqValue
       }
     }
-    const preview = await resolveAutoIdTokens(parsed, {
+    const { rendered, complete } = await resolveAutoIdTokensDetailed(parsed, {
       collection,
       values: body.values ?? {},
       recordId: body.record_id,
       lookups: dbLookups(db),
       seqValue
     })
-    return reply.send({ preview })
+    return reply.send({ preview: rendered, complete })
   })
 
   // ─────────────────────────────────────────────────────────────────────────

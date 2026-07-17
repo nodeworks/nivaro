@@ -5,6 +5,7 @@ import {
   parseAutoIdPattern,
   renderAutoIdPattern,
   resolveAutoIdTokens,
+  resolveAutoIdTokensDetailed,
   validateAutoIdPattern
 } from '../../../services/auto-ids.js'
 
@@ -220,5 +221,33 @@ describe('junction-triggered recompute (M2O own-row DB fallback)', () => {
       seqValue: '76800'
     })
     expect(out).toBe('26-76800')
+  })
+})
+
+describe('resolveAutoIdTokensDetailed completeness', () => {
+  const parsed = parseAutoIdPattern(
+    '{project.project_type.short_code}{funding_years[0] % 100}-{seq}'
+  )
+
+  it('complete when every relation token resolves', async () => {
+    const { rendered, complete } = await resolveAutoIdTokensDetailed(parsed, {
+      collection: 'workflows',
+      values: { project: 123, funding_years: [2026] },
+      lookups,
+      seqValue: '####'
+    })
+    expect(rendered).toBe('CR26-####')
+    expect(complete).toBe(true)
+  })
+
+  it('incomplete when any relation token renders empty', async () => {
+    const { rendered, complete } = await resolveAutoIdTokensDetailed(parsed, {
+      collection: 'workflows',
+      values: { funding_years: [2026] },
+      lookups,
+      seqValue: '####'
+    })
+    expect(rendered).toBe('26-####')
+    expect(complete).toBe(false)
   })
 })

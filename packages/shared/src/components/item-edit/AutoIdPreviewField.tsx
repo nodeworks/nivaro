@@ -70,14 +70,16 @@ export function useAutoIdPreview({
           const v = valueFor(d)
           if (v !== undefined) values[d] = v
         }
-        const res = await client.request<{ preview: string }>(
+        const res = await client.request<{ preview: string; complete?: boolean }>(
           post(`/items/${collection}/auto-id-preview`, {
             field: field.field,
             values,
             record_id: itemId !== 'new' ? itemId : undefined
           })
         )
-        if (res?.preview) setPreview(res.preview)
+        // Only show fully-resolved IDs — a partial like '-####' or '26-####'
+        // (some pattern token still unset) renders as nothing.
+        setPreview(res?.complete && res.preview ? res.preview : '')
       } catch {
         // keep last good preview
       }
