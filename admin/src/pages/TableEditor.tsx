@@ -14,7 +14,7 @@ import {
   useSensor,
   useSensors
 } from '@dnd-kit/core'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
   Check,
@@ -7796,10 +7796,38 @@ function RowRuleRow({
 // the named fields below), so reordering keeps identity stable across moves.
 type ColumnPresetItem = { name: string; columns: string[]; _key: string }
 type DrawerRelationItem = { field: string; sumField: string; capField: string; _key: string }
+type PresetFieldOption = { field: string; label: string }
+// One group per relatedCollection layout columns (heading undefined) plus one group
+// per configured drawer relation offering "relationField.memberField" dot tokens.
+type PresetOptionGroup = { heading?: string; options: PresetFieldOption[] }
+
+// Module-level (not per-render) so useMemo deps referencing them are stable —
+// mirrors InlineTableField's NON_DISPLAY_TYPES/SENTINEL_FIELDS/SPECIAL_GROUP_KEYS predicate.
+const PRESET_NON_DISPLAY_TYPES = new Set([
+  'alias',
+  'o2m',
+  'm2m',
+  'm2a',
+  'presentation',
+  'group',
+  'divider'
+])
+const PRESET_SENTINEL_FIELDS = new Set([
+  '__pipeline__',
+  '__comments__',
+  '__tasks__',
+  '__addendums__',
+  '__owners__',
+  '__pdf__',
+  '__subtitle__'
+])
+const PRESET_SPECIAL_GROUP_KEYS = new Set(['__apply_values__', '__create_with_defaults__'])
+const isM2MIfacePreset = (ifc: string | null | undefined) =>
+  ifc === 'select-multiple-m2m' || (ifc ?? '').endsWith('-m2m')
 
 function ColumnPresetRow({
   preset,
-  fieldOptions,
+  optionGroups,
   onChange,
   onRemove,
   onMoveUp,
@@ -7808,7 +7836,7 @@ function ColumnPresetRow({
   isLast
 }: {
   preset: ColumnPresetItem
-  fieldOptions: Array<{ field: string; label?: string | null; type?: string }>
+  optionGroups: PresetOptionGroup[]
   onChange: (p: ColumnPresetItem) => void
   onRemove: () => void
   onMoveUp: () => void
@@ -7817,6 +7845,10 @@ function ColumnPresetRow({
   isLast: boolean
 }) {
   const [colsOpen, setColsOpen] = useState(false)
+  const allOptions = useMemo(() => optionGroups.flatMap((g) => g.options), [optionGroups])
+  // Stored columns not present in the current option set (layout changed, drawer
+  // relation removed, etc.) — surfaced as removable warning chips, never silently dropped.
+  const staleTokens = preset.columns.filter((c) => !allOptions.some((o) => o.field === c))
   return (
     <div className='space-y-1.5 rounded border border-slate-200 p-2'>
       <div className='flex items-center gap-1.5'>
@@ -7861,45 +7893,67 @@ function ColumnPresetRow({
             >
               {preset.columns.length
                 ? preset.columns
-                    .map((f) => fieldOptions.find((o) => o.field === f)?.label || f)
+                    .map((f) => allOptions.find((o) => o.field === f)?.label || f)
                     .join(', ')
                 : 'No columns selected'}
             </span>
             <ChevronDown className='h-3.5 w-3.5 text-slate-400 ml-1 shrink-0' />
           </button>
         </PopoverTrigger>
-        <PopoverContent className='w-64 p-0' align='start'>
+        <PopoverContent className='w-72 p-0' align='start'>
           <Command>
             <CommandInput placeholder='Search fields…' className='h-8 text-[12px]' />
-            <CommandList className='max-h-[220px]'>
-              <CommandGroup>
-                {fieldOptions.map((f) => {
-                  const checked = preset.columns.includes(f.field)
-                  return (
-                    <CommandItem
-                      key={f.field}
-                      value={`${f.label || f.field} ${f.field}`}
-                      onSelect={() =>
-                        onChange({
-                          ...preset,
-                          columns: checked
-                            ? preset.columns.filter((x) => x !== f.field)
-                            : [...preset.columns, f.field]
-                        })
-                      }
-                      className='text-[11px] flex items-center gap-2'
-                    >
-                      <Check className={cn('h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')} />
-                      <span className='flex-1 truncate'>{f.label || f.field}</span>
-                      <span className='font-mono text-[9px] text-slate-400 shrink-0'>{f.field}</span>
-                    </CommandItem>
-                  )
-                })}
-              </CommandGroup>
+            <CommandList className='max-h-[260px]'>
+              {optionGroups.map((group, gi) => (
+                <CommandGroup key={group.heading ?? `__layout_${gi}`} heading={group.heading}>
+                  {group.options.map((f) => {
+                    const checked = preset.columns.includes(f.field)
+                    return (
+                      <CommandItem
+                        key={f.field}
+                        value={`${f.label} ${f.field}`}
+                        onSelect={() =>
+                          onChange({
+                            ...preset,
+                            columns: checked
+                              ? preset.columns.filter((x) => x !== f.field)
+                              : [...preset.columns, f.field]
+                          })
+                        }
+                        className='text-[11px] flex items-center gap-2'
+                      >
+                        <Check className={cn('h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')} />
+                        <span className='flex-1 truncate'>{f.label}</span>
+                        <span className='font-mono text-[9px] text-slate-400 shrink-0'>{f.field}</span>
+                      </CommandItem>
+                    )
+                  })}
+                </CommandGroup>
+              ))}
             </CommandList>
           </Command>
         </PopoverContent>
       </Popover>
+      {staleTokens.length > 0 && (
+        <div className='flex flex-wrap gap-1'>
+          {staleTokens.map((token) => (
+            <span
+              key={token}
+              title='Not in the current layout or relation set'
+              className='inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700'
+            >
+              {token}
+              <button
+                type='button'
+                onClick={() => onChange({ ...preset, columns: preset.columns.filter((x) => x !== token) })}
+                className='text-amber-500 hover:text-amber-800'
+              >
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -8514,6 +8568,147 @@ function FieldSettingsPopover({
   const childNumericFieldOptions = useMemo(
     () => uniqueByOptions.filter((f) => NUMERIC_FIELD_TYPES.has(f.type ?? '')),
     [uniqueByOptions]
+  )
+
+  // ── Column presets picker: layout-sourced options + relation summary tokens ──
+  // The FK column on the child collection pointing back at THIS O2M's parent —
+  // excluded from the picker the same way InlineTableField's displayCols excludes manyField.
+  const childToParentField = useMemo(() => {
+    const rel = childRelationsRaw.find(
+      (r) =>
+        r.many_collection === relatedCollection &&
+        r.one_collection === collection &&
+        !r.junction_field &&
+        (r.one_field === fieldName ||
+          ((!r.one_field || r.one_field === 'id') && r.many_collection === fieldName))
+    )
+    return rel?.many_field ?? null
+  }, [childRelationsRaw, relatedCollection, collection, fieldName])
+
+  // Picker source = the selected Layout's display columns — replicates
+  // InlineTableField's displayCols predicate so a picked column is guaranteed to render.
+  const { data: presetLayoutFields = [] } = useQuery<
+    Array<{
+      field: string
+      label?: string | null
+      type?: string
+      interface?: string | null
+      hidden?: boolean
+      group_key?: string | null
+      layout_assigned?: boolean
+    }>
+  >({
+    queryKey: ['field-config', relatedCollection, gridLayoutId],
+    queryFn: () =>
+      api
+        .get(`/field-config/${relatedCollection}`, {
+          params: gridLayoutId ? { layout_id: gridLayoutId } : {}
+        })
+        .then((r) => r.data.data ?? []),
+    enabled: !!relatedCollection && isInlineTable,
+    staleTime: 60 * 1000
+  })
+
+  const presetPickerFieldOptions = useMemo<PresetFieldOption[]>(
+    () =>
+      presetLayoutFields
+        .filter(
+          (f) =>
+            !f.hidden &&
+            (!PRESET_NON_DISPLAY_TYPES.has(f.type ?? '') || isM2MIfacePreset(f.interface)) &&
+            f.field !== childToParentField &&
+            f.field !== 'id' &&
+            (!gridLayoutId || f.layout_assigned === true) &&
+            !PRESET_SENTINEL_FIELDS.has(f.field) &&
+            !PRESET_SPECIAL_GROUP_KEYS.has(f.group_key ?? '')
+        )
+        .map((f) => ({ field: f.field, label: f.label || titleCase(f.field) })),
+    [presetLayoutFields, childToParentField, gridLayoutId]
+  )
+
+  // Relation summary options: one group per configured drawer relation, offering
+  // that relation's grandchild plain fields as "relationField.memberField" dot tokens.
+  const drawerRelationGrandCollections = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const entry of drawerRelationsLocal) {
+      const gc = drawerRelationOptions.find((r) => r.value === entry.field)?.collection
+      if (gc) map.set(entry.field, gc)
+    }
+    return map
+  }, [drawerRelationsLocal, drawerRelationOptions])
+
+  const distinctSummaryGrandCollections = useMemo(
+    () => [...new Set(drawerRelationGrandCollections.values())],
+    [drawerRelationGrandCollections]
+  )
+
+  const summaryGrandFieldsQueries = useQueries({
+    queries: distinctSummaryGrandCollections.map((gc) => ({
+      queryKey: ['field-config-all', gc],
+      queryFn: () => api.get(`/field-config/${gc}`).then((r) => r.data.data ?? []),
+      enabled: !!gc,
+      staleTime: 5 * 60 * 1000
+    }))
+  })
+  const summaryGrandFieldsByCollection = useMemo(() => {
+    const map = new Map<
+      string,
+      Array<{
+        field: string
+        label?: string | null
+        type?: string
+        hidden?: boolean
+        group_key?: string | null
+      }>
+    >()
+    distinctSummaryGrandCollections.forEach((gc, i) => {
+      map.set(gc, summaryGrandFieldsQueries[i]?.data ?? [])
+    })
+    return map
+  }, [distinctSummaryGrandCollections, summaryGrandFieldsQueries])
+
+  const presetSummaryOptionGroups = useMemo<PresetOptionGroup[]>(() => {
+    const groups: PresetOptionGroup[] = []
+    for (const entry of drawerRelationsLocal) {
+      const grandCollection = drawerRelationGrandCollections.get(entry.field)
+      if (!grandCollection) continue
+      const fkField = childRelationsRaw.find(
+        (r) =>
+          r.one_collection === relatedCollection &&
+          r.many_collection === grandCollection &&
+          !r.junction_field &&
+          (r.one_field === entry.field ||
+            ((!r.one_field || r.one_field === 'id') && r.many_collection === entry.field))
+      )?.many_field
+      const grandFields = summaryGrandFieldsByCollection.get(grandCollection) ?? []
+      const options = grandFields
+        .filter(
+          (f) =>
+            !f.hidden &&
+            !PRESET_NON_DISPLAY_TYPES.has(f.type ?? '') &&
+            f.field !== fkField &&
+            f.field !== 'id' &&
+            !PRESET_SENTINEL_FIELDS.has(f.field) &&
+            !PRESET_SPECIAL_GROUP_KEYS.has(f.group_key ?? '')
+        )
+        .map((f) => ({
+          field: `${entry.field}.${f.field}`,
+          label: `${entry.field} → ${f.label || titleCase(f.field)}`
+        }))
+      if (options.length > 0) groups.push({ heading: entry.field, options })
+    }
+    return groups
+  }, [
+    drawerRelationsLocal,
+    drawerRelationGrandCollections,
+    childRelationsRaw,
+    relatedCollection,
+    summaryGrandFieldsByCollection
+  ])
+
+  const presetOptionGroups = useMemo<PresetOptionGroup[]>(
+    () => [{ options: presetPickerFieldOptions }, ...presetSummaryOptionGroups],
+    [presetPickerFieldOptions, presetSummaryOptionGroups]
   )
 
   // Reset local state when popover opens
@@ -9653,7 +9848,7 @@ function FieldSettingsPopover({
                       <ColumnPresetRow
                         key={preset._key}
                         preset={preset}
-                        fieldOptions={uniqueByOptions}
+                        optionGroups={presetOptionGroups}
                         onChange={(updated) =>
                           setColumnPresetsLocal(
                             columnPresetsLocal.map((p, i) => (i === idx ? updated : p))

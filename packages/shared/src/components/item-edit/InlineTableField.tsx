@@ -58,6 +58,9 @@ interface O2MRevisionEntry {
 }
 
 const NON_DISPLAY_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
+// Built-in preset sentinel: shows every displayCols entry, no relation summary columns.
+// Not a real ColumnPreset — never appears in columnPresets, only in localStorage/activePreset.
+const ALL_PRESET_SENTINEL = '__all__'
 
 function evalClientFormula(formula: string, row: Record<string, unknown>): number | null {
   // Handles both `item.fieldname` and `{{fieldname}}` token syntax
@@ -302,6 +305,7 @@ export function InlineTableField({
   const presetStorageKey = `nvr_grid_preset_${relatedCollection}_${parentFieldKey ?? manyField}`
   const [activePreset, setActivePreset] = useState<string | undefined>(() => {
     const stored = localStorage.getItem(presetStorageKey)
+    if (stored === ALL_PRESET_SENTINEL) return ALL_PRESET_SENTINEL
     if (stored && columnPresets?.some(p => p.name === stored)) return stored
     return columnPresets?.[0]?.name
   })
@@ -542,13 +546,267 @@ export function InlineTableField({
 
   // Column view preset: which named subset of displayCols is currently shown.
   // Presets can only FILTER displayCols — they never reveal a column the layout hid.
-  const resolvedPreset = columnPresets && columnPresets.length >= 2
+  // ALL_PRESET_SENTINEL is a built-in view (not a real preset): resolvedPreset stays
+  // undefined for it, same as the existing stale-name fallback — both end up showing
+  // full displayCols below, but the switcher highlight distinguishes the two (see
+  // presetSwitcher: stale names still highlight columnPresets[0], unchanged).
+  const resolvedPreset = columnPresets && columnPresets.length >= 2 && activePreset !== ALL_PRESET_SENTINEL
     ? columnPresets.find(p => p.name === activePreset)
     : undefined
-  const presetCols = resolvedPreset
-    ? resolvedPreset.columns.map(name => displayCols.find(c => c.field === name)).filter((c): c is CMSField => !!c)
+  // Membership filter in LAYOUT order — stored preset column order is ignored for
+  // child columns; unknown/stale names in preset.columns are silently skipped.
+  const presetChildFieldSet = resolvedPreset
+    ? new Set(resolvedPreset.columns.filter(token => !token.includes('.')))
+    : null
+  const presetCols = presetChildFieldSet
+    ? displayCols.filter(c => presetChildFieldSet.has(c.field))
     : []
-  const effectiveCols = presetCols.length > 0 ? presetCols : displayCols
+
+  // Relation summary columns: dot tokens ("relationField.memberField") in the ACTIVE
+  // preset only, resolved against drawerRelations. Preserve stored pick order.
+  const activePresetDotTokens = useMemo(() => {
+    if (!resolvedPreset) return [] as { relationField: string; memberField: string }[]
+    const tokens: { relationField: string; memberField: string }[] = []
+    for (const token of resolvedPreset.columns) {
+      const dot = token.indexOf('.')
+      if (dot < 0) continue
+      const relationField = token.slice(0, dot)
+      const memberField = token.slice(dot + 1)
+      const inDrawer = drawerRelations?.some(dr => (typeof dr === 'string' ? dr : dr.field) === relationField)
+      if (inDrawer) tokens.push({ relationField, memberField })
+    }
+    return tokens
+  }, [resolvedPreset, drawerRelations])
+
+  const summaryRelationFields = useMemo(
+    () => [...new Set(activePresetDotTokens.map(t => t.relationField))],
+    [activePresetDotTokens]
+  )
+
+  // Resolve each summary relation's grandchild collection/fk the same way
+  // NestedRelationEditor does — reusing the already-fetched childRelations.
+  const summaryGrandRels = useMemo(() => {
+    const map = new Map<string, { grandCollection: string; fkField: string } | null>()
+    for (const relationField of summaryRelationFields) {
+      const rel = childRelations.find(r => r.one_collection === relatedCollection && r.one_field === relationField)
+      map.set(relationField, rel?.many_collection && rel?.many_field
+        ? { grandCollection: rel.many_collection, fkField: rel.many_field }
+        : null)
+    }
+    return map
+  }, [summaryRelationFields, childRelations, relatedCollection])
+
+  const summaryGrandCollections = useMemo(
+    () => [...new Set(
+      [...summaryGrandRels.values()]
+        .filter((v): v is { grandCollection: string; fkField: string } => !!v)
+        .map(v => v.grandCollection)
+    )],
+    [summaryGrandRels]
+  )
+
+  // Grandchild field-config + relations, batched per distinct grandchild collection.
+  // Same query key shape as NestedRelationEditor — shares its cache when a drawer is open.
+  const summaryFieldConfigQueries = useQueries({
+    queries: summaryGrandCollections.map(gc => ({
+      queryKey: ['field-config', gc, null],
+      queryFn: () => client.request<{ data: CMSField[] }>(get(`/field-config/${gc}`)).then(r => r.data ?? []),
+      staleTime: 60_000
+    }))
+  })
+  const summaryRelationsQueries = useQueries({
+    queries: summaryGrandCollections.map(gc => ({
+      queryKey: ['collection-meta', gc],
+      queryFn: () => client.request<{ data: unknown }>(get(`/collections/${gc}`)).then(r => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+      staleTime: 10 * 60_000
+    }))
+  })
+  const summaryFieldsByCollection = useMemo(() => {
+    const map = new Map<string, CMSField[]>()
+    summaryGrandCollections.forEach((gc, i) => { map.set(gc, summaryFieldConfigQueries[i]?.data ?? []) })
+    return map
+  }, [summaryGrandCollections, summaryFieldConfigQueries])
+  const summaryRelationsByCollection = useMemo(() => {
+    const map = new Map<string, CMSRelation[]>()
+    summaryGrandCollections.forEach((gc, i) => { map.set(gc, summaryRelationsQueries[i]?.data ?? []) })
+    return map
+  }, [summaryGrandCollections, summaryRelationsQueries])
+
+  // Member field → grandchild M2O relation, per summary relation (for label resolution).
+  const grandM2oRelMaps = useMemo(() => {
+    const map = new Map<string, Map<string, CMSRelation>>()
+    for (const relationField of summaryRelationFields) {
+      const grandInfo = summaryGrandRels.get(relationField)
+      if (!grandInfo) continue
+      const grelations = summaryRelationsByCollection.get(grandInfo.grandCollection) ?? []
+      const fieldMap = new Map<string, CMSRelation>()
+      for (const t of activePresetDotTokens) {
+        if (t.relationField !== relationField) continue
+        const rel = grelations.find(r => r.many_collection === grandInfo.grandCollection && r.many_field === t.memberField && !r.junction_field)
+        if (rel?.one_collection) fieldMap.set(t.memberField, rel)
+      }
+      map.set(relationField, fieldMap)
+    }
+    return map
+  }, [summaryRelationFields, summaryGrandRels, summaryRelationsByCollection, activePresetDotTokens])
+
+  // ONE batched members query per distinct summary relation: grandchild rows whose fk
+  // matches a visible SAVED row. Nested under the ['o2m-rows', ...] prefix so every
+  // existing invalidation call site (incl. NestedRelationEditor's outerGridInvalidateKey)
+  // refreshes it for free — staleness matches the grid's own o2m-rows refetch behavior.
+  const visibleRowIds = useMemo(() => rows.map(r => String(r.id)), [rows])
+  const rowIdsHash = visibleRowIds.join(',')
+  const summaryMembersQueries = useQueries({
+    queries: summaryRelationFields.map(relationField => {
+      const grandInfo = summaryGrandRels.get(relationField)
+      return {
+        queryKey: ['o2m-rows', relatedCollection, manyField, parentId, 'summary-members', relationField, rowIdsHash],
+        queryFn: () => {
+          if (!grandInfo) return Promise.resolve([] as Record<string, unknown>[])
+          return client
+            .request<{ data: Record<string, unknown>[] }>(
+              get(`/items/${grandInfo.grandCollection}`, {
+                filter: JSON.stringify({ [grandInfo.fkField]: { _in: visibleRowIds } }),
+                limit: 1000
+              })
+            )
+            .then(r => r.data ?? [])
+        },
+        enabled: !!grandInfo && visibleRowIds.length > 0,
+        staleTime: 30_000
+      }
+    })
+  })
+  const summaryMembersByRelation = useMemo(() => {
+    const map = new Map<string, Map<string, Record<string, unknown>[]>>()
+    summaryRelationFields.forEach((relationField, i) => {
+      const grandInfo = summaryGrandRels.get(relationField)
+      const byRow = new Map<string, Record<string, unknown>[]>()
+      if (grandInfo) {
+        for (const m of summaryMembersQueries[i]?.data ?? []) {
+          const pid = String(m[grandInfo.fkField])
+          if (!byRow.has(pid)) byRow.set(pid, [])
+          byRow.get(pid)!.push(m)
+        }
+      }
+      map.set(relationField, byRow)
+    })
+    return map
+  }, [summaryRelationFields, summaryGrandRels, summaryMembersQueries])
+
+  // Batched M2O label resolution for summary member fields — same batched/shared-cache
+  // approach as m2oDisplays below, scoped to grandchild collections + pending-row drafts.
+  const summaryM2oLookupIds = useMemo(() => {
+    const result = new Map<string, string[]>()
+    const push = (oneCollection: string, id: unknown) => {
+      if (id == null || id === '') return
+      if (!result.has(oneCollection)) result.set(oneCollection, [])
+      result.get(oneCollection)!.push(String(id))
+    }
+    for (const [relationField, byRow] of summaryMembersByRelation) {
+      const fieldMap = grandM2oRelMaps.get(relationField)
+      if (!fieldMap || fieldMap.size === 0) continue
+      for (const members of byRow.values()) {
+        for (const m of members) {
+          for (const [memberField, rel] of fieldMap) {
+            if (rel.one_collection) push(rel.one_collection, m[memberField])
+          }
+        }
+      }
+      for (const row of pendingRows) {
+        const staged = row[`__o2m_${relationField}`]
+        if (!Array.isArray(staged)) continue
+        for (const m of staged as Record<string, unknown>[]) {
+          for (const [memberField, rel] of fieldMap) {
+            if (rel.one_collection) push(rel.one_collection, m[memberField])
+          }
+        }
+      }
+    }
+    for (const [k, ids] of result) result.set(k, [...new Set(ids)].sort())
+    return result
+  }, [summaryMembersByRelation, grandM2oRelMaps, pendingRows])
+
+  const { data: summaryM2oDisplays = {} } = useQuery<Record<string, Record<string, string>>>({
+    queryKey: ['summary-m2o-display', relatedCollection, ...Array.from(summaryM2oLookupIds.entries()).flat(2)],
+    queryFn: async () => {
+      const result: Record<string, Record<string, string>> = {}
+      await Promise.all(
+        [...summaryM2oLookupIds.entries()].map(async ([oneCollection, ids]) => {
+          const [metaRes, itemsRes] = await Promise.all([
+            client.request<{ data: { display_template?: string | null } }>(get(`/collections/${oneCollection}`)),
+            client.request<{ data: Record<string, unknown>[] }>(
+              get(`/items/${oneCollection}`, { filter: JSON.stringify({ id: { _in: ids } }), limit: ids.length })
+            )
+          ])
+          result[oneCollection] = {}
+          for (const item of itemsRes.data ?? []) {
+            result[oneCollection][String(item.id)] = applyDisplayTemplate(metaRes.data?.display_template, item)
+          }
+        })
+      )
+      return result
+    },
+    enabled: summaryM2oLookupIds.size > 0,
+    staleTime: 60_000
+  })
+
+  // Synthetic read-only columns appended AFTER child columns. field = "relationField.memberField"
+  // (the dot is the discriminator effectiveCols.map() sites use to detect a summary column —
+  // real CMSField.field values are plain identifiers and never contain one).
+  const summaryCols = useMemo<CMSField[]>(() => activePresetDotTokens.map(({ relationField, memberField }) => {
+    const grandInfo = summaryGrandRels.get(relationField)
+    const grandFields = grandInfo ? summaryFieldsByCollection.get(grandInfo.grandCollection) ?? [] : []
+    const grandField = grandFields.find(f => f.field === memberField)
+    return {
+      field: `${relationField}.${memberField}`,
+      type: 'presentation',
+      interface: null,
+      label: grandField?.label ?? titleCase(memberField),
+      required: false,
+      hidden: false,
+      readonly: true,
+      sort: 0,
+      group_key: null,
+      options: null,
+      computed_formula: null,
+      computed_type: null,
+      note: null,
+      placeholder: null,
+      repeater_schema: null,
+      dependency_config: null
+    }
+  }), [activePresetDotTokens, summaryGrandRels, summaryFieldsByCollection])
+
+  function isSummaryCol(c: CMSField): boolean {
+    return c.field.includes('.')
+  }
+
+  // Joined ', ' display for a summary column against one row. Saved rows read the batched
+  // members query; pending (unsaved) rows read their staged `__o2m_<relationField>` draft.
+  function summaryCellValue(c: CMSField, sourceRow: Record<string, unknown>, isPendingRow: boolean): string {
+    const dot = c.field.indexOf('.')
+    if (dot < 0) return '—'
+    const relationField = c.field.slice(0, dot)
+    const memberField = c.field.slice(dot + 1)
+    const staged = sourceRow[`__o2m_${relationField}`]
+    const members = isPendingRow
+      ? (Array.isArray(staged) ? staged as Record<string, unknown>[] : [])
+      : (summaryMembersByRelation.get(relationField)?.get(String(sourceRow.id)) ?? [])
+    if (members.length === 0) return '—'
+    const rel = grandM2oRelMaps.get(relationField)?.get(memberField)
+    const parts = members
+      .map(m => {
+        const v = m[memberField]
+        if (v == null || v === '') return null
+        if (rel?.one_collection) return summaryM2oDisplays[rel.one_collection]?.[String(v)] ?? String(v)
+        return String(v)
+      })
+      .filter((v): v is string => !!v)
+    return parts.length > 0 ? parts.join(', ') : '—'
+  }
+
+  const effectiveCols = resolvedPreset ? [...presetCols, ...summaryCols] : displayCols
 
   // Fields configured for the apply values form (group_key === '__apply_values__')
   const applyValuesCols = useMemo(() =>
@@ -1057,8 +1315,24 @@ export function InlineTableField({
     ((isNew || isPendingMode) ? 2 : 1) +
     (rowOrderField || isNew || isPendingMode ? 1 : 0)
 
+  const isAllPresetActive = activePreset === ALL_PRESET_SENTINEL
+  // Stale stored names keep highlighting columnPresets[0] (unchanged prior behavior);
+  // the All chip only highlights on the explicit sentinel, never as a fallback.
+  const activePresetHighlightName = isAllPresetActive ? null : (resolvedPreset?.name ?? columnPresets?.[0]?.name)
   const presetSwitcher = columnPresets && columnPresets.length >= 2 && (
     <div className='flex items-center gap-1 text-[11px]'>
+      <button
+        type='button'
+        onClick={() => selectPreset(ALL_PRESET_SENTINEL)}
+        className={cn(
+          'h-6 px-2.5 rounded border transition-colors',
+          isAllPresetActive
+            ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+            : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
+        )}
+      >
+        All
+      </button>
       {columnPresets.map(p => (
         <button
           key={p.name}
@@ -1066,7 +1340,7 @@ export function InlineTableField({
           onClick={() => selectPreset(p.name)}
           className={cn(
             'h-6 px-2.5 rounded border transition-colors',
-            (resolvedPreset?.name ?? columnPresets[0]?.name) === p.name
+            activePresetHighlightName === p.name
               ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
               : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
           )}
@@ -1286,6 +1560,13 @@ export function InlineTableField({
                   )}
                 </td>
                 {effectiveCols.map((c) => {
+                  if (isSummaryCol(c)) {
+                    return (
+                      <td key={c.field} className='px-2 py-1 align-top'>
+                        <div className='py-0.5 overflow-hidden text-slate-500'>{summaryCellValue(c, isEditing ? editState!.draft : row, true)}</div>
+                      </td>
+                    )
+                  }
                   const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
                   const isMM = isM2MIface(c.interface)
                   const m2mKey = `__m2m_${c.field}`
@@ -1441,6 +1722,13 @@ export function InlineTableField({
                   </td>
                 )}
                 {effectiveCols.map((c) => {
+                  if (isSummaryCol(c)) {
+                    return (
+                      <td key={c.field} className='px-2 py-1 align-top'>
+                        <div className='py-0.5 overflow-hidden text-slate-500'>{summaryCellValue(c, displayRow, false)}</div>
+                      </td>
+                    )
+                  }
                   const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
                   const computedDisplayVal = isComputedWrite
                     ? (evalClientFormula(c.computed_formula as string, isEditing ? (editState?.draft ?? displayRow) : displayRow) ?? displayRow[c.field])
@@ -1554,6 +1842,13 @@ export function InlineTableField({
               {(rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
               {(isNew || isPendingMode) && <td className='px-3 py-1.5' />}
               {effectiveCols.map((c) => {
+                if (isSummaryCol(c)) {
+                  return (
+                    <td key={c.field} className='px-2 py-1 align-top'>
+                      <div className='py-0.5 overflow-hidden text-slate-500'>{summaryCellValue(c, editState!.draft, true)}</div>
+                    </td>
+                  )
+                }
                 const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
                 const isMM = isM2MIface(c.interface)
                 const m2mKey = `__m2m_${c.field}`
@@ -1642,7 +1937,7 @@ export function InlineTableField({
                   {isPendingMode && <td className='w-20' />}
                   {effectiveCols.map((c) => (
                     <td key={c.field} className={`px-2 py-1.5 text-[11px] ${changedFields.has(c.field) ? 'bg-amber-50 text-amber-900' : 'text-slate-700'}`}>
-                      {renderCell(c, row[c.field], row.id != null ? String(row.id) : undefined)}
+                      {isSummaryCol(c) ? summaryCellValue(c, row, false) : renderCell(c, row[c.field], row.id != null ? String(row.id) : undefined)}
                     </td>
                   ))}
                   <td className='w-20 px-2 py-1.5 text-right'>
