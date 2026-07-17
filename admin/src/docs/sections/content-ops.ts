@@ -1715,7 +1715,7 @@ export const contentOpsGridPresets: DocSection = {
     },
     {
       type: 'p',
-      text: "A preset can only FILTER the columns the layout and field permissions already resolved for the grid — it can never reveal a column the layout hid or a role can't see. Naming a column outside that resolved set simply drops it from the preset silently. If the remembered preset no longer exists (deleted, renamed, or the field now has fewer than two presets), the grid falls back to showing every resolved column rather than an empty table."
+      text: "A preset can only FILTER the columns the layout and field permissions already resolved for the grid — it can never reveal a column the layout hid or a role can't see. Naming a column outside that resolved set simply drops it from the preset silently. If the field now has fewer than two presets configured, the grid falls back to showing every resolved column rather than an empty table. If the remembered preset name was deleted or renamed but two or more presets still exist, the picker instead silently falls back to the first configured preset — not to the full column set."
     },
     {
       type: 'note',
