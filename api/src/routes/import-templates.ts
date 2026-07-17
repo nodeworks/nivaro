@@ -448,17 +448,24 @@ async function validateNestedTarget(
 ): Promise<{ isRelation: boolean }> {
   if (ctx.fieldSet.has(field)) {
     if (ctx.aliasFields.has(field)) {
+      // A registered O2M alias is the NORMAL relation-mode target — execute resolves
+      // it the same way. Only reject when no relation actually backs the alias.
+      const relation = await resolveLineChildRelation(childCollection, field)
+      if (relation) return { isRelation: true }
       ctx.errors.push({
         path,
-        message: `Field "${field}" on ${childCollection} is an alias field — nested_target requires a repeater/JSON column`
+        message: `Field "${field}" on ${childCollection} is an alias with no backing O2M relation — nested_target requires a relation or a repeater/JSON column`
       })
       return { isRelation: false }
     }
     // nivaro_fields metadata can drift from the physical table (e.g. a field row
     // registered for what is really a related table) — verify the column exists,
-    // since createOne silently drops keys without a physical column.
+    // since createOne silently drops keys without a physical column. A drifted row
+    // backed by a real O2M relation still validates in relation mode.
     const actualCols = await getActualColumns(childCollection)
     if (!actualCols.has(field)) {
+      const relation = await resolveLineChildRelation(childCollection, field)
+      if (relation) return { isRelation: true }
       ctx.errors.push({
         path,
         message: `Field "${field}" is registered on ${childCollection} but has no physical column — nested rows would be dropped on save. Use a repeater/JSON column.`
