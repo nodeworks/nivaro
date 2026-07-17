@@ -1739,7 +1739,11 @@ function FieldMetaEditor({
   // Merge (or remove) the auto_id key on top of whatever buildOptions() produced,
   // without disturbing the interface-specific options it already builds.
   function withAutoId(base: string | null): string | null {
-    const parsed = (base ? JSON.parse(base) : {}) as Record<string, unknown>
+    const raw = base ? (JSON.parse(base) as unknown) : {}
+    // Choice interfaces serialize options as a bare choices ARRAY — auto_id has no
+    // home there (stringify silently drops non-index props). Leave those untouched.
+    if (Array.isArray(raw)) return base
+    const parsed = raw as Record<string, unknown>
     if (autoIdPattern) {
       parsed.auto_id = {
         pattern: autoIdPattern,
@@ -2226,7 +2230,8 @@ function FieldMetaEditor({
         )}
       </div>
 
-      {/* ── Auto ID ── */}
+      {/* ── Auto ID ── (hidden for choice interfaces: their options are a bare array) */}
+      {!CHOICE_INTERFACES.has(fieldInterface) && (
       <div className='mt-3 rounded-md border border-slate-200 bg-white p-3'>
         <p className='mb-2 text-[11px] font-medium text-slate-600'>Auto ID</p>
         <div className='space-y-2'>
@@ -2272,6 +2277,7 @@ function FieldMetaEditor({
           )}
         </div>
       </div>
+      )}
 
       {/* ── Encryption ── */}
       <div className='mt-3 flex items-center justify-between rounded-md border border-slate-200 bg-white p-3'>
