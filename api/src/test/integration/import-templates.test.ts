@@ -1974,6 +1974,128 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     )
   })
 
+  it('POST /:id/execute — nested member on_miss create dedupes two lines missing the SAME name into ONE createOne, applies the new id into each grandchild FK', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-nested-create-miss',
+      collection: 'deployment_orders_ncm',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'deployment_lines_ncm',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null,
+        nested: {
+          target_field: 'unit_workflows_ncm',
+          when: null,
+          columns: [
+            {
+              target: 'unit',
+              source: null,
+              steps: [
+                {
+                  type: 'lookup',
+                  collection: 'units_ncm',
+                  match_field: 'name',
+                  on_miss: 'create',
+                  create: {
+                    defaults: [{ target: 'name', source: 'unit_name', steps: [] }],
+                    dedupe_by: ['name']
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }),
+      attach_file_field: null
+    }
+    const childRelation = {
+      many_collection: 'unit_workflow_lines_ncm',
+      many_field: 'deployment_order_id'
+    }
+    const nestedRelationRow = { many_collection: 'unit_workflows_ncm', many_field: 'workflow_line' }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(childRelation) as unknown as ReturnType<typeof db>) // line child relation resolve
+      .mockReturnValueOnce(makeChain(nestedRelationRow) as unknown as ReturnType<typeof db>) // nested target relation resolve
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'unit-99' } as never) // deduped units_ncm create
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'child-1' } as never) // line 1 child
+      .mockResolvedValueOnce({ id: 'grandchild-1' } as never) // line 1 member
+      .mockResolvedValueOnce({ id: 'child-2' } as never) // line 2 child
+      .mockResolvedValueOnce({ id: 'grandchild-2' } as never) // line 2 member
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-nested-create-miss/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { name: 'Deploy' },
+        lines: [
+          {
+            values: { sku: 'A1', unit_name: 'New Unit' },
+            nested: {
+              field: 'unit_workflows_ncm',
+              rows: [{ workflow_id: 'w1' }],
+              member_stubs: [{ unit: { is_new: true, name: 'New Unit' } }]
+            }
+          },
+          {
+            // Case/whitespace variant — must dedupe with line 1 (lookup-layer normalization)
+            values: { sku: 'A2', unit_name: ' new unit ' },
+            nested: {
+              field: 'unit_workflows_ncm',
+              rows: [{ workflow_id: 'w2' }],
+              member_stubs: [{ unit: { is_new: true, name: ' new unit ' } }]
+            }
+          }
+        ],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    // 1 deduped lookup create + parent + (child, grandchild) x2 = 6, NOT 7 — proves the two
+    // misses collapsed into a single createOne (and thus a single unit toward totalCreates).
+    expect(vi.mocked(createOne)).toHaveBeenCalledTimes(6)
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      1,
+      user,
+      'units_ncm',
+      { name: 'New Unit' },
+      expect.anything(),
+      undefined,
+      { skipRollupRecalc: true }
+    )
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      4,
+      user,
+      'unit_workflows_ncm',
+      { workflow_id: 'w1', unit: 'unit-99', workflow_line: 'child-1' },
+      expect.anything(),
+      undefined,
+      { skipRollupRecalc: true }
+    )
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      6,
+      user,
+      'unit_workflows_ncm',
+      { workflow_id: 'w2', unit: 'unit-99', workflow_line: 'child-2' },
+      expect.anything(),
+      undefined,
+      { skipRollupRecalc: true }
+    )
+  })
+
   it('POST /:id/execute — on_miss create: a later line failure compensates, deleting the created lookup record LAST (after parent)', async () => {
     const user = makeRegularUser({ id: 'user-1' })
     const template = {

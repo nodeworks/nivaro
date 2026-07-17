@@ -17,7 +17,13 @@ export interface ImportIssue {
 
 export interface LineDraft {
   values: Record<string, unknown>
-  nested?: { field: string; rows: Record<string, unknown>[] }
+  nested?: {
+    field: string
+    rows: Record<string, unknown>[]
+    // Parallel to rows (index i belongs to rows[i]) — only member stubs whose lookup step
+    // is on_miss:'create' survive here (create_stub misses stay warn-only, unpersisted).
+    member_stubs?: Record<string, { is_new: true; name: string }>[]
+  }
   stubs?: Record<string, { is_new: true; name: string }> // per-field create_stub sidecars
 }
 
@@ -617,6 +623,12 @@ async function processPerLineNested(
   })
   if (gatedEntries.length === 0) return
 
+  const createTargets = new Set<string>()
+  for (const col of nested.columns) {
+    const lookupStep = findLookupStep(col.steps)
+    if (lookupStep?.on_miss === 'create') createTargets.add(col.target)
+  }
+
   const memberResults = await runColumnsBatched(
     nested.columns,
     gatedEntries,
@@ -630,13 +642,20 @@ async function processPerLineNested(
     const draft = lineDraftByRowNumber.get(result.rowNumber)
     if (!draft) continue
     // Member stubs are NOT written into the stored row — same rationale as disperse's
-    // nestedRows above: create_stub misses already surface as warn issues.
+    // nestedRows above: create_stub misses already surface as warn issues. on_miss:'create'
+    // misses DO need to survive to execute time (collectCreateMisses reads them back off
+    // draft.nested.member_stubs), so those are captured separately below.
     const member: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(result.values)) {
       if (value !== undefined) member[key] = value
     }
     if (Object.keys(member).length > 0) {
       draft.nested = { field: nested.target_field, rows: [member] }
+      const memberStub: Record<string, Stub> = {}
+      for (const [target, stub] of Object.entries(result.stubs)) {
+        if (createTargets.has(target)) memberStub[target] = stub
+      }
+      if (Object.keys(memberStub).length > 0) draft.nested.member_stubs = [memberStub]
     }
   }
 }
@@ -698,22 +717,67 @@ export function collectCreateMisses(
       )
     }
   }
-  if (createStepByTarget.size === 0) return misses
-  for (const line of lines) {
-    if (!line.stubs) continue
-    for (const [target, stub] of Object.entries(line.stubs)) {
-      const step = createStepByTarget.get(target)
-      if (!step) continue
-      misses.push({
-        step,
-        name: stub.name,
-        values: line.values,
-        apply: (id) => {
-          line.values[target] = id
-        }
-      })
+  if (createStepByTarget.size > 0) {
+    for (const line of lines) {
+      if (!line.stubs) continue
+      for (const [target, stub] of Object.entries(line.stubs)) {
+        const step = createStepByTarget.get(target)
+        if (!step) continue
+        misses.push({
+          step,
+          name: stub.name,
+          values: line.values,
+          apply: (id) => {
+            line.values[target] = id
+          }
+        })
+      }
     }
   }
+
+  // Nested member on_miss:'create' — covers the per-line nested channel only
+  // (config.line_map.nested). Disperse's member_columns on_miss:'create' is a separate
+  // channel (processDisperse strips stubs before writing nested rows) and is not covered.
+  const nested = config.line_map?.nested
+  if (nested) {
+    const nestedCreateStepByTarget = new Map<
+      string,
+      LookupStepConfig & { create: ImportLookupCreate }
+    >()
+    for (const col of nested.columns) {
+      const lookupStep = findLookupStep(col.steps)
+      if (lookupStep?.on_miss === 'create' && lookupStep.create) {
+        nestedCreateStepByTarget.set(
+          col.target,
+          lookupStep as LookupStepConfig & { create: ImportLookupCreate }
+        )
+      }
+    }
+    if (nestedCreateStepByTarget.size > 0) {
+      for (const line of lines) {
+        if (line.nested?.field !== nested.target_field || !line.nested.member_stubs) continue
+        const { rows, member_stubs: memberStubs } = line.nested
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i]
+          const stubs = memberStubs[i]
+          if (!stubs) continue
+          for (const [target, stub] of Object.entries(stubs)) {
+            const step = nestedCreateStepByTarget.get(target)
+            if (!step) continue
+            misses.push({
+              step,
+              name: stub.name,
+              values: line.values,
+              apply: (id) => {
+                row[target] = id
+              }
+            })
+          }
+        }
+      }
+    }
+  }
+
   return misses
 }
 

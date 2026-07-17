@@ -452,6 +452,63 @@ describe('runImportPipeline — per-line nested', () => {
     expect(lines[1].nested).toBeUndefined()
   })
 
+  it('on_miss create — a missing nested member value survives to draft.nested.member_stubs, warn issue unchanged', async () => {
+    const createConfig = cfg({
+      line_map: {
+        target_field: 'lines',
+        row_filter: { column: 'Line Number', op: 'nnull' },
+        columns: [{ target: 'price', source: 'Line Price', steps: [] }],
+        nested: {
+          target_field: 'unit_workflows',
+          when: { column: 'Unit Type', op: 'nnull' },
+          columns: [
+            {
+              target: 'unit',
+              source: 'Unit Type',
+              steps: [
+                {
+                  type: 'lookup',
+                  collection: 'units',
+                  match_field: 'name',
+                  on_miss: 'create',
+                  create: {
+                    defaults: [{ target: 'name', source: 'Unit Type', steps: [] }],
+                    dedupe_by: ['name']
+                  }
+                }
+              ]
+            },
+            { target: 'quantity', source: 'Qty', steps: [] }
+          ]
+        }
+      }
+    })
+    const { lines, issues } = await runImportPipeline({
+      config: createConfig,
+      rows: [
+        {
+          'Line Number': 1,
+          'Line Price': 5,
+          'Unit Type': 'xmfr99.milford.ma',
+          Qty: 3
+        }
+      ],
+      lookup: async () => [] // no match anywhere
+    })
+    expect(lines[0].nested).toEqual({
+      field: 'unit_workflows',
+      rows: [{ quantity: 3 }], // unit missed → omitted from the member row itself
+      member_stubs: [{ unit: { is_new: true, name: 'xmfr99.milford.ma' } }]
+    })
+    expect(issues).toContainEqual({
+      severity: 'warn',
+      rule: 'line[1]:nested:unit',
+      column: 'Unit Type',
+      row: 1,
+      message: 'No match for "xmfr99.milford.ma" — will be created on direct import'
+    })
+  })
+
   it('disperse wins — nested skipped when disperse already attached', async () => {
     const both = cfg({
       line_map: {
