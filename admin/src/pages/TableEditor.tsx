@@ -8382,6 +8382,7 @@ function FieldSettingsPopover({
   const [rowRulesLocal, setRowRulesLocal] = useState<RowRuleItem[]>([])
   const [parentContextFieldsLocal, setParentContextFieldsLocal] = useState<string[]>([])
   const [columnPresetsLocal, setColumnPresetsLocal] = useState<ColumnPresetItem[]>([])
+  const [defaultPresetLocal, setDefaultPresetLocal] = useState<string>('')
   const [drawerRelationsLocal, setDrawerRelationsLocal] = useState<DrawerRelationItem[]>([])
   const [uniqueBy, setUniqueBy] = useState<string[]>([])
   const [uniqueByOpen, setUniqueByOpen] = useState(false)
@@ -8773,6 +8774,7 @@ function FieldSettingsPopover({
               }))
             : []
         )
+        setDefaultPresetLocal(typeof opts.default_preset === 'string' ? opts.default_preset : '')
         setDrawerRelationsLocal(
           Array.isArray(opts.drawer_relations)
             ? (
@@ -8901,6 +8903,11 @@ function FieldSettingsPopover({
                       ...(validColumnPresets.length > 0
                         ? { column_presets: validColumnPresets }
                         : { column_presets: undefined }),
+                      ...(defaultPresetLocal &&
+                      (defaultPresetLocal === '__all__' ||
+                        validColumnPresets.some((p) => p.name === defaultPresetLocal))
+                        ? { default_preset: defaultPresetLocal }
+                        : { default_preset: undefined }),
                       ...(validDrawerRelations.length > 0
                         ? { drawer_relations: validDrawerRelations }
                         : { drawer_relations: undefined }),
@@ -9870,6 +9877,26 @@ function FieldSettingsPopover({
                         isLast={idx === columnPresetsLocal.length - 1}
                       />
                     ))}
+                    {columnPresetsLocal.length >= 2 && (
+                      <div className='flex items-center gap-2'>
+                        <Label className='text-[10px] text-slate-500 shrink-0'>Default view</Label>
+                        <select
+                          value={defaultPresetLocal}
+                          onChange={(e) => setDefaultPresetLocal(e.target.value)}
+                          className='h-6 rounded border border-slate-200 bg-white px-1 text-[10px] text-slate-700'
+                        >
+                          <option value=''>First preset</option>
+                          <option value='__all__'>All columns</option>
+                          {columnPresetsLocal
+                            .filter((p) => p.name.trim())
+                            .map((p) => (
+                              <option key={p._key} value={p.name.trim()}>
+                                {p.name.trim()}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 )}
 

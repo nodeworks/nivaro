@@ -147,6 +147,7 @@ export function InlineTableField({
   parentCascades,
   rowRules,
   columnPresets,
+  defaultPreset,
   drawerRelations,
   parentContextFields,
   uniqueBy,
@@ -172,6 +173,8 @@ export function InlineTableField({
   parentCascades?: CascadeRule[]
   rowRules?: RowRule[]
   columnPresets?: ColumnPreset[]
+  /** Initial view before the user picks one: a preset name or '__all__'. */
+  defaultPreset?: string
   drawerRelations?: DrawerRelationConfig[]
   parentContextFields?: string[]
   uniqueBy?: string[]
@@ -307,6 +310,9 @@ export function InlineTableField({
     const stored = localStorage.getItem(presetStorageKey)
     if (stored === ALL_PRESET_SENTINEL) return ALL_PRESET_SENTINEL
     if (stored && columnPresets?.some(p => p.name === stored)) return stored
+    // No (valid) user choice yet: honor the configured default view, then first preset
+    if (defaultPreset === ALL_PRESET_SENTINEL) return ALL_PRESET_SENTINEL
+    if (defaultPreset && columnPresets?.some(p => p.name === defaultPreset)) return defaultPreset
     return columnPresets?.[0]?.name
   })
   function selectPreset(name: string) {
