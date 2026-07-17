@@ -1773,10 +1773,19 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
   const fileM2mOptions = fields
     .filter((f) => f.type === 'alias')
     .filter((f) => {
-      const parent = relations.find(
-        (r) =>
-          r.one_collection === collection && r.one_field === f.field && r.junction_field != null
-      )
+      // Same resolution as the server's findM2MRelation: exact one_field match, then
+      // the junction-table-name fallback used by legacy alias fields.
+      const parent =
+        relations.find(
+          (r) =>
+            r.one_collection === collection && r.one_field === f.field && r.junction_field != null
+        ) ??
+        relations.find(
+          (r) =>
+            r.one_collection === collection &&
+            r.many_collection === f.field &&
+            r.junction_field != null
+        )
       if (!parent) return false
       return relations.some(
         (r) =>

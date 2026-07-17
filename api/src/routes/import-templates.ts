@@ -187,10 +187,13 @@ function isValidM2mBody(value: unknown): value is Record<string, Array<string | 
  *  target turns out not to be a plain column (see `getM2mAliasFieldsCached`). */
 async function resolveM2mAliasFields(collection: string): Promise<Map<string, M2mAliasInfo>> {
   const rels = await getRelations(collection)
+  // Candidates include the junction-table-name fallback aliases (legacy fields named
+  // after the junction) — findM2MRelation resolves both spellings.
   const candidateFields = new Set(
     rels
       .filter((r) => r.one_collection === collection && r.junction_field != null)
-      .map((r) => r.one_field as string)
+      .flatMap((r) => [r.one_field as string, r.many_collection])
+      .filter(Boolean)
   )
   const map = new Map<string, M2mAliasInfo>()
   for (const field of candidateFields) {

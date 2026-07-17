@@ -878,22 +878,27 @@ export function findM2MRelation(
   collection: string,
   rels: CMSRelation[]
 ): { junction: string; fkToParent: string; fkToOther: string; otherCollection: string } | null {
-  for (const rel of rels) {
-    if (rel.one_collection !== collection) continue
-    if (rel.junction_field == null) continue
-    if (rel.one_field !== key) continue
+  // Two passes: exact one_field match wins; then the junction-table-name fallback the
+  // admin UI uses for legacy alias fields named after the junction. Without it, an
+  // alias like 'workflows_files' renders in forms but silently fails to resolve here.
+  for (const exact of [true, false]) {
+    for (const rel of rels) {
+      if (rel.one_collection !== collection) continue
+      if (rel.junction_field == null) continue
+      if (exact ? rel.one_field !== key : rel.many_collection !== key) continue
 
-    // Find the other FK in the junction table
-    const otherRel = rels.find(
-      (r) => r.many_collection === rel.many_collection && r.many_field === rel.junction_field
-    )
-    if (!otherRel?.one_collection) continue
+      // Find the other FK in the junction table
+      const otherRel = rels.find(
+        (r) => r.many_collection === rel.many_collection && r.many_field === rel.junction_field
+      )
+      if (!otherRel?.one_collection) continue
 
-    return {
-      junction: rel.many_collection,
-      fkToParent: rel.many_field,
-      fkToOther: rel.junction_field,
-      otherCollection: otherRel.one_collection
+      return {
+        junction: rel.many_collection,
+        fkToParent: rel.many_field,
+        fkToOther: rel.junction_field,
+        otherCollection: otherRel.one_collection
+      }
     }
   }
   return null
