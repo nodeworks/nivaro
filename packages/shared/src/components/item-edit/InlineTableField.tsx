@@ -33,8 +33,8 @@ import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { FieldRenderer } from './FieldRenderer'
 import { NestedRelationEditor } from './NestedRelationEditor'
 import { RelationCombobox } from './RelationCombobox'
-import { applyDisplayTemplate, parseJson, SENTINEL_FIELDS } from './helpers'
-import type { CMSField, CMSRelation } from './types'
+import { applyDisplayTemplate, EMPTY_NESTED_OPS, parseJson, SENTINEL_FIELDS } from './helpers'
+import type { CMSField, CMSRelation, NestedOps } from './types'
 
 interface RowRevision {
   id: number
@@ -812,7 +812,10 @@ export function InlineTableField({
         const writableKeys = new Set(displayCols.map(c => c.field).filter(k => !k.startsWith('__m2m_')))
         const rowPayload = Object.fromEntries(Object.entries(editState.draft).filter(([k]) => writableKeys.has(k)))
         if (isPendingMode && staging) {
-          staging.queueEdit(relatedCollection, manyField, editState.rowId, rowPayload)
+          // __nested_ops_* keys ride along here (exempt from the writableKeys filter) so the
+          // batch flush can apply them — the immediate PATCH branch below still strips them.
+          const nestedOpsEntries = Object.entries(editState.draft).filter(([k]) => k.startsWith('__nested_ops_'))
+          staging.queueEdit(relatedCollection, manyField, editState.rowId, { ...rowPayload, ...Object.fromEntries(nestedOpsEntries) })
           setEditState(null)
           return
         }
@@ -1529,6 +1532,11 @@ export function InlineTableField({
                             parentDraft={editState?.draft ?? displayRow}
                             hint={relHint}
                             outerGridInvalidateKey={['o2m-rows', relatedCollection, manyField, parentId]}
+                            {...(isPendingMode ? {
+                              deferred: true,
+                              stagedOps: (editState?.draft[`__nested_ops_${relField}`] as NestedOps | undefined) ?? EMPTY_NESTED_OPS,
+                              onStagedOpsChange: (ops: NestedOps) => setDraftField(`__nested_ops_${relField}`, ops)
+                            } : {})}
                           />
                         )
                       })}

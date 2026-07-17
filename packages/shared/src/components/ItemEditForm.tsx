@@ -30,6 +30,7 @@ import type {
   CMSField,
   CMSRelation,
   FieldGroup,
+  NestedOps,
   RenderFieldProps,
   SlotAssignment,
   StepDef,
@@ -1782,11 +1783,43 @@ export function ItemEditForm({
         const edits = pendingO2MEdits.get(key) ?? new Map()
         updateStep(stepId, { status: 'running', progress: { done: 0, total: edits.size } })
         let hasErr = false
+        let nestedFailures = 0
         await Promise.all([...edits.entries()].map(async ([rowId, changes]) => {
-          await client.request(patch(`/items/${rc}/${rowId}`, changes)).catch(err => { hasErr = true; updateStep(stepId, { status: 'error', error: errMsg(err) }) })
+          // __nested_ops_* keys stage a NestedRelationEditor's grandchild ops (F3) — strip
+          // them from the PATCH payload and apply them against the resolved relation instead.
+          const nestedOpsEntries = Object.entries(changes).filter(([k]) => k.startsWith('__nested_ops_'))
+          const cleanChanges = Object.fromEntries(Object.entries(changes).filter(([k]) => !k.startsWith('__nested_ops_')))
+          if (Object.keys(cleanChanges).length > 0) {
+            await client.request(patch(`/items/${rc}/${rowId}`, cleanChanges)).catch(err => { hasErr = true; updateStep(stepId, { status: 'error', error: errMsg(err) }) })
+          }
+          for (const [opsKey, opsVal] of nestedOpsEntries) {
+            const field = opsKey.slice('__nested_ops_'.length)
+            const grandRel = relations.find(r => r.one_collection === rc && r.one_field === field)
+            const ops = opsVal as NestedOps
+            if (!grandRel?.many_collection || !grandRel.many_field) {
+              nestedFailures += ops.created.length + ops.updated.length + ops.deleted.length
+              continue
+            }
+            const { many_collection, many_field } = grandRel
+            await Promise.all(ops.created.map(draftRow =>
+              client.request(post(`/items/${many_collection}`, { ...draftRow, [many_field]: rowId })).catch(() => { nestedFailures++ })
+            ))
+            await Promise.all(ops.updated.map(({ id, changes: uChanges }) =>
+              client.request(patch(`/items/${many_collection}/${id}`, uChanges)).catch(() => { nestedFailures++ })
+            ))
+            // Deletes last, after creates/updates for this same flush have had a chance to land.
+            await Promise.all(ops.deleted.map(id =>
+              client.request(del(`/items/${many_collection}/${id}`)).catch(() => { nestedFailures++ })
+            ))
+          }
           updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: edits.size } }))
         }))
-        if (!hasErr) { updateStep(stepId, { status: 'done' }); nextEdits.delete(key) }
+        if (!hasErr && nestedFailures === 0) {
+          updateStep(stepId, { status: 'done' })
+          nextEdits.delete(key)
+        } else if (!hasErr) {
+          updateStep(stepId, { status: 'error', error: `${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed` })
+        }
       }
       setPendingO2MEdits(nextEdits)
 

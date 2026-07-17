@@ -32,6 +32,16 @@ export interface CMSRelation {
   junction_field: string | null
 }
 
+// Staged grandchild ops for a NestedRelationEditor under saveMode='pending' on
+// an already-saved parent row — explicit ops rather than a full-list replace,
+// so a replace-reconcile can't delete rows added concurrently by someone else
+// between snapshot and flush.
+export interface NestedOps {
+  created: Record<string, unknown>[]
+  updated: { id: string; changes: Record<string, unknown> }[]
+  deleted: string[]
+}
+
 export interface FieldGroup {
   id: number
   key: string

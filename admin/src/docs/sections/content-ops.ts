@@ -1745,11 +1745,11 @@ export const contentOpsGridPresets: DocSection = {
     },
     {
       type: 'p',
-      text: "What actually happens on Add/Edit/Delete inside the drawer depends on whether the parent row it belongs to has been saved yet. Editing a NEW or still-pending row stages grandchild members client-side (reusing the same `__o2m_<field>` prefill staging contract import templates use — see Import Templates gotchas) and only creates them once the parent row itself is saved, so they correctly participate in an `inline-table` field's `save_mode: \"pending\"` batching (including a batch cancel, which discards the staged members along with the rest of the pending row). Editing an ALREADY-SAVED row's drawer writes immediately — every Add/Edit/Delete there is a live `POST`/`PATCH`/`DELETE` against the grandchild collection, regardless of the outer grid's save mode."
+      text: "What actually happens on Add/Edit/Delete inside the drawer depends on whether the parent row it belongs to has been saved yet. Editing a NEW or still-pending row stages grandchild members client-side (reusing the same `__o2m_<field>` prefill staging contract import templates use — see Import Templates gotchas) and only creates them once the parent row itself is saved, so they correctly participate in an `inline-table` field's `save_mode: \"pending\"` batching (including a batch cancel, which discards the staged members along with the rest of the pending row). Editing an ALREADY-SAVED row's drawer depends on the outer grid's own save mode: under `save_mode: \"immediate\"` (the default), every Add/Edit/Delete is a live `POST`/`PATCH`/`DELETE` against the grandchild collection. Under `save_mode: \"pending\"`, drawer ops on an already-saved row stage too — as explicit created/updated/deleted ops keyed to that row's queued edit — and only flush (in that order, deletes last) when the outer batch is saved."
     },
     {
-      type: 'warn',
-      text: "Because of that split, a saved row's drawer edits are NOT undone by cancelling a pending batch on the outer grid — only the parent grid's own staged row/edits/deletes are discarded, grandchild writes already made through an already-saved row's drawer are not. This is a known, accepted inconsistency rather than a bug: reverting it would require staging grandchild writes transactionally as well, one level deeper than the current pending-mode architecture goes."
+      type: 'note',
+      text: "Because staged drawer ops ride along with the parent row's queued edit, a batch cancel on the outer grid now discards them along with everything else queued for that row — there is no longer a saved-row drawer path that writes outside the outer grid's save mode."
     },
     { type: 'h3', text: 'Configuring in the admin UI' },
     {

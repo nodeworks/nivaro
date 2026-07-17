@@ -5,8 +5,8 @@ import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatNumber, titleCase } from '../../lib/utils'
 import { FieldRenderer } from './FieldRenderer'
-import { applyDisplayTemplate, SENTINEL_FIELDS } from './helpers'
-import type { CMSField, CMSRelation } from './types'
+import { applyDisplayTemplate, EMPTY_NESTED_OPS, SENTINEL_FIELDS } from './helpers'
+import type { CMSField, CMSRelation, NestedOps } from './types'
 
 // Types not editable at this depth — grandchild rows edit scalar/M2O fields
 // only. M2M sub-relations would need a third staging layer; out of scope.
@@ -34,6 +34,24 @@ interface NestedRelationEditorProps {
   // invalidated alongside this editor's nested-rows key so stored-rollup columns on the outer
   // grid refresh after a grandchild write. Only meaningful when the outer row is already saved.
   outerGridInvalidateKey?: unknown[]
+  // Stage ops instead of writing live — outer grid is under saveMode='pending' and this parent
+  // row is already saved. Only meaningful when parentRowId != null.
+  deferred?: boolean
+  stagedOps?: NestedOps
+  onStagedOpsChange?: (ops: NestedOps) => void
+}
+
+function fieldsEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a == null && b == null) return true
+  if (a == null || b == null) return false
+  if (
+    (typeof a === 'string' && typeof b === 'number') ||
+    (typeof a === 'number' && typeof b === 'string')
+  ) {
+    return String(a) === String(b)
+  }
+  return JSON.stringify(a) === JSON.stringify(b)
 }
 
 function parseSaveError(err: unknown): string {
@@ -64,7 +82,10 @@ export function NestedRelationEditor({
   parentDraft,
   hint,
   readOnly = false,
-  outerGridInvalidateKey
+  outerGridInvalidateKey,
+  deferred = false,
+  stagedOps,
+  onStagedOpsChange
 }: NestedRelationEditorProps) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -141,13 +162,25 @@ export function NestedRelationEditor({
     staleTime: 30_000
   })
 
-  const rows = useMemo(
-    () =>
-      parentRowId != null
-        ? grandRows.map((r) => ({ key: String(r.id), data: r }))
-        : (stagedMembers ?? []).map((m, i) => ({ key: `staged:${i}`, data: m })),
-    [parentRowId, grandRows, stagedMembers]
-  )
+  const rows = useMemo(() => {
+    if (parentRowId != null) {
+      if (deferred) {
+        const ops = stagedOps ?? EMPTY_NESTED_OPS
+        const deletedSet = new Set(ops.deleted)
+        const updatedMap = new Map(ops.updated.map((u) => [u.id, u.changes]))
+        const overlaid = grandRows
+          .filter((r) => !deletedSet.has(String(r.id)))
+          .map((r) => {
+            const changes = updatedMap.get(String(r.id))
+            return { key: String(r.id), data: changes ? { ...r, ...changes } : r }
+          })
+        const created = ops.created.map((c, i) => ({ key: `created:${i}`, data: c }))
+        return [...overlaid, ...created]
+      }
+      return grandRows.map((r) => ({ key: String(r.id), data: r }))
+    }
+    return (stagedMembers ?? []).map((m, i) => ({ key: `staged:${i}`, data: m }))
+  }, [parentRowId, grandRows, stagedMembers, deferred, stagedOps])
 
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [draft, setDraft] = useState<Record<string, unknown>>({})
@@ -185,13 +218,35 @@ export function NestedRelationEditor({
   async function save() {
     if (!editingKey) return
     if (parentRowId != null && grandCollection && fkField) {
-      setSaving(true)
       // draft starts from the full API row on edit (id, fkField, system fields, etc.) —
       // only send back the fields this editor actually renders.
       const writableKeys = new Set(displayCols.map((c) => c.field))
       const rowPayload = Object.fromEntries(
         Object.entries(draft).filter(([k]) => writableKeys.has(k))
       )
+      if (deferred) {
+        const ops = stagedOps ?? EMPTY_NESTED_OPS
+        if (editingKey === 'new') {
+          onStagedOpsChange?.({ ...ops, created: [...ops.created, rowPayload] })
+        } else if (editingKey.startsWith('created:')) {
+          const idx = parseInt(editingKey.slice('created:'.length), 10)
+          const nextCreated = [...ops.created]
+          nextCreated[idx] = rowPayload
+          onStagedOpsChange?.({ ...ops, created: nextCreated })
+        } else {
+          const original = grandRows.find((r) => String(r.id) === editingKey)
+          const changed = Object.fromEntries(
+            Object.entries(rowPayload).filter(([k, v]) => !fieldsEqual(v, original?.[k]))
+          )
+          const nextUpdated = ops.updated.filter((u) => u.id !== editingKey)
+          if (Object.keys(changed).length > 0)
+            nextUpdated.push({ id: editingKey, changes: changed })
+          onStagedOpsChange?.({ ...ops, updated: nextUpdated })
+        }
+        cancelEdit()
+        return
+      }
+      setSaving(true)
       try {
         if (editingKey === 'new') {
           await client.request(
@@ -223,13 +278,27 @@ export function NestedRelationEditor({
 
   async function confirmedDelete(key: string) {
     if (parentRowId != null && grandCollection) {
-      try {
-        await client.request(del(`/items/${grandCollection}/${key}`))
-        invalidateOuterGrid()
-      } catch (err) {
-        // Leave confirmDeleteKey set so the error renders next to the Delete? prompt.
-        setRowError(parseSaveError(err))
-        return
+      if (deferred) {
+        const ops = stagedOps ?? EMPTY_NESTED_OPS
+        if (key.startsWith('created:')) {
+          const idx = parseInt(key.slice('created:'.length), 10)
+          onStagedOpsChange?.({ ...ops, created: ops.created.filter((_, i) => i !== idx) })
+        } else {
+          onStagedOpsChange?.({
+            ...ops,
+            updated: ops.updated.filter((u) => u.id !== key),
+            deleted: ops.deleted.includes(key) ? ops.deleted : [...ops.deleted, key]
+          })
+        }
+      } else {
+        try {
+          await client.request(del(`/items/${grandCollection}/${key}`))
+          invalidateOuterGrid()
+        } catch (err) {
+          // Leave confirmDeleteKey set so the error renders next to the Delete? prompt.
+          setRowError(parseSaveError(err))
+          return
+        }
       }
     } else {
       const idx = parseInt(key.slice('staged:'.length), 10)

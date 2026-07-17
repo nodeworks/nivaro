@@ -1,6 +1,7 @@
 import { type RefObject, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import type { NestedOps } from './types'
 
 // ─── Display template ──────────────────────────────────────────────────────────
 
@@ -166,3 +167,5 @@ export const SYSTEM_FIELDS = new Set([
 export const SENTINEL_FIELDS = new Set(['__pipeline__', '__comments__', '__tasks__', '__addendums__', '__owners__', '__pdf__', '__subtitle__'])
 export const isSentinelKey = (field: string) =>
   SENTINEL_FIELDS.has(field) || (field.startsWith('__widget_') && field.endsWith('__'))
+
+export const EMPTY_NESTED_OPS: NestedOps = { created: [], updated: [], deleted: [] }
