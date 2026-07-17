@@ -173,3 +173,20 @@ describe('resolveAutoIdTokens', () => {
     expect(out).toBe('26-1')
   })
 })
+
+describe('recompute gating (pure logic exercised through resolveAutoIdTokens)', () => {
+  it('re-renders prefix with preserved suffix', async () => {
+    const parsed = parseAutoIdPattern(
+      '{project.project_type.short_code}{funding_years[0] % 100}-{seq}'
+    )
+    const suffix = extractSuffix(parsed, 'CM22-15305')
+    expect(suffix).toBe('15305')
+    const out = await resolveAutoIdTokens(parsed, {
+      collection: 'workflows',
+      values: { project: 123, funding_years: [2027] },
+      lookups,
+      seqValue: suffix as string
+    })
+    expect(out).toBe('CR27-15305')
+  })
+})

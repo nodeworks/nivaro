@@ -7,6 +7,13 @@ import { hooks } from '../hooks/registry.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
 import type { CMSRelation, ItemsQuery, User } from '../types.js'
+import {
+  applyAutoIdsExt,
+  autoIdFieldsFor,
+  autoIdJunctionTargets,
+  parseAutoIdPattern,
+  recomputeAutoIdPrefix
+} from './auto-ids.js'
 import { getCollection, getFields, getRelations } from './collections.js'
 import { decryptItemFields, encryptItemFields } from './encryption.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
@@ -172,82 +179,6 @@ function parseJson<T>(v: string | null | undefined): T | null {
     return JSON.parse(v) as T
   } catch {
     return null
-  }
-}
-
-// ─── Auto-ID generation ────────────────────────────────────────────────────────
-
-interface AutoIdConfig {
-  pattern: string
-  padding?: number
-}
-
-async function generateAutoId(
-  collection: string,
-  field: string,
-  pattern: string,
-  padding: number
-): Promise<string> {
-  const seqKey = `${collection}.${field}`
-
-  // MSSQL atomic increment: UPDATE OUTPUT
-  const rows = (await db.raw(
-    `UPDATE nivaro_sequences SET next_val = next_val + 1 OUTPUT INSERTED.next_val WHERE id = ?`,
-    [seqKey]
-  )) as { recordset?: Array<{ next_val: number }> } | Array<{ next_val: number }>
-
-  const recordset = Array.isArray(rows) ? rows : rows.recordset
-
-  let seqVal: number
-  if (!recordset?.[0]) {
-    // First use — insert then use 1
-    await db('nivaro_sequences')
-      .insert({ id: seqKey, next_val: 2 })
-      .catch(() => {})
-    seqVal = 1
-  } else {
-    seqVal = recordset[0].next_val
-  }
-
-  const now = new Date()
-  const YY = String(now.getFullYear()).slice(-2)
-  const YYYY = String(now.getFullYear())
-  const MM = String(now.getMonth() + 1).padStart(2, '0')
-  const seq = padding > 0 ? String(seqVal).padStart(padding, '0') : String(seqVal)
-
-  return pattern
-    .replace('{YY}', YY)
-    .replace('{YYYY}', YYYY)
-    .replace('{MM}', MM)
-    .replace('{seq}', seq)
-    .replace('{seq4}', String(seqVal).padStart(4, '0'))
-    .replace('{seq6}', String(seqVal).padStart(6, '0'))
-}
-
-/**
- * Apply auto-ID generation for any field on the collection whose options contain
- * an `auto_id` config. Mutates `payload` in place (only sets fields not already provided).
- */
-async function applyAutoIds(collection: string, payload: Record<string, unknown>): Promise<void> {
-  const fieldRows = (await db('nivaro_fields')
-    .where({ collection })
-    .andWhereRaw(`options LIKE '%"auto_id"%'`)
-    .select('field', 'options')) as Array<{ field: string; options: string | null }>
-
-  for (const f of fieldRows) {
-    // Don't overwrite a value the caller explicitly provided.
-    if (payload[f.field] != null && payload[f.field] !== '') continue
-
-    const opts = parseJson<{ auto_id?: AutoIdConfig }>(f.options)
-    const autoId = opts?.auto_id
-    if (!autoId?.pattern) continue
-
-    payload[f.field] = await generateAutoId(
-      collection,
-      f.field,
-      autoId.pattern,
-      autoId.padding ?? 0
-    )
   }
 }
 
@@ -902,6 +833,47 @@ export function findM2MRelation(
     }
   }
   return null
+}
+
+/**
+ * When a row is written to a junction collection (M2M through-table), any auto_id
+ * field on the parent side whose pattern draws a token from that junction
+ * (e.g. `{funding_years[0] % 100}`) may now render a different prefix — the row
+ * just inserted/deleted changes which value "wins" the ordered lookup. Recompute
+ * and write those parent fields. Never throws — mirrors recalcAffectedRollups.
+ */
+async function recomputeJunctionAutoIds(
+  junctionCollection: string,
+  row: Record<string, unknown> | null | undefined
+): Promise<void> {
+  if (!row) return
+  try {
+    const targets = await autoIdJunctionTargets(db, junctionCollection)
+    for (const target of targets) {
+      const parentId = row[target.parentFkField]
+      if (parentId == null) continue
+
+      const currentRow = (await db(target.parentCollection)
+        .where({ id: parentId })
+        .first(target.field)) as Record<string, unknown> | undefined
+
+      const newVal = await recomputeAutoIdPrefix(
+        db,
+        target.parentCollection,
+        target.field,
+        target.config,
+        parentId,
+        {}
+      )
+      if (newVal != null && newVal !== currentRow?.[target.field]) {
+        await db(target.parentCollection)
+          .where({ id: parentId })
+          .update({ [target.field]: newVal })
+      }
+    }
+  } catch {
+    // Non-fatal — the primary create/delete already succeeded.
+  }
 }
 
 // ─── Filter operators ─────────────────────────────────────────────────────────
@@ -1618,7 +1590,7 @@ export async function createOne(
   await applyDatetimeAutoFields(collection, ctx.payload, 'on_create')
 
   // Auto-ID generation — fill any auto_id fields not explicitly provided
-  await applyAutoIds(collection, ctx.payload)
+  await applyAutoIdsExt(db, collection, ctx.payload)
 
   // Write-time computed fields — evaluated after auto-IDs so formula can reference them
   // For create, the payload itself is the full context
@@ -1654,6 +1626,10 @@ export async function createOne(
   if (!opts?.skipRollupRecalc) {
     await recalcAffectedRollups(collection, (result ?? ctx.payload) as Record<string, unknown>)
   }
+
+  // If this collection is an M2M junction table, recompute any parent auto_id
+  // fields whose pattern draws from it (never throws).
+  await recomputeJunctionAutoIds(collection, (result ?? ctx.payload) as Record<string, unknown>)
 
   // after_create rules
   await evaluateRules(
@@ -1727,6 +1703,29 @@ export async function updateOne(
   // Write-time computed fields — merge previous data as context so formula can read existing fields
   const writeCtx = { ...(previousData ?? {}), ...ctx.payload }
   await applyWriteComputedFields(collection, ctx.payload, writeCtx)
+
+  // Auto-ID prefix recompute — if a relation an auto_id pattern depends on
+  // just changed (e.g. re-parenting to a different project), re-render the
+  // prefix while preserving the existing sequence suffix. Skips fields the
+  // caller explicitly set and fields whose relation inputs didn't change.
+  for (const { field, config } of await autoIdFieldsFor(db, collection)) {
+    if (field in ctx.payload) continue // explicit value provided — don't override
+
+    let parsed: ReturnType<typeof parseAutoIdPattern> | null
+    try {
+      parsed = parseAutoIdPattern(config.pattern)
+    } catch {
+      continue
+    }
+
+    const firstSegs = parsed.tokens.filter((t) => t.kind === 'relation').map((t) => t.path[0])
+    if (!firstSegs.some((seg) => seg in ctx.payload)) continue
+
+    const newVal = await recomputeAutoIdPrefix(db, collection, field, config, id, writeCtx)
+    if (newVal != null && newVal !== previousData?.[field]) {
+      ctx.payload[field] = newVal
+    }
+  }
 
   // Encrypt configured encrypted fields just before write
   const securedPayload = await encryptItemFields(collection, ctx.payload)
@@ -1804,6 +1803,10 @@ export async function deleteOne(
 
   // Recalc any stored rollups the deleted row contributed to (never throws)
   await recalcAffectedRollups(collection, null, previousData)
+
+  // If this collection is an M2M junction table, recompute any parent auto_id
+  // fields whose pattern draws from it (never throws).
+  await recomputeJunctionAutoIds(collection, previousData)
 
   await hooks.trigger('after', { ...ctx, previousData })
 }
