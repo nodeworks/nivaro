@@ -931,7 +931,11 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
       const seqKey = `${table}.${field}`
       const seqRow = await db('nivaro_sequences').where({ id: seqKey }).first()
-      const current = seqRow ? Number(seqRow.next_val) : null
+      // nivaro_sequences stores the LAST value handed out (the atomic
+      // UPDATE ... OUTPUT increments then returns), so the next number a save
+      // will actually issue is stored + 1. Report that, matching the editor's
+      // "Next number" label and the PUT below.
+      const current = seqRow ? Number(seqRow.next_val) + 1 : null
 
       const maxRows = rawRows<{ max_suffix: number | null }>(
         await db.raw(
@@ -963,6 +967,9 @@ export async function dataModelRoutes(app: FastifyInstance) {
     if (typeof body.next_val !== 'number' || !Number.isFinite(body.next_val)) {
       return reply.code(400).send({ error: 'next_val must be a number' })
     }
+    // The atomic increment returns stored + 1, so to make the NEXT issued
+    // number equal body.next_val we store one less (floored at 0).
+    const stored = Math.max(0, Math.floor(body.next_val) - 1)
 
     try {
       const fieldRow = await db<CMSField>('nivaro_fields')
@@ -983,9 +990,9 @@ export async function dataModelRoutes(app: FastifyInstance) {
       const seqKey = `${table}.${field}`
       const existingSeq = await db('nivaro_sequences').where({ id: seqKey }).first()
       if (existingSeq) {
-        await db('nivaro_sequences').where({ id: seqKey }).update({ next_val: body.next_val })
+        await db('nivaro_sequences').where({ id: seqKey }).update({ next_val: stored })
       } else {
-        await db('nivaro_sequences').insert({ id: seqKey, next_val: body.next_val })
+        await db('nivaro_sequences').insert({ id: seqKey, next_val: stored })
       }
 
       await logActivity({
