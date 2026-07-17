@@ -6,6 +6,7 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, Upload } from 'lucide-react'
 import { type ChangeEvent, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
 import { Button } from '../ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
@@ -32,7 +33,8 @@ export function ImportFromFileButton({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pendingTemplateRef = useRef<ImportTemplateSummary | null>(null)
   const [popoverOpen, setPopoverOpen] = useState(false)
-  const [importing, setImporting] = useState(false)
+  const [importingFile, setImportingFile] = useState<string | null>(null)
+  const importing = importingFile != null
   const [error, setError] = useState<ParseError | null>(null)
 
   const { data } = useQuery({
@@ -55,7 +57,7 @@ export function ImportFromFileButton({
     const template = pendingTemplateRef.current
     e.target.value = ''
     if (!file || !template) return
-    setImporting(true)
+    setImportingFile(file.name)
     setError(null)
     try {
       const result = await client.importParse(template.id, file)
@@ -63,7 +65,7 @@ export function ImportFromFileButton({
     } catch (err) {
       setError(err as ParseError)
     } finally {
-      setImporting(false)
+      setImportingFile(null)
     }
   }
 
@@ -131,6 +133,18 @@ export function ImportFromFileButton({
       )}
       {error && <div className='text-[12px] text-red-600 dark:text-red-400'>{error.message}</div>}
       {error?.issues && <ImportIssuesPanel issues={error.issues} />}
+      {importing &&
+        createPortal(
+          <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40'>
+            <div className='flex items-center gap-3 rounded-lg border bg-background px-5 py-4 shadow-lg'>
+              <Loader2 className='h-5 w-5 animate-spin text-muted-foreground' />
+              <div className='text-[13px]'>
+                Processing <span className='font-medium'>{importingFile}</span>…
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }

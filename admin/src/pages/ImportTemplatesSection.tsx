@@ -13,7 +13,16 @@ import {
   Trash2,
   Upload
 } from 'lucide-react'
-import { createContext, type ReactNode, useContext, useMemo, useRef, useState } from 'react'
+import {
+  type ComponentProps,
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -1376,6 +1385,55 @@ function NestedSection({
 
 // ─── Basics ─────────────────────────────────────────────────────────────────
 
+// Text inputs commit into the shared draft, which re-renders the whole builder
+// (rule editors, pickers, test panel). Buffer keystrokes locally and commit
+// debounced + on blur so typing stays responsive.
+function BufferedInput({
+  value,
+  onCommit,
+  ...props
+}: { value: string; onCommit: (v: string) => void } & Omit<
+  ComponentProps<typeof Input>,
+  'value' | 'onChange'
+>) {
+  const [local, setLocal] = useState(value)
+  const focusedRef = useRef(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!focusedRef.current) setLocal(value)
+  }, [value])
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+    },
+    []
+  )
+  function commit(v: string) {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = null
+    onCommit(v)
+  }
+  return (
+    <Input
+      {...props}
+      value={local}
+      onFocus={() => {
+        focusedRef.current = true
+      }}
+      onBlur={(e) => {
+        focusedRef.current = false
+        commit(e.target.value)
+      }}
+      onChange={(e) => {
+        const v = e.target.value
+        setLocal(v)
+        if (timerRef.current) clearTimeout(timerRef.current)
+        timerRef.current = setTimeout(() => commit(v), 300)
+      }}
+    />
+  )
+}
+
 function BasicsFields({
   draft,
   patch,
@@ -1391,17 +1449,17 @@ function BasicsFields({
     <div className='space-y-4'>
       <div className='grid grid-cols-2 gap-3'>
         <LabeledField label='Name'>
-          <Input
+          <BufferedInput
             value={draft.name}
-            onChange={(e) => patch({ name: e.target.value })}
+            onCommit={(v) => patch({ name: v })}
             placeholder='e.g. Bid Sheet Import'
             className='h-8 text-[12px]'
           />
         </LabeledField>
         <LabeledField label='Sheet match (optional)'>
-          <Input
+          <BufferedInput
             value={draft.sheet_match}
-            onChange={(e) => patch({ sheet_match: e.target.value })}
+            onCommit={(v) => patch({ sheet_match: v })}
             placeholder='sheet/tab name contains…'
             className='h-8 text-[12px]'
           />
@@ -1424,9 +1482,9 @@ function BasicsFields({
           />
         </LabeledField>
         <LabeledField label='Header button label'>
-          <Input
+          <BufferedInput
             value={draft.button_label}
-            onChange={(e) => patch({ button_label: e.target.value })}
+            onCommit={(v) => patch({ button_label: v })}
             placeholder='Import from file'
             maxLength={100}
             className='h-8 text-[12px]'

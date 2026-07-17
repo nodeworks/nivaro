@@ -702,11 +702,21 @@ export function ItemEditForm({
 
     const m2mEntries = Object.entries(result.m2m ?? {})
     for (const [field, ids] of m2mEntries) {
-      const m2mRel = relations.find(
-        (r) => r.one_collection === collection && r.one_field === field && r.junction_field != null
-      )
+      // Exact one_field match first, then the legacy junction-table-name alias
+      // (a field named after the junction collection itself, e.g. 'workflows_files').
+      const m2mRel =
+        relations.find(
+          (r) => r.one_collection === collection && r.one_field === field && r.junction_field != null
+        ) ??
+        relations.find(
+          (r) =>
+            r.one_collection === collection && r.many_collection === field && r.junction_field != null
+        )
       if (m2mRel) {
-        for (const id of ids) m2mStagingCtx.stageLink(field, id)
+        // Stage under the same key the M2M editors use, so the links render in the
+        // form and the save flush (findM2MRel) resolves them.
+        const stagingKey = m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
+        for (const id of ids) m2mStagingCtx.stageLink(stagingKey, id)
       } else {
         issues.push({
           severity: 'error',
