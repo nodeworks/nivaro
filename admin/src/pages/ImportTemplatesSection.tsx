@@ -1760,7 +1760,7 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
   const [errors, setErrors] = useState<ConfigErrorDetail[]>([])
 
   const { data: templates = [], isLoading } = useQuery<TemplateRow[]>({
-    queryKey: ['import-templates', collection],
+    queryKey: ['admin-import-templates', collection],
     queryFn: () =>
       api
         .get<{ data: TemplateRow[] }>('/import-templates', { params: { collection } })
@@ -1900,6 +1900,8 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
     },
     onSuccess: (row) => {
       setErrors([])
+      qc.invalidateQueries({ queryKey: ['admin-import-templates', collection] })
+      // Shared ImportFromFileButton caches the header-button summaries under this key
       qc.invalidateQueries({ queryKey: ['import-templates', collection] })
       setSelectedId(row.id)
       toast.success(selectedId ? 'Template saved' : 'Template created')
@@ -1915,6 +1917,8 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.delete(`/import-templates/${id}`),
     onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ['admin-import-templates', collection] })
+      // Shared ImportFromFileButton caches the header-button summaries under this key
       qc.invalidateQueries({ queryKey: ['import-templates', collection] })
       if (selectedId === id) newTemplate()
       setPendingDeleteId(null)
