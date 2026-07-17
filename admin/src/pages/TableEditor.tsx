@@ -13553,7 +13553,10 @@ function FieldGroupsTab({
         type: 'm2m' as const
       }))
       .filter((v: { field: string; type: 'm2m' }) => {
-        if (!v.field || seenM2m.has(v.field)) return false
+        // seenO2m too: an O2M alias and an M2M alias can resolve the same name
+        // (legacy one_field='id' rows fall back to many_collection) — a duplicate
+        // here renders the Fields palette with duplicate React keys.
+        if (!v.field || seenM2m.has(v.field) || seenO2m.has(v.field)) return false
         seenM2m.add(v.field)
         return true
       })
