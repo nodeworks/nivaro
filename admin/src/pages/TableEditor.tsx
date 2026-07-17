@@ -1195,7 +1195,12 @@ function ColumnRow({
       qc.invalidateQueries({ queryKey: ['data-model-table', tableName] })
       onRefresh()
     },
-    onError: () => toast.error('Failed to save field metadata')
+    onError: (err: unknown) => {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        'Failed to save field metadata'
+      toast.error(msg)
+    }
   })
 
   const isProtected = isSystem && !col.field_meta
@@ -1631,6 +1636,26 @@ function FieldMetaEditor({
     () => !!(fm as { is_inheritable?: boolean } | null | undefined)?.is_inheritable
   )
 
+  // Auto ID (generated ID pattern) state
+  const [autoIdPattern, setAutoIdPattern] = useState(
+    () => parseJson<{ auto_id?: { pattern?: string } }>(fm?.options)?.auto_id?.pattern ?? ''
+  )
+  const [autoIdPadding, setAutoIdPadding] = useState(
+    () => parseJson<{ auto_id?: { padding?: number } }>(fm?.options)?.auto_id?.padding ?? 0
+  )
+  const [autoIdSeed, setAutoIdSeed] = useState<number | null>(null)
+
+  const { data: seedInfo } = useQuery({
+    queryKey: ['auto-id-seed', tableName, col.name],
+    enabled: !!autoIdPattern,
+    queryFn: () =>
+      api
+        .get<{ current: number | null; suggested: number }>(
+          `/data-model/${tableName}/fields/${col.name}/auto-id-seed`
+        )
+        .then((r) => r.data)
+  })
+
   // Display options state
   const [fmtPrefix, setFmtPrefix] = useState(
     () => parseJson<{ prefix?: string }>(fm?.display_options)?.prefix ?? ''
@@ -1711,6 +1736,21 @@ function FieldMetaEditor({
     return null
   }
 
+  // Merge (or remove) the auto_id key on top of whatever buildOptions() produced,
+  // without disturbing the interface-specific options it already builds.
+  function withAutoId(base: string | null): string | null {
+    const parsed = (base ? JSON.parse(base) : {}) as Record<string, unknown>
+    if (autoIdPattern) {
+      parsed.auto_id = {
+        pattern: autoIdPattern,
+        ...(autoIdPadding ? { padding: autoIdPadding } : {})
+      }
+    } else {
+      delete parsed.auto_id
+    }
+    return Object.keys(parsed).length ? JSON.stringify(parsed) : null
+  }
+
   // Build the computed_* payload depending on the selected compute type.
   // Rollup serializes its config to JSON; read/write use the raw formula.
   const computedReady = computedType === 'rollup' ? isRollupValid(rollup) : !!computedFormula.trim()
@@ -1754,7 +1794,7 @@ function FieldMetaEditor({
         interface: fieldInterface || null,
         display: display || null,
         display_options: buildDisplayOptions(),
-        options: buildOptions(),
+        options: withAutoId(buildOptions()),
         note: note || null,
         hidden,
         readonly,
@@ -1768,6 +1808,16 @@ function FieldMetaEditor({
       // onSave's own mutation already surfaced an error toast — nothing left to do,
       // and the metadata never saved so backfilling now would run against stale config.
       return
+    }
+
+    if (autoIdPattern && autoIdSeed != null && autoIdSeed !== seedInfo?.current) {
+      try {
+        await api.put(`/data-model/${tableName}/fields/${col.name}/auto-id-seed`, {
+          next_val: autoIdSeed
+        })
+      } catch {
+        toast.error(`"${col.name}" saved, but updating the next-ID seed failed`)
+      }
     }
 
     if (isStoredRollup) {
@@ -2174,6 +2224,53 @@ function FieldMetaEditor({
             )}
           </div>
         )}
+      </div>
+
+      {/* ── Auto ID ── */}
+      <div className='mt-3 rounded-md border border-slate-200 bg-white p-3'>
+        <p className='mb-2 text-[11px] font-medium text-slate-600'>Auto ID</p>
+        <div className='space-y-2'>
+          <div>
+            <Label className='mb-1 block text-[11px]'>Pattern</Label>
+            <Input
+              value={autoIdPattern}
+              onChange={(e) => setAutoIdPattern(e.target.value)}
+              placeholder='{project.project_type.short_code}{funding_years[0] % 100}-{seq}'
+              className='h-7 text-[12px] font-mono'
+            />
+          </div>
+          {autoIdPattern && (
+            <div className='grid grid-cols-2 gap-3'>
+              <div>
+                <Label className='mb-1 block text-[11px]'>Padding</Label>
+                <Input
+                  type='number'
+                  min={0}
+                  value={autoIdPadding}
+                  onChange={(e) => setAutoIdPadding(Math.max(0, Number(e.target.value) || 0))}
+                  className='h-7 text-[12px]'
+                />
+              </div>
+              <div>
+                <Label className='mb-1 block text-[11px]'>
+                  Next number
+                  {seedInfo && (
+                    <span className='ml-1 font-normal text-slate-400'>
+                      (current: {seedInfo.current ?? '—'}, suggested: {seedInfo.suggested})
+                    </span>
+                  )}
+                </Label>
+                <Input
+                  type='number'
+                  min={1}
+                  value={autoIdSeed ?? seedInfo?.current ?? seedInfo?.suggested ?? 1}
+                  onChange={(e) => setAutoIdSeed(Math.max(1, Number(e.target.value) || 1))}
+                  className='h-7 text-[12px]'
+                />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Encryption ── */}
