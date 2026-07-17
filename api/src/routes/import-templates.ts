@@ -223,11 +223,16 @@ function buildCreateGroups(
   const groups: CreateGroup[] = []
   const groupsByStep = new Map<CreateMiss['step'], Map<string, CreateGroup>>()
   for (const miss of misses) {
-    const defaultsPayload = resolveCreateDefaults(
-      miss.step.create.defaults,
-      miss.values,
-      resolvedCtx
-    )
+    // Seed the match field with the value that was actually searched for (the sheet
+    // cell, trimmed to match the lookup layer's own trim+lowercase normalization) BEFORE
+    // folding in create.defaults — otherwise the created record never carries the value
+    // that missed, and the next import of the same name misses again, creating a
+    // duplicate every time. An explicit defaults rule targeting the match field (rare,
+    // but legal) still wins since it's spread in after and only overwrites when defined.
+    const defaultsPayload = {
+      [miss.step.match_field]: String(miss.name).trim(),
+      ...resolveCreateDefaults(miss.step.create.defaults, miss.values, resolvedCtx)
+    }
     // Normalized like the lookup matchMap (trim + lowercase) so values the lookup
     // layer would treat as one match never dedupe into two created records.
     const dedupeKey = JSON.stringify(

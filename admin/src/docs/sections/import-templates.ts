@@ -102,6 +102,10 @@ export const importTemplatesGuide: DocSection = {
     },
     {
       type: 'p',
+      text: "Every created record's payload is seeded with the searched-for value in `match_field` (the exact miss name, trimmed) before `defaults` is applied — so the record that gets created always carries the value that failed to match, and the next import of the same name matches it instead of creating a duplicate. A `defaults` rule that explicitly targets `match_field` still wins over the seed."
+    },
+    {
+      type: 'p',
       text: "Defaults resolve per miss against the LINE's mapped values — the keys already produced by that line's other header rules — not the raw sheet columns (the sheet is gone by execute time; only the parsed/edited `values`/`lines` payload is submitted). A default's `expression` step can also reach `{{$resolved.*}}` to pull in an already-resolved header value (e.g. a region resolved once for the whole import, reused as a scope default on every created record)."
     },
     {

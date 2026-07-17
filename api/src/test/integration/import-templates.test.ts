@@ -2226,6 +2226,252 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     )
   })
 
+  it('POST /:id/execute — on_miss create seeds the created record with the searched name when defaults has no rule for the match field', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-create-seed-min',
+      collection: 'purchase_orders_seed_min',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [
+          {
+            target: 'unit',
+            source: null,
+            steps: [
+              {
+                type: 'lookup',
+                collection: 'units_seed_min',
+                match_field: 'name',
+                on_miss: 'create',
+                create: {
+                  defaults: [], // no rule for "name" — this is the new minimal contract
+                  dedupe_by: ['name']
+                }
+              }
+            ]
+          }
+        ],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = {
+      many_collection: 'po_line_items_seed_min',
+      many_field: 'purchase_order_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // relation resolve
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'unit-1' } as never) // seeded-only create
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'line-1' } as never) // line
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-create-seed-min/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: {},
+        lines: [
+          {
+            values: { sku: 'A1' },
+            stubs: { unit: { is_new: true, name: '  New Widget  ' } }
+          }
+        ],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      1,
+      user,
+      'units_seed_min',
+      { name: 'New Widget' }, // seeded from the searched name, trimmed
+      expect.anything(),
+      undefined,
+      { skipRollupRecalc: true }
+    )
+  })
+
+  it('POST /:id/execute — on_miss create: an explicit defaults rule targeting the match field overrides the seeded name', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-create-seed-override',
+      collection: 'purchase_orders_seed_override',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [
+          {
+            target: 'unit',
+            source: null,
+            steps: [
+              {
+                type: 'lookup',
+                collection: 'units_seed_override',
+                match_field: 'name',
+                on_miss: 'create',
+                create: {
+                  defaults: [
+                    {
+                      target: 'name',
+                      source: null,
+                      steps: [{ type: 'const', value: 'Canonical Name' }]
+                    }
+                  ],
+                  dedupe_by: ['name']
+                }
+              }
+            ]
+          }
+        ],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = {
+      many_collection: 'po_line_items_seed_override',
+      many_field: 'purchase_order_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // relation resolve
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'unit-1' } as never) // explicit-default create
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'line-1' } as never) // line
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-create-seed-override/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: {},
+        lines: [
+          {
+            values: { sku: 'A1' },
+            stubs: { unit: { is_new: true, name: 'Raw Sheet Name' } }
+          }
+        ],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      1,
+      user,
+      'units_seed_override',
+      { name: 'Canonical Name' }, // explicit default wins over the seeded searched name
+      expect.anything(),
+      undefined,
+      { skipRollupRecalc: true }
+    )
+  })
+
+  it('POST /:id/execute — on_miss create: dedupe across case/whitespace name variants still collapses to ONE create, stored name is the first-seen trimmed original', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-create-seed-dedupe',
+      collection: 'purchase_orders_seed_dedupe',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [
+          {
+            target: 'unit',
+            source: null,
+            steps: [
+              {
+                type: 'lookup',
+                collection: 'units_seed_dedupe',
+                match_field: 'name',
+                on_miss: 'create',
+                create: {
+                  defaults: [], // relies purely on the match-field seed, not a defaults rule
+                  dedupe_by: ['name']
+                }
+              }
+            ]
+          }
+        ],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = {
+      many_collection: 'po_line_items_seed_dedupe',
+      many_field: 'purchase_order_id'
+    }
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // relation resolve
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'unit-1' } as never) // deduped create
+      .mockResolvedValueOnce({ id: 'parent-1' } as never) // parent
+      .mockResolvedValueOnce({ id: 'line-1' } as never) // line 1
+      .mockResolvedValueOnce({ id: 'line-2' } as never) // line 2
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-create-seed-dedupe/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: {},
+        lines: [
+          {
+            values: { sku: 'A1' },
+            stubs: { unit: { is_new: true, name: ' New Unit ' } } // first-seen, wins
+          },
+          {
+            values: { sku: 'A2' },
+            stubs: { unit: { is_new: true, name: 'new unit' } } // case/whitespace variant, dedupes
+          }
+        ],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(vi.mocked(createOne)).toHaveBeenCalledTimes(4) // 1 create + parent + 2 lines, NOT 2 creates
+    expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
+      1,
+      user,
+      'units_seed_dedupe',
+      { name: 'New Unit' }, // first-seen trimmed original casing, not the second variant
+      expect.anything(),
+      undefined,
+      { skipRollupRecalc: true }
+    )
+  })
+
   it('POST /:id/execute — on_miss create: a later line failure compensates, deleting the created lookup record LAST (after parent)', async () => {
     const user = makeRegularUser({ id: 'user-1' })
     const template = {
