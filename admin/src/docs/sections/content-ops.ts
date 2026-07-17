@@ -413,7 +413,7 @@ export const contentOpsCascadeFilters: DocSection = {
     { type: 'h1', id: 'content-ops-cascade-filters', text: 'Cascade Filters' },
     {
       type: 'p',
-      text: 'M2O fields support cascading option filtering via `cascade_filters` in `dependency_config`. When a parent field value is selected, the child M2O field\'s option list is automatically narrowed to only records matching that parent value. Multi-level chains (e.g. Division → Region → Site) are fully supported.'
+      text: "M2O fields support cascading option filtering via `cascade_filters` in `dependency_config`. When a parent field value is selected, the child M2O field's option list is automatically narrowed to only records matching that parent value. Multi-level chains (e.g. Division → Region → Site) are fully supported."
     },
     { type: 'h3', text: 'How it works' },
     {
@@ -439,17 +439,37 @@ export const contentOpsCascadeFilters: DocSection = {
       type: 'table',
       head: ['Property', 'Type', 'Description'],
       rows: [
-        ['parent_field', 'string', 'Field name in the same collection whose selected value drives the filter.'],
-        ['filter_column', 'string', 'Column on the M2O related table to filter by (WHERE filter_column = parent_value).'],
-        ['clear_on_parent_change', 'boolean?', 'If true, nulls this field whenever the parent value changes. Defaults to false.'],
-        ['clear_on_unavailable', 'boolean?', 'If true, the editor checks whether the current value is still within the filtered option set whenever the filter changes. If the selected value is not in the new options, it is automatically cleared.'],
-        ['parent_field', 'string', 'Works with both M2O and M2M parent fields. M2M parent: uses the first staged selection as the filter value.']
+        [
+          'parent_field',
+          'string',
+          'Field name in the same collection whose selected value drives the filter.'
+        ],
+        [
+          'filter_column',
+          'string',
+          'Column on the M2O related table to filter by (WHERE filter_column = parent_value).'
+        ],
+        [
+          'clear_on_parent_change',
+          'boolean?',
+          'If true, nulls this field whenever the parent value changes. Defaults to false.'
+        ],
+        [
+          'clear_on_unavailable',
+          'boolean?',
+          'If true, the editor checks whether the current value is still within the filtered option set whenever the filter changes. If the selected value is not in the new options, it is automatically cleared.'
+        ],
+        [
+          'parent_field',
+          'string',
+          'Works with both M2O and M2M parent fields. M2M parent: uses the first staged selection as the filter value.'
+        ]
       ]
     },
     { type: 'h3', text: 'M2M-to-M2M cascades' },
     {
       type: 'p',
-      text: 'Cascade filters now work correctly when both the parent and child are M2M fields. When the parent is M2M, the child option fetch uses the `_some` filter operator so that child records are matched against any of the parent\'s staged selections, rather than a single value. No extra configuration is required — set `parent_field` to the M2M parent and the editor picks the right operator automatically.'
+      text: "Cascade filters now work correctly when both the parent and child are M2M fields. When the parent is M2M, the child option fetch uses the `_some` filter operator so that child records are matched against any of the parent's staged selections, rather than a single value. No extra configuration is required — set `parent_field` to the M2M parent and the editor picks the right operator automatically."
     },
     { type: 'h3', text: 'Editing existing rules' },
     {
@@ -1640,16 +1660,105 @@ export const pickerExclusionsGuide: DocSection = {
       type: 'table',
       head: ['Method', 'Path', 'Description'],
       rows: [
-        ['GET', '/api/picker-exclusions/status/:collection/:itemId', 'Check exclusion status for a single record.'],
+        [
+          'GET',
+          '/api/picker-exclusions/status/:collection/:itemId',
+          'Check exclusion status for a single record.'
+        ],
         ['POST', '/api/picker-exclusions', 'Exclude a record. Body: `{collection, item_id}`.'],
         ['DELETE', '/api/picker-exclusions', 'Remove exclusion. Body: `{collection, item_id}`.'],
-        ['POST', '/api/picker-exclusions/batch-status', 'Check multiple records. Body: `{collection, ids[]}`. Returns `{excluded: string[]}`.'],
-        ['POST', '/api/picker-exclusions/bulk', 'Exclude/include many records. Body: `{collection, ids[], exclude: boolean}`.']
+        [
+          'POST',
+          '/api/picker-exclusions/batch-status',
+          'Check multiple records. Body: `{collection, ids[]}`. Returns `{excluded: string[]}`.'
+        ],
+        [
+          'POST',
+          '/api/picker-exclusions/bulk',
+          'Exclude/include many records. Body: `{collection, ids[], exclude: boolean}`.'
+        ]
       ]
     },
     {
       type: 'note',
       text: 'Read endpoints require authentication. Write endpoints require admin access.'
+    }
+  ]
+}
+
+export const contentOpsGridPresets: DocSection = {
+  id: 'content-ops-grid-presets',
+  label: 'Grid View Presets & Nested Relations',
+  content: [
+    { type: 'h1', id: 'content-ops-grid-presets', text: 'Grid View Presets & Nested Relations' },
+    {
+      type: 'p',
+      text: "Two layout options for an O2M field rendered as an inline grid (interface `inline-table`) in the item editor: named view presets that switch which columns the grid shows, and a nested relation editor that lets a grandchild collection be edited from inside each row's expanded drawer. Both are configured per-field in Data Model, not by the end user."
+    },
+    {
+      type: 'note',
+      text: 'This is unrelated to the "Column Presets" user guide above — that feature is a per-user, self-service preset for which columns a COLLECTION BROWSER shows, saved to `nivaro_collection_presets`. Grid view presets are admin-configured on a single O2M FIELD\'s layout and only ever narrow an already-fixed column set.'
+    },
+    { type: 'h3', id: 'grid-view-presets', text: 'View presets (column_presets)' },
+    {
+      type: 'p',
+      text: "A field's `options.column_presets` is an array of `{ name, columns }` objects. With two or more presets configured, the grid shows a segmented control above the table (and, in read-only grids, in its own strip since the normal toolbar row is skipped) letting the user switch which named subset of columns is visible. The active preset is remembered per grid instance in `localStorage`."
+    },
+    {
+      type: 'pre',
+      code: `{
+  "column_presets": [
+    { "name": "Summary", "columns": ["description", "amount", "status"] },
+    { "name": "Full detail", "columns": ["description", "amount", "status", "unit_id", "notes", "created_by"] }
+  ]
+}`
+    },
+    {
+      type: 'p',
+      text: "A preset can only FILTER the columns the layout and field permissions already resolved for the grid — it can never reveal a column the layout hid or a role can't see. Naming a column outside that resolved set simply drops it from the preset silently. If the remembered preset no longer exists (deleted, renamed, or the field now has fewer than two presets), the grid falls back to showing every resolved column rather than an empty table."
+    },
+    {
+      type: 'note',
+      text: 'Switching presets is a VIEW change only. Saving a row always writes every field the layout resolved for that row, not just the currently visible preset columns — this matters because a row rule can autofill a field that the active preset happens to be hiding, and a mid-edit preset switch must never silently discard a value already typed into a column that just became hidden. A per-column aggregate footer, where configured, does follow the active preset — switching presets changes which totals are shown.'
+    },
+    { type: 'h3', id: 'grid-nested-relations', text: 'Nested relation editor (drawer_relations)' },
+    {
+      type: 'p',
+      text: "A field's `options.drawer_relations` lists grandchild relations to surface inline. Expanding a row for edit shows one mini-grid per entry beneath it, letting the user add, edit, and delete grandchild records without leaving the parent form. Each entry is either a bare relation name, or an object adding a running-total hint:"
+    },
+    {
+      type: 'pre',
+      code: `{
+  "drawer_relations": [
+    "unit_workflows",
+    { "field": "unit_materials", "hint": { "sum_field": "total", "cap_field": "budget" } }
+  ]
+}`
+    },
+    {
+      type: 'p',
+      text: '`field` names an O2M relation defined on the CHILD collection (the same collection the parent grid\'s rows belong to) — its target (the grandchild collection) is resolved from `nivaro_relations` the same way import templates resolve a relation-mode nested target. When a `hint` is set, the drawer header shows "remaining: cap − sum" — `cap_field` is read off the child row\'s own current value (the row being edited), `sum_field` is summed across every grandchild row/staged member currently shown, and the number turns red when it goes negative.'
+    },
+    {
+      type: 'warn',
+      text: 'The hint is a client-side display only — nothing stops the save. It is not a substitute for a sum_cap validation rule on the grandchild collection (see Aggregate cap rules); pair the two if the cap needs to actually be enforced, not just shown.'
+    },
+    {
+      type: 'p',
+      text: "What actually happens on Add/Edit/Delete inside the drawer depends on whether the parent row it belongs to has been saved yet. Editing a NEW or still-pending row stages grandchild members client-side (reusing the same `__o2m_<field>` prefill staging contract import templates use — see Import Templates gotchas) and only creates them once the parent row itself is saved, so they correctly participate in an `inline-table` field's `save_mode: \"pending\"` batching (including a batch cancel, which discards the staged members along with the rest of the pending row). Editing an ALREADY-SAVED row's drawer writes immediately — every Add/Edit/Delete there is a live `POST`/`PATCH`/`DELETE` against the grandchild collection, regardless of the outer grid's save mode."
+    },
+    {
+      type: 'warn',
+      text: "Because of that split, a saved row's drawer edits are NOT undone by cancelling a pending batch on the outer grid — only the parent grid's own staged row/edits/deletes are discarded, grandchild writes already made through an already-saved row's drawer are not. This is a known, accepted inconsistency rather than a bug: reverting it would require staging grandchild writes transactionally as well, one level deeper than the current pending-mode architecture goes."
+    },
+    { type: 'h3', text: 'Configuring in the admin UI' },
+    {
+      type: 'p',
+      text: 'Data Model → table → hover the O2M field\'s chip in the Table Editor and click the gear icon → set Interface to Inline Table. Two additional sections appear in the same popover: "Column presets" (name + a multi-select of that grid\'s available columns per preset — reorder with the up/down arrows) and "Drawer relations" (pick a relation, then optionally a sum field and a cap field for the hint). A preset needs both a name and at least one column to be saved; an empty preset is dropped on save. A drawer relation needs a relation selected to be saved; the hint is only attached when BOTH sum field and cap field are set — leaving either blank saves the relation as a plain string with no hint.'
+    },
+    {
+      type: 'note',
+      text: "The Drawer relations picker offers only relations defined on this table pointing to a child collection. The sum field options come from that CHILD relation's target (the grandchild collection) — chosen fresh per row once a relation is picked, and reset whenever the relation changes since a new relation implies a new grandchild collection. The cap field options come from this table's (the child's) own numeric fields — a different collection than the sum field, on purpose, since the cap lives on the row itself, not the rows underneath it."
     }
   ]
 }

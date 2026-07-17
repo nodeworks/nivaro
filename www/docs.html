@@ -363,6 +363,7 @@
           <a class="docs-nav-item" data-section="content-ops-addendums" href="#content-ops-addendums">Addendums / Amendments</a>
           <a class="docs-nav-item" data-section="content-ops-percent-complete" href="#content-ops-percent-complete">% Complete Field</a>
           <a class="docs-nav-item" data-section="content-ops-m2a" href="#content-ops-m2a">Polymorphic Relations (M2A)</a>
+          <a class="docs-nav-item" data-section="content-ops-grid-presets" href="#content-ops-grid-presets">Grid View Presets &amp; Nested Relations</a>
         </div>
       </div>
 
@@ -10225,6 +10226,39 @@ POST /api/items/pages
 }</code></pre>
           <div class="doc-note">M2A relations render in the item editor as a sorted list of "blocks" with a type-picker to add new ones. Drag handles allow reordering. Each block type expands to show its own fields inline.</div>
           <!-- /SYNC:content-ops-m2a -->
+        </div>
+
+        <div class="doc-section" id="s-content-ops-grid-presets" data-toc='[{"id":"content-ops-grid-presets","label":"Grid View Presets &amp; Nested Relations"},{"id":"grid-view-presets","label":"View presets (column_presets)"},{"id":"grid-nested-relations","label":"Nested relation editor (drawer_relations)"}]'>
+          <!-- SYNC:content-ops-grid-presets -->
+          <h1 class="doc-h1" id="content-ops-grid-presets">Grid View Presets &amp; Nested Relations</h1>
+          <p class="doc-p">Two layout options for an O2M field rendered as an inline grid (interface <code class="doc-code">inline-table</code>) in the item editor: named view presets that switch which columns the grid shows, and a nested relation editor that lets a grandchild collection be edited from inside each row's expanded drawer. Both are configured per-field in Data Model, not by the end user.</p>
+          <div class="doc-note">This is unrelated to the "Column Presets" user guide above — that feature is a per-user, self-service preset for which columns a COLLECTION BROWSER shows, saved to <code class="doc-code">nivaro_collection_presets</code>. Grid view presets are admin-configured on a single O2M FIELD's layout and only ever narrow an already-fixed column set.</div>
+          <h3 class="doc-h3" id="grid-view-presets">View presets (column_presets)</h3>
+          <p class="doc-p">A field's <code class="doc-code">options.column_presets</code> is an array of <code class="doc-code">{ name, columns }</code> objects. With two or more presets configured, the grid shows a segmented control above the table (and, in read-only grids, in its own strip since the normal toolbar row is skipped) letting the user switch which named subset of columns is visible. The active preset is remembered per grid instance in <code class="doc-code">localStorage</code>.</p>
+          <pre class="doc-pre"><code>{
+  "column_presets": [
+    { "name": "Summary", "columns": ["description", "amount", "status"] },
+    { "name": "Full detail", "columns": ["description", "amount", "status", "unit_id", "notes", "created_by"] }
+  ]
+}</code></pre>
+          <p class="doc-p">A preset can only FILTER the columns the layout and field permissions already resolved for the grid — it can never reveal a column the layout hid or a role can't see. Naming a column outside that resolved set simply drops it from the preset silently. If the remembered preset no longer exists (deleted, renamed, or the field now has fewer than two presets), the grid falls back to showing every resolved column rather than an empty table.</p>
+          <div class="doc-note">Switching presets is a VIEW change only. Saving a row always writes every field the layout resolved for that row, not just the currently visible preset columns — this matters because a row rule can autofill a field that the active preset happens to be hiding, and a mid-edit preset switch must never silently discard a value already typed into a column that just became hidden. A per-column aggregate footer, where configured, does follow the active preset — switching presets changes which totals are shown.</div>
+          <h3 class="doc-h3" id="grid-nested-relations">Nested relation editor (drawer_relations)</h3>
+          <p class="doc-p">A field's <code class="doc-code">options.drawer_relations</code> lists grandchild relations to surface inline. Expanding a row for edit shows one mini-grid per entry beneath it, letting the user add, edit, and delete grandchild records without leaving the parent form. Each entry is either a bare relation name, or an object adding a running-total hint:</p>
+          <pre class="doc-pre"><code>{
+  "drawer_relations": [
+    "unit_workflows",
+    { "field": "unit_materials", "hint": { "sum_field": "total", "cap_field": "budget" } }
+  ]
+}</code></pre>
+          <p class="doc-p"><code class="doc-code">field</code> names an O2M relation defined on the CHILD collection (the same collection the parent grid's rows belong to) — its target (the grandchild collection) is resolved from <code class="doc-code">nivaro_relations</code> the same way import templates resolve a relation-mode nested target. When a <code class="doc-code">hint</code> is set, the drawer header shows "remaining: cap − sum" — <code class="doc-code">cap_field</code> is read off the child row's own current value (the row being edited), <code class="doc-code">sum_field</code> is summed across every grandchild row/staged member currently shown, and the number turns red when it goes negative.</p>
+          <div class="doc-note doc-warn">The hint is a client-side display only — nothing stops the save. It is not a substitute for a sum_cap validation rule on the grandchild collection (see Aggregate cap rules); pair the two if the cap needs to actually be enforced, not just shown.</div>
+          <p class="doc-p">What actually happens on Add/Edit/Delete inside the drawer depends on whether the parent row it belongs to has been saved yet. Editing a NEW or still-pending row stages grandchild members client-side (reusing the same <code class="doc-code">__o2m_&lt;field&gt;</code> prefill staging contract import templates use — see Import Templates gotchas) and only creates them once the parent row itself is saved, so they correctly participate in an <code class="doc-code">inline-table</code> field's <code class="doc-code">save_mode: "pending"</code> batching (including a batch cancel, which discards the staged members along with the rest of the pending row). Editing an ALREADY-SAVED row's drawer writes immediately — every Add/Edit/Delete there is a live <code class="doc-code">POST</code>/<code class="doc-code">PATCH</code>/<code class="doc-code">DELETE</code> against the grandchild collection, regardless of the outer grid's save mode.</p>
+          <div class="doc-note doc-warn">Because of that split, a saved row's drawer edits are NOT undone by cancelling a pending batch on the outer grid — only the parent grid's own staged row/edits/deletes are discarded, grandchild writes already made through an already-saved row's drawer are not. This is a known, accepted inconsistency rather than a bug: reverting it would require staging grandchild writes transactionally as well, one level deeper than the current pending-mode architecture goes.</div>
+          <h3 class="doc-h3">Configuring in the admin UI</h3>
+          <p class="doc-p">Data Model → table → hover the O2M field's chip in the Table Editor and click the gear icon → set Interface to Inline Table. Two additional sections appear in the same popover: "Column presets" (name + a multi-select of that grid's available columns per preset — reorder with the up/down arrows) and "Drawer relations" (pick a relation, then optionally a sum field and a cap field for the hint). A preset needs both a name and at least one column to be saved; an empty preset is dropped on save. A drawer relation needs a relation selected to be saved; the hint is only attached when BOTH sum field and cap field are set — leaving either blank saves the relation as a plain string with no hint.</p>
+          <div class="doc-note">The Drawer relations picker offers only relations defined on this table pointing to a child collection. The sum field options come from that CHILD relation's target (the grandchild collection) — chosen fresh per row once a relation is picked, and reset whenever the relation changes since a new relation implies a new grandchild collection. The cap field options come from this table's (the child's) own numeric fields — a different collection than the sum field, on purpose, since the cap lives on the row itself, not the rows underneath it.</div>
+          <!-- /SYNC:content-ops-grid-presets -->
         </div>
 
         <!-- ════ SECURITY & INFRASTRUCTURE ════ -->

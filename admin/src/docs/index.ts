@@ -78,6 +78,7 @@ import {
   contentOpsFieldHistory,
   contentOpsFieldLocking,
   contentOpsFieldVisibility,
+  contentOpsGridPresets,
   contentOpsPercentComplete,
   contentOpsPolymorphicRelations,
   contentOpsRecordTemplates,
@@ -610,6 +611,7 @@ export const navSections: NavGroup[] = [
       contentOpsAddendums,
       contentOpsPercentComplete,
       contentOpsPolymorphicRelations,
+      contentOpsGridPresets,
       pickerFilterGuide,
       pickerExclusionsGuide
     ]
