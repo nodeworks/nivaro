@@ -7,11 +7,13 @@ import { get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { AutoIdPreviewField } from './AutoIdPreviewField'
 import { FieldRenderer } from './FieldRenderer'
 import {
   CascadeEffectController,
   getCascadeFilters,
-  getColSpanClass, 
+  getColSpanClass,
+  parseJson,
   SYSTEM_FIELDS
 } from './helpers'
 import { useM2MStaging } from './M2MStagingContext'
@@ -194,6 +196,8 @@ export function FieldRow({
   if (!forceVisible && (!visible || (!field.layout_assigned && (field.hidden || SYSTEM_FIELDS.has(field.field))))) return null
   const value = draft[field.field] ?? null
   const label = field.label ?? titleCase(field.field)
+  const autoIdPattern = parseJson<{ auto_id?: { pattern?: string } }>(field.options)?.auto_id
+    ?.pattern
 
   // Resolve M2M / M2O relation for this field (for cascade clear logic)
   const m2mRelForField = (() => {
@@ -415,7 +419,9 @@ export function FieldRow({
         )}
       </div>}
       {swapContent ?? <div className={cn(locked && 'cursor-not-allowed')}><div className={cn(locked && 'pointer-events-none opacity-60', error && 'ring-1 ring-red-400 rounded-md')}>
-        {renderField ? (
+        {autoIdPattern ? (
+          <AutoIdPreviewField collection={collection} field={field} draft={draft} itemId={itemId} />
+        ) : renderField ? (
           renderField({
             field,
             value,
