@@ -391,120 +391,120 @@ export function NestedRelationEditor({
               const isConfirmingDelete = confirmDeleteKey === key
               return (
                 <Fragment key={key}>
-                <tr
-                  onClick={() => !isEditingRow && !readOnly && startEdit(key, data)}
-                  className={cn(
-                    'border-b border-slate-100 transition-colors',
-                    isEditingRow
-                      ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
-                      : 'bg-white hover:bg-slate-50/80',
-                    !isEditingRow && !readOnly ? 'cursor-pointer' : ''
-                  )}
-                >
-                  {displayCols.map((c) => (
-                    <td key={c.field} className='px-2 py-1 align-top'>
-                      {isEditingRow ? (
-                        <FieldRenderer
-                          field={c}
-                          value={draft[c.field] ?? null}
-                          onChange={(v) => setDraftField(c.field, v)}
-                          relations={grandRelations}
-                          collection={grandCollection}
-                          itemId={parentRowId != null ? key : 'new'}
-                        />
-                      ) : (
-                        <div className='py-0.5 overflow-hidden'>
-                          {formatCellValue(c, data[c.field])}
-                        </div>
-                      )}
-                    </td>
-                  ))}
-                  {!readOnly && (
-                    <td className='px-1 py-1 align-middle'>
-                      {isEditingRow ? (
-                        <div className='flex items-stretch gap-1'>
-                          <button
-                            type='button'
-                            disabled={saving}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              save()
-                            }}
-                            className='rounded px-2 h-7 bg-[#00ceff] text-white text-[10px] font-medium hover:brightness-110 disabled:opacity-50'
-                          >
-                            {saving ? '…' : 'Save'}
-                          </button>
-                          <button
-                            type='button'
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              cancelEdit()
-                            }}
-                            className='rounded px-1.5 h-7 text-slate-400 hover:text-slate-700 text-[10px]'
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      ) : isConfirmingDelete ? (
-                        <div className='flex items-center justify-end gap-1'>
-                          <span className='text-[10px] text-slate-400'>Delete?</span>
-                          <button
-                            type='button'
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              confirmedDelete(key)
-                            }}
-                            className='rounded px-1.5 py-0.5 text-[10px] text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400'
-                          >
-                            Yes
-                          </button>
-                          <button
-                            type='button'
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setConfirmDeleteKey(null)
-                              setRowError(null)
-                            }}
-                            className='rounded px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-slate-700 border border-slate-200'
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <div className='flex items-center justify-end gap-0.5'>
-                          <button
-                            type='button'
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              startEdit(key, data)
-                            }}
-                            className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'
-                          >
-                            <Pencil className='h-3 w-3' />
-                          </button>
-                          <button
-                            type='button'
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setConfirmDeleteKey(key)
-                              setRowError(null)
-                            }}
-                            className='rounded p-0.5 text-slate-300 hover:text-red-500'
-                          >
-                            <X className='h-3 w-3' />
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  )}
-                </tr>
-                {(isEditingRow || isConfirmingDelete) && rowError && (
-                  <tr className='border-b border-slate-100 bg-red-50/50'>
-                    <td colSpan={emptyColSpan} className='px-2 py-1 text-[11px] text-red-600'>
-                      {rowError}
-                    </td>
+                  <tr
+                    onClick={() => !isEditingRow && !readOnly && startEdit(key, data)}
+                    className={cn(
+                      'border-b border-slate-100 transition-colors',
+                      isEditingRow
+                        ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
+                        : 'bg-white hover:bg-slate-50/80',
+                      !isEditingRow && !readOnly ? 'cursor-pointer' : ''
+                    )}
+                  >
+                    {displayCols.map((c) => (
+                      <td key={c.field} className='px-2 py-1 align-top'>
+                        {isEditingRow ? (
+                          <FieldRenderer
+                            field={c}
+                            value={draft[c.field] ?? null}
+                            onChange={(v) => setDraftField(c.field, v)}
+                            relations={grandRelations}
+                            collection={grandCollection}
+                            itemId={parentRowId != null ? key : 'new'}
+                          />
+                        ) : (
+                          <div className='py-0.5 overflow-hidden'>
+                            {formatCellValue(c, data[c.field])}
+                          </div>
+                        )}
+                      </td>
+                    ))}
+                    {!readOnly && (
+                      <td className='px-1 py-1 align-middle'>
+                        {isEditingRow ? (
+                          <div className='flex items-stretch gap-1'>
+                            <button
+                              type='button'
+                              disabled={saving}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                save()
+                              }}
+                              className='rounded px-2 h-7 bg-[#00ceff] text-white text-[10px] font-medium hover:brightness-110 disabled:opacity-50'
+                            >
+                              {saving ? '…' : 'Save'}
+                            </button>
+                            <button
+                              type='button'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                cancelEdit()
+                              }}
+                              className='rounded px-1.5 h-7 text-slate-400 hover:text-slate-700 text-[10px]'
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : isConfirmingDelete ? (
+                          <div className='flex items-center justify-end gap-1'>
+                            <span className='text-[10px] text-slate-400'>Delete?</span>
+                            <button
+                              type='button'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                confirmedDelete(key)
+                              }}
+                              className='rounded px-1.5 py-0.5 text-[10px] text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400'
+                            >
+                              Yes
+                            </button>
+                            <button
+                              type='button'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setConfirmDeleteKey(null)
+                                setRowError(null)
+                              }}
+                              className='rounded px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-slate-700 border border-slate-200'
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div className='flex items-center justify-end gap-0.5'>
+                            <button
+                              type='button'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                startEdit(key, data)
+                              }}
+                              className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'
+                            >
+                              <Pencil className='h-3 w-3' />
+                            </button>
+                            <button
+                              type='button'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setConfirmDeleteKey(key)
+                                setRowError(null)
+                              }}
+                              className='rounded p-0.5 text-slate-300 hover:text-red-500'
+                            >
+                              <X className='h-3 w-3' />
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    )}
                   </tr>
-                )}
+                  {(isEditingRow || isConfirmingDelete) && rowError && (
+                    <tr className='border-b border-slate-100 bg-red-50/50'>
+                      <td colSpan={emptyColSpan} className='px-2 py-1 text-[11px] text-red-600'>
+                        {rowError}
+                      </td>
+                    </tr>
+                  )}
                 </Fragment>
               )
             })}
