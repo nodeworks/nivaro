@@ -1584,7 +1584,8 @@ export async function createOne(
   collection: string,
   data: Record<string, unknown>,
   req?: FastifyRequest,
-  workspaceId?: string
+  workspaceId?: string,
+  opts?: { skipRollupRecalc?: boolean }
 ) {
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
@@ -1642,8 +1643,12 @@ export async function createOne(
 
   const result = await readOne(user, collection, returnedId as string | number)
 
-  // Recalc any stored rollups this new row contributes to (never throws)
-  await recalcAffectedRollups(collection, (result ?? ctx.payload) as Record<string, unknown>)
+  // Recalc any stored rollups this new row contributes to (never throws). Callers
+  // that create many rows in one batch (e.g. import execute) can opt out and run
+  // one deduped recalc pass of their own after the whole batch commits.
+  if (!opts?.skipRollupRecalc) {
+    await recalcAffectedRollups(collection, (result ?? ctx.payload) as Record<string, unknown>)
+  }
 
   // after_create rules
   await evaluateRules(

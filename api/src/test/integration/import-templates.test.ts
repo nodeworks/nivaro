@@ -868,13 +868,83 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'po_line_items',
       { sku: 'A1', qty: 1, purchase_order_id: 'parent-1' },
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
-    // Success path: createOne fires its own recalcs internally (mocked away here since
-    // items.js is mocked wholesale) — the route itself must not additionally invoke the
-    // compensation-only recalc helper when nothing was rolled back.
-    expect(vi.mocked(getRollupContributors)).not.toHaveBeenCalled()
+    // Every createOne call above skipped its own per-row recalc (skipRollupRecalc:
+    // true) — the route runs ONE deduped pass over the parent + both created lines
+    // after success instead.
+    expect(vi.mocked(getRollupContributors)).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(getRollupContributors)).toHaveBeenNthCalledWith(1, 'purchase_orders')
+    expect(vi.mocked(getRollupContributors)).toHaveBeenNthCalledWith(2, 'po_line_items')
+    expect(vi.mocked(getRollupContributors)).toHaveBeenNthCalledWith(3, 'po_line_items')
     expect(vi.mocked(recalcRollupsForParent)).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/execute — happy path dedupes the created parent\'s rollup to ONE recalc despite 3 lines FKing to it', async () => {
+    const user = makeRegularUser({ id: 'user-1' })
+    const template = {
+      id: 'tmpl-1',
+      collection: 'purchase_orders',
+      mode: 'direct',
+      file_types: JSON.stringify(['xlsx', 'csv']),
+      sheet_match: null,
+      header_row: 1,
+      header_map: JSON.stringify([]),
+      line_map: JSON.stringify({
+        target_field: 'line_items',
+        row_filter: null,
+        columns: [],
+        apply_field_rules: true,
+        disperse: null
+      }),
+      attach_file_field: null
+    }
+    const relation = { many_collection: 'po_line_items', many_field: 'purchase_order_id' }
+    // The line items' own FK to the parent (purchase_order_id) is itself a rollup
+    // contributor entry — this is the PRIMARY parent-child FK the happy-path pass must
+    // cover: createOne no longer recalcs it per-row, so without the dedup pass the
+    // parent's total_amount rollup would never update at all.
+    const totalAmountEntry = {
+      parentCollection: 'purchase_orders',
+      parentFk: 'purchase_order_id',
+      rollupField: 'total_amount',
+      sources: []
+    }
+    vi.mocked(getRollupContributors).mockImplementation(async (collection: string) =>
+      collection === 'po_line_items' ? [totalAmountEntry] : []
+    )
+    vi.mocked(db)
+      .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
+      .mockReturnValueOnce(makeChain(relation) as unknown as ReturnType<typeof db>) // relation resolve
+
+    vi.mocked(createOne)
+      .mockResolvedValueOnce({ id: 'parent-1' } as never)
+      .mockResolvedValueOnce({ id: 'line-1' } as never)
+      .mockResolvedValueOnce({ id: 'line-2' } as never)
+      .mockResolvedValueOnce({ id: 'line-3' } as never)
+
+    const app = await buildApp(user, false)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/import-templates/tmpl-1/execute',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        values: { vendor_name: 'Acme' },
+        lines: [
+          { values: { sku: 'A1', qty: 1 } },
+          { values: { sku: 'A2', qty: 2 } },
+          { values: { sku: 'A3', qty: 3 } }
+        ],
+        issues: []
+      })
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(vi.mocked(createOne)).toHaveBeenCalledTimes(4)
+    // 3 lines each carry the same parentFk value (parent-1) — deduped to one recalc.
+    expect(vi.mocked(recalcRollupsForParent)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(recalcRollupsForParent)).toHaveBeenCalledWith(totalAmountEntry, 'parent-1')
   })
 
   it('POST /:id/execute — 422 with an error-severity issue in body, no rows created', async () => {
@@ -1216,7 +1286,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'workflows_funding_years',
       { workflow_id: 'parent-1', year_id: '2026-id' },
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
     expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
       3,
@@ -1224,7 +1295,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'workflow_line_items',
       expect.objectContaining({ sku: 'A1', workflow_id: 'parent-1' }),
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
   })
 
@@ -1287,7 +1359,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'workflows_funding_years',
       { workflow_id: 'parent-1', year_id: '2026-id' },
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
   })
 
@@ -1630,7 +1703,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'unit_workflow_lines_exec',
       { sku: 'A1', deployment_order_id: 'parent-1' },
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
     expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
       3,
@@ -1638,7 +1712,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'unit_workflows_exec',
       { workflow_id: 'w1', workflow_line: 'child-1' },
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
     expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
       4,
@@ -1646,7 +1721,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'unit_workflows_exec',
       { workflow_id: 'w2', workflow_line: 'child-1' },
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
     expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
       5,
@@ -1654,7 +1730,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'unit_workflow_lines_exec',
       { sku: 'A2', deployment_order_id: 'parent-1' },
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
   })
 
@@ -1874,7 +1951,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'units_create_miss',
       { name: 'New Unit' },
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
     expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
       3,
@@ -1882,7 +1960,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'po_line_items_create_miss',
       { sku: 'A1', unit_name: 'New Unit', unit: 'unit-99', purchase_order_id: 'parent-1' },
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
     expect(vi.mocked(createOne)).toHaveBeenNthCalledWith(
       4,
@@ -1890,7 +1969,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       'po_line_items_create_miss',
       { sku: 'A2', unit_name: ' new unit ', unit: 'unit-99', purchase_order_id: 'parent-1' },
       expect.anything(),
-      undefined
+      undefined,
+      { skipRollupRecalc: true }
     )
   })
 

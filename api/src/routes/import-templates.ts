@@ -282,19 +282,24 @@ async function deleteGroupedByCollection(
   }
 }
 
-/** After compensation raw-deletes a created row, any stored rollup whose contributor
- *  FK (`entry.parentFk`) is present on that row's own payload may now be stale — even
- *  when the FK points at a record OUTSIDE the created tree entirely (e.g. a
- *  lookup-resolved `product_id`, an M2M junction's far-side id, or a `create.defaults`
- *  constant FK). `createOne` bumped that parent's stored rollup when the row was first
- *  created (its generic per-collection contributor recalc doesn't care which field the
- *  caller "meant" as the parent); the raw delete never re-triggers it, so it's left
- *  inflated. Recalcs every contributor entry for the row's own collection whose
- *  `parentFk` resolves to a non-null value on the row's payload, deduped per
+/** Recalcs every stored rollup whose contributor FK (`entry.parentFk`) is present on
+ *  one of `rows`' own payloads — even when the FK points at a record OUTSIDE the
+ *  created tree entirely (e.g. a lookup-resolved `product_id`, an M2M junction's
+ *  far-side id, or a `create.defaults` constant FK). Every row here was created with
+ *  `skipRollupRecalc: true`, so this is the only recalc it gets — deduped per
  *  `(parentCollection, rollupField, parentId)` so the same rollup is never recomputed
- *  twice across rows/entries. Recalcing a parent id that was ITSELF deleted in this
- *  same compensation is a harmless no-op — the update simply matches zero rows. */
-async function recalcContributorsForDeletedRows(
+ *  twice across rows/entries. Two callers:
+ *  - Happy path (once, after the full create phase succeeds): also covers the PRIMARY
+ *    parent-child FK (a child's fk to the created parent, a grandchild's fk to its
+ *    child) generically, since that FK lives on the row's own payload same as any
+ *    other contributor — the created parent's own rollup gets exactly one recalc here
+ *    instead of the N it would have gotten from N per-row createOne recalcs.
+ *  - Compensation (after a raw delete): the primary parent-child FK is a no-op there
+ *    (the parent was just deleted), but the same generic pass also catches secondary
+ *    FKs a raw delete never re-triggers, which is the case that matters there.
+ *  Recalcing a parent id that was itself deleted in the same compensation pass is a
+ *  harmless no-op — the update simply matches zero rows. */
+async function recalcContributorsForRows(
   rows: Array<{ collection: string; payload: Record<string, unknown> }>
 ): Promise<void> {
   const seen = new Set<string>()
@@ -1061,10 +1066,12 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
 
     const workspaceId = req.workspaceId ?? undefined
     // Every created-row bookkeeping array below carries `payload` (the exact object
-    // passed to createOne) alongside `collection`/`id` — compensation's raw deletes
-    // bypass items-service hooks, so recalcContributorsForDeletedRows needs each row's
-    // own FK values (which may point at records outside the created tree entirely) to
-    // know which stored rollups createOne originally bumped and now need refreshing.
+    // passed to createOne) alongside `collection`/`id`. Every createOne call in this
+    // route passes skipRollupRecalc: true — a happy-path success runs ONE deduped
+    // recalcContributorsForRows pass over everything created instead of one recalc per
+    // row; on failure, compensation's raw deletes bypass items-service hooks entirely,
+    // so that same pass (over the rows that existed before compensation) is what
+    // refreshes any stored rollup createOne would otherwise have bumped.
     const createdChildIds: (string | number)[] = []
     const createdChildren: Array<{
       collection: string
@@ -1106,7 +1113,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
             group.step.collection,
             group.defaultsPayload,
             req,
-            workspaceId
+            workspaceId,
+            { skipRollupRecalc: true }
           )) as { id: string | number }
           createdLookupRecords.push({
             collection: group.step.collection,
@@ -1126,7 +1134,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           )
         }
         try {
-          await recalcContributorsForDeletedRows(createdLookupRecords)
+          await recalcContributorsForRows(createdLookupRecords)
         } catch {
           // swallow — compensation already reported the real error
         }
@@ -1163,7 +1171,9 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       })
 
     try {
-      parent = (await createOne(req.user!, collection, values, req, workspaceId)) as {
+      parent = (await createOne(req.user!, collection, values, req, workspaceId, {
+        skipRollupRecalc: true
+      })) as {
         id: string | number
       }
     } catch {
@@ -1195,7 +1205,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
             info.junction,
             junctionPayload,
             req,
-            workspaceId
+            workspaceId,
+            { skipRollupRecalc: true }
           )) as { id: string | number }
           createdJunctions.push({
             collection: info.junction,
@@ -1220,13 +1231,9 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
                 [fkField]: parent.id,
                 ...(line.nested ? { [line.nested.field]: line.nested.rows } : {})
               }
-          const child = (await createOne(
-            req.user!,
-            childCollection,
-            childData,
-            req,
-            workspaceId
-          )) as { id: string | number }
+          const child = (await createOne(req.user!, childCollection, childData, req, workspaceId, {
+            skipRollupRecalc: true
+          })) as { id: string | number }
           createdChildIds.push(child.id)
           createdChildren.push({ collection: childCollection, id: child.id, payload: childData })
 
@@ -1238,7 +1245,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
                 nestedRelation.collection,
                 grandchildPayload,
                 req,
-                workspaceId
+                workspaceId,
+                { skipRollupRecalc: true }
               )) as { id: string | number }
               createdGrandchildren.push({
                 collection: nestedRelation.collection,
@@ -1312,7 +1320,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       // create.defaults constant). Swallowed: compensation already reported the real
       // error; a recalc failure must not mask it.
       try {
-        await recalcContributorsForDeletedRows([
+        await recalcContributorsForRows([
           ...createdGrandchildren,
           ...createdJunctions,
           ...createdChildren,
@@ -1328,6 +1336,25 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           : `Import failed on line ${failedAtLine} — nothing was created`,
         issues: [...bodyIssues, ...compensationIssues]
       })
+    }
+
+    // The full create phase succeeded — every createOne call above skipped its own
+    // per-row rollup recalc (skipRollupRecalc: true), so run ONE deduped pass over
+    // everything just created, including the parent itself (children's fkField and
+    // grandchildren's nested fk_field point at created ids in their own payloads, so
+    // the generic contributor-FK scan already covers the parent-child relationship —
+    // see recalcContributorsForRows). Never fails the response: the rows already
+    // committed, and a stale rollup here is recoverable via backfill.
+    try {
+      await recalcContributorsForRows([
+        { collection, payload: values },
+        ...createdLookupRecords,
+        ...createdChildren,
+        ...createdJunctions,
+        ...createdGrandchildren
+      ])
+    } catch (err) {
+      console.error({ err }, 'import-template execute: happy-path rollup recalc failed')
     }
 
     await logActivity({
