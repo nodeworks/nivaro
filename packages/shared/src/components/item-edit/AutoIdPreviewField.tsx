@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { post } from '../../lib/commands'
 import { Input } from '../ui/input'
 import { parseJson } from './helpers'
+import { M2MStagingContext } from './M2MStagingContext'
 import type { CMSField } from './types'
 
 const NON_RELATION = new Set(['YY', 'YYYY', 'MM', 'seq', 'seq4', 'seq6'])
@@ -37,9 +38,18 @@ export function AutoIdPreviewField({
     [field.options]
   )
   const deps = useMemo(() => (pattern ? relationFirstSegments(pattern) : []), [pattern])
-  // Stable signature of only the draft values the pattern actually depends on —
+  // M2M selections on new records live in the staging context, not the draft —
+  // fall back to staged links so tokens like {funding_years[0]} preview live.
+  const staging = useContext(M2MStagingContext)
+  const valueFor = (d: string): unknown => {
+    if (draft[d] !== undefined) return draft[d]
+    const staged = staging?.getStagedLinks(d) ?? []
+    return staged.length ? staged : undefined
+  }
+  // Stable signature of only the values the pattern actually depends on —
   // typing in unrelated fields must not re-trigger the debounce/request cycle.
-  const depsKey = useMemo(() => JSON.stringify(deps.map((d) => draft[d])), [deps, draft])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: valueFor reads draft+staging, both listed
+  const depsKey = useMemo(() => JSON.stringify(deps.map(valueFor)), [deps, draft, staging])
   const stored = draft[field.field]
   // New records start blank until the first preview response; existing records
   // show the stored value immediately.
@@ -55,7 +65,10 @@ export function AutoIdPreviewField({
     timerRef.current = setTimeout(async () => {
       try {
         const values: Record<string, unknown> = {}
-        for (const d of deps) if (draft[d] !== undefined) values[d] = draft[d]
+        for (const d of deps) {
+          const v = valueFor(d)
+          if (v !== undefined) values[d] = v
+        }
         const res = await client.request<{ preview: string }>(
           post(`/items/${collection}/auto-id-preview`, {
             field: field.field,
