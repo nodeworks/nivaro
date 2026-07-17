@@ -1101,6 +1101,31 @@ export async function dataModelRoutes(app: FastifyInstance) {
         relations.sort((a, b) => Number(a.id) - Number(b.id))
       }
 
+      // One more hop: relations OWNED by this collection's O2M children, so nested
+      // editors (line items → unit allocations) can resolve grandchild relations
+      // from the parent form's relation list.
+      const childCollections = [
+        ...new Set(
+          relations
+            .filter((r) => r.one_collection === collection && !r.junction_field)
+            .map((r) => r.many_collection)
+        )
+      ]
+      if (childCollections.length > 0) {
+        const grandRels = await db<CMSRelation>('nivaro_relations').whereIn(
+          'one_collection',
+          childCollections
+        )
+        const seen = new Set(relations.map((r) => r.id))
+        for (const g of grandRels) {
+          if (!seen.has(g.id)) {
+            relations.push(g)
+            seen.add(g.id)
+          }
+        }
+        relations.sort((a, b) => Number(a.id) - Number(b.id))
+      }
+
       return reply.send({ data: relations })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
