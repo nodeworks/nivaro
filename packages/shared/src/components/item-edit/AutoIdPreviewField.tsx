@@ -3,44 +3,45 @@ import { useNivaroClient } from '../../context'
 import { post } from '../../lib/commands'
 import { Input } from '../ui/input'
 import { parseJson } from './helpers'
-import { M2MStagingContext } from './M2MStagingContext'
+import { M2MStagingContext, type M2MStagingCtx } from './M2MStagingContext'
 import type { CMSField } from './types'
 
 const NON_RELATION = new Set(['YY', 'YYYY', 'MM', 'seq', 'seq4', 'seq6'])
-const RELATION_TOKEN_RE = /\{([A-Za-z0-9_]+)(?:\[0\])?[.\s%}][^}]*\}/g
 
 function relationFirstSegments(pattern: string): string[] {
   const segs = new Set<string>()
-  for (const m of pattern.matchAll(RELATION_TOKEN_RE)) {
+  for (const m of pattern.matchAll(/\{\s*([A-Za-z0-9_]+)(\[0\])?[^}]*\}/g)) {
     if (!NON_RELATION.has(m[1])) segs.add(m[1])
   }
   return [...segs]
 }
 
-// Read-only preview of a collection's `auto_id` pattern as the operator fills in
-// the relation fields it depends on. Debounced POST to the preview endpoint;
+// Live preview string for a collection's `auto_id` pattern as the operator fills
+// in the relation fields it depends on. Debounced POST to the preview endpoint;
 // keeps the last good preview on request failure so a transient error never
-// blanks the field.
-export function AutoIdPreviewField({
+// blanks the value. Pass `staging` explicitly when calling from the component
+// that PROVIDES M2MStagingContext (its own render sits above the provider).
+export function useAutoIdPreview({
   collection,
   field,
   draft,
-  itemId
+  itemId,
+  staging
 }: {
   collection: string
-  field: CMSField
+  field: CMSField | null
   draft: Record<string, unknown>
   itemId: string
-}) {
+  staging?: M2MStagingCtx | null
+}): string {
   const client = useNivaroClient()
   const pattern = useMemo(
-    () => parseJson<{ auto_id?: { pattern?: string } }>(field.options)?.auto_id?.pattern,
-    [field.options]
+    () => parseJson<{ auto_id?: { pattern?: string } }>(field?.options ?? null)?.auto_id?.pattern,
+    [field?.options]
   )
   const deps = useMemo(() => (pattern ? relationFirstSegments(pattern) : []), [pattern])
   // M2M selections on new records live in the staging context, not the draft —
   // fall back to staged links so tokens like {funding_years[0]} preview live.
-  const staging = useContext(M2MStagingContext)
   const valueFor = (d: string): unknown => {
     if (draft[d] !== undefined) return draft[d]
     const staged = staging?.getStagedLinks(d) ?? []
@@ -50,7 +51,7 @@ export function AutoIdPreviewField({
   // typing in unrelated fields must not re-trigger the debounce/request cycle.
   // biome-ignore lint/correctness/useExhaustiveDependencies: valueFor reads draft+staging, both listed
   const depsKey = useMemo(() => JSON.stringify(deps.map(valueFor)), [deps, draft, staging])
-  const stored = draft[field.field]
+  const stored = field ? draft[field.field] : undefined
   // New records start blank until the first preview response; existing records
   // show the stored value immediately.
   const [preview, setPreview] = useState<string>(() =>
@@ -60,7 +61,7 @@ export function AutoIdPreviewField({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: depsKey is the intentional proxy for deps/draft
   useEffect(() => {
-    if (!pattern) return
+    if (!pattern || !field) return
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(async () => {
       try {
@@ -84,8 +85,24 @@ export function AutoIdPreviewField({
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [pattern, collection, field.field, itemId, depsKey])
+  }, [pattern, collection, field?.field, itemId, depsKey])
 
+  return preview
+}
+
+export function AutoIdPreviewField({
+  collection,
+  field,
+  draft,
+  itemId
+}: {
+  collection: string
+  field: CMSField
+  draft: Record<string, unknown>
+  itemId: string
+}) {
+  const staging = useContext(M2MStagingContext)
+  const preview = useAutoIdPreview({ collection, field, draft, itemId, staging })
   return (
     <Input value={preview} disabled readOnly className='h-8 text-[12px] text-muted-foreground' />
   )

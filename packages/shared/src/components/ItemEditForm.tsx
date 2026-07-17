@@ -19,7 +19,8 @@ import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { FieldRow } from './item-edit/FieldRow'
 import { GroupSection, InlineDisplay, OwnersInline, OwnersInlineCompact, StripFieldValue } from './item-edit/GroupSection'
-import { applyDisplayTemplate, isSentinelKey, resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
+import { applyDisplayTemplate, isSentinelKey, parseJson, resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
+import { useAutoIdPreview } from './item-edit/AutoIdPreviewField'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import { AddendumFieldContext, AddendumO2MContext, AddendumViewContext, type AddendumFieldMap, type AddendumO2MMap } from './item-edit/AddendumFieldContext'
 import { O2MStagingContext, type O2MStagingCtx } from './item-edit/O2MStagingContext'
@@ -1442,17 +1443,44 @@ export function ItemEditForm({
     [subtitleConfig]
   )
 
+  // Subtitle fields with an auto_id pattern render their LIVE preview — on new
+  // records (nothing stored yet) and on edits (prefix inputs may have changed).
+  const autoIdSubtitleMeta = useMemo(() => {
+    if (!subtitleConfig) return null
+    for (const sf of subtitleConfig.fields) {
+      const meta = (fieldConfig ?? []).find((f) => f.field === sf.field)
+      if (meta && parseJson<{ auto_id?: { pattern?: string } }>(meta.options ?? null)?.auto_id?.pattern) {
+        return meta
+      }
+    }
+    return null
+  }, [subtitleConfig, fieldConfig])
+
+  // Called unconditionally (rules of hooks); no-ops when meta is null. Staging is
+  // passed explicitly — this render sits above the M2MStagingContext provider.
+  const autoIdSubtitlePreview = useAutoIdPreview({
+    collection,
+    field: autoIdSubtitleMeta,
+    draft,
+    itemId,
+    staging: m2mStagingCtx
+  })
+
   const subtitleParts = useMemo(() => {
-    if (!subtitleConfig || isNew) return []
+    if (!subtitleConfig) return []
     const src = (itemData as Record<string, unknown> | null) ?? draft
     return subtitleConfig.fields
       .map((sf) => {
-        const val = src[sf.field]
+        const isAutoId = sf.field === autoIdSubtitleMeta?.field
+        // Non-auto-id fields keep the original behavior: hidden on new records.
+        if (isNew && !isAutoId) return null
+        let val = src[sf.field]
+        if (isAutoId && autoIdSubtitlePreview) val = autoIdSubtitlePreview
         if (val === null || val === undefined || val === '') return null
         return { value: String(val), color: sf.color, weight: sf.weight, display_as: sf.display_as }
       })
       .filter(Boolean) as Array<{ value: string; color?: string; weight?: string; display_as?: string }>
-  }, [subtitleConfig, isNew, itemData, draft])
+  }, [subtitleConfig, isNew, itemData, draft, autoIdSubtitleMeta, autoIdSubtitlePreview])
 
   const headerFields = useMemo(() => (activeLayoutData?.assignments ?? [])
     .filter((a) => (a.field === '__owners__' || !a.field.startsWith('__')) && (a.group_key ?? null) === '__header__')
