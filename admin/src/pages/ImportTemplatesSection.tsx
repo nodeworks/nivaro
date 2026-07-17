@@ -116,6 +116,7 @@ interface TemplateRow {
   header_map: ImportHeaderRule[]
   line_map: ImportLineConfig | null
   attach_file_field: string | null
+  button_label: string | null
   is_active: boolean
   is_shared: boolean
   role_id: string | null
@@ -129,6 +130,7 @@ interface TemplateDraft {
   sheet_match: string
   header_row: number
   attach_file_field: string
+  button_label: string
   header_map: ImportHeaderRule[]
   line_map: ImportLineConfig | null
   is_active: boolean
@@ -237,6 +239,7 @@ function blankDraft(): TemplateDraft {
     sheet_match: '',
     header_row: 1,
     attach_file_field: '',
+    button_label: '',
     header_map: [],
     line_map: null,
     is_active: true,
@@ -254,6 +257,7 @@ function rowToDraft(row: TemplateRow): TemplateDraft {
     sheet_match: row.sheet_match ?? '',
     header_row: row.header_row,
     attach_file_field: row.attach_file_field ?? '',
+    button_label: row.button_label ?? '',
     header_map: row.header_map,
     line_map: row.line_map,
     is_active: row.is_active,
@@ -270,6 +274,7 @@ function draftToBody(draft: TemplateDraft): Record<string, unknown> {
     sheet_match: draft.sheet_match || null,
     header_row: draft.header_row,
     attach_file_field: draft.attach_file_field || null,
+    button_label: draft.button_label || null,
     header_map: draft.header_map,
     line_map: draft.line_map,
     is_active: draft.is_active,
@@ -1416,6 +1421,15 @@ function BasicsFields({
             onChange={(v) => patch({ attach_file_field: v })}
             options={[{ value: '', label: '(none)' }, ...fileFieldOptions]}
             placeholder='(none)'
+          />
+        </LabeledField>
+        <LabeledField label='Header button label'>
+          <Input
+            value={draft.button_label}
+            onChange={(e) => patch({ button_label: e.target.value })}
+            placeholder='Import from file'
+            maxLength={100}
+            className='h-8 text-[12px]'
           />
         </LabeledField>
       </div>

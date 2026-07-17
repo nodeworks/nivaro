@@ -67,13 +67,20 @@ export function ImportFromFileButton({
     }
   }
 
+  // Single template: its custom label. Multiple: a label shared by ALL of them still
+  // applies; mixed labels fall back to the generic text since the button fans out.
+  const firstLabel = templates[0]?.button_label?.trim()
+  const customLabel =
+    firstLabel && templates.every((t) => t.button_label === templates[0].button_label)
+      ? firstLabel
+      : null
   const buttonLabel = importing ? (
     <>
       <Loader2 className='h-3.5 w-3.5 animate-spin' /> Importing…
     </>
   ) : (
     <>
-      <Upload className='h-3.5 w-3.5' /> Import from file
+      <Upload className='h-3.5 w-3.5' /> {customLabel ?? 'Import from file'}
     </>
   )
 

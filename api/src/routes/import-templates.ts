@@ -697,6 +697,10 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       header_map: JSON.stringify(config.header_map),
       line_map: config.line_map ? JSON.stringify(config.line_map) : null,
       attach_file_field: config.attach_file_field,
+      button_label:
+        typeof body.button_label === 'string' && body.button_label.trim()
+          ? body.button_label.trim().slice(0, 100)
+          : null,
       is_active: body.is_active !== false,
       is_shared: !!body.is_shared,
       role_id: typeof body.role_id === 'string' ? body.role_id : null,
@@ -768,6 +772,12 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     if (typeof body.name === 'string') patch.name = body.name
     if (typeof body.collection === 'string') patch.collection = body.collection
     if (typeof body.mode === 'string') patch.mode = body.mode
+    if ('button_label' in body) {
+      patch.button_label =
+        typeof body.button_label === 'string' && body.button_label.trim()
+          ? body.button_label.trim().slice(0, 100)
+          : null
+    }
     if (typeof body.is_active === 'boolean') patch.is_active = body.is_active
     if (typeof body.is_shared === 'boolean') patch.is_shared = body.is_shared
     if ('role_id' in body) patch.role_id = typeof body.role_id === 'string' ? body.role_id : null

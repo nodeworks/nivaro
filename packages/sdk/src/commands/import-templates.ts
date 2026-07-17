@@ -7,6 +7,8 @@ export interface ImportTemplateSummary {
   mode: 'prefill' | 'direct' | 'both'
   file_types: string[]
   is_active: boolean
+  /** Custom header-button label; falls back to "Import from file" when null. */
+  button_label?: string | null
 }
 
 export interface ImportParseResponse {
