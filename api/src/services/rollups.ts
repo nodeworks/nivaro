@@ -274,7 +274,11 @@ export async function recalcRollupsForParent(
     await db(entry.parentCollection)
       .where({ id: parentId })
       .update({ [entry.rollupField]: total })
-  } catch {
+  } catch (err) {
+    console.error(
+      { err, parentCollection: entry.parentCollection, rollupField: entry.rollupField, parentId },
+      'Rollup recalc failed'
+    )
     // swallow — recalc must never break the write that triggered it
   }
 }
@@ -305,7 +309,8 @@ export async function recalcAffectedRollups(
         await recalcRollupsForParent(entry, id)
       }
     }
-  } catch {
+  } catch (err) {
+    console.error({ err, childCollection }, 'Rollup recalc failed for child collection')
     // swallow — recalc must never break the write that triggered it
   }
 }
