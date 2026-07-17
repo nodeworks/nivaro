@@ -64,7 +64,7 @@ describe('POST /items/:collection/auto-id-preview', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/items/invoices/auto-id-preview',
+      url: '/items/invoices-no-config/auto-id-preview',
       payload: { field: 'sku' }
     })
 
@@ -85,9 +85,13 @@ describe('POST /items/:collection/auto-id-preview', () => {
     const app = buildApp()
     await app.ready()
 
+    // Distinct collection name per test case — `autoIdFieldsFor` now caches
+    // `nivaro_fields` lookups per collection for 30s, so reusing a collection
+    // name across cases with different mocked field rows would read a stale
+    // cache entry from an earlier test in this file.
     const res = await app.inject({
       method: 'POST',
-      url: '/items/invoices/auto-id-preview',
+      url: '/items/invoices-draft-preview/auto-id-preview',
       payload: { field: 'sku', values: {} }
     })
 
@@ -111,7 +115,7 @@ describe('POST /items/:collection/auto-id-preview', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/items/invoices/auto-id-preview',
+      url: '/items/invoices-record-preview/auto-id-preview',
       payload: { field: 'sku', record_id: 42 }
     })
 
@@ -129,7 +133,7 @@ describe('POST /items/:collection/auto-id-preview', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/items/invoices/auto-id-preview',
+      url: '/items/invoices-forbidden/auto-id-preview',
       payload: { field: 'sku' }
     })
 

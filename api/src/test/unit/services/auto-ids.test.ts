@@ -111,7 +111,8 @@ const rels = [
 
 const rows: Record<string, Record<string, Record<string, unknown>>> = {
   projects: { '123': { id: 123, project_type: 7 } },
-  project_types: { '7': { id: 7, short_code: 'CR' } }
+  project_types: { '7': { id: 7, short_code: 'CR' } },
+  workflows: { '55': { id: 55, project: 123 } }
 }
 
 const lookups: AutoIdLookups = {
@@ -188,5 +189,36 @@ describe('recompute gating (pure logic exercised through resolveAutoIdTokens)', 
       seqValue: suffix as string
     })
     expect(out).toBe('CR27-15305')
+  })
+})
+
+describe('junction-triggered recompute (M2O own-row DB fallback)', () => {
+  const parsed = parseAutoIdPattern(
+    '{project.project_type.short_code}{funding_years[0] % 100}-{seq}'
+  )
+
+  it('resolves the M2O token via own-row fallback when mergedValues is empty', async () => {
+    // Mirrors recomputeJunctionAutoIds in items.ts: it recomputes with
+    // mergedValues `{}` (no draft), relying on `recordId` for both the plain
+    // M2O hop (`project`) and the firstIsMany M2M hop (`funding_years`).
+    const out = await resolveAutoIdTokens(parsed, {
+      collection: 'workflows',
+      values: {},
+      recordId: 55,
+      lookups,
+      seqValue: '76800'
+    })
+    expect(out).toBe('CR26-76800')
+  })
+
+  it('leaves an explicit-null draft value unresolved (does not fall back to the DB)', async () => {
+    const out = await resolveAutoIdTokens(parsed, {
+      collection: 'workflows',
+      values: { project: null },
+      recordId: 55,
+      lookups,
+      seqValue: '76800'
+    })
+    expect(out).toBe('26-76800')
   })
 })

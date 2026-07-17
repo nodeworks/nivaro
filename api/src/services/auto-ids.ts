@@ -146,6 +146,14 @@ async function resolveRelationToken(
         ctx.recordId,
         alias.junction_field as string
       )
+    } else if (!token.firstIsMany && value === undefined && ctx.recordId != null) {
+      // No draft value for a plain M2O token (draft key absent entirely, as
+      // happens when items.ts's junction recompute passes mergedValues `{}`)
+      // — fall back to the record's own current value. A draft that
+      // explicitly contains `null` means "cleared" and must stay
+      // unresolvable, so this only fires on strict `undefined`.
+      const own = await ctx.lookups.readRow(ctx.collection, ctx.recordId, [seg0])
+      value = own?.[seg0]
     }
     if (value === undefined || value === null || value === '') return ''
 
@@ -256,11 +264,23 @@ export function dbLookups(db: Knex): AutoIdLookups {
   }
 }
 
+// 30s TTL cache of auto_id fields, keyed by collection name. Fields change
+// rarely (admin-driven schema edits), so a short TTL is fine — matches
+// junctionTargetsCache below and items.ts's other meta-caches.
+const autoIdFieldsCache = new Map<
+  string,
+  { fields: Array<{ field: string; config: AutoIdConfig }>; at: number }
+>()
+const AUTO_ID_FIELDS_TTL_MS = 30_000
+
 /** All `options.auto_id`-configured fields for a single collection. */
 export async function autoIdFieldsFor(
   db: Knex,
   collection: string
 ): Promise<Array<{ field: string; config: AutoIdConfig }>> {
+  const hit = autoIdFieldsCache.get(collection)
+  if (hit && Date.now() - hit.at < AUTO_ID_FIELDS_TTL_MS) return hit.fields
+
   const fieldRows = (await db('nivaro_fields')
     .where({ collection })
     .andWhereRaw(`options LIKE '%"auto_id"%'`)
@@ -272,6 +292,7 @@ export async function autoIdFieldsFor(
     const config = opts?.auto_id
     if (config?.pattern) out.push({ field: f.field, config })
   }
+  autoIdFieldsCache.set(collection, { fields: out, at: Date.now() })
   return out
 }
 
