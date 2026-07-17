@@ -354,6 +354,68 @@ describe('evaluateSumCapRule', () => {
     expect(whereNotIds).toEqual(['row1'])
   })
 
+  it("applies the caller's row filter to the current-row fetch but withholds it from the SUM query, while both keep the workspace scope", async () => {
+    const collection = 'scoped_allocations_rowfilter'
+    const columnInfo = vi.fn().mockResolvedValue({ workspace_id: {} })
+    const { chain, whereArgs, whereNotIds } = collectionChain([
+      { workflow_line: 'wl1', allocated_amount: 20 },
+      { v: '40' }
+    ])
+    ;(chain as unknown as Record<string, unknown>).columnInfo = columnInfo
+    const relChain = onceChain({ one_collection: 'workflow_lines' })
+    const parentChain = onceChain({ amount: 100 })
+    // getRowFilter hits nivaro_roles (non-admin role) then nivaro_policies (a
+    // row_filter'd policy) — mockResolvedValue (not Once) since it's called
+    // twice: once for the caller's own action, once for the parent's 'read'.
+    const roleChain: Record<string, unknown> = {
+      where: vi.fn(() => roleChain),
+      first: vi.fn().mockResolvedValue({ id: 'role1', admin_access: false })
+    }
+    const policyChain: Record<string, unknown> = {
+      where: vi.fn(() => policyChain),
+      orderByRaw: vi.fn(() => policyChain),
+      first: vi.fn().mockResolvedValue({
+        row_filter: JSON.stringify([{ field: 'owner', op: 'eq', value: '$CURRENT_USER' }])
+      })
+    }
+    // applyRowFilter binds field names via db.raw('??', [field]) — the shared
+    // db mock is a bare vi.fn(), so it needs a .raw for this test only.
+    ;(db as unknown as { raw: (sql: string, bindings: unknown[]) => unknown }).raw = vi.fn(
+      (_sql: string, bindings: unknown[]) => bindings[0]
+    )
+
+    vi.mocked(db).mockImplementation((table: unknown) => {
+      if (table === collection) return chain as never
+      if (table === 'nivaro_relations') return relChain as never
+      if (table === 'workflow_lines') return parentChain as never
+      if (table === 'nivaro_roles') return roleChain as never
+      if (table === 'nivaro_policies') return policyChain as never
+      throw new Error(`unexpected table ${String(table)}`)
+    })
+
+    await expect(
+      evaluateSumCapRule(
+        rule(),
+        ctx({
+          collection,
+          action: 'update',
+          keys: ['row1'],
+          payload: { allocated_amount: 90 },
+          user: { id: 'u1', role: 'role1' } as HookContext['user'],
+          req: { workspaceId: 'ws-other' } as HookContext['req']
+        })
+      )
+    ).rejects.toBeInstanceOf(CapValidationError)
+
+    // Both queries stayed workspace-scoped...
+    expect(whereArgs.filter((args) => args[0] === `${collection}.workspace_id`)).toHaveLength(2)
+    // ...but only the current-row fetch got the row filter's `owner = $CURRENT_USER`
+    // clause — the SUM query must not be narrowed by the caller's own visibility
+    // filter, or the group total undercounts and the cap becomes per-user.
+    expect(whereArgs.filter((args) => args[0] === 'owner')).toEqual([['owner', '=', 'u1']])
+    expect(whereNotIds).toEqual(['row1'])
+  })
+
   it("skips the rule without throwing when the scoped current-row fetch finds nothing (row invisible under this workspace) — the write path's own 404 check handles it", async () => {
     const collection = 'scoped_allocations_missing'
     const columnInfo = vi.fn().mockResolvedValue({ workspace_id: {} })

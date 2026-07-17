@@ -135,8 +135,11 @@ async function resolveM2oParent(collection: string, field: string): Promise<stri
  * must derive and apply the SAME scope itself — otherwise an update targeting
  * another workspace's row id would reach the cap arithmetic (and leak a 422
  * vs. 404 boolean oracle, plus the cap/total amounts) before the write path's
- * own 404 check ever runs. Mirrors updateOne exactly: applyWorkspaceScope +
- * getRowFilter/applyRowFilter, both keyed off ctx.req.workspaceId + ctx.user.
+ * own 404 check ever runs. The current-row fetch mirrors updateOne exactly
+ * (applyWorkspaceScope + getRowFilter/applyRowFilter, keyed off
+ * ctx.req.workspaceId + ctx.user) so its visibility matches the write path's
+ * own 404 semantics. The SUM query is workspace-scoped only — see the comment
+ * at its call site for why the row filter must NOT apply there.
  */
 export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Promise<void> {
   const payload = ctx.payload ?? {}
@@ -162,9 +165,16 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
   const incomingRaw = payload[rule.sum_field] ?? currentRow?.[rule.sum_field] ?? 0
   const incoming = Number(incomingRaw ?? 0)
 
+  // Workspace-scoped only — NOT row-filtered. The cap is a data-integrity
+  // constraint over the whole group within the workspace; a caller's
+  // visibility filter (e.g. `owner = $CURRENT_USER`) must not narrow the
+  // group total, or the cap silently becomes per-user instead of per-group
+  // and a genuinely over-cap group sails through. The SUM result itself is
+  // never returned to the caller, only folded into the violation explanation
+  // (or the pass/fail decision) — acceptable to compute over rows the caller
+  // can't otherwise see.
   const sumQuery = db(ctx.collection).where(rule.group_by, groupValue as never)
   await applyWorkspaceScope(sumQuery, ctx.collection, workspaceId)
-  if (rowFilter) applyRowFilter(sumQuery, rowFilter, ctx.user as NonNullable<typeof ctx.user>)
   if (currentId != null) sumQuery.whereNot({ id: currentId })
   const sumRow = (await sumQuery.sum(`${rule.sum_field} as v`).first()) as
     | { v: string | number | null }
