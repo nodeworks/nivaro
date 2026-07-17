@@ -75,7 +75,7 @@ import fastifyMultipart from '@fastify/multipart'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { requireAdmin } from '../../middleware/authenticate.js'
-import { makeLookupFetcher } from '../../routes/import-templates.js'
+import { chunkedDelete, makeLookupFetcher } from '../../routes/import-templates.js'
 import { uploadFileBuffer } from '../../services/files.js'
 import { applyFieldRules, createOne } from '../../services/items.js'
 import { can } from '../../services/permissions.js'
@@ -3098,5 +3098,58 @@ describe('makeLookupFetcher', () => {
     expect(blockedByPrefix).toEqual([])
     expect(blockedByShape).toEqual([])
     expect(db).not.toHaveBeenCalled()
+  })
+})
+
+describe('chunkedDelete', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it("chunks a whereIn delete over 1000 ids to stay under MSSQL's 2100-parameter limit", async () => {
+    const delFn = vi.fn().mockResolvedValue(1)
+    const whereInCalls: unknown[][] = []
+    const chain: Record<string, unknown> = {
+      whereIn: vi.fn((...args: unknown[]) => {
+        whereInCalls.push(args)
+        return chain
+      }),
+      del: delFn
+    }
+
+    vi.mocked(db)
+      .mockReturnValueOnce(chain as unknown as ReturnType<typeof db>)
+      .mockReturnValueOnce(chain as unknown as ReturnType<typeof db>)
+      .mockReturnValueOnce(chain as unknown as ReturnType<typeof db>)
+
+    // 2500 synthetic ids — well past what a compensation delete for a large failed
+    // import can carry (up to ~5000), without building real rows through the pipeline.
+    const ids = Array.from({ length: 2500 }, (_, i) => `id-${i}`)
+    await chunkedDelete('po_line_items', ids)
+
+    expect(delFn).toHaveBeenCalledTimes(3)
+    expect(whereInCalls).toEqual([
+      ['id', ids.slice(0, 1000)],
+      ['id', ids.slice(1000, 2000)],
+      ['id', ids.slice(2000, 2500)]
+    ])
+  })
+
+  it('is a no-op for an empty id list — no delete call at all', async () => {
+    await chunkedDelete('po_line_items', [])
+
+    expect(db).not.toHaveBeenCalled()
+  })
+
+  it('issues a single delete call when ids fit within one chunk', async () => {
+    const delFn = vi.fn().mockResolvedValue(1)
+    const chain: Record<string, unknown> = {
+      whereIn: vi.fn(() => chain),
+      del: delFn
+    }
+    vi.mocked(db).mockReturnValueOnce(chain as unknown as ReturnType<typeof db>)
+
+    await chunkedDelete('po_line_items', ['a', 'b', 'c'])
+
+    expect(delFn).toHaveBeenCalledTimes(1)
+    expect(chain.whereIn).toHaveBeenCalledWith('id', ['a', 'b', 'c'])
   })
 })

@@ -4,7 +4,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getRelations } from '../services/collections.js'
-import { selectInChunks } from '../services/db-batch.js'
+import { chunkArray, selectInChunks } from '../services/db-batch.js'
 import { uploadFileBuffer } from '../services/files.js'
 import { IMPORT_ROW_CAP, readSpreadsheet } from '../services/import-spreadsheet.js'
 import type {
@@ -253,6 +253,19 @@ function buildCreateGroups(
   return groups
 }
 
+const DELETE_CHUNK_SIZE = 1000
+
+/** `whereIn('id', ids).del()`, chunked under MSSQL's 2100-parameter limit — a
+ *  large failed import's compensation can carry thousands of created ids, well
+ *  past what a single whereIn can bind. Sequential (not parallel) to keep
+ *  compensation's error handling and logging straightforward. */
+export async function chunkedDelete(table: string, ids: (string | number)[]): Promise<void> {
+  if (ids.length === 0) return
+  for (const chunk of chunkArray(ids, DELETE_CHUNK_SIZE)) {
+    await db(table).whereIn('id', chunk).del()
+  }
+}
+
 /** Deletes a mixed set of records grouped by collection — shared by the create-records
  *  compensation path and the main execute compensation path. */
 async function deleteGroupedByCollection(
@@ -265,7 +278,7 @@ async function deleteGroupedByCollection(
     byCollection.set(rec.collection, ids)
   }
   for (const [coll, ids] of byCollection) {
-    await db(coll).whereIn('id', ids).del()
+    await chunkedDelete(coll, ids)
   }
 }
 
@@ -1257,7 +1270,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           grandchildrenByCollection.set(grandchild.collection, ids)
         }
         for (const [grandchildCollection, ids] of grandchildrenByCollection) {
-          await db(grandchildCollection).whereIn('id', ids).del()
+          await chunkedDelete(grandchildCollection, ids)
         }
         const junctionsByCollection = new Map<string, (string | number)[]>()
         for (const junction of createdJunctions) {
@@ -1266,10 +1279,10 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           junctionsByCollection.set(junction.collection, ids)
         }
         for (const [junctionCollection, ids] of junctionsByCollection) {
-          await db(junctionCollection).whereIn('id', ids).del()
+          await chunkedDelete(junctionCollection, ids)
         }
         if (childCollection && createdChildIds.length > 0) {
-          await db(childCollection).whereIn('id', createdChildIds).del()
+          await chunkedDelete(childCollection, createdChildIds)
         }
         if (parent) {
           await db(collection).where({ id: parent.id }).del()
