@@ -4181,6 +4181,15 @@ const EMPTY_SUM_CAP_RULE: SumCapRule = {
   message: ''
 }
 
+function isSumCapRuleFilledIn(rule: SumCapRule): boolean {
+  return (
+    rule.sum_field.trim() !== '' &&
+    rule.group_by.trim() !== '' &&
+    rule.cap.relation.trim() !== '' &&
+    rule.cap.field.trim() !== ''
+  )
+}
+
 interface AiCollectionSettings {
   collection: string
   validation_enabled: boolean
@@ -4572,7 +4581,16 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
           size='sm'
           className='bg-nvr-cyan text-white hover:bg-nvr-cyan-dark'
           disabled={saveMutation.isPending}
-          onClick={() => saveMutation.mutate()}
+          onClick={() => {
+            const incomplete = rules.some(
+              (r) => typeof r !== 'string' && r.type === 'sum_cap' && !isSumCapRuleFilledIn(r)
+            )
+            if (incomplete) {
+              toast.error('Complete all Sum Cap rule fields before saving')
+              return
+            }
+            saveMutation.mutate()
+          }}
         >
           {saveMutation.isPending ? 'Saving…' : 'Save AI Settings'}
         </Button>
