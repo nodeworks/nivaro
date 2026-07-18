@@ -67,7 +67,16 @@ function summaryEntryKey(e: SummaryEntry): string {
 // payload, which diffReimportLines intentionally drops from its output.
 
 function reimportMatchKey(row: Record<string, unknown>, matchBy: string[]): string {
-  return matchBy.map((col) => String(row[col] ?? '').trim()).join('\x00')
+  return matchBy
+    .map((col) => {
+      const trimmed = String(row[col] ?? '').trim()
+      if (trimmed !== '') {
+        const num = Number(trimmed)
+        if (Number.isFinite(num)) return String(num)
+      }
+      return trimmed
+    })
+    .join('\x00')
 }
 
 function buildReimportFileRows(result: ImportParseResponse): Record<string, unknown>[] {
@@ -885,7 +894,85 @@ export function ItemEditForm({
       if (rel?.many_collection && rel.many_field) {
         const lineCollection = rel.many_collection
         const lineField = rel.many_field
-        for (const row of diff.creates) {
+
+        // Row-rule autofill on newly-created lines — mirrors the new-record import
+        // path in applyImportResult above (same chunked-evaluate idiom) so re-import
+        // creates get the same server-evaluated defaults instead of shipping raw file
+        // values. Duplicated rather than shared: the two paths evaluate different
+        // shapes — result.lines[].values vs. diff.creates, which also carries
+        // __o2m_-prefixed nested payloads that must not be sent to the endpoint.
+        let creates = diff.creates
+        if (creates.length > 0) {
+          const lineFieldRow = (fieldConfig ?? []).find((f) => f.field === result.line_target_field)
+          const rawOpts = lineFieldRow?.options
+          const opts = (
+            typeof rawOpts === 'string'
+              ? (() => {
+                  try {
+                    return JSON.parse(rawOpts)
+                  } catch {
+                    return {}
+                  }
+                })()
+              : (rawOpts ?? {})
+          ) as { row_rules?: unknown[]; parent_context_fields?: string[] }
+          const rowRules = Array.isArray(opts.row_rules) ? opts.row_rules : []
+          if (rowRules.length > 0) {
+            const mergedDraft = { ...draftRef.current }
+            const parentCtx: Record<string, unknown> = {}
+            for (const f of opts.parent_context_fields ?? []) parentCtx[f] = mergedDraft[f] ?? null
+            for (const rule of rowRules) {
+              const tf = (rule as { trigger_field?: unknown }).trigger_field
+              if (typeof tf === 'string' && tf.startsWith('$parent.')) {
+                const key = tf.slice(8)
+                if (!(key in parentCtx)) parentCtx[key] = mergedDraft[key] ?? null
+              }
+            }
+            // Bounded concurrency (10 at a time) rather than firing every line's
+            // evaluate at once — a large import could otherwise open hundreds of
+            // simultaneous requests. Failed rows degrade to {} and are surfaced as one
+            // aggregate warning so the user knows some autofill didn't run.
+            const evaluated: Record<string, unknown>[] = []
+            let anyEvalFailed = false
+            const EVAL_CHUNK = 10
+            for (let i = 0; i < creates.length; i += EVAL_CHUNK) {
+              const chunk = creates.slice(i, i + EVAL_CHUNK)
+              const chunkResults = await Promise.all(
+                chunk.map((row) => {
+                  const data = Object.fromEntries(
+                    Object.entries(row).filter(([k]) => !k.startsWith('__o2m_'))
+                  )
+                  return client
+                    .request<{ updates: Record<string, unknown> }>(
+                      post('/field-rules/evaluate', {
+                        collection: lineCollection,
+                        data,
+                        parent_context: parentCtx,
+                        row_rules: rowRules
+                      })
+                    )
+                    .then((res) => res.updates ?? {})
+                    .catch(() => {
+                      anyEvalFailed = true
+                      return {}
+                    })
+                })
+              )
+              evaluated.push(...chunkResults)
+            }
+            if (anyEvalFailed) {
+              issues.push({
+                severity: 'warn',
+                rule: 'reimport-apply',
+                message:
+                  'Some line autofill rules could not be evaluated — check the affected rows before saving.'
+              })
+            }
+            creates = creates.map((row, i) => ({ ...row, ...evaluated[i] }))
+          }
+        }
+
+        for (const row of creates) {
           o2mStagingCtx.queueRow(lineCollection, lineField, row)
         }
         for (const upd of diff.updates) {
@@ -1039,7 +1126,7 @@ export function ItemEditForm({
 
       setImportIssues(issues)
     },
-    [collection, relations, o2mStagingCtx, m2mStagingCtx, client, itemId]
+    [collection, relations, o2mStagingCtx, m2mStagingCtx, client, itemId, fieldConfig]
   )
 
   useEffect(() => {

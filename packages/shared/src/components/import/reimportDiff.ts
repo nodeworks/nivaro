@@ -24,8 +24,21 @@ function valuesEqual(a: unknown, b: unknown): boolean {
   return normA === normB
 }
 
+// Canonicalizes a match-key component so numeric-format drift between the file
+// and the DB (e.g. '26.0' vs 26) doesn't defeat matching — an unmatched numeric
+// key would otherwise degenerate upsert_delete into delete+create, destroying
+// the existing line's id.
+function normalizeMatchComponent(v: unknown): string {
+  const trimmed = normalize(v)
+  if (trimmed !== '') {
+    const num = Number(trimmed)
+    if (Number.isFinite(num)) return String(num)
+  }
+  return trimmed
+}
+
 function matchKey(row: Record<string, unknown>, matchBy: string[]): string {
-  return matchBy.map((col) => normalize(row[col])).join('\x00')
+  return matchBy.map((col) => normalizeMatchComponent(row[col])).join('\x00')
 }
 
 export function diffReimportLines(

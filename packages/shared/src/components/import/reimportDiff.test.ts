@@ -224,4 +224,51 @@ describe('diffReimportLines', () => {
     expect(result.updates).toEqual([])
     expect(result.creates).toEqual([{ sku: 'new', qty: 1, __o2m_members: [{ name: 'y' }] }])
   })
+
+  it('upsert matches a numeric match key across file/DB format drift instead of delete+create', () => {
+    const fileRows = [{ item_no: '26.0', label: 'widget' }]
+    const existingRows = [{ id: 'e1', item_no: 26, label: 'widget' }]
+    const result = diffReimportLines(fileRows, existingRows, {
+      lines: 'upsert',
+      match_by: ['item_no']
+    })
+    expect(result.creates).toEqual([])
+    expect(result.deletes).toEqual([])
+    expect(result.matchedUnchanged).toBe(1)
+    expect(result.updates).toEqual([])
+  })
+
+  it('upsert_delete matches a numeric match key across format drift and preserves the line id', () => {
+    const fileRows = [{ item_no: '26.0', label: 'updated' }]
+    const existingRows = [{ id: 'e1', item_no: 26, label: 'widget' }]
+    const result = diffReimportLines(fileRows, existingRows, {
+      lines: 'upsert_delete',
+      match_by: ['item_no']
+    })
+    expect(result.creates).toEqual([])
+    expect(result.deletes).toEqual([])
+    expect(result.updates).toEqual([{ id: 'e1', changes: { label: 'updated' } }])
+  })
+
+  it('upsert leaves non-numeric match keys unaffected by the numeric canonicalization rule', () => {
+    const fileRows = [{ sku: 'abc', label: 'widget' }]
+    const existingRows = [{ id: 'e1', sku: 'abc', label: 'widget' }]
+    const result = diffReimportLines(fileRows, existingRows, {
+      lines: 'upsert',
+      match_by: ['sku']
+    })
+    expect(result.matchedUnchanged).toBe(1)
+    expect(result.creates).toEqual([])
+  })
+
+  it('upsert leaves an empty match-key component unchanged by the numeric canonicalization rule', () => {
+    const fileRows = [{ sku: '', label: 'widget' }]
+    const existingRows = [{ id: 'e1', sku: null, label: 'widget' }]
+    const result = diffReimportLines(fileRows, existingRows, {
+      lines: 'upsert',
+      match_by: ['sku']
+    })
+    expect(result.matchedUnchanged).toBe(1)
+    expect(result.creates).toEqual([])
+  })
 })
