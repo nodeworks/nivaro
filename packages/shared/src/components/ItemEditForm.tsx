@@ -1115,7 +1115,7 @@ export function ItemEditForm({
             const junctionRows = await client
               .request<{ data: Record<string, unknown>[] }>(
                 get(`/items/${m2mRel.many_collection}`, {
-                  filter: JSON.stringify({ [m2mRel.many_field]: { _eq: itemId } }),
+                  filter: JSON.stringify({ [String(m2mRel.many_field)]: { _eq: itemId } }),
                   fields: `id,${m2mRel.junction_field}`,
                   limit: 2000
                 })
