@@ -1107,7 +1107,30 @@ export function ItemEditForm({
         const m2mRel = findM2mAliasRel(field)
         if (m2mRel) {
           const stagingKey = m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
-          for (const id of ids) m2mStagingCtx.stageLink(stagingKey, id)
+          // Existing record: only stage values not already linked, or the save
+          // flush would insert duplicate junction rows (e.g. a second 2026
+          // funding-year link on every re-import).
+          let existing = new Set<string>()
+          try {
+            const junctionRows = await client
+              .request<{ data: Record<string, unknown>[] }>(
+                get(`/items/${m2mRel.many_collection}`, {
+                  filter: JSON.stringify({ [m2mRel.many_field]: { _eq: itemId } }),
+                  fields: `id,${m2mRel.junction_field}`,
+                  limit: 2000
+                })
+              )
+              .then((r) => r.data ?? [])
+            existing = new Set(
+              junctionRows.map((jr) => String(jr[m2mRel.junction_field as string]))
+            )
+          } catch {
+            // fetch failure: fall through and stage everything (worst case a
+            // duplicate link, same as the pre-fix behavior)
+          }
+          for (const id of ids) {
+            if (!existing.has(String(id))) m2mStagingCtx.stageLink(stagingKey, id)
+          }
         } else {
           issues.push({
             severity: 'error',
