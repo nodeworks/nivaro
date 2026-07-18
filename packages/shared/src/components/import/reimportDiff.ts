@@ -14,10 +14,12 @@ function normalize(v: unknown): string {
 function valuesEqual(a: unknown, b: unknown): boolean {
   const normA = normalize(a)
   const normB = normalize(b)
-  const numA = Number(normA)
-  const numB = Number(normB)
-  if (Number.isFinite(numA) && Number.isFinite(numB)) {
-    return numA === numB
+  if (normA !== '' && normB !== '') {
+    const numA = Number(normA)
+    const numB = Number(normB)
+    if (Number.isFinite(numA) && Number.isFinite(numB)) {
+      return numA === numB
+    }
   }
   return normA === normB
 }
@@ -51,7 +53,11 @@ export function diffReimportLines(
 
   const existingByKey = new Map<string, Record<string, unknown>>()
   for (const row of existingRows) {
-    existingByKey.set(matchKey(row, cfg.match_by), row)
+    const key = matchKey(row, cfg.match_by)
+    if (existingByKey.has(key)) {
+      throw new Error(`Duplicate match key among existing lines: ${key}`)
+    }
+    existingByKey.set(key, row)
   }
 
   const seenFileKeys = new Set<string>()

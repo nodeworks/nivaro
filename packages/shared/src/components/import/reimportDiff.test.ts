@@ -154,6 +154,62 @@ describe('diffReimportLines', () => {
     expect(result.matchedUnchanged).toBe(0)
   })
 
+  it('upsert treats empty string vs zero as unequal and stages an update', () => {
+    const fileRows = [{ sku: 'a', qty: '' }]
+    const existingRows = [{ id: 'e1', sku: 'a', qty: '0' }]
+    const result = diffReimportLines(fileRows, existingRows, {
+      lines: 'upsert',
+      match_by: ['sku']
+    })
+    expect(result.updates).toEqual([{ id: 'e1', changes: { qty: '' } }])
+    expect(result.matchedUnchanged).toBe(0)
+  })
+
+  it('upsert treats empty string vs empty string as equal', () => {
+    const fileRows = [{ sku: 'a', qty: '' }]
+    const existingRows = [{ id: 'e1', sku: 'a', qty: '' }]
+    const result = diffReimportLines(fileRows, existingRows, {
+      lines: 'upsert',
+      match_by: ['sku']
+    })
+    expect(result.matchedUnchanged).toBe(1)
+    expect(result.updates).toEqual([])
+  })
+
+  it('upsert treats string zero vs number zero as equal', () => {
+    const fileRows = [{ sku: 'a', qty: '0' }]
+    const existingRows = [{ id: 'e1', sku: 'a', qty: 0 }]
+    const result = diffReimportLines(fileRows, existingRows, {
+      lines: 'upsert',
+      match_by: ['sku']
+    })
+    expect(result.matchedUnchanged).toBe(1)
+    expect(result.updates).toEqual([])
+  })
+
+  it('throws on duplicate match keys among existing rows in upsert modes', () => {
+    const fileRows = [{ sku: 'a', qty: 1 }]
+    const existingRows = [
+      { id: 'e1', sku: 'a', qty: 1 },
+      { id: 'e2', sku: 'a', qty: 2 }
+    ]
+    expect(() =>
+      diffReimportLines(fileRows, existingRows, { lines: 'upsert_delete', match_by: ['sku'] })
+    ).toThrow('Duplicate match key among existing lines: a')
+  })
+
+  it('matches a file row and existing row whose match_by columns are all empty', () => {
+    const fileRows = [{ sku: '', qty: 5 }]
+    const existingRows = [{ id: 'e1', sku: null, qty: 3 }]
+    const result = diffReimportLines(fileRows, existingRows, {
+      lines: 'upsert',
+      match_by: ['sku']
+    })
+    expect(result.updates).toEqual([{ id: 'e1', changes: { qty: 5 } }])
+    expect(result.creates).toEqual([])
+    expect(result.matchedUnchanged).toBe(0)
+  })
+
   it('ignores __o2m_ keys when comparing matched rows but keeps them on creates', () => {
     const fileRows = [
       { sku: 'a', qty: 5, __o2m_members: [{ name: 'x' }] },
