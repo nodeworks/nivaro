@@ -9,6 +9,14 @@ export interface ImportTemplateSummary {
   is_active: boolean
   /** Custom header-button label; falls back to "Import from file" when null. */
   button_label?: string | null
+  /** Re-import policy for applying this template to an existing record; null when unconfigured. */
+  reimport?: {
+    enabled: boolean
+    header_fields: 'overwrite' | 'fill_empty' | 'skip'
+    lines: 'replace' | 'upsert' | 'upsert_delete' | 'append'
+    match_by: string[]
+    attachments: 'add' | 'replace'
+  } | null
 }
 
 export interface ImportParseResponse {

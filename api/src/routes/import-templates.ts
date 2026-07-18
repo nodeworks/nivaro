@@ -48,6 +48,7 @@ function formatTemplate(row: Record<string, unknown>) {
     file_types: parseJsonSafe(row.file_types) ?? ['xlsx', 'xlsm', 'csv'],
     header_map: parseJsonSafe(row.header_map) ?? [],
     line_map: parseJsonSafe(row.line_map),
+    reimport: parseJsonSafe(row.reimport) ?? null,
     is_active: !!row.is_active,
     is_shared: !!row.is_shared
   }
@@ -65,7 +66,8 @@ function templateRowToConfig(row: Record<string, unknown>): ImportTemplateConfig
     header_row: Number(row.header_row) || 1,
     header_map: (parseJsonSafe(row.header_map) as ImportHeaderRule[] | null) ?? [],
     line_map: parseJsonSafe(row.line_map) as ImportLineConfig | null,
-    attach_file_field: (row.attach_file_field as string | null) ?? null
+    attach_file_field: (row.attach_file_field as string | null) ?? null,
+    reimport: (parseJsonSafe(row.reimport) as ImportTemplateConfig['reimport']) ?? null
   }
 }
 
@@ -707,6 +709,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       header_map: JSON.stringify(config.header_map),
       line_map: config.line_map ? JSON.stringify(config.line_map) : null,
       attach_file_field: config.attach_file_field,
+      reimport: config.reimport ? JSON.stringify(config.reimport) : null,
       button_label:
         typeof body.button_label === 'string' && body.button_label.trim()
           ? body.button_label.trim().slice(0, 100)
@@ -759,7 +762,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       header_map: body.header_map ?? parseJsonSafe(existing.header_map),
       line_map: 'line_map' in body ? body.line_map : parseJsonSafe(existing.line_map),
       attach_file_field:
-        'attach_file_field' in body ? body.attach_file_field : existing.attach_file_field
+        'attach_file_field' in body ? body.attach_file_field : existing.attach_file_field,
+      reimport: 'reimport' in body ? body.reimport : parseJsonSafe(existing.reimport)
     }
 
     const { config, errors } = normalizeImportTemplateConfig(rawConfig)
@@ -777,7 +781,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       header_row: config.header_row,
       header_map: JSON.stringify(config.header_map),
       line_map: config.line_map ? JSON.stringify(config.line_map) : null,
-      attach_file_field: config.attach_file_field
+      attach_file_field: config.attach_file_field,
+      reimport: config.reimport ? JSON.stringify(config.reimport) : null
     }
     if (typeof body.name === 'string') patch.name = body.name
     if (typeof body.collection === 'string') patch.collection = body.collection

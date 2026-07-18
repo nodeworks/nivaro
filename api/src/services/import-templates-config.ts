@@ -57,6 +57,14 @@ export interface ImportLineConfig {
   nested: ImportNestedConfig | null
 }
 
+export interface ImportReimportConfig {
+  enabled: boolean
+  header_fields: 'overwrite' | 'fill_empty' | 'skip'
+  lines: 'replace' | 'upsert' | 'upsert_delete' | 'append'
+  match_by: string[]
+  attachments: 'add' | 'replace'
+}
+
 export interface ImportTemplateConfig {
   file_types: ('xlsx' | 'xlsm' | 'xls' | 'csv')[]
   sheet_match: string | null
@@ -64,6 +72,7 @@ export interface ImportTemplateConfig {
   header_map: ImportHeaderRule[]
   line_map: ImportLineConfig | null
   attach_file_field: string | null
+  reimport?: ImportReimportConfig | null
 }
 
 export interface ConfigError {
@@ -78,6 +87,9 @@ const DEFAULT_FILE_TYPES: ImportTemplateConfig['file_types'] = ['xlsx', 'xlsm', 
 const ROW_FILTER_OPS = ['nnull', 'eq', 'neq'] as const
 const USERS_SENTINEL = '$users'
 const USERS_ALLOWED_MATCH_FIELDS = ['email']
+const REIMPORT_HEADER_FIELDS = ['overwrite', 'fill_empty', 'skip'] as const
+const REIMPORT_LINES = ['replace', 'upsert', 'upsert_delete', 'append'] as const
+const REIMPORT_ATTACHMENTS = ['add', 'replace'] as const
 
 function asObject(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw)
@@ -339,6 +351,78 @@ function normalizeLineConfig(
   }
 }
 
+function normalizeReimport(
+  raw: unknown,
+  lineMap: ImportLineConfig | null,
+  errors: ConfigError[]
+): ImportReimportConfig | null {
+  if (raw == null) return null
+  const src = asObject(raw)
+  const path = 'reimport'
+  const enabled = src.enabled === true
+
+  let headerFields: ImportReimportConfig['header_fields'] = 'overwrite'
+  if (src.header_fields !== undefined) {
+    if (
+      REIMPORT_HEADER_FIELDS.includes(src.header_fields as (typeof REIMPORT_HEADER_FIELDS)[number])
+    ) {
+      headerFields = src.header_fields as ImportReimportConfig['header_fields']
+    } else {
+      errors.push({
+        path: `${path}.header_fields`,
+        message: `Unknown header_fields "${src.header_fields}"`
+      })
+    }
+  }
+
+  let lines: ImportReimportConfig['lines'] = 'upsert_delete'
+  if (src.lines !== undefined) {
+    if (REIMPORT_LINES.includes(src.lines as (typeof REIMPORT_LINES)[number])) {
+      lines = src.lines as ImportReimportConfig['lines']
+    } else {
+      errors.push({ path: `${path}.lines`, message: `Unknown lines "${src.lines}"` })
+    }
+  }
+
+  let attachments: ImportReimportConfig['attachments'] = 'add'
+  if (src.attachments !== undefined) {
+    if (REIMPORT_ATTACHMENTS.includes(src.attachments as (typeof REIMPORT_ATTACHMENTS)[number])) {
+      attachments = src.attachments as ImportReimportConfig['attachments']
+    } else {
+      errors.push({
+        path: `${path}.attachments`,
+        message: `Unknown attachments "${src.attachments}"`
+      })
+    }
+  }
+
+  const matchBy = Array.isArray(src.match_by)
+    ? src.match_by.filter((v): v is string => typeof v === 'string' && v !== '')
+    : []
+
+  if (enabled) {
+    if ((lines === 'upsert' || lines === 'upsert_delete') && matchBy.length === 0) {
+      errors.push({
+        path: `${path}.match_by`,
+        message: 'match_by is required when lines is "upsert" or "upsert_delete"'
+      })
+    }
+    if (lineMap) {
+      const targetColumns = new Set(lineMap.columns.map((c) => c.target))
+      for (const col of matchBy) {
+        if (!targetColumns.has(col)) {
+          errors.push({
+            path: `${path}.match_by`,
+            message: `match_by column "${col}" is not a line_map target column`
+          })
+        }
+      }
+    }
+  }
+
+  return { enabled, header_fields: headerFields, lines, match_by: matchBy, attachments }
+}
+
 export function normalizeImportTemplateConfig(raw: unknown): {
   config: ImportTemplateConfig
   errors: ConfigError[]
@@ -363,13 +447,16 @@ export function normalizeImportTemplateConfig(raw: unknown): {
   const lineMap =
     src.line_map != null ? normalizeLineConfig(src.line_map, 'line_map', errors) : null
 
+  const reimport = normalizeReimport(src.reimport, lineMap, errors)
+
   const config: ImportTemplateConfig = {
     file_types: fileTypes.length > 0 ? fileTypes : [...DEFAULT_FILE_TYPES],
     sheet_match: typeof src.sheet_match === 'string' ? src.sheet_match : null,
     header_row: Math.max(1, Number(src.header_row) || 1),
     header_map: headerMap,
     line_map: lineMap,
-    attach_file_field: typeof src.attach_file_field === 'string' ? src.attach_file_field : null
+    attach_file_field: typeof src.attach_file_field === 'string' ? src.attach_file_field : null,
+    reimport
   }
 
   return { config, errors }

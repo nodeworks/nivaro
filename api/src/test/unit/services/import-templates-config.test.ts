@@ -11,7 +11,8 @@ describe('normalizeImportTemplateConfig', () => {
       header_row: 1,
       header_map: [],
       line_map: null,
-      attach_file_field: null
+      attach_file_field: null,
+      reimport: null
     })
   })
 
@@ -322,5 +323,103 @@ describe('normalizeImportTemplateConfig', () => {
       ]
     })
     expect((config.header_map[0].steps[0] as { create?: unknown }).create).toBeUndefined()
+  })
+
+  it('round-trips a valid full reimport block', () => {
+    const { config, errors } = normalizeImportTemplateConfig({
+      line_map: {
+        target_field: 'lines',
+        columns: [{ target: 'name', source: 'Name', steps: [] }]
+      },
+      reimport: {
+        enabled: true,
+        header_fields: 'fill_empty',
+        lines: 'upsert',
+        match_by: ['name'],
+        attachments: 'replace'
+      }
+    })
+    expect(errors).toEqual([])
+    expect(config.reimport).toEqual({
+      enabled: true,
+      header_fields: 'fill_empty',
+      lines: 'upsert',
+      match_by: ['name'],
+      attachments: 'replace'
+    })
+  })
+
+  it('normalizes reimport to null when the raw block is absent', () => {
+    const { config, errors } = normalizeImportTemplateConfig({})
+    expect(errors).toEqual([])
+    expect(config.reimport).toBeNull()
+  })
+
+  it('fills reimport defaults when the block is partial', () => {
+    const { config, errors } = normalizeImportTemplateConfig({
+      reimport: { enabled: true, match_by: ['name'] }
+    })
+    expect(errors).toEqual([])
+    expect(config.reimport).toEqual({
+      enabled: true,
+      header_fields: 'overwrite',
+      lines: 'upsert_delete',
+      match_by: ['name'],
+      attachments: 'add'
+    })
+  })
+
+  it('rejects upsert_delete reimport without match_by', () => {
+    const { errors } = normalizeImportTemplateConfig({
+      reimport: { enabled: true, lines: 'upsert_delete', match_by: [] }
+    })
+    expect(errors).toContainEqual({
+      path: 'reimport.match_by',
+      message: 'match_by is required when lines is "upsert" or "upsert_delete"'
+    })
+  })
+
+  it('rejects unknown reimport enum values', () => {
+    const { errors } = normalizeImportTemplateConfig({
+      reimport: { enabled: true, lines: 'destroy', match_by: ['name'] }
+    })
+    expect(errors).toContainEqual({
+      path: 'reimport.lines',
+      message: 'Unknown lines "destroy"'
+    })
+  })
+
+  it('rejects a reimport match_by column not in the line map target columns', () => {
+    const { errors } = normalizeImportTemplateConfig({
+      line_map: {
+        target_field: 'lines',
+        columns: [{ target: 'name', source: 'Name', steps: [] }]
+      },
+      reimport: {
+        enabled: true,
+        lines: 'upsert',
+        match_by: ['not_a_column']
+      }
+    })
+    expect(errors).toContainEqual({
+      path: 'reimport.match_by',
+      message: 'match_by column "not_a_column" is not a line_map target column'
+    })
+  })
+
+  it('does not validate match_by when the reimport block is disabled', () => {
+    const { config, errors } = normalizeImportTemplateConfig({
+      line_map: {
+        target_field: 'lines',
+        columns: [{ target: 'name', source: 'Name', steps: [] }]
+      },
+      reimport: {
+        enabled: false,
+        lines: 'upsert_delete',
+        match_by: []
+      }
+    })
+    expect(errors).toEqual([])
+    expect(config.reimport?.enabled).toBe(false)
   })
 })
