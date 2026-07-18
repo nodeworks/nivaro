@@ -24,9 +24,11 @@ function acceptFor(templates: ImportTemplateSummary[]): string {
 
 export function ImportFromFileButton({
   collection,
+  templateFilter,
   onParsed
 }: {
   collection: string
+  templateFilter?: (t: ImportTemplateSummary) => boolean
   onParsed: (result: ImportParseResponse, template: ImportTemplateSummary) => void
 }) {
   const client = useNivaroClient()
@@ -42,7 +44,8 @@ export function ImportFromFileButton({
     queryFn: () => client.request(listImportTemplates(collection))
   })
 
-  const templates = data?.data ?? []
+  const allTemplates = data?.data ?? []
+  const templates = templateFilter ? allTemplates.filter(templateFilter) : allTemplates
   if (templates.length === 0) return null
 
   function openPicker(template: ImportTemplateSummary) {

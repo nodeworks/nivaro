@@ -1,9 +1,10 @@
-import type { ImportParseResponse } from '@nivaro/sdk'
+import type { ImportParseResponse, ImportTemplateSummary } from '@nivaro/sdk'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileDown, Loader2, Save, Trash2 } from 'lucide-react'
 import { CloneDialog } from './item-edit/CloneDialog'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
+import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
 import {
   type ReactNode,
   useCallback,
@@ -58,6 +59,31 @@ function parseSummaryFields(raw: string[] | string | null | undefined): SummaryE
 
 function summaryEntryKey(e: SummaryEntry): string {
   return typeof e === 'string' ? e : e.field
+}
+
+// ─── Re-import helpers (pure) ───────────────────────────────────────────────
+// Mirrors the match-key normalization in reimportDiff.ts — used here only to
+// re-associate a MATCHED line (changed or unchanged) with its nested __o2m_
+// payload, which diffReimportLines intentionally drops from its output.
+
+function reimportMatchKey(row: Record<string, unknown>, matchBy: string[]): string {
+  return matchBy.map((col) => String(row[col] ?? '').trim()).join('\x00')
+}
+
+function buildReimportFileRows(result: ImportParseResponse): Record<string, unknown>[] {
+  return result.lines.map((line) => ({
+    ...line.values,
+    ...(line.nested
+      ? { [result.nested_relation ? `__o2m_${line.nested.field}` : line.nested.field]: line.nested.rows }
+      : {})
+  }))
+}
+
+/** attach_file_field rides on the raw template row (formatTemplate spreads the
+ *  full DB row) but isn't declared on the trimmed ImportTemplateSummary type. */
+function reimportAttachField(template: ImportTemplateSummary): string | null {
+  const raw = (template as unknown as { attach_file_field?: unknown }).attach_file_field
+  return typeof raw === 'string' && raw ? raw : null
 }
 
 // ─── GridContainer — measures its own width for responsive col spans ──────────
@@ -729,6 +755,292 @@ export function ItemEditForm({
 
     setImportIssues(issues)
   }, [collection, relations, o2mStagingCtx, m2mStagingCtx, fieldConfig, client])
+
+  // ── Re-import (existing records) ────────────────────────────────────────────
+  const [reimportDialog, setReimportDialog] = useState<{
+    diff: ReimportLineDiff
+    result: ImportParseResponse
+    template: ImportTemplateSummary
+    existingRows: Record<string, unknown>[]
+  } | null>(null)
+  const [reimportApplying, setReimportApplying] = useState(false)
+
+  const handleReimportParsed = useCallback(
+    async (result: ImportParseResponse, template: ImportTemplateSummary) => {
+      const cfg = template.reimport
+      if (!cfg) return
+
+      const hasPendingWork =
+        isDirty ||
+        [...pendingO2MRows.values()].some((rows) => rows.length > 0) ||
+        [...pendingO2MEdits.values()].some((edits) => edits.size > 0) ||
+        [...pendingO2MDeletes.values()].some((dels) => dels.size > 0)
+      if (hasPendingWork) {
+        const proceed = window.confirm(
+          'Unsaved changes will be combined with the re-import staging. Continue?'
+        )
+        if (!proceed) return
+      }
+
+      const rel = result.line_target_field
+        ? relations.find(
+            (r) => r.one_collection === collection && r.one_field === result.line_target_field
+          )
+        : null
+
+      const fileRows = buildReimportFileRows(result)
+      let existingRows: Record<string, unknown>[] = []
+
+      if (result.lines.length > 0 && rel?.many_collection && rel.many_field) {
+        const cols = new Set<string>(['id', ...cfg.match_by])
+        for (const row of fileRows) {
+          for (const key of Object.keys(row)) {
+            if (!key.startsWith('__o2m_')) cols.add(key)
+          }
+        }
+        try {
+          existingRows = await client
+            .request<{ data: Record<string, unknown>[] }>(
+              get(`/items/${rel.many_collection}`, {
+                filter: JSON.stringify({ [rel.many_field]: { _eq: itemId } }),
+                fields: [...cols].join(','),
+                limit: 2000
+              })
+            )
+            .then((r) => r.data ?? [])
+        } catch {
+          setImportIssues([
+            {
+              severity: 'error',
+              rule: 'reimport-apply',
+              message: "Could not load the record's current lines — nothing was staged."
+            }
+          ])
+          return
+        }
+      }
+
+      let diff: ReimportLineDiff
+      try {
+        diff =
+          result.lines.length > 0 && rel?.many_collection && rel.many_field
+            ? diffReimportLines(fileRows, existingRows, { lines: cfg.lines, match_by: cfg.match_by })
+            : { creates: [], updates: [], deletes: [], matchedUnchanged: 0 }
+      } catch (err) {
+        setImportIssues([
+          {
+            severity: 'error',
+            rule: 'reimport-apply',
+            message: err instanceof Error ? err.message : 'Duplicate match key in the imported lines.'
+          }
+        ])
+        return
+      }
+
+      setImportIssues([])
+      setReimportDialog({ diff, result, template, existingRows })
+    },
+    [isDirty, pendingO2MRows, pendingO2MEdits, pendingO2MDeletes, relations, collection, client, itemId]
+  )
+
+  const applyReimportStaging = useCallback(
+    async (
+      diff: ReimportLineDiff,
+      result: ImportParseResponse,
+      template: ImportTemplateSummary,
+      existingRows: Record<string, unknown>[]
+    ) => {
+      const cfg = template.reimport
+      if (!cfg) return
+
+      const attachField = reimportAttachField(template)
+      const issues = [...result.issues]
+
+      // 2. Header fields per policy.
+      if (cfg.header_fields !== 'skip') {
+        const merged: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(result.values)) {
+          if (attachField && k === attachField) continue
+          if (cfg.header_fields === 'overwrite') {
+            merged[k] = v
+          } else {
+            const cur = draftRef.current[k]
+            if (cur === null || cur === undefined || cur === '') merged[k] = v
+          }
+        }
+        if (Object.keys(merged).length > 0) {
+          draftRef.current = { ...draftRef.current, ...merged }
+          setDraft((prev) => ({ ...prev, ...merged }))
+        }
+      }
+
+      // 3-4. Line diff → staged O2M rows/edits/deletes, plus nested replace-per-line
+      // for matched lines whose file row carries nested data.
+      const rel = result.line_target_field
+        ? relations.find(
+            (r) => r.one_collection === collection && r.one_field === result.line_target_field
+          )
+        : null
+
+      if (rel?.many_collection && rel.many_field) {
+        const lineCollection = rel.many_collection
+        const lineField = rel.many_field
+        for (const row of diff.creates) {
+          o2mStagingCtx.queueRow(lineCollection, lineField, row)
+        }
+        for (const upd of diff.updates) {
+          o2mStagingCtx.queueEdit(lineCollection, lineField, upd.id, upd.changes)
+        }
+        for (const id of diff.deletes) {
+          o2mStagingCtx.queueDelete(lineCollection, lineField, id)
+        }
+
+        if (cfg.lines === 'upsert' || cfg.lines === 'upsert_delete') {
+          const fileRows = buildReimportFileRows(result)
+          const existingByKey = new Map<string, string>()
+          for (const row of existingRows) {
+            existingByKey.set(reimportMatchKey(row, cfg.match_by), String(row.id))
+          }
+          const matchedByField = new Map<string, { id: string; members: Record<string, unknown>[] }[]>()
+          for (const row of fileRows) {
+            const existingId = existingByKey.get(reimportMatchKey(row, cfg.match_by))
+            if (!existingId) continue
+            for (const [colKey, val] of Object.entries(row)) {
+              if (!colKey.startsWith('__o2m_')) continue
+              const field = colKey.slice('__o2m_'.length)
+              const arr = matchedByField.get(field) ?? []
+              arr.push({ id: existingId, members: Array.isArray(val) ? (val as Record<string, unknown>[]) : [] })
+              matchedByField.set(field, arr)
+            }
+          }
+          for (const [field, entries] of matchedByField) {
+            const grandRel = relations.find(
+              (r) => r.one_collection === lineCollection && r.one_field === field
+            )
+            if (!grandRel?.many_collection || !grandRel.many_field) {
+              issues.push({
+                severity: 'error',
+                rule: 'reimport-apply',
+                message: `No matching relation found for the nested "${field}" rows — they were not updated.`
+              })
+              continue
+            }
+            const grandCollection = grandRel.many_collection
+            const grandField = grandRel.many_field
+            const lineIds = entries.map((e) => e.id)
+            let existingMembers: Record<string, unknown>[] = []
+            try {
+              existingMembers = await client
+                .request<{ data: Record<string, unknown>[] }>(
+                  get(`/items/${grandCollection}`, {
+                    filter: JSON.stringify({ [grandField]: { _in: lineIds } }),
+                    fields: `id,${grandField}`,
+                    limit: 2000
+                  })
+                )
+                .then((r) => r.data ?? [])
+            } catch {
+              issues.push({
+                severity: 'error',
+                rule: 'reimport-apply',
+                message: `Could not load existing "${field}" rows — they were not updated.`
+              })
+              continue
+            }
+            const idsByParent = new Map<string, string[]>()
+            for (const m of existingMembers) {
+              const parentId = String(m[grandField])
+              const arr = idsByParent.get(parentId) ?? []
+              arr.push(String(m.id))
+              idsByParent.set(parentId, arr)
+            }
+            for (const entry of entries) {
+              o2mStagingCtx.queueEdit(lineCollection, lineField, entry.id, {
+                [`__nested_ops_${field}`]: {
+                  created: entry.members,
+                  updated: [],
+                  deleted: idsByParent.get(entry.id) ?? []
+                }
+              })
+            }
+          }
+        }
+      } else if (result.lines.length > 0) {
+        issues.push({
+          severity: 'error',
+          rule: 'reimport-apply',
+          message: 'No matching relation found for the imported line items — they were not added.'
+        })
+      }
+
+      // 5. Attachment staging per policy, plus any other M2M alias fields (additive,
+      // same idiom as the new-record import path).
+      const findM2mAliasRel = (field: string) =>
+        relations.find(
+          (r) => r.one_collection === collection && r.one_field === field && r.junction_field != null
+        ) ??
+        relations.find(
+          (r) => r.one_collection === collection && r.many_collection === field && r.junction_field != null
+        )
+
+      if (attachField && result.file_id) {
+        const attachRel = findM2mAliasRel(attachField)
+        if (attachRel) {
+          const stagingKey = attachRel.one_field ?? `${attachRel.many_collection}.${attachRel.junction_field}`
+          if (cfg.attachments === 'replace' && attachRel.many_collection && attachRel.many_field) {
+            try {
+              const junctionRows = await client
+                .request<{ data: Record<string, unknown>[] }>(
+                  get(`/items/${attachRel.many_collection}`, {
+                    filter: JSON.stringify({ [attachRel.many_field]: { _eq: itemId } }),
+                    fields: 'id',
+                    limit: 2000
+                  })
+                )
+                .then((r) => r.data ?? [])
+              for (const jr of junctionRows) m2mStagingCtx.stageUnlink(stagingKey, jr.id)
+            } catch {
+              issues.push({
+                severity: 'error',
+                rule: 'reimport-apply',
+                message:
+                  'Could not load the existing attachment to replace it — the new file was linked alongside it.'
+              })
+            }
+          }
+          m2mStagingCtx.stageLink(stagingKey, result.file_id)
+        } else {
+          draftRef.current = { ...draftRef.current, [attachField]: result.file_id }
+          setDraft((prev) => ({ ...prev, [attachField]: result.file_id }))
+        }
+      }
+
+      for (const [field, ids] of Object.entries(result.m2m ?? {})) {
+        if (attachField && field === attachField) continue
+        const m2mRel = findM2mAliasRel(field)
+        if (m2mRel) {
+          const stagingKey = m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
+          for (const id of ids) m2mStagingCtx.stageLink(stagingKey, id)
+        } else {
+          issues.push({
+            severity: 'error',
+            rule: 'reimport-apply',
+            message: `No M2M relation found for "${field}" — the imported selection was not applied.`
+          })
+        }
+      }
+
+      // 6. Summary issue.
+      issues.push({
+        severity: 'warn',
+        rule: 'reimport-apply',
+        message: `Re-import: ${diff.updates.length} updates · ${diff.creates.length} new · ${diff.deletes.length} deletes · ${diff.matchedUnchanged} unchanged`
+      })
+
+      setImportIssues(issues)
+    },
+    [collection, relations, o2mStagingCtx, m2mStagingCtx, client, itemId]
+  )
 
   useEffect(() => {
     if (!isNew || !initialImportResult || appliedInitialImportRef.current) return
@@ -2814,6 +3126,53 @@ export function ItemEditForm({
         steps={saveSteps}
         onClose={() => setSaveDialogOpen(false)}
       />
+      <Dialog
+        open={!!reimportDialog}
+        onOpenChange={(open) => {
+          if (!open && !reimportApplying) setReimportDialog(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Update this record from file</DialogTitle>
+          </DialogHeader>
+          <DialogBody className='space-y-3'>
+            {reimportDialog && (
+              <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+                {reimportDialog.diff.updates.length} will update · {reimportDialog.diff.creates.length} new ·{' '}
+                {reimportDialog.diff.deletes.length} will delete · {reimportDialog.diff.matchedUnchanged} unchanged
+              </p>
+            )}
+            {reimportDialog && <ImportIssuesPanel issues={reimportDialog.result.issues} />}
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              variant='outline'
+              onClick={() => setReimportDialog(null)}
+              disabled={reimportApplying}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!reimportDialog) return
+                setReimportApplying(true)
+                await applyReimportStaging(
+                  reimportDialog.diff,
+                  reimportDialog.result,
+                  reimportDialog.template,
+                  reimportDialog.existingRows
+                )
+                setReimportApplying(false)
+                setReimportDialog(null)
+              }}
+              disabled={reimportApplying}
+            >
+              {reimportApplying ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Apply to form'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
         {showHeader && (
           <header
@@ -2901,6 +3260,13 @@ export function ItemEditForm({
             <div className='ml-auto flex items-center gap-1.5'>
               {isNew && (
                 <ImportFromFileButton collection={collection} onParsed={applyImportResult} />
+              )}
+              {!isNew && (
+                <ImportFromFileButton
+                  collection={collection}
+                  templateFilter={(t) => t.reimport?.enabled === true}
+                  onParsed={handleReimportParsed}
+                />
               )}
               {(effectiveShowRevisions && !isNew) || (effectiveShowClone && !isNew && isAdmin) || canDelete ? (
                 <>
