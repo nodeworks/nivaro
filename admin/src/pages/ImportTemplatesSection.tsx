@@ -109,6 +109,14 @@ interface ImportLineConfig {
   nested: ImportNestedConfig | null
 }
 
+interface ImportReimportConfig {
+  enabled: boolean
+  header_fields: 'overwrite' | 'fill_empty' | 'skip'
+  lines: 'replace' | 'upsert' | 'upsert_delete' | 'append'
+  match_by: string[]
+  attachments: 'add' | 'replace'
+}
+
 interface ConfigErrorDetail {
   path: string
   message: string
@@ -129,6 +137,7 @@ interface TemplateRow {
   is_active: boolean
   is_shared: boolean
   role_id: string | null
+  reimport: ImportReimportConfig | null
 }
 
 interface TemplateDraft {
@@ -145,6 +154,7 @@ interface TemplateDraft {
   is_active: boolean
   is_shared: boolean
   role_id: string
+  reimport: ImportReimportConfig
 }
 
 interface FieldConfigRow {
@@ -179,6 +189,32 @@ const DEFAULT_NESTED: ImportNestedConfig = {
   when: null,
   columns: []
 }
+
+const DEFAULT_REIMPORT: ImportReimportConfig = {
+  enabled: false,
+  header_fields: 'overwrite',
+  lines: 'upsert_delete',
+  match_by: [],
+  attachments: 'add'
+}
+
+const REIMPORT_HEADER_FIELDS_OPTIONS: Option[] = [
+  { value: 'overwrite', label: 'Overwrite from file' },
+  { value: 'fill_empty', label: 'Fill empty only' },
+  { value: 'skip', label: 'Skip' }
+]
+
+const REIMPORT_LINES_OPTIONS: Option[] = [
+  { value: 'replace', label: 'Replace all' },
+  { value: 'upsert', label: 'Update matched' },
+  { value: 'upsert_delete', label: 'Full sync (update + delete missing)' },
+  { value: 'append', label: 'Append only' }
+]
+
+const REIMPORT_ATTACHMENTS_OPTIONS: Option[] = [
+  { value: 'add', label: 'Add new file' },
+  { value: 'replace', label: 'Replace existing' }
+]
 
 const USERS_LOOKUP_OPTION: Option = { value: '$users', label: 'Users (system)' }
 
@@ -253,7 +289,8 @@ function blankDraft(): TemplateDraft {
     line_map: null,
     is_active: true,
     is_shared: false,
-    role_id: ''
+    role_id: '',
+    reimport: DEFAULT_REIMPORT
   }
 }
 
@@ -271,7 +308,8 @@ function rowToDraft(row: TemplateRow): TemplateDraft {
     line_map: row.line_map,
     is_active: row.is_active,
     is_shared: row.is_shared,
-    role_id: row.role_id ?? ''
+    role_id: row.role_id ?? '',
+    reimport: row.reimport ?? DEFAULT_REIMPORT
   }
 }
 
@@ -288,7 +326,8 @@ function draftToBody(draft: TemplateDraft): Record<string, unknown> {
     line_map: draft.line_map,
     is_active: draft.is_active,
     is_shared: draft.is_shared,
-    role_id: draft.role_id || null
+    role_id: draft.role_id || null,
+    reimport: draft.reimport.enabled ? draft.reimport : null
   }
 }
 
@@ -1383,6 +1422,114 @@ function NestedSection({
   )
 }
 
+// ─── Re-import ──────────────────────────────────────────────────────────────
+
+function ReimportFields({
+  reimport,
+  onChange,
+  lineMap,
+  errors
+}: {
+  reimport: ImportReimportConfig
+  onChange: (patch: Partial<ImportReimportConfig>) => void
+  lineMap: ImportLineConfig | null
+  errors: ConfigErrorDetail[]
+}) {
+  const matchByOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const opts: Option[] = []
+    for (const col of lineMap?.columns ?? []) {
+      if (col.target && !seen.has(col.target)) {
+        seen.add(col.target)
+        opts.push({ value: col.target, label: col.target })
+      }
+    }
+    return opts
+  }, [lineMap])
+
+  const showMatchBy = reimport.lines === 'upsert' || reimport.lines === 'upsert_delete'
+
+  return (
+    <div className='space-y-3'>
+      <div className='flex items-center gap-2.5'>
+        <Switch checked={reimport.enabled} onCheckedChange={(v) => onChange({ enabled: v })} />
+        <span className='text-[12px] text-slate-600'>Allow re-import into existing records</span>
+      </div>
+      {reimport.enabled && (
+        <div className='space-y-3'>
+          <div className='grid grid-cols-3 gap-3'>
+            <LabeledField label='Header fields'>
+              <Combobox
+                value={reimport.header_fields}
+                onChange={(v) =>
+                  onChange({ header_fields: v as ImportReimportConfig['header_fields'] })
+                }
+                options={REIMPORT_HEADER_FIELDS_OPTIONS}
+                width={200}
+              />
+            </LabeledField>
+            <LabeledField label='Lines'>
+              <Combobox
+                value={reimport.lines}
+                onChange={(v) =>
+                  onChange({
+                    lines: v as ImportReimportConfig['lines'],
+                    match_by: v === 'upsert' || v === 'upsert_delete' ? reimport.match_by : []
+                  })
+                }
+                options={REIMPORT_LINES_OPTIONS}
+                width={240}
+              />
+            </LabeledField>
+            <LabeledField label='Attached file'>
+              <Combobox
+                value={reimport.attachments}
+                onChange={(v) =>
+                  onChange({ attachments: v as ImportReimportConfig['attachments'] })
+                }
+                options={REIMPORT_ATTACHMENTS_OPTIONS}
+                width={200}
+              />
+            </LabeledField>
+          </div>
+          <InlineErrors errors={errorsUnder(errors, 'reimport')} ownPath='reimport' />
+          {showMatchBy && (
+            <div>
+              <Label className='mb-1.5 block text-[11px] text-slate-500'>Match by</Label>
+              {matchByOptions.length === 0 ? (
+                <p className='text-[12px] text-slate-400'>
+                  Add target columns to line config to choose a match key.
+                </p>
+              ) : (
+                <div className='flex flex-wrap items-center gap-4'>
+                  {matchByOptions.map((opt) => (
+                    <label
+                      key={opt.value}
+                      className='flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-600'
+                    >
+                      <input
+                        type='checkbox'
+                        checked={reimport.match_by.includes(opt.value)}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? [...reimport.match_by, opt.value]
+                            : reimport.match_by.filter((v) => v !== opt.value)
+                          onChange({ match_by: next })
+                        }}
+                      />
+                      {opt.label}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Basics ─────────────────────────────────────────────────────────────────
 
 // Text inputs commit into the shared draft, which re-renders the whole builder
@@ -1749,7 +1896,7 @@ function TestPanel({ collection, draft }: { collection: string; draft: TemplateD
 // ─── Main section ───────────────────────────────────────────────────────────
 
 function isKnownSectionPath(path: string): boolean {
-  return path.startsWith('header_map') || path.startsWith('line_map')
+  return path.startsWith('header_map') || path.startsWith('line_map') || path.startsWith('reimport')
 }
 
 export function ImportTemplatesSection({ collection }: { collection: string }) {
@@ -2130,6 +2277,15 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
               </CollectionOptionsContext.Provider>
             </div>
           )}
+        </Section>
+
+        <Section title='Re-import'>
+          <ReimportFields
+            reimport={draft.reimport}
+            onChange={(p) => patch({ reimport: { ...draft.reimport, ...p } })}
+            lineMap={draft.line_map}
+            errors={errors}
+          />
         </Section>
 
         <Section title='Test'>
