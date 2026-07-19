@@ -63,6 +63,8 @@ export interface ImportReimportConfig {
   lines: 'replace' | 'upsert' | 'upsert_delete' | 'append'
   match_by: string[]
   attachments: 'add' | 'replace'
+  /** Optional label for the re-import button; falls back to the template's button_label. */
+  button_label?: string | null
 }
 
 export interface ImportTemplateConfig {
@@ -420,7 +422,19 @@ function normalizeReimport(
     }
   }
 
-  return { enabled, header_fields: headerFields, lines, match_by: matchBy, attachments }
+  const buttonLabel =
+    typeof src.button_label === 'string' && src.button_label.trim() !== ''
+      ? src.button_label.trim().slice(0, 100)
+      : null
+
+  return {
+    enabled,
+    header_fields: headerFields,
+    lines,
+    match_by: matchBy,
+    attachments,
+    button_label: buttonLabel
+  }
 }
 
 export function normalizeImportTemplateConfig(raw: unknown): {

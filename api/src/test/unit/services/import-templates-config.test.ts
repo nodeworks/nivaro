@@ -345,7 +345,8 @@ describe('normalizeImportTemplateConfig', () => {
       header_fields: 'fill_empty',
       lines: 'upsert',
       match_by: ['name'],
-      attachments: 'replace'
+      attachments: 'replace',
+      button_label: null
     })
   })
 
@@ -365,7 +366,8 @@ describe('normalizeImportTemplateConfig', () => {
       header_fields: 'overwrite',
       lines: 'upsert_delete',
       match_by: ['name'],
-      attachments: 'add'
+      attachments: 'add',
+      button_label: null
     })
   })
 
@@ -421,5 +423,25 @@ describe('normalizeImportTemplateConfig', () => {
     })
     expect(errors).toEqual([])
     expect(config.reimport?.enabled).toBe(false)
+  })
+})
+
+describe('reimport button_label', () => {
+  it('trims, caps at 100 chars, and nulls when empty', () => {
+    const { config, errors } = normalizeImportTemplateConfig({
+      reimport: { enabled: true, lines: 'append', button_label: '  Re-import Bid  ' }
+    })
+    expect(errors).toEqual([])
+    expect(config.reimport?.button_label).toBe('Re-import Bid')
+
+    const long = normalizeImportTemplateConfig({
+      reimport: { enabled: false, button_label: 'x'.repeat(150) }
+    })
+    expect(long.config.reimport?.button_label).toHaveLength(100)
+
+    const empty = normalizeImportTemplateConfig({
+      reimport: { enabled: false, button_label: '   ' }
+    })
+    expect(empty.config.reimport?.button_label).toBeNull()
   })
 })

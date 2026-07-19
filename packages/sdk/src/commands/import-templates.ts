@@ -16,6 +16,7 @@ export interface ImportTemplateSummary {
     lines: 'replace' | 'upsert' | 'upsert_delete' | 'append'
     match_by: string[]
     attachments: 'add' | 'replace'
+    button_label?: string | null
   } | null
 }
 

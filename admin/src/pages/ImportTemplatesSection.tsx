@@ -115,6 +115,7 @@ interface ImportReimportConfig {
   lines: 'replace' | 'upsert' | 'upsert_delete' | 'append'
   match_by: string[]
   attachments: 'add' | 'replace'
+  button_label?: string | null
 }
 
 interface ConfigErrorDetail {
@@ -1489,6 +1490,15 @@ function ReimportFields({
                 }
                 options={REIMPORT_ATTACHMENTS_OPTIONS}
                 width={200}
+              />
+            </LabeledField>
+            <LabeledField label='Button label'>
+              <BufferedInput
+                value={reimport.button_label ?? ''}
+                onCommit={(v) => onChange({ button_label: v || null })}
+                placeholder='Falls back to header button label'
+                maxLength={100}
+                className='h-8 text-[12px]'
               />
             </LabeledField>
           </div>

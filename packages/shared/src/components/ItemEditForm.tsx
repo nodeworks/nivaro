@@ -3375,6 +3375,7 @@ export function ItemEditForm({
                 <ImportFromFileButton
                   collection={collection}
                   templateFilter={(t) => t.reimport?.enabled === true}
+                  getLabel={(t) => t.reimport?.button_label ?? t.button_label}
                   onParsed={handleReimportParsed}
                 />
               )}

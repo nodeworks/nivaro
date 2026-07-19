@@ -25,10 +25,13 @@ function acceptFor(templates: ImportTemplateSummary[]): string {
 export function ImportFromFileButton({
   collection,
   templateFilter,
+  getLabel,
   onParsed
 }: {
   collection: string
   templateFilter?: (t: ImportTemplateSummary) => boolean
+  /** Per-template label source; defaults to the template's button_label. */
+  getLabel?: (t: ImportTemplateSummary) => string | null | undefined
   onParsed: (result: ImportParseResponse, template: ImportTemplateSummary) => void
 }) {
   const client = useNivaroClient()
@@ -74,9 +77,10 @@ export function ImportFromFileButton({
 
   // Single template: its custom label. Multiple: a label shared by ALL of them still
   // applies; mixed labels fall back to the generic text since the button fans out.
-  const firstLabel = templates[0]?.button_label?.trim()
+  const labelOf = (t: ImportTemplateSummary) => (getLabel ? getLabel(t) : t.button_label)
+  const firstLabel = templates[0] ? labelOf(templates[0])?.trim() : undefined
   const customLabel =
-    firstLabel && templates.every((t) => t.button_label === templates[0].button_label)
+    firstLabel && templates.every((t) => labelOf(t) === labelOf(templates[0]))
       ? firstLabel
       : null
   const buttonLabel = importing ? (
