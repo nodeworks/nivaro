@@ -166,7 +166,7 @@ interface DbFixture {
   instance: Record<string, unknown>
   transition: Record<string, unknown>
   targetState?: Record<string, unknown>
-  fieldRows?: Array<{ field: string; label: string | null }>
+  fieldRows?: Array<{ field: string; label: string | null; type: string | null }>
   childRows?: Array<Record<string, unknown>>
 }
 
@@ -279,7 +279,7 @@ describe('POST /pipelines/instance/:collection/:item/transition — requirements
         collection: string
         fk_field: string
         title: string
-        fields: Array<{ field: string; label: string }>
+        fields: Array<{ field: string; label: string; type: string | null }>
         rows: Array<{
           id: number
           label: string
@@ -295,13 +295,50 @@ describe('POST /pipelines/instance/:collection/:item/transition — requirements
         collection: 'workflow_line_items',
         fk_field: 'workflow',
         title: 'Enter REQ IDs',
-        fields: [{ field: 'req_id', label: 'REQ ID' }],
+        fields: [{ field: 'req_id', label: 'REQ ID', type: null }],
         rows: [
           { id: 1, label: '#1', complete: false, values: { req_id: null } },
           { id: 2, label: '#2', complete: false, values: { req_id: '   ' } },
           { id: 3, label: 'REQ-3', complete: true, values: { req_id: 'REQ-3' } }
         ]
       }
+    ])
+  })
+
+  it('carries the nivaro_fields type on each payload field (numeric child column)', async () => {
+    vi.mocked(getCollection).mockResolvedValueOnce(undefined)
+    vi.mocked(db).mockImplementation(
+      makeExecuteDbMock({
+        instance: baseInstance,
+        transition: baseTransition([
+          {
+            type: 'child_fields',
+            collection: 'workflow_line_items',
+            fk_field: 'workflow',
+            fields: ['qty']
+          }
+        ]),
+        targetState: terminalTargetState,
+        fieldRows: [{ field: 'qty', label: 'Quantity', type: 'integer' }],
+        childRows: [{ id: 1, qty: null }]
+      }) as unknown as typeof db
+    )
+
+    const app = buildApp()
+    await app.ready()
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/pipelines/instance/workflows/wf-1/transition',
+      payload: { transition_id: 'tx-1' }
+    })
+
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as {
+      requirements: Array<{ fields: Array<{ field: string; label: string; type: string | null }> }>
+    }
+    expect(body.requirements[0].fields).toEqual([
+      { field: 'qty', label: 'Quantity', type: 'integer' }
     ])
   })
 

@@ -20,6 +20,8 @@ import { Input } from '../ui/input'
 export interface TransitionRequirementFieldMeta {
   field: string
   label: string
+  /** nivaro_fields type of the child column; null when the column has no nivaro_fields row. */
+  type: string | null
 }
 
 export interface TransitionRequirementRow {
@@ -47,6 +49,36 @@ function rowKey(collection: string, id: string | number): string {
   return `${collection}::${String(id)}`
 }
 
+// Same numeric type-string set the other Input-driven PATCH consumers coerce on
+// (FieldRenderer / InlineGridField) — the items PATCH endpoint does no coercion.
+const NUMERIC_FIELD_TYPES = [
+  'integer',
+  'bigInteger',
+  'float',
+  'decimal',
+  'numeric',
+  'int',
+  'bigint',
+  'smallint',
+  'tinyint',
+  'real',
+  'money',
+  'smallmoney',
+  'double',
+  'number'
+]
+
+// Coerce a non-empty input string by column type before it rides in a PATCH
+// body. NaN falls back to the raw string so the server's own 4xx surfaces
+// inline instead of us silently writing garbage.
+function coerceForPatch(raw: string, type: string | null): unknown {
+  if (type && NUMERIC_FIELD_TYPES.includes(type)) {
+    const n = Number(raw.trim())
+    if (!Number.isNaN(n)) return n
+  }
+  return raw
+}
+
 function toInputValue(v: unknown): string {
   return v == null ? '' : String(v)
 }
@@ -69,12 +101,13 @@ function snapshotValues(
 
 export function TransitionRequirementsDialog({
   payload,
+  isRetry,
   onSubmitted,
   onClose
 }: {
   payload: TransitionRequirementsPayload
-  collection: string
-  item: string
+  /** True when this payload came from a retry's second 422 (values changed underneath). */
+  isRetry?: boolean
   onSubmitted: () => void
   onClose: () => void
 }) {
@@ -114,7 +147,9 @@ export function TransitionRequirementsDialog({
           const saved = savedRef.current[rk] ?? {}
           const changed: Record<string, unknown> = {}
           for (const f of entry.fields) {
-            if (current[f.field] !== saved[f.field]) changed[f.field] = current[f.field]
+            if (current[f.field] !== saved[f.field]) {
+              changed[f.field] = coerceForPatch(current[f.field] ?? '', f.type)
+            }
           }
           if (Object.keys(changed).length === 0) return { rk, ok: true as const }
           try {
@@ -151,6 +186,12 @@ export function TransitionRequirementsDialog({
           <DialogTitle className='text-[15px]'>{title}</DialogTitle>
         </DialogHeader>
         <DialogBody className='max-h-[60vh] space-y-5 overflow-y-auto'>
+          {isRetry && (
+            <p className='flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'>
+              <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400' />
+              Values changed since your last attempt — review the highlighted rows.
+            </p>
+          )}
           {payload.map((entry) => (
             <div key={`${entry.collection}-${entry.fk_field}-${entry.title}`} className='space-y-2'>
               {payload.length > 1 && (

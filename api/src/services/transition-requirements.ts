@@ -29,6 +29,7 @@ export const IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 export interface RequirementFieldMeta {
   field: string
   label: string
+  type: string | null
 }
 
 export interface RequirementRow {
@@ -120,21 +121,25 @@ export async function evaluateTransitionRequirements(
         ? entry.title
         : 'Required before continuing'
 
-    let fieldLabelRows: Array<{ field: string; label: string | null }> = []
+    let fieldInfoRows: Array<{ field: string; label: string | null; type: string | null }> = []
     try {
-      fieldLabelRows = (await database('nivaro_fields')
+      fieldInfoRows = (await database('nivaro_fields')
         .where({ collection })
-        .select('field', 'label')) as Array<{ field: string; label: string | null }>
+        .select('field', 'label', 'type')) as Array<{
+        field: string
+        label: string | null
+        type: string | null
+      }>
     } catch {
-      fieldLabelRows = []
+      fieldInfoRows = []
     }
-    const nivaroLabelByField = new Map(fieldLabelRows.map((r) => [r.field, r.label]))
+    const nivaroFieldByField = new Map(fieldInfoRows.map((r) => [r.field, r]))
 
     const fieldMeta: RequirementFieldMeta[] = requiredFields.map((f) => {
+      const info = nivaroFieldByField.get(f)
       const override = labelsOverride[f]
-      const label =
-        (typeof override === 'string' && override.trim()) || nivaroLabelByField.get(f) || f
-      return { field: f, label }
+      const label = (typeof override === 'string' && override.trim()) || info?.label || f
+      return { field: f, label, type: info?.type ?? null }
     })
 
     let displayTemplate: string | null = null

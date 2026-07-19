@@ -92,6 +92,9 @@ interface RequirementsDialogState {
   payload: TransitionRequirementsPayload
   transitionId: string
   comment?: string
+  /** Bumped on every 422 payload (initial and retry) — keys the dialog so a
+   *  retry's fresh payload remounts it with reseeded state; >1 means retry. */
+  revision: number
 }
 
 // Shared by both executeTransition mutations below: pulls the 422 requirements
@@ -965,11 +968,12 @@ function PipelinePanelInner({
     onError: (err: unknown, variables) => {
       const requirements = transitionRequirementsFromError(err)
       if (requirements) {
-        setRequirementsDialog({
+        setRequirementsDialog((prev) => ({
           payload: requirements,
           transitionId: variables.transition_id,
-          comment: variables.comment
-        })
+          comment: variables.comment,
+          revision: (prev?.revision ?? 0) + 1
+        }))
         return
       }
       const resp = (err as { response?: { status?: number; data?: { error?: string } } })?.response
@@ -1270,9 +1274,9 @@ function PipelinePanelInner({
       </div>
       {requirementsDialog && (
         <TransitionRequirementsDialog
+          key={requirementsDialog.revision}
           payload={requirementsDialog.payload}
-          collection={collection}
-          item={item}
+          isRetry={requirementsDialog.revision > 1}
           onSubmitted={() =>
             executeTransition.mutate({
               transition_id: requirementsDialog.transitionId,
@@ -1365,11 +1369,12 @@ function PipelineTransitionButtonsInner({
     onError: (err: unknown, variables) => {
       const requirements = transitionRequirementsFromError(err)
       if (requirements) {
-        setRequirementsDialog({
+        setRequirementsDialog((prev) => ({
           payload: requirements,
           transitionId: variables.transition_id,
-          comment: variables.comment
-        })
+          comment: variables.comment,
+          revision: (prev?.revision ?? 0) + 1
+        }))
         return
       }
       const resp = (err as { response?: { status?: number; data?: { error?: string } } })?.response
@@ -1515,9 +1520,9 @@ function PipelineTransitionButtonsInner({
       )}
       {requirementsDialog && (
         <TransitionRequirementsDialog
+          key={requirementsDialog.revision}
           payload={requirementsDialog.payload}
-          collection={collection}
-          item={item}
+          isRetry={requirementsDialog.revision > 1}
           onSubmitted={() =>
             executeTransition.mutate({
               transition_id: requirementsDialog.transitionId,
