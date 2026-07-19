@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { getCollection } from '../services/collections.js'
+import { extractTemplateFields, resolveDisplayValue } from '../services/display-value.js'
 import { can } from '../services/permissions.js'
 import { resolveStateOwners, resolveStateOwnersBatch } from '../services/pipeline-engine.js'
 import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
@@ -46,6 +48,7 @@ interface WorkflowTransition {
   sort: number
   group_label: string | null
   condition_rules: string | null
+  requirements: string | null
 }
 
 interface WorkflowBinding {
@@ -139,6 +142,39 @@ interface ConditionRule {
   value?: unknown
 }
 
+// Loosely-typed — `type` is the only key enforcement cares about at read time;
+// unrecognized types are stored and echoed back untouched (see
+// evaluateTransitionRequirements for the forward-compat handling).
+interface ParsedRequirement {
+  type: string
+  collection?: unknown
+  fk_field?: unknown
+  fields?: unknown
+  labels?: unknown
+  title?: unknown
+}
+
+interface RequirementFieldMeta {
+  field: string
+  label: string
+}
+
+interface RequirementRow {
+  id: unknown
+  label: string
+  complete: boolean
+  values: Record<string, unknown>
+}
+
+interface RequirementBlockResult {
+  type: 'child_fields'
+  collection: string
+  fk_field: string
+  title: string
+  fields: RequirementFieldMeta[]
+  rows: RequirementRow[]
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function parseJson(val: string | null | undefined): unknown {
@@ -179,7 +215,8 @@ function formatTransition(t: WorkflowTransition) {
     ...t,
     required_roles: parseJson(t.required_roles) as string[] | null,
     actions: parseJson(t.actions) as unknown[] | null,
-    condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null
+    condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null,
+    requirements: parseJson(t.requirements) as ParsedRequirement[] | null
   }
 }
 
@@ -268,6 +305,170 @@ async function fetchRecordForConditions(
     // Table may not exist in dev; condition rules treat missing fields as null.
     return {}
   }
+}
+
+// ─── Transition requirements (child-field gates) ───────────────────────────
+
+const IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+
+function isEmptyRequirementValue(v: unknown): boolean {
+  return v == null || String(v).trim() === ''
+}
+
+// Pure. Row ids (from `rows`) where any of `fields` is empty per the Global
+// Constraints definition: null, '' or whitespace-only after String().
+function findIncompleteRows(rows: Array<Record<string, unknown>>, fields: string[]): Set<unknown> {
+  const incomplete = new Set<unknown>()
+  for (const row of rows) {
+    if (fields.some((f) => isEmptyRequirementValue(row[f]))) incomplete.add(row.id)
+  }
+  return incomplete
+}
+
+// 400-message validator for the `requirements` array accepted by the transition
+// create/PATCH routes. Only the known `child_fields` shape is validated — other
+// `type` values are accepted and stored as-is, mirroring how enforcement treats
+// unrecognized types as "no requirement" rather than an error (forward compat
+// with the reserved `record_fields` type from the design doc).
+function validateRequirements(value: unknown): string | null {
+  if (value === undefined || value === null) return null
+  if (!Array.isArray(value)) return 'requirements must be an array'
+  for (let i = 0; i < value.length; i++) {
+    const entry = value[i]
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return `requirements[${i}] must be an object`
+    }
+    const e = entry as Record<string, unknown>
+    if (e.type !== 'child_fields') continue
+    if (typeof e.collection !== 'string' || !IDENTIFIER_RE.test(e.collection)) {
+      return `requirements[${i}].collection must be a valid identifier`
+    }
+    if (typeof e.fk_field !== 'string' || !IDENTIFIER_RE.test(e.fk_field)) {
+      return `requirements[${i}].fk_field must be a valid identifier`
+    }
+    if (
+      !Array.isArray(e.fields) ||
+      e.fields.length === 0 ||
+      !e.fields.every((f) => typeof f === 'string' && IDENTIFIER_RE.test(f))
+    ) {
+      return `requirements[${i}].fields must be a non-empty array of valid identifiers`
+    }
+  }
+  return null
+}
+
+// Evaluates a transition's stored `requirements` JSON against the item's
+// current child-row data. Returns null when the gate passes (nothing blocks)
+// or the 422 payload's `requirements` array when it doesn't. Malformed JSON,
+// malformed entries, and unrecognized `type` values are all treated as "no
+// requirement" — logged, never thrown, never blocking a transition on bad config.
+async function evaluateTransitionRequirements(
+  database: typeof db,
+  requirementsJson: string | null,
+  itemId: string,
+  logger: Pick<FastifyBaseLogger, 'warn'>
+): Promise<RequirementBlockResult[] | null> {
+  if (!requirementsJson) return null
+  const parsed = parseJson(requirementsJson)
+  if (parsed === null) {
+    logger.warn({ requirementsJson }, 'transition requirements: malformed JSON, ignoring')
+    return null
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null
+
+  const blocking: RequirementBlockResult[] = []
+
+  for (const raw of parsed) {
+    if (!raw || typeof raw !== 'object') continue
+    const entry = raw as Record<string, unknown>
+    if (entry.type !== 'child_fields') continue // unrecognized type — ignored, never an error
+
+    const { collection, fk_field: fkField, fields } = entry
+    if (
+      typeof collection !== 'string' ||
+      !IDENTIFIER_RE.test(collection) ||
+      typeof fkField !== 'string' ||
+      !IDENTIFIER_RE.test(fkField) ||
+      !Array.isArray(fields) ||
+      fields.length === 0 ||
+      !fields.every((f) => typeof f === 'string' && IDENTIFIER_RE.test(f))
+    ) {
+      logger.warn({ entry }, 'transition requirements: malformed child_fields entry, ignoring')
+      continue
+    }
+
+    const requiredFields = fields as string[]
+    const labelsOverride =
+      entry.labels && typeof entry.labels === 'object' && !Array.isArray(entry.labels)
+        ? (entry.labels as Record<string, unknown>)
+        : {}
+    const title =
+      typeof entry.title === 'string' && entry.title.trim()
+        ? entry.title
+        : 'Required before continuing'
+
+    let fieldLabelRows: Array<{ field: string; label: string | null }> = []
+    try {
+      fieldLabelRows = (await database('nivaro_fields')
+        .where({ collection })
+        .select('field', 'label')) as Array<{ field: string; label: string | null }>
+    } catch {
+      fieldLabelRows = []
+    }
+    const nivaroLabelByField = new Map(fieldLabelRows.map((r) => [r.field, r.label]))
+
+    const fieldMeta: RequirementFieldMeta[] = requiredFields.map((f) => {
+      const override = labelsOverride[f]
+      const label =
+        (typeof override === 'string' && override.trim()) || nivaroLabelByField.get(f) || f
+      return { field: f, label }
+    })
+
+    let displayTemplate: string | null = null
+    try {
+      const childCol = await getCollection(collection)
+      displayTemplate = childCol?.display_template ?? null
+    } catch {
+      displayTemplate = null
+    }
+
+    const templateFields = extractTemplateFields(displayTemplate)
+    const selectFields = [...new Set(['id', ...requiredFields, ...templateFields])]
+
+    let childRows: Array<Record<string, unknown>> = []
+    try {
+      childRows = (await database(collection)
+        .where({ [fkField]: itemId })
+        .limit(2000)
+        .select(selectFields)) as Array<Record<string, unknown>>
+    } catch {
+      childRows = []
+    }
+
+    if (childRows.length === 0) continue // zero child rows — nothing to require
+
+    const incompleteIds = findIncompleteRows(childRows, requiredFields)
+    if (incompleteIds.size === 0) continue // every row already filled in
+
+    const rows: RequirementRow[] = childRows.map((row) => {
+      const values: Record<string, unknown> = {}
+      for (const f of requiredFields) values[f] = row[f] ?? null
+      let label = displayTemplate ? resolveDisplayValue(row, displayTemplate) : ''
+      if (!label) label = `#${String(row.id)}`
+      return { id: row.id, label, complete: !incompleteIds.has(row.id), values }
+    })
+
+    blocking.push({
+      type: 'child_fields',
+      collection,
+      fk_field: fkField,
+      title,
+      fields: fieldMeta,
+      rows
+    })
+  }
+
+  return blocking.length > 0 ? blocking : null
 }
 
 function evalFilterOp(op: SkipOp, recordVal: unknown, value: unknown): boolean {
@@ -676,9 +877,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'sort'
       | 'group_label'
       | 'condition_rules'
+      | 'requirements'
     >
     if (!body.to_state) return reply.code(400).send({ error: 'to_state is required' })
     if (!body.label?.trim()) return reply.code(400).send({ error: 'label is required' })
+    const requirementsError = validateRequirements(body.requirements)
+    if (requirementsError) return reply.code(400).send({ error: requirementsError })
 
     const txId = randomUUID()
     await db('nivaro_workflow_transitions').insert({
@@ -692,7 +896,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       actions: toJsonStr(body.actions),
       sort: body.sort ?? 0,
       group_label: body.group_label?.trim() || null,
-      condition_rules: toJsonStr(body.condition_rules)
+      condition_rules: toJsonStr(body.condition_rules),
+      requirements: toJsonStr(body.requirements)
     })
     const tx = await db<WorkflowTransition>('nivaro_workflow_transitions')
       .where({ id: txId })
@@ -716,6 +921,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     if (!tx) return reply.code(404).send({ error: 'Not found' })
 
     const body = req.body as Partial<WorkflowTransition>
+    const requirementsError = validateRequirements(body.requirements)
+    if (requirementsError) return reply.code(400).send({ error: requirementsError })
+
     await db('nivaro_workflow_transitions')
       .where({ id: txId })
       .update({
@@ -730,7 +938,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         group_label:
           body.group_label !== undefined ? body.group_label?.trim() || null : tx.group_label,
         condition_rules:
-          body.condition_rules !== undefined ? toJsonStr(body.condition_rules) : tx.condition_rules
+          body.condition_rules !== undefined ? toJsonStr(body.condition_rules) : tx.condition_rules,
+        requirements:
+          body.requirements !== undefined ? toJsonStr(body.requirements) : tx.requirements
       })
     const updated = await db<WorkflowTransition>('nivaro_workflow_transitions')
       .where({ id: txId })
@@ -1334,6 +1544,21 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           if (!userRole || !roles.includes(userRole)) {
             return reply.code(403).send({ error: 'You do not have permission for this transition' })
           }
+        }
+      }
+
+      // Transition requirements gate: block on incomplete child-row data before
+      // even considering condition rules — a data-entry gate takes priority over
+      // conditional branching, and API callers can't bypass it.
+      if (transition.requirements) {
+        const blocking = await evaluateTransitionRequirements(
+          db,
+          transition.requirements,
+          item,
+          req.log
+        )
+        if (blocking) {
+          return reply.code(422).send({ error: 'TRANSITION_REQUIREMENTS', requirements: blocking })
         }
       }
 
