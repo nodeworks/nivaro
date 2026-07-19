@@ -20,6 +20,7 @@ import {
   type WorkflowState,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
+import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import type { User } from '../types.js'
 import { pubsub, topics } from './pubsub.js'
 import {
@@ -769,6 +770,13 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         }
       }
 
+      // Transition requirements gate — mirrors the REST transition routes so
+      // GraphQL callers can't bypass incomplete child-row data.
+      if (transition.requirements) {
+        const blocking = await evaluateTransitionRequirements(db, transition.requirements, item)
+        if (blocking) throw new Error('TRANSITION_REQUIREMENTS')
+      }
+
       const previousState = instance.current_state
       const resolvedTarget = await resolveTransitionTarget(
         transition.to_state,
@@ -936,6 +944,13 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         if (roles?.length && (!user.role || !roles.includes(user.role))) {
           throw new Error('You do not have permission for this transition')
         }
+      }
+
+      // Transition requirements gate — mirrors the REST transition routes so
+      // GraphQL callers can't bypass incomplete child-row data.
+      if (transition.requirements) {
+        const blocking = await evaluateTransitionRequirements(db, transition.requirements, item)
+        if (blocking) throw new Error('TRANSITION_REQUIREMENTS')
       }
 
       const previousState = instance.current_state

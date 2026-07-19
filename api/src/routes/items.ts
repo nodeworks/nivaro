@@ -28,6 +28,7 @@ import {
   resolveTransitionTarget,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
+import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import type { ItemsQuery, User } from '../types.js'
 
 function handleError(err: unknown, reply: FastifyReply): FastifyReply {
@@ -272,6 +273,7 @@ export async function itemsRoutes(app: FastifyInstance) {
 
     let succeeded = 0
     let failed = 0
+    const errors: Array<{ item: string; error: string }> = []
     for (const item of ids) {
       try {
         const instance = await db('nivaro_workflow_instances').where({ collection, item }).first()
@@ -285,6 +287,22 @@ export async function itemsRoutes(app: FastifyInstance) {
         if (!fromOk) {
           failed++
           continue
+        }
+
+        // Transition requirements gate — mirrors the single-item transition
+        // route so bulk actions can't bypass incomplete child-row data.
+        if (transition.requirements) {
+          const blocking = await evaluateTransitionRequirements(
+            db,
+            transition.requirements,
+            String(item),
+            req.log
+          )
+          if (blocking) {
+            failed++
+            errors.push({ item: String(item), error: 'TRANSITION_REQUIREMENTS' })
+            continue
+          }
         }
 
         const resolvedTarget = await resolveTransitionTarget(
@@ -340,7 +358,7 @@ export async function itemsRoutes(app: FastifyInstance) {
         failed++
       }
     }
-    return reply.send({ succeeded, failed })
+    return reply.send({ succeeded, failed, errors })
   })
 
   // POST /items/:collection/auto-id-preview — render an auto_id pattern against

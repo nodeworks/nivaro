@@ -26,6 +26,7 @@ export interface WorkflowTransition {
   required_roles: string | null
   actions: string | null
   sort: number
+  requirements?: string | null
 }
 
 export interface WorkflowInstance {
