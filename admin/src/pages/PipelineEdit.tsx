@@ -28,6 +28,7 @@ import {
   LayoutGrid,
   Link2,
   Link2Off,
+  ListChecks,
   Loader2,
   Pencil,
   Plus,
@@ -65,7 +66,8 @@ import {
   type PipelineOwnerGroupUser,
   type PipelineState,
   type PipelineTemplate,
-  type PipelineTransition
+  type PipelineTransition,
+  type TransitionRequirement
 } from '@/lib/api'
 import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from '@/lib/relations'
 import { cn, titleCase } from '@/lib/utils'
@@ -627,6 +629,7 @@ type RouteEntry = {
   to_states: string[]
   condition_rules: ConditionRule[] | null
   required_roles: string[] | null
+  requirements: TransitionRequirement[] | null
   minSort: number
 }
 
@@ -670,6 +673,7 @@ function groupByLabel(transitions: PipelineTransition[]): LabelGroup[] {
         to_states: [tx.to_state],
         condition_rules: tx.condition_rules,
         required_roles: tx.required_roles,
+        requirements: tx.requirements,
         minSort: tx.sort
       })
     }
@@ -1121,6 +1125,215 @@ function TransitionConditionsSection({
   )
 }
 
+// ─── Transition requirements (child-row data gates) ───────────────────────────
+// v1 supports the `child_fields` type only: block the transition until every
+// row of a picked O2M child relation has the listed fields filled in. See
+// docs/superpowers/specs/2026-07-19-transition-requirements-design.md.
+
+function TransitionRequirementEntry({
+  requirement,
+  childRelations,
+  onChange,
+  onRemove
+}: {
+  requirement: TransitionRequirement
+  childRelations: CMSRelation[]
+  onChange: (patch: Partial<TransitionRequirement>) => void
+  onRemove: () => void
+}) {
+  const { data: childMeta } = useQuery({
+    queryKey: ['collection-meta', requirement.collection],
+    queryFn: () => api.get(`/collections/${requirement.collection}`).then((r) => r.data.data),
+    enabled: !!requirement.collection
+  })
+  const childFields: CMSField[] = [
+    ...(childMeta?.fields?.filter((f: CMSField) => !f.hidden) ?? [])
+  ].sort((a, b) => a.field.localeCompare(b.field))
+
+  const relationOptions = childRelations.map((r) => ({
+    value: `${r.many_collection}::${r.many_field}`,
+    label: `${r.many_collection}.${r.many_field}`
+  }))
+  const selectedRelationValue = requirement.collection
+    ? `${requirement.collection}::${requirement.fk_field}`
+    : ''
+
+  const toggleField = (field: string, checked: boolean) => {
+    const fields = checked
+      ? [...requirement.fields, field]
+      : requirement.fields.filter((f) => f !== field)
+    const labels = { ...(requirement.labels ?? {}) }
+    if (!checked) delete labels[field]
+    onChange({ fields, labels: Object.keys(labels).length > 0 ? labels : undefined })
+  }
+
+  const setFieldLabel = (field: string, label: string) => {
+    const labels = { ...(requirement.labels ?? {}) }
+    if (label.trim()) labels[field] = label
+    else delete labels[field]
+    onChange({ labels: Object.keys(labels).length > 0 ? labels : undefined })
+  }
+
+  return (
+    <div className='space-y-2.5 rounded-lg border border-slate-200 bg-white p-3'>
+      <div className='flex items-start gap-2'>
+        <div className='flex-1 space-y-1.5'>
+          <Label className='text-[11px]'>Child Relation</Label>
+          <SimpleCombobox
+            value={selectedRelationValue}
+            onChange={(v) => {
+              const [coll, fk] = v.split('::')
+              onChange({
+                collection: coll ?? '',
+                fk_field: fk ?? '',
+                fields: [],
+                labels: undefined
+              })
+            }}
+            options={relationOptions}
+            placeholder='Select a child relation…'
+          />
+        </div>
+        <button
+          type='button'
+          onClick={onRemove}
+          className='mt-5 rounded p-1 text-slate-400 hover:text-red-500 shrink-0'
+        >
+          <Trash2 className='h-3.5 w-3.5' />
+        </button>
+      </div>
+
+      {requirement.collection && (
+        <div className='space-y-1.5'>
+          <Label className='text-[11px]'>Required Fields</Label>
+          <div className='max-h-48 space-y-1 overflow-y-auto rounded-md border border-slate-200 p-2'>
+            {childFields.length === 0 && (
+              <p className='text-[11px] text-slate-400'>No fields found.</p>
+            )}
+            {childFields.map((f) => {
+              const checked = requirement.fields.includes(f.field)
+              return (
+                <div key={f.field} className='flex items-center gap-2'>
+                  <input
+                    type='checkbox'
+                    checked={checked}
+                    onChange={(e) => toggleField(f.field, e.target.checked)}
+                    className='h-3.5 w-3.5 shrink-0 rounded border-slate-300'
+                  />
+                  <span className='flex-1 text-[12px] text-slate-700'>{f.field}</span>
+                  {checked && (
+                    <Input
+                      value={requirement.labels?.[f.field] ?? ''}
+                      onChange={(e) => setFieldLabel(f.field, e.target.value)}
+                      placeholder='Display label (optional)'
+                      className='h-6 w-40 text-[11px]'
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className='space-y-1.5'>
+        <Label className='text-[11px]'>Dialog Title</Label>
+        <Input
+          value={requirement.title ?? ''}
+          onChange={(e) => onChange({ title: e.target.value.trim() ? e.target.value : undefined })}
+          placeholder='Required before continuing'
+          className='h-7 text-[12px]'
+        />
+      </div>
+    </div>
+  )
+}
+
+function TransitionRequirementsSection({
+  requirements,
+  onChange,
+  collection
+}: {
+  requirements: TransitionRequirement[]
+  onChange: (reqs: TransitionRequirement[]) => void
+  collection?: string
+}) {
+  const [expanded, setExpanded] = useState(requirements.length > 0)
+
+  const { data: colMeta } = useQuery({
+    queryKey: ['collection-meta', collection],
+    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
+    enabled: !!collection
+  })
+  const relations: CMSRelation[] = colMeta?.relations ?? []
+  const childRelations = relations.filter(
+    (r) => r.one_collection === collection && r.junction_field === null
+  )
+
+  const updateReq = (idx: number, patch: Partial<TransitionRequirement>) =>
+    onChange(requirements.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
+  const removeReq = (idx: number) => onChange(requirements.filter((_, i) => i !== idx))
+
+  return (
+    <div className='space-y-2 border-t border-slate-200 pt-3'>
+      <button
+        type='button'
+        onClick={() => setExpanded((v) => !v)}
+        className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 hover:text-slate-800'
+      >
+        {expanded ? (
+          <ChevronDown className='h-3.5 w-3.5' />
+        ) : (
+          <ChevronRight className='h-3.5 w-3.5' />
+        )}
+        <ListChecks className='h-3 w-3' />
+        Requirements <span className='font-normal text-slate-400'>(optional)</span>
+        {requirements.length > 0 && (
+          <span className='rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy'>
+            {requirements.length}
+          </span>
+        )}
+      </button>
+
+      {expanded && (
+        <div className='space-y-2'>
+          <p className='text-[11px] text-slate-400 leading-snug'>
+            Block this transition until every row of a child relation has the listed fields filled
+            in. Prompts the user with a fill-in dialog when rows are incomplete.
+          </p>
+
+          {requirements.map((req, idx) => (
+            <TransitionRequirementEntry
+              // biome-ignore lint/suspicious/noArrayIndexKey: entries are positional
+              key={idx}
+              requirement={req}
+              childRelations={childRelations}
+              onChange={(patch) => updateReq(idx, patch)}
+              onRemove={() => removeReq(idx)}
+            />
+          ))}
+
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            className='h-7 gap-1 text-[12px]'
+            onClick={() =>
+              onChange([
+                ...requirements,
+                { type: 'child_fields', collection: '', fk_field: '', fields: [] }
+              ])
+            }
+          >
+            <Plus className='h-3 w-3' />
+            Add Requirement
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Transition editor ────────────────────────────────────────────────────────
 
 interface TransitionFormData {
@@ -1130,6 +1343,7 @@ interface TransitionFormData {
   color: string | null
   required_roles: string[] | null
   condition_rules: ConditionRule[] | null
+  requirements: TransitionRequirement[] | null
 }
 
 function TransitionForm({
@@ -1156,7 +1370,8 @@ function TransitionForm({
     label: fixedLabel ?? initial.label ?? '',
     color: initial.color ?? null,
     required_roles: initial.required_roles ?? null,
-    condition_rules: initial.condition_rules ?? null
+    condition_rules: initial.condition_rules ?? null,
+    requirements: initial.requirements ?? null
   })
 
   const set = <K extends keyof TransitionFormData>(k: K, v: TransitionFormData[K]) =>
@@ -1242,6 +1457,12 @@ function TransitionForm({
       <TransitionConditionsSection
         rules={form.condition_rules ?? []}
         onChange={(rules) => set('condition_rules', rules)}
+        collection={collection}
+      />
+
+      <TransitionRequirementsSection
+        requirements={form.requirements ?? []}
+        onChange={(reqs) => set('requirements', reqs.length > 0 ? reqs : null)}
         collection={collection}
       />
 
@@ -1927,6 +2148,7 @@ export function PipelineEditPage() {
         color: data.color,
         required_roles: data.required_roles,
         condition_rules: data.condition_rules,
+        requirements: data.requirements,
         group_label: null,
         actions: null,
         sort: 0
@@ -1958,6 +2180,7 @@ export function PipelineEditPage() {
           color: labelGroup.color,
           required_roles: data.required_roles,
           condition_rules: data.condition_rules,
+          requirements: data.requirements,
           group_label: null,
           actions: null,
           sort: Math.max(labelGroup.minSort, ...labelGroup.routes.map((r) => r.minSort)),
@@ -1982,6 +2205,7 @@ export function PipelineEditPage() {
           color: data.color,
           required_roles: data.required_roles,
           condition_rules: data.condition_rules,
+          requirements: data.requirements,
           group_label: null,
           actions: null,
           sort: 0,
@@ -2468,7 +2692,8 @@ export function PipelineEditPage() {
                                           label: grp.label,
                                           color: grp.color,
                                           required_roles: route.required_roles,
-                                          condition_rules: route.condition_rules
+                                          condition_rules: route.condition_rules,
+                                          requirements: route.requirements
                                         }}
                                         fixedLabel={grp.label}
                                         states={states}

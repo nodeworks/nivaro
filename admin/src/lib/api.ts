@@ -342,6 +342,15 @@ export type PipelineState = {
   stage_visibility: 'always' | 'hide' | 'hide_unless_active'
 }
 
+export type TransitionRequirement = {
+  type: 'child_fields'
+  collection: string
+  fk_field: string
+  fields: string[]
+  labels?: Record<string, string>
+  title?: string
+}
+
 export type PipelineTransition = {
   id: string
   template: string
@@ -354,6 +363,7 @@ export type PipelineTransition = {
   sort: number
   group_label: string | null
   condition_rules: ConditionRule[] | null
+  requirements: TransitionRequirement[] | null
 }
 
 export type PipelineBinding = {
