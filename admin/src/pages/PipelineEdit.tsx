@@ -1377,7 +1377,10 @@ function TransitionForm({
   const set = <K extends keyof TransitionFormData>(k: K, v: TransitionFormData[K]) =>
     setForm((f) => ({ ...f, [k]: v }))
 
-  const isValid = form.to_states.length > 0 && form.label.trim()
+  const requirementComplete = (r: TransitionRequirement) =>
+    r.collection.trim() !== '' && r.fk_field.trim() !== '' && r.fields.length > 0
+  const requirementsValid = (form.requirements ?? []).every(requirementComplete)
+  const isValid = form.to_states.length > 0 && form.label.trim() && requirementsValid
 
   return (
     <div className='space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4'>
@@ -1476,7 +1479,12 @@ function TransitionForm({
           disabled={!isValid || saving}
           onClick={() => {
             const rules = (form.condition_rules ?? []).filter((r) => r.field.trim())
-            onSave({ ...form, condition_rules: rules.length > 0 ? rules : null })
+            const reqs = (form.requirements ?? []).filter(requirementComplete)
+            onSave({
+              ...form,
+              condition_rules: rules.length > 0 ? rules : null,
+              requirements: reqs.length > 0 ? reqs : null
+            })
           }}
         >
           {saving ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Save Transition'}
