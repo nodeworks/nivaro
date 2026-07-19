@@ -26,6 +26,10 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import {
+  TransitionRequirementsDialog,
+  type TransitionRequirementsPayload
+} from './TransitionRequirementsDialog'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -83,6 +87,25 @@ interface PipelinePanelData {
   all_transitions: PipelineTransition[]
   history: PipelineHistoryEntry[]
   binding: { id: number; template: string; collection: string; state_field: string | null } | null
+}
+interface RequirementsDialogState {
+  payload: TransitionRequirementsPayload
+  transitionId: string
+  comment?: string
+}
+
+// Shared by both executeTransition mutations below: pulls the 422 requirements
+// payload out of a failed transition request, or null when the failure is
+// something else (409 conflict, permission error, etc).
+function transitionRequirementsFromError(err: unknown): TransitionRequirementsPayload | null {
+  const e = err as {
+    status?: number
+    response?: { error?: string; requirements?: TransitionRequirementsPayload }
+  }
+  if (e?.status === 422 && e.response?.error === 'TRANSITION_REQUIREMENTS') {
+    return e.response.requirements ?? []
+  }
+  return null
 }
 
 // ─── State badge ──────────────────────────────────────────────────────────────
@@ -871,6 +894,7 @@ function PipelinePanelInner({
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
   const syncedFromProp = useRef(false)
   useEffect(() => {
     if (!syncedFromProp.current && defaultExpanded !== undefined) {
@@ -935,9 +959,19 @@ function PipelinePanelInner({
       queryClient.invalidateQueries({ queryKey })
       setComment('')
       setPendingTransition(null)
+      setRequirementsDialog(null)
       toast.success('Transition executed')
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, variables) => {
+      const requirements = transitionRequirementsFromError(err)
+      if (requirements) {
+        setRequirementsDialog({
+          payload: requirements,
+          transitionId: variables.transition_id,
+          comment: variables.comment
+        })
+        return
+      }
       const resp = (err as { response?: { status?: number; data?: { error?: string } } })?.response
       toast.error(resp?.data?.error ?? 'Failed to execute transition')
       if (resp?.status === 409) {
@@ -1085,153 +1119,170 @@ function PipelinePanelInner({
   )
 
   return (
-    <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border'>
-      <div
-        role='button'
-        tabIndex={0}
-        onClick={() => setExpanded((v) => !v)}
-        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setExpanded((v) => !v)}
-        className='flex w-full cursor-pointer items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
-      >
-        <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        <span className='font-semibold text-sm text-slate-700'>{title || 'Pipeline'}</span>
-        <div className='flex items-center gap-1.5'>
-          {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
-          {addendumPending && (
-            <span className='flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
-              <span className='h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse shrink-0' />
-              Addendum in review
-            </span>
-          )}
-        </div>
-        <div className='ml-auto flex items-center gap-2' onClick={(e) => e.stopPropagation()}>
-          {!expanded && hasTransitions && (
-            <div className='flex flex-wrap items-center gap-1.5'>
-              {renderTransitionButtons(transitions, true)}
-            </div>
-          )}
-          {!expanded && !instance && data?.binding && (
-            <Button
-              size='sm'
-              variant='outline'
-              className='h-7 gap-1.5 text-[11px]'
-              onClick={(e) => {
-                e.stopPropagation()
-                startPipeline.mutate()
-              }}
-              disabled={startPipeline.isPending}
-            >
-              {startPipeline.isPending ? (
-                <Loader2 className='h-3 w-3 animate-spin' />
-              ) : (
-                <GitBranch className='h-3 w-3' />
-              )}
-              Start
-            </Button>
-          )}
-          {showApprovalChain && data?.binding && (
-            <ApprovalChainView
-              collection={collection}
-              item={item}
-              states={states ?? []}
-              currentStateId={data?.instance?.current_state ?? null}
-            />
-          )}
-        </div>
-        <ChevronDown
-          className={cn(
-            'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150',
-            expanded && 'rotate-180'
-          )}
-        />
-      </div>
-      {!expanded && pendingTransition && (
-        <div className='border-t border-slate-100 dark:border-border/60 px-4 py-3'>
-          {confirmForm}
-        </div>
-      )}
-      {expanded && (
-        <div className='border-t border-slate-100 dark:border-border/60'>
-          {addendumPending && (
-            <div className='flex items-center gap-2 border-b border-amber-100 bg-amber-50 px-5 py-2.5 dark:border-amber-500/20 dark:bg-amber-500/10'>
-              <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />
-              <p className='text-[12px] text-amber-700 dark:text-amber-400'>
-                An addendum is in review — coordinate transitions carefully.
-              </p>
-            </div>
-          )}
-          {!instance ? (
-            <div className='flex items-center justify-between gap-4 px-5 py-4'>
-              <p className='text-[13px] text-slate-500'>Pipeline not started for this record.</p>
+    <>
+      <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border'>
+        <div
+          role='button'
+          tabIndex={0}
+          onClick={() => setExpanded((v) => !v)}
+          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setExpanded((v) => !v)}
+          className='flex w-full cursor-pointer items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
+        >
+          <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+          <span className='font-semibold text-sm text-slate-700'>{title || 'Pipeline'}</span>
+          <div className='flex items-center gap-1.5'>
+            {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
+            {addendumPending && (
+              <span className='flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
+                <span className='h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse shrink-0' />
+                Addendum in review
+              </span>
+            )}
+          </div>
+          <div className='ml-auto flex items-center gap-2' onClick={(e) => e.stopPropagation()}>
+            {!expanded && hasTransitions && (
+              <div className='flex flex-wrap items-center gap-1.5'>
+                {renderTransitionButtons(transitions, true)}
+              </div>
+            )}
+            {!expanded && !instance && data?.binding && (
               <Button
                 size='sm'
                 variant='outline'
-                className='shrink-0 gap-1.5 text-[12px]'
-                onClick={() => startPipeline.mutate()}
+                className='h-7 gap-1.5 text-[11px]'
+                onClick={(e) => {
+                  e.stopPropagation()
+                  startPipeline.mutate()
+                }}
                 disabled={startPipeline.isPending}
               >
                 {startPipeline.isPending ? (
-                  <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                  <Loader2 className='h-3 w-3 animate-spin' />
                 ) : (
-                  <GitBranch className='h-3.5 w-3.5' />
+                  <GitBranch className='h-3 w-3' />
                 )}
-                Start Pipeline
+                Start
               </Button>
-            </div>
-          ) : (
-            <div className='divide-y divide-slate-100 dark:divide-border/60'>
-              {(states ?? []).length > 1 && (
-                <div className='px-5 py-4'>
-                  <StateTrack
-                    states={states}
-                    allTransitions={data?.all_transitions ?? []}
-                    availableTransitions={transitions ?? []}
-                    currentStateId={instance.current_state}
-                    history={history ?? []}
-                  />
-                </div>
-              )}
-              <div className='px-5 py-4'>
-                <OwnersSection
-                  collection={collection}
-                  item={item}
-                  states={states ?? []}
-                  currentStateId={data?.instance?.current_state ?? null}
-                />
+            )}
+            {showApprovalChain && data?.binding && (
+              <ApprovalChainView
+                collection={collection}
+                item={item}
+                states={states ?? []}
+                currentStateId={data?.instance?.current_state ?? null}
+              />
+            )}
+          </div>
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150',
+              expanded && 'rotate-180'
+            )}
+          />
+        </div>
+        {!expanded && pendingTransition && (
+          <div className='border-t border-slate-100 dark:border-border/60 px-4 py-3'>
+            {confirmForm}
+          </div>
+        )}
+        {expanded && (
+          <div className='border-t border-slate-100 dark:border-border/60'>
+            {addendumPending && (
+              <div className='flex items-center gap-2 border-b border-amber-100 bg-amber-50 px-5 py-2.5 dark:border-amber-500/20 dark:bg-amber-500/10'>
+                <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />
+                <p className='text-[12px] text-amber-700 dark:text-amber-400'>
+                  An addendum is in review — coordinate transitions carefully.
+                </p>
               </div>
-              {hasTransitions && (
-                <div className='space-y-3 px-5 py-4'>
-                  <div className='flex flex-wrap justify-end gap-2'>
-                    {renderTransitionButtons(transitions)}
-                  </div>
-                  {pendingTransition && confirmForm}
-                </div>
-              )}
-              <div className='px-5 py-3'>
-                <button
-                  type='button'
-                  className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-slate-600'
-                  onClick={() => setShowHistory((v) => !v)}
+            )}
+            {!instance ? (
+              <div className='flex items-center justify-between gap-4 px-5 py-4'>
+                <p className='text-[13px] text-slate-500'>Pipeline not started for this record.</p>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='shrink-0 gap-1.5 text-[12px]'
+                  onClick={() => startPipeline.mutate()}
+                  disabled={startPipeline.isPending}
                 >
-                  <ChevronDown
-                    className={cn(
-                      'h-3.5 w-3.5 transition-transform duration-200',
-                      showHistory && 'rotate-180'
-                    )}
-                  />
-                  Transition history <span className='tabular-nums'>({history?.length ?? 0})</span>
-                </button>
-                {showHistory && (
-                  <div className='mt-3'>
-                    <HistoryTimeline history={history ?? []} />
+                  {startPipeline.isPending ? (
+                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                  ) : (
+                    <GitBranch className='h-3.5 w-3.5' />
+                  )}
+                  Start Pipeline
+                </Button>
+              </div>
+            ) : (
+              <div className='divide-y divide-slate-100 dark:divide-border/60'>
+                {(states ?? []).length > 1 && (
+                  <div className='px-5 py-4'>
+                    <StateTrack
+                      states={states}
+                      allTransitions={data?.all_transitions ?? []}
+                      availableTransitions={transitions ?? []}
+                      currentStateId={instance.current_state}
+                      history={history ?? []}
+                    />
                   </div>
                 )}
+                <div className='px-5 py-4'>
+                  <OwnersSection
+                    collection={collection}
+                    item={item}
+                    states={states ?? []}
+                    currentStateId={data?.instance?.current_state ?? null}
+                  />
+                </div>
+                {hasTransitions && (
+                  <div className='space-y-3 px-5 py-4'>
+                    <div className='flex flex-wrap justify-end gap-2'>
+                      {renderTransitionButtons(transitions)}
+                    </div>
+                    {pendingTransition && confirmForm}
+                  </div>
+                )}
+                <div className='px-5 py-3'>
+                  <button
+                    type='button'
+                    className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-slate-600'
+                    onClick={() => setShowHistory((v) => !v)}
+                  >
+                    <ChevronDown
+                      className={cn(
+                        'h-3.5 w-3.5 transition-transform duration-200',
+                        showHistory && 'rotate-180'
+                      )}
+                    />
+                    Transition history{' '}
+                    <span className='tabular-nums'>({history?.length ?? 0})</span>
+                  </button>
+                  {showHistory && (
+                    <div className='mt-3'>
+                      <HistoryTimeline history={history ?? []} />
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
+      </div>
+      {requirementsDialog && (
+        <TransitionRequirementsDialog
+          payload={requirementsDialog.payload}
+          collection={collection}
+          item={item}
+          onSubmitted={() =>
+            executeTransition.mutate({
+              transition_id: requirementsDialog.transitionId,
+              comment: requirementsDialog.comment
+            })
+          }
+          onClose={() => setRequirementsDialog(null)}
+        />
       )}
-    </div>
+    </>
   )
 }
 
@@ -1269,6 +1320,7 @@ function PipelineTransitionButtonsInner({
   const queryClient = useQueryClient()
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
+  const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
   const trySetPending = (txId: string) => {
     if (pendingTransition === txId) {
       setPendingTransition(null)
@@ -1307,9 +1359,19 @@ function PipelineTransitionButtonsInner({
       queryClient.invalidateQueries({ queryKey })
       setComment('')
       setPendingTransition(null)
+      setRequirementsDialog(null)
       toast.success('Transition executed')
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, variables) => {
+      const requirements = transitionRequirementsFromError(err)
+      if (requirements) {
+        setRequirementsDialog({
+          payload: requirements,
+          transitionId: variables.transition_id,
+          comment: variables.comment
+        })
+        return
+      }
       const resp = (err as { response?: { status?: number; data?: { error?: string } } })?.response
       toast.error(resp?.data?.error ?? 'Failed to execute transition')
       if (resp?.status === 409) {
@@ -1450,6 +1512,20 @@ function PipelineTransitionButtonsInner({
             </Button>
           </div>
         </div>
+      )}
+      {requirementsDialog && (
+        <TransitionRequirementsDialog
+          payload={requirementsDialog.payload}
+          collection={collection}
+          item={item}
+          onSubmitted={() =>
+            executeTransition.mutate({
+              transition_id: requirementsDialog.transitionId,
+              comment: requirementsDialog.comment
+            })
+          }
+          onClose={() => setRequirementsDialog(null)}
+        />
       )}
     </div>
   )
