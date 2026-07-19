@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
   Check,
-  CheckCircle2,
   ChevronDown,
   GitBranch,
   Loader2,
@@ -1097,12 +1096,6 @@ function PipelinePanelInner({
         <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         <span className='font-semibold text-sm text-slate-700'>{title || 'Pipeline'}</span>
         <div className='flex items-center gap-1.5'>
-          {instance?.completed_at && (
-            <span className='flex items-center gap-1 text-[11px] font-medium text-emerald-600'>
-              <CheckCircle2 className='h-3.5 w-3.5' />
-              Completed
-            </span>
-          )}
           {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
           {addendumPending && (
             <span className='flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
