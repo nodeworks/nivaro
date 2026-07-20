@@ -59,7 +59,7 @@ interface O2MRevisionEntry {
 
 const NON_DISPLAY_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
 // Built-in preset sentinel: shows every displayCols entry, no relation summary columns.
-// Not a real ColumnPreset — never appears in columnPresets, only in localStorage/activePreset.
+// Not a real ColumnPreset — never appears in columnPresets, only in activePreset/default_preset.
 const ALL_PRESET_SENTINEL = '__all__'
 
 function evalClientFormula(formula: string, row: Record<string, unknown>): number | null {
@@ -304,20 +304,16 @@ export function InlineTableField({
   const [saving, setSaving] = useState(false)
   const [uniqueError, setUniqueError] = useState<string | null>(null)
   const activeView = useAddendumView()
-  // Column view preset selection, persisted per grid instance
-  const presetStorageKey = `nvr_grid_preset_${relatedCollection}_${parentFieldKey ?? manyField}`
+  // Column view preset selection — session-only. Always initializes to the
+  // configured default view (then first preset); a clicked preset must NOT
+  // stick across reloads.
   const [activePreset, setActivePreset] = useState<string | undefined>(() => {
-    const stored = localStorage.getItem(presetStorageKey)
-    if (stored === ALL_PRESET_SENTINEL) return ALL_PRESET_SENTINEL
-    if (stored && columnPresets?.some(p => p.name === stored)) return stored
-    // No (valid) user choice yet: honor the configured default view, then first preset
     if (defaultPreset === ALL_PRESET_SENTINEL) return ALL_PRESET_SENTINEL
     if (defaultPreset && columnPresets?.some(p => p.name === defaultPreset)) return defaultPreset
     return columnPresets?.[0]?.name
   })
   function selectPreset(name: string) {
     setActivePreset(name)
-    localStorage.setItem(presetStorageKey, name)
   }
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
