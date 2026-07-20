@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Loader2 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { Fragment, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { patch } from '../../lib/commands'
 import { cn } from '../../lib/utils'
@@ -196,79 +196,95 @@ export function TransitionRequirementsDialog({
               Values changed since your last attempt — review the highlighted rows.
             </p>
           )}
-          {payload.map((entry) => (
-            <div key={`${entry.collection}-${entry.fk_field}-${entry.title}`} className='space-y-2'>
-              {payload.length > 1 && (
-                <h4 className='text-[12px] font-semibold text-slate-500'>{entry.title}</h4>
-              )}
-              {entry.fields.length > 0 && (
-                <div className='flex items-center gap-2 px-1 text-[11px] font-medium text-slate-400'>
-                  <span className='min-w-0 flex-1'>Row</span>
-                  {(entry.display_fields ?? []).map((f) => (
-                    <span key={f.field} className='w-32 shrink-0'>
-                      {f.label}
-                    </span>
-                  ))}
-                  {entry.fields.map((f) => (
-                    <span key={f.field} className='w-36 shrink-0'>
-                      {f.label}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <div className='space-y-1.5'>
-                {entry.rows.map((row) => {
-                  const rk = rowKey(entry.collection, row.id)
-                  return (
-                    <div
-                      key={rk}
-                      className='flex flex-wrap items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 dark:border-border'
-                    >
-                      <span className='flex min-w-0 flex-1 items-center gap-1.5'>
-                        {!row.complete && (
-                          <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 animate-pulse' />
-                        )}
-                        <span
-                          className={cn(
-                            'truncate text-[12px]',
-                            row.complete ? 'text-slate-400' : 'font-medium text-slate-700'
-                          )}
-                        >
-                          {row.label}
-                        </span>
-                      </span>
-                      {(entry.display_fields ?? []).map((f) => (
-                        <span
-                          key={f.field}
-                          className='w-32 shrink-0 truncate text-[12px] text-slate-500'
-                          title={toInputValue(row.display?.[f.field])}
-                        >
-                          {toInputValue(row.display?.[f.field]) || '—'}
-                        </span>
-                      ))}
-                      <div className='flex flex-wrap items-center gap-1.5'>
-                        {entry.fields.map((f) => (
-                          <Input
-                            key={f.field}
-                            value={values[rk]?.[f.field] ?? ''}
-                            onChange={(e) => setFieldValue(rk, f.field, e.target.value)}
-                            placeholder={f.label}
-                            className='h-8 w-36 text-[12px]'
-                          />
+          {payload.map((entry) => {
+            const displayFields = entry.display_fields ?? []
+            const colCount = 1 + displayFields.length + entry.fields.length
+            return (
+              <div
+                key={`${entry.collection}-${entry.fk_field}-${entry.title}`}
+                className='space-y-2'
+              >
+                {payload.length > 1 && (
+                  <h4 className='text-[12px] font-semibold text-slate-500'>{entry.title}</h4>
+                )}
+                <div className='overflow-x-auto rounded-md border border-slate-200 dark:border-border'>
+                  <table className='w-full border-collapse text-[12px]'>
+                    <thead>
+                      <tr className='border-b border-slate-200 bg-slate-50/60 text-left text-[11px] font-medium text-slate-400 dark:border-border dark:bg-white/[0.02]'>
+                        <th className='px-2.5 py-1.5 font-medium'>Row</th>
+                        {displayFields.map((f) => (
+                          <th key={f.field} className='px-2.5 py-1.5 font-medium'>
+                            {f.label}
+                          </th>
                         ))}
-                      </div>
-                      {rowErrors[rk] && (
-                        <p className='flex w-full items-center gap-1 text-[11px] text-red-600'>
-                          <AlertCircle className='h-3 w-3 shrink-0' />
-                          {rowErrors[rk]}
-                        </p>
-                      )}
-                    </div>
-                  )
-                })}
+                        {entry.fields.map((f) => (
+                          <th key={f.field} className='w-40 px-2.5 py-1.5 font-medium'>
+                            {f.label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {entry.rows.map((row) => {
+                        const rk = rowKey(entry.collection, row.id)
+                        return (
+                          <Fragment key={rk}>
+                            <tr className='border-b border-slate-100 last:border-b-0 dark:border-border/50'>
+                              <td className='max-w-[220px] px-2.5 py-1.5'>
+                                <span className='flex items-center gap-1.5'>
+                                  {!row.complete && (
+                                    <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 animate-pulse' />
+                                  )}
+                                  <span
+                                    className={cn(
+                                      'truncate',
+                                      row.complete ? 'text-slate-400' : 'font-medium text-slate-700'
+                                    )}
+                                    title={row.label}
+                                  >
+                                    {row.label}
+                                  </span>
+                                </span>
+                              </td>
+                              {displayFields.map((f) => (
+                                <td
+                                  key={f.field}
+                                  className='max-w-[200px] truncate px-2.5 py-1.5 text-slate-500'
+                                  title={toInputValue(row.display?.[f.field])}
+                                >
+                                  {toInputValue(row.display?.[f.field]) || '—'}
+                                </td>
+                              ))}
+                              {entry.fields.map((f) => (
+                                <td key={f.field} className='px-2 py-1'>
+                                  <Input
+                                    value={values[rk]?.[f.field] ?? ''}
+                                    onChange={(e) => setFieldValue(rk, f.field, e.target.value)}
+                                    placeholder={f.label}
+                                    className='h-8 w-full min-w-[9rem] text-[12px]'
+                                  />
+                                </td>
+                              ))}
+                            </tr>
+                            {rowErrors[rk] && (
+                              <tr>
+                                <td colSpan={colCount} className='px-2.5 pb-1.5'>
+                                  <p className='flex items-center gap-1 text-[11px] text-red-600'>
+                                    <AlertCircle className='h-3 w-3 shrink-0' />
+                                    {rowErrors[rk]}
+                                  </p>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </DialogBody>
         <DialogFooter>
           <Button type='button' variant='outline' onClick={onClose} disabled={submitting}>

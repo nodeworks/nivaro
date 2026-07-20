@@ -166,9 +166,71 @@ export async function evaluateTransitionRequirements(
       displayTemplate = null
     }
 
+    // Relation metadata for the child collection: M2O display fields resolve to
+    // the related record's display value; M2M alias fields resolve to a joined
+    // list via the junction. Failures fall back to raw values — display polish
+    // must never block a transition.
+    let childRels: Array<{
+      many_collection: string
+      many_field: string
+      one_collection: string | null
+      one_field: string | null
+      junction_field: string | null
+    }> = []
+    try {
+      childRels = (await database('nivaro_relations')
+        .where({ many_collection: collection })
+        .orWhere({ one_collection: collection })
+        .select(
+          'many_collection',
+          'many_field',
+          'one_collection',
+          'one_field',
+          'junction_field'
+        )) as typeof childRels
+    } catch {
+      childRels = []
+    }
+    const m2oByField = new Map<string, string>()
+    const m2mByField = new Map<
+      string,
+      { junction: string; fkToChild: string; junctionField: string; relatedCollection: string }
+    >()
+    for (const f of displayFields) {
+      const m2o = childRels.find(
+        (r) => r.many_collection === collection && r.many_field === f && r.junction_field == null
+      )
+      if (m2o?.one_collection) {
+        m2oByField.set(f, m2o.one_collection)
+        continue
+      }
+      const alias = childRels.find(
+        (r) =>
+          r.one_collection === collection &&
+          r.junction_field != null &&
+          (r.one_field === f || r.many_collection === f)
+      )
+      if (alias?.junction_field) {
+        const companion = childRels.find(
+          (r) =>
+            r.many_collection === alias.many_collection && r.many_field === alias.junction_field
+        )
+        if (companion?.one_collection) {
+          m2mByField.set(f, {
+            junction: alias.many_collection,
+            fkToChild: alias.many_field,
+            junctionField: alias.junction_field,
+            relatedCollection: companion.one_collection
+          })
+        }
+      }
+    }
+    // Alias fields are not real columns — keep them out of the child SELECT.
+    const columnDisplayFields = displayFields.filter((f) => !m2mByField.has(f))
+
     const templateFields = extractTemplateFields(displayTemplate)
     const selectFields = [
-      ...new Set(['id', ...requiredFields, ...displayFields, ...templateFields])
+      ...new Set(['id', ...requiredFields, ...columnDisplayFields, ...templateFields])
     ]
 
     let childRows: Array<Record<string, unknown>> = []
@@ -193,11 +255,89 @@ export async function evaluateTransitionRequirements(
     const incompleteIds = findIncompleteRows(childRows, requiredFields)
     if (incompleteIds.size === 0) continue // every row already filled in
 
+    const relatedLabel = async (
+      relatedCollection: string,
+      ids: unknown[]
+    ): Promise<Map<string, string>> => {
+      const out = new Map<string, string>()
+      const distinct = [...new Set(ids.filter((v) => v != null).map(String))]
+      if (distinct.length === 0) return out
+      let template: string | null = null
+      try {
+        template = (await getCollection(relatedCollection))?.display_template ?? null
+      } catch {
+        template = null
+      }
+      const related = (await database(relatedCollection)
+        .whereIn('id', distinct)
+        .limit(500)
+        .select('*')) as Array<Record<string, unknown>>
+      for (const r of related) out.set(String(r.id), resolveDisplayValue(r, template))
+      return out
+    }
+
+    const m2oResolved = new Map<string, Map<string, string>>()
+    for (const [f, relatedCollection] of m2oByField) {
+      try {
+        m2oResolved.set(
+          f,
+          await relatedLabel(
+            relatedCollection,
+            childRows.map((r) => r[f])
+          )
+        )
+      } catch (err) {
+        logger.warn(
+          { err, collection, field: f },
+          'transition requirements: m2o display resolve failed'
+        )
+      }
+    }
+
+    const m2mResolved = new Map<string, Map<string, string>>()
+    for (const [f, cfg] of m2mByField) {
+      try {
+        const childIds = childRows.map((r) => String(r.id))
+        const junctionRows = (await database(cfg.junction)
+          .whereIn(cfg.fkToChild, childIds)
+          .limit(2000)
+          .select(cfg.fkToChild, cfg.junctionField)) as Array<Record<string, unknown>>
+        const labels = await relatedLabel(
+          cfg.relatedCollection,
+          junctionRows.map((j) => j[cfg.junctionField])
+        )
+        const byChild = new Map<string, string[]>()
+        for (const j of junctionRows) {
+          const childId = String(j[cfg.fkToChild])
+          const label = labels.get(String(j[cfg.junctionField]))
+          if (!label) continue
+          const arr = byChild.get(childId) ?? []
+          arr.push(label)
+          byChild.set(childId, arr)
+        }
+        m2mResolved.set(f, new Map([...byChild].map(([k, v]) => [k, v.join(', ')])))
+      } catch (err) {
+        logger.warn(
+          { err, collection, field: f },
+          'transition requirements: m2m display resolve failed'
+        )
+      }
+    }
+
     const rows: RequirementRow[] = childRows.map((row) => {
       const values: Record<string, unknown> = {}
       for (const f of requiredFields) values[f] = row[f] ?? null
       const display: Record<string, unknown> = {}
-      for (const f of displayFields) display[f] = row[f] ?? null
+      for (const f of displayFields) {
+        if (m2mByField.has(f)) {
+          display[f] = m2mResolved.get(f)?.get(String(row.id)) ?? null
+        } else if (m2oByField.has(f)) {
+          const raw = row[f]
+          display[f] = raw == null ? null : (m2oResolved.get(f)?.get(String(raw)) ?? raw)
+        } else {
+          display[f] = row[f] ?? null
+        }
+      }
       let label = displayTemplate ? resolveDisplayValue(row, displayTemplate) : ''
       if (!label) label = `#${String(row.id)}`
       return { id: row.id, label, complete: !incompleteIds.has(row.id), values, display }
