@@ -36,6 +36,7 @@ export interface RLColumn {
   field: string
   label: string
   format: string
+  color: string
 }
 export interface ReviewListCfg {
   host_collection: string
@@ -49,6 +50,8 @@ export interface ReviewListCfg {
   line_columns: RLColumn[]
   status_field: string
   status_options: RLStatusOption[]
+  status_empty_label: string
+  status_empty_color: string
   stamp_user_field: string
   stamp_date_field: string
 }
@@ -61,10 +64,11 @@ function rawColumns(v: unknown): RLColumn[] {
       return {
         field: String(o.field ?? ''),
         label: o.label != null ? String(o.label) : '',
-        format: o.format != null ? String(o.format) : ''
+        format: o.format != null ? String(o.format) : '',
+        color: o.color != null ? String(o.color) : ''
       }
     }
-    return { field: String(e), label: '', format: '' }
+    return { field: String(e), label: '', format: '', color: '' }
   })
 }
 
@@ -74,6 +78,7 @@ function columnsToRaw(cols: RLColumn[]): Array<string | Record<string, unknown>>
     const out: Record<string, unknown> = { field: c.field }
     if (c.label) out.label = c.label
     if (c.format) out.format = c.format
+    if (c.format === 'flag' && c.color) out.color = c.color
     return out
   })
 }
@@ -120,6 +125,8 @@ export function rawToReviewList(r: Record<string, unknown>): ReviewListCfg {
     line_columns: rawColumns(r.line_columns),
     status_field: String(status.field ?? ''),
     status_options: statusOptions,
+    status_empty_label: status.empty_label != null ? String(status.empty_label) : '',
+    status_empty_color: status.empty_color != null ? String(status.empty_color) : '',
     stamp_user_field: status.stamp_user_field != null ? String(status.stamp_user_field) : '',
     stamp_date_field: status.stamp_date_field != null ? String(status.stamp_date_field) : ''
   }
@@ -143,6 +150,10 @@ export function reviewListToRaw(c: ReviewListCfg): Record<string, unknown> {
   if (c.group_meta.length) out.group_meta = columnsToRaw(c.group_meta)
   if (c.line_columns.length) out.line_columns = columnsToRaw(c.line_columns)
   const status: Record<string, unknown> = { field: c.status_field, options: c.status_options }
+  if (c.status_empty_label) {
+    status.empty_label = c.status_empty_label
+    if (c.status_empty_color) status.empty_color = c.status_empty_color
+  }
   if (c.stamp_user_field) status.stamp_user_field = c.stamp_user_field
   if (c.stamp_date_field) status.stamp_date_field = c.stamp_date_field
   out.status = status
@@ -298,7 +309,8 @@ const FORMAT_OPTS = [
   { value: 'number', label: 'Number' },
   { value: 'currency', label: 'Currency' },
   { value: 'date', label: 'Date' },
-  { value: 'datetime', label: 'Date + time' }
+  { value: 'datetime', label: 'Date + time' },
+  { value: 'flag', label: 'Flag badge' }
 ]
 
 function MultiFieldPicker({
@@ -314,7 +326,7 @@ function MultiFieldPicker({
   function toggle(field: string, checked: boolean) {
     onChange(
       checked
-        ? [...value, { field, label: '', format: '' }]
+        ? [...value, { field, label: '', format: '', color: '' }]
         : value.filter((c) => c.field !== field)
     )
   }
@@ -365,6 +377,16 @@ function MultiFieldPicker({
                   widthClass='w-[130px]'
                 />
               </div>
+              {c.format === 'flag' && (
+                <div className='w-[90px]'>
+                  <PickCombobox
+                    value={c.color || 'amber'}
+                    onChange={(v) => upd(c.field, { color: v })}
+                    options={STATUS_COLOR_OPTS}
+                    widthClass='w-[120px]'
+                  />
+                </div>
+              )}
               <Button
                 size='icon'
                 variant='ghost'
@@ -380,7 +402,7 @@ function MultiFieldPicker({
       )}
       <CustomDotPathInput
         onAdd={(v) => {
-          if (!selected(v)) onChange([...value, { field: v, label: '', format: '' }])
+          if (!selected(v)) onChange([...value, { field: v, label: '', format: '', color: '' }])
         }}
       />
     </div>
@@ -647,7 +669,7 @@ export function ReviewListConfigForm({
                 <PickCombobox
                   value={cfg.aggregate_sum_format}
                   onChange={(v) => set('aggregate_sum_format', v)}
-                  options={FORMAT_OPTS.filter((o) => !o.value.startsWith('date'))}
+                  options={FORMAT_OPTS.filter((o) => ['', 'number', 'currency'].includes(o.value))}
                   widthClass='w-[130px]'
                 />
               </div>
@@ -767,6 +789,31 @@ export function ReviewListConfigForm({
               </div>
             )
           })}
+        </div>
+      </div>
+
+      <div className='space-y-1'>
+        <Label className='text-[11px] text-muted-foreground'>
+          Empty status badge{' '}
+          <span className='text-[10px] opacity-60'>(shown when a row has no status yet)</span>
+        </Label>
+        <div className='flex items-center gap-1.5'>
+          <Input
+            className='h-7 flex-1 text-[12px]'
+            value={cfg.status_empty_label}
+            onChange={(e) => set('status_empty_label', e.target.value)}
+            placeholder='e.g. Unreviewed — empty for a plain dash'
+          />
+          {cfg.status_empty_label && (
+            <div className='w-[110px]'>
+              <PickCombobox
+                value={cfg.status_empty_color || 'blue'}
+                onChange={(v) => set('status_empty_color', v)}
+                options={STATUS_COLOR_OPTS}
+                widthClass='w-[140px]'
+              />
+            </div>
+          )}
         </div>
       </div>
 

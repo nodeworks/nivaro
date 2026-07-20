@@ -28,7 +28,9 @@ export const IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 const MAX_PATH_HOPS = 4
 const CAP = 2000
 
-export const COLUMN_FORMATS = ['currency', 'number', 'date', 'datetime'] as const
+// 'flag' renders a colored pill bearing the column label when the value is
+// truthy (and nothing when falsy) — for boolean badges like "On Hold".
+export const COLUMN_FORMATS = ['currency', 'number', 'date', 'datetime', 'flag'] as const
 export type ColumnFormat = (typeof COLUMN_FORMATS)[number]
 
 /** Object form of a group_meta / line_columns entry. Plain strings remain valid. */
@@ -36,6 +38,8 @@ export interface ColumnSpec {
   field: string
   label?: string
   format?: ColumnFormat
+  /** Pill color for format 'flag' (same palette as status option colors). */
+  color?: string
 }
 
 export interface ReviewListConfig {
@@ -51,6 +55,9 @@ export interface ReviewListConfig {
   status: {
     field: string
     options: Array<{ value: string; label: string; color: string }>
+    /** Badge shown when the status value is empty (e.g. "Unreviewed"). */
+    empty_label?: string | null
+    empty_color?: string | null
     stamp_user_field?: string | null
     stamp_date_field?: string | null
   }
@@ -77,8 +84,18 @@ export interface ReviewListRow {
 export interface ReviewListResult {
   rows: ReviewListRow[]
   columns: {
-    group_meta: Array<{ field: string; label: string; format: ColumnFormat | null }>
-    line_columns: Array<{ field: string; label: string; format: ColumnFormat | null }>
+    group_meta: Array<{
+      field: string
+      label: string
+      format: ColumnFormat | null
+      color: string | null
+    }>
+    line_columns: Array<{
+      field: string
+      label: string
+      format: ColumnFormat | null
+      color: string | null
+    }>
   }
   truncated: boolean
 }
@@ -263,6 +280,9 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
       if (spec.format !== undefined && !COLUMN_FORMATS.includes(spec.format as ColumnFormat)) {
         return `${key}[${i}].format must be one of: ${COLUMN_FORMATS.join(', ')}`
       }
+      if (spec.color !== undefined && (typeof spec.color !== 'string' || !spec.color)) {
+        return `${key}[${i}].color must be a non-empty string`
+      }
     }
     return null
   }
@@ -277,6 +297,20 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
   if (!isPlainIdentifier(status.field)) return 'status.field must be a valid identifier'
   if (!Array.isArray(status.options) || status.options.length === 0) {
     return 'status.options must be a non-empty array'
+  }
+  if (
+    status.empty_label !== undefined &&
+    status.empty_label !== null &&
+    (typeof status.empty_label !== 'string' || !status.empty_label)
+  ) {
+    return 'status.empty_label must be a non-empty string'
+  }
+  if (
+    status.empty_color !== undefined &&
+    status.empty_color !== null &&
+    (typeof status.empty_color !== 'string' || !status.empty_color)
+  ) {
+    return 'status.empty_color must be a non-empty string'
   }
   const seenValues = new Set<string>()
   for (let i = 0; i < status.options.length; i++) {
@@ -587,7 +621,8 @@ export async function resolveReviewListRows(
   const toColumnMeta = (spec: ColumnSpec) => ({
     field: spec.field,
     label: spec.label || labelByField.get(spec.field) || spec.field,
-    format: spec.format ?? null
+    format: spec.format ?? null,
+    color: spec.color ?? null
   })
 
   return {

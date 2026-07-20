@@ -210,12 +210,12 @@ describe('resolveReviewListRows — invoices 2-hop reverse walk (pinned fixture)
     expect(result.truncated).toBe(false)
     expect(result.columns).toEqual({
       group_meta: [
-        { field: 'number', label: 'PO Number', format: null },
-        { field: 'hold_reason', label: 'hold_reason', format: null }
+        { field: 'number', label: 'PO Number', format: null, color: null },
+        { field: 'hold_reason', label: 'hold_reason', format: null, color: null }
       ],
       line_columns: [
-        { field: 'line_item_number', label: 'line_item_number', format: null },
-        { field: 'amount', label: 'amount', format: null }
+        { field: 'line_item_number', label: 'line_item_number', format: null, color: null },
+        { field: 'amount', label: 'amount', format: null, color: null }
       ]
     })
     expect(result.rows).toEqual([
@@ -469,7 +469,7 @@ describe('resolveReviewListRows — dot-path label resolution (one M2O hop)', ()
 
     expect(result.rows[0].values).toEqual({ 'purchase_order.number': 'PO-100' })
     expect(result.columns.group_meta).toEqual([
-      { field: 'purchase_order.number', label: 'purchase_order.number', format: null }
+      { field: 'purchase_order.number', label: 'purchase_order.number', format: null, color: null }
     ])
   })
 })
@@ -495,10 +495,10 @@ describe('resolveReviewListRows — object column specs (label override + format
     // Config label wins over the nivaro_fields label ('PO Number'); string
     // entries stay back-compatible with format: null.
     expect(result.columns).toEqual({
-      group_meta: [{ field: 'number', label: 'Invoice #', format: null }],
+      group_meta: [{ field: 'number', label: 'Invoice #', format: null, color: null }],
       line_columns: [
-        { field: 'line_item_number', label: 'line_item_number', format: null },
-        { field: 'amount', label: 'Amount', format: 'currency' }
+        { field: 'line_item_number', label: 'line_item_number', format: null, color: null },
+        { field: 'amount', label: 'Amount', format: 'currency', color: null }
       ]
     })
     expect(result.rows[0].values).toEqual({
@@ -607,6 +607,22 @@ describe('validateReviewListConfig', () => {
     const badField = baseValidConfig() as Record<string, unknown>
     badField.group_meta = [{ field: 'a.b.c' }]
     expect(validateReviewListConfig(badField, RELATIONS)).toMatch(/group_meta\[0\].field/)
+  })
+
+  it('accepts flag columns with color and status empty badge; rejects empty strings', () => {
+    const ok = baseValidConfig() as Record<string, unknown>
+    ok.group_meta = [{ field: 'is_on_hold', label: 'On Hold', format: 'flag', color: 'amber' }]
+    ;(ok.status as Record<string, unknown>).empty_label = 'Unreviewed'
+    ;(ok.status as Record<string, unknown>).empty_color = 'blue'
+    expect(validateReviewListConfig(ok, RELATIONS)).toBeNull()
+
+    const badColor = baseValidConfig() as Record<string, unknown>
+    badColor.group_meta = [{ field: 'is_on_hold', format: 'flag', color: '' }]
+    expect(validateReviewListConfig(badColor, RELATIONS)).toMatch(/group_meta\[0\].color/)
+
+    const badEmpty = baseValidConfig() as Record<string, unknown>
+    ;(badEmpty.status as Record<string, unknown>).empty_label = ''
+    expect(validateReviewListConfig(badEmpty, RELATIONS)).toMatch(/empty_label/)
   })
 
   it('validates aggregate_sum_format against the format enum', () => {

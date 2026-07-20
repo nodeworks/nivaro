@@ -16,12 +16,13 @@ export interface ReviewListStatusOption {
   color: string
 }
 
-export type ReviewListColumnFormat = 'currency' | 'number' | 'date' | 'datetime'
+export type ReviewListColumnFormat = 'currency' | 'number' | 'date' | 'datetime' | 'flag'
 
 export interface ReviewListColumnSpec {
   field: string
   label?: string
   format?: ReviewListColumnFormat
+  color?: string
 }
 
 export interface ReviewListConfig {
@@ -37,6 +38,8 @@ export interface ReviewListConfig {
   status: {
     field: string
     options: ReviewListStatusOption[]
+    empty_label?: string | null
+    empty_color?: string | null
     stamp_user_field?: string | null
     stamp_date_field?: string | null
   }
@@ -54,10 +57,26 @@ export interface ReviewListRow {
 export interface ReviewListResult {
   rows: ReviewListRow[]
   columns: {
-    group_meta: Array<{ field: string; label: string; format?: ReviewListColumnFormat | null }>
-    line_columns: Array<{ field: string; label: string; format?: ReviewListColumnFormat | null }>
+    group_meta: Array<{
+      field: string
+      label: string
+      format?: ReviewListColumnFormat | null
+      color?: string | null
+    }>
+    line_columns: Array<{
+      field: string
+      label: string
+      format?: ReviewListColumnFormat | null
+      color?: string | null
+    }>
   }
   truncated: boolean
+}
+
+// Bit/boolean columns arrive as true/1/'1'/'true' depending on driver and
+// dialect — normalize for flag rendering.
+function isTruthyFlag(v: unknown): boolean {
+  return v === true || v === 1 || v === '1' || v === 'true'
 }
 
 // ─── Value formatting ───────────────────────────────────────────────────────
@@ -116,10 +135,14 @@ function StatusBadge({ label, color }: { label: string; color: string | null }) 
 
 function statusDisplay(
   value: unknown,
-  options: ReviewListStatusOption[]
+  status: ReviewListConfig['status']
 ): { label: string; color: string | null } {
-  if (value == null || value === '') return { label: '—', color: null }
-  const match = options.find((o) => o.value === String(value))
+  if (value == null || value === '') {
+    return status.empty_label
+      ? { label: status.empty_label, color: status.empty_color ?? 'blue' }
+      : { label: '—', color: null }
+  }
+  const match = status.options.find((o) => o.value === String(value))
   if (match) return { label: match.label, color: match.color }
   return { label: String(value), color: null }
 }
@@ -270,7 +293,7 @@ export function ReviewListWidget({
           const isOpen = expanded.has(group.key)
           const badge = group.mixedStatus
             ? { label: 'Mixed', color: null }
-            : statusDisplay(group.uniformStatus, config.status.options)
+            : statusDisplay(group.uniformStatus, config.status)
           const firstRow = group.rows[0]
           const stampUser = firstRow.stamp_user
           const stampDate = firstRow.stamp_date
@@ -297,6 +320,12 @@ export function ReviewListWidget({
                   </span>
                   {groupMetaCols.map((c) => {
                     const v = firstRow.values[c.field]
+                    if (c.format === 'flag') {
+                      if (!isTruthyFlag(v)) return null
+                      return (
+                        <StatusBadge key={c.field} label={c.label} color={c.color ?? 'amber'} />
+                      )
+                    }
                     if (v == null || v === '') return null
                     return (
                       <span
@@ -378,7 +407,15 @@ export function ReviewListWidget({
                               key={c.field}
                               className='px-2.5 py-1.5 text-slate-600 dark:text-slate-300'
                             >
-                              {formatValue(row.values[c.field], c.format)}
+                              {c.format === 'flag' ? (
+                                isTruthyFlag(row.values[c.field]) ? (
+                                  <StatusBadge label={c.label} color={c.color ?? 'amber'} />
+                                ) : (
+                                  '—'
+                                )
+                              ) : (
+                                formatValue(row.values[c.field], c.format)
+                              )}
                             </td>
                           ))}
                         </tr>
