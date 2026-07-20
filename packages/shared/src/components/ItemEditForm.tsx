@@ -400,6 +400,31 @@ export function computeM2MEffectiveIds(
   return [...new Set([...committed, ...staged])]
 }
 
+// Appends `id` to `existing` unless an id string-equal to it is already
+// present. Returns `existing` unchanged (same reference) when it's a no-op,
+// so a setState updater built on this can bail out without a wasted
+// re-render. This is the actual dedup guarantee for staged M2M links —
+// every stageLink call goes through it, so no caller (rule-staging or
+// otherwise) can ever produce a duplicate entry for the same field.
+export function appendUniqueM2MId(existing: unknown[], id: unknown): unknown[] {
+  if (existing.some((x) => String(x) === String(id))) return existing
+  return [...existing, id]
+}
+
+// Filters `returnedIds` down to the ones not already in `liveEffectiveIds`.
+// Used at field-rule apply time so two overlapping /field-rules/evaluate
+// responses (e.g. from two rapid trigger changes) each stage only what the
+// OTHER hasn't already staged by the time they run — `liveEffectiveIds`
+// should come from current state read at call time, not a value captured
+// when the request was fired.
+export function idsNeedingStaging(
+  returnedIds: unknown[],
+  liveEffectiveIds: string[] | null | undefined
+): unknown[] {
+  const current = new Set((liveEffectiveIds ?? []).map(String))
+  return returnedIds.filter((id) => !current.has(String(id)))
+}
+
 // An M2M alias field's committed junction rows load asynchronously (the
 // query is shared with M2MCombobox, but on an existing record it may not
 // have settled yet by the time a rule fires). Reporting [] in that window
@@ -793,11 +818,12 @@ export function ItemEditForm({
       getStagedUnlinks: (k) => m2mUnlinks.get(k) ?? new Set(),
       stageLink: (k, id) =>
         setM2mLinks((prev) => {
-          const next = new Map(prev)
-          const arr = [...(next.get(k) ?? [])]
-          if (!arr.map(String).includes(String(id))) arr.push(id)
-          next.set(k, arr)
-          return next
+          const existing = prev.get(k) ?? []
+          const next = appendUniqueM2MId(existing, id)
+          if (next === existing) return prev
+          const nextMap = new Map(prev)
+          nextMap.set(k, next)
+          return nextMap
         }),
       stageUnlink: (k, jId) =>
         setM2mUnlinks((prev) => {
@@ -1476,6 +1502,17 @@ export function ItemEditForm({
     return out
   }, [m2mAliasFieldsForRules, m2mAliasCommittedResults, m2mLinks, m2mUnlinks, itemId, isNew])
 
+  // Kept in sync every render (not gated by a dependency list) so an async
+  // callback whose closure was captured before this render — e.g. an
+  // in-flight /field-rules/evaluate response fired by an earlier trigger
+  // change — can still read the truly current effective-id set when it
+  // eventually runs, rather than whatever was true when its own request was
+  // sent. Two overlapping evaluate responses (two rapid trigger changes)
+  // otherwise both see an empty "already staged" set and would try to stage
+  // the same returned ids twice.
+  const m2mAliasFieldStatesRef = useRef(m2mAliasFieldStates)
+  m2mAliasFieldStatesRef.current = m2mAliasFieldStates
+
   // undefined = not an alias field (existing scalar/M2O behavior unaffected).
   // An alias field's ids default to [] while unknown — callers that need to
   // tell "unknown" apart from "genuinely empty" must check m2mAliasFieldStates
@@ -1499,14 +1536,20 @@ export function ItemEditForm({
   const applyFieldRuleResults = useCallback(
     (results: Record<string, unknown> | null | undefined) => {
       const { scalar, alias } = partitionRuleResults(results, new Set(m2mAliasFieldsForRules.keys()))
+      // Unsettled-guard: checked against the state captured when this
+      // response's evaluate cycle started — a target that wasn't known yet
+      // simply gets another chance on the next trigger fire.
       const settledAlias = dropUnsettledAliasResults(alias, m2mAliasFieldStates)
       for (const [field, ids] of Object.entries(settledAlias)) {
         const info = m2mAliasFieldsForRules.get(field)
         if (!info) continue
-        const currentIds = new Set((getM2MEffectiveIds(field) ?? []).map(String))
-        for (const id of ids) {
-          if (!currentIds.has(String(id))) m2mStagingCtx.stageLink(info.stagingKey, id)
-        }
+        // Skip-check: read the LIVE ref, not this closure's captured
+        // m2mAliasFieldStates — so a response applied after another
+        // overlapping one (e.g. from two rapid trigger changes) sees
+        // whatever that other response already staged, not what was true
+        // when this request was fired.
+        const toStage = idsNeedingStaging(ids, m2mAliasFieldStatesRef.current[field]?.ids)
+        for (const id of toStage) m2mStagingCtx.stageLink(info.stagingKey, id)
       }
       if (Object.keys(scalar).length > 0) {
         const merged = mergeRuleResults(draftRef.current, scalar)
@@ -1514,7 +1557,7 @@ export function ItemEditForm({
         setDraft(merged)
       }
     },
-    [m2mAliasFieldsForRules, m2mAliasFieldStates, getM2MEffectiveIds, m2mStagingCtx]
+    [m2mAliasFieldsForRules, m2mAliasFieldStates, m2mStagingCtx]
   )
 
   const fieldRuleTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})

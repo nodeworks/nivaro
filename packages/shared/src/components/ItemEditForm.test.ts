@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  appendUniqueM2MId,
   applyLayoutDefaults,
   computeM2MEffectiveIds,
   dropUnsettledAliasResults,
   type FieldRule,
+  idsNeedingStaging,
   type M2MFieldState,
   mergeRuleResults,
   partitionRuleResults,
@@ -299,5 +301,62 @@ describe('dropUnsettledAliasResults', () => {
 
   it('returns an empty object when alias is empty', () => {
     expect(dropUnsettledAliasResults({}, { regions: { known: true, ids: [] } })).toEqual({})
+  })
+})
+
+describe('appendUniqueM2MId', () => {
+  it('appends a new id', () => {
+    expect(appendUniqueM2MId(['r1'], 'r2')).toEqual(['r1', 'r2'])
+  })
+
+  it('is idempotent — staging the same id twice yields a single entry', () => {
+    const once = appendUniqueM2MId([], 'r1')
+    const twice = appendUniqueM2MId(once, 'r1')
+    expect(twice).toEqual(['r1'])
+  })
+
+  it('returns the same array reference when the id is already present (no-op bail)', () => {
+    const existing = ['r1', 'r2']
+    expect(appendUniqueM2MId(existing, 'r1')).toBe(existing)
+  })
+
+  it('treats a string id and a number id as the same entry', () => {
+    const withNumber = appendUniqueM2MId([], 5)
+    expect(appendUniqueM2MId(withNumber, '5')).toEqual([5])
+    const withString = appendUniqueM2MId([], '5')
+    expect(appendUniqueM2MId(withString, 5)).toEqual(['5'])
+  })
+
+  it('starts from an empty array', () => {
+    expect(appendUniqueM2MId([], 'r1')).toEqual(['r1'])
+  })
+})
+
+describe('idsNeedingStaging', () => {
+  it('filters out ids already present in the live effective set', () => {
+    expect(idsNeedingStaging(['r1', 'r2', 'r3'], ['r1', 'r2'])).toEqual(['r3'])
+  })
+
+  it('returns everything when nothing is live-selected yet', () => {
+    expect(idsNeedingStaging(['r1', 'r2'], [])).toEqual(['r1', 'r2'])
+    expect(idsNeedingStaging(['r1', 'r2'], null)).toEqual(['r1', 'r2'])
+    expect(idsNeedingStaging(['r1', 'r2'], undefined)).toEqual(['r1', 'r2'])
+  })
+
+  it('returns an empty array when everything is already live-selected', () => {
+    expect(idsNeedingStaging(['r1', 'r2'], ['r1', 'r2', 'r3'])).toEqual([])
+  })
+
+  it('coerces ids to strings when comparing', () => {
+    expect(idsNeedingStaging([5, '6'], ['5'])).toEqual(['6'])
+  })
+
+  it('reflects a live set that changed after the returned ids were computed — the overlapping-response race', () => {
+    // Simulates: response A already staged r1-r3 (now live); response B,
+    // whose own request fired before A's staging happened, returns the same
+    // r1-r3 plus r4. Only r4 should still need staging.
+    const returnedByResponseB = ['r1', 'r2', 'r3', 'r4']
+    const liveAfterResponseA = ['r1', 'r2', 'r3']
+    expect(idsNeedingStaging(returnedByResponseB, liveAfterResponseA)).toEqual(['r4'])
   })
 })
