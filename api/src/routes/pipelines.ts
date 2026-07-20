@@ -820,7 +820,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   app.delete('/transitions/:txId', { preHandler: requireAdmin }, async (req, reply) => {
     const { txId } = req.params as { txId: string }
-    const deleted = await db('nivaro_workflow_transitions').where({ id: txId }).delete()
+    let deleted: number
+    try {
+      deleted = await db('nivaro_workflow_transitions').where({ id: txId }).delete()
+    } catch {
+      // FK from nivaro_workflow_history — executed transitions carry history
+      return reply.code(409).send({
+        error: 'This transition has been executed (history exists) and cannot be deleted.'
+      })
+    }
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     await logActivity({
       action: 'delete',

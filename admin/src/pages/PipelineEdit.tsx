@@ -2236,27 +2236,49 @@ export function PipelineEditPage() {
 
   const updateRoute = useMutation({
     mutationFn: async ({ route, data }: { route: RouteEntry; data: TransitionFormData }) => {
-      for (const txId of route.ids) await api.delete(`/pipelines/transitions/${txId}`)
+      // Diff-based save: PATCH kept targets in place, POST added ones, DELETE
+      // removed ones LAST. The old delete-all-then-recreate broke on any
+      // transition with history (FK) and risked losing the route on a
+      // mid-flight failure.
+      const existingByToState = new Map<string, string>()
+      route.to_states.forEach((ts, i) => {
+        existingByToState.set(ts, route.ids[i])
+      })
+      const desired = new Set(data.to_states)
+      const shared = {
+        from_state: data.from_state,
+        label: data.label,
+        color: data.color,
+        required_roles: data.required_roles,
+        condition_rules: data.condition_rules,
+        requirements: data.requirements
+      }
       for (const to_state of data.to_states) {
-        await api.post(`/pipelines/${id}/transitions`, {
-          from_state: data.from_state,
-          label: data.label,
-          color: data.color,
-          required_roles: data.required_roles,
-          condition_rules: data.condition_rules,
-          requirements: data.requirements,
-          group_label: null,
-          actions: null,
-          sort: 0,
-          to_state
-        })
+        const txId = existingByToState.get(to_state)
+        if (txId) {
+          await api.patch(`/pipelines/transitions/${txId}`, { ...shared, to_state })
+        } else {
+          await api.post(`/pipelines/${id}/transitions`, {
+            ...shared,
+            group_label: null,
+            actions: null,
+            sort: 0,
+            to_state
+          })
+        }
+      }
+      for (const [ts, txId] of existingByToState) {
+        if (!desired.has(ts)) await api.delete(`/pipelines/transitions/${txId}`)
       }
     },
     onSuccess: () => {
       invalidate()
       setEditingRoute(null)
     },
-    onError: () => toast.error('Failed to update route')
+    onError: (err: unknown) => {
+      const resp = (err as { response?: { data?: { error?: string } } })?.response
+      toast.error(resp?.data?.error ?? 'Failed to update route')
+    }
   })
 
   const deleteRoute = useMutation({
