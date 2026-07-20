@@ -15010,6 +15010,13 @@ function FieldGroupsTab({
           }> | null) ?? []
         const derivedInputs: Array<{ key: string; label: string; type: string }> = (() => {
           if (declaredInputs.length > 0) return []
+          // review_list widgets declare no static inputs, but always need
+          // record_id — surface it here so it's visible/editable like any
+          // other widget's bindings (TableEditor.tsx Add Widget already
+          // defaults its binding_value to 'id').
+          if (wDef?.widget_type === 'review_list') {
+            return [{ key: 'record_id', label: 'Record ID', type: 'string' }]
+          }
           const cfg =
             ((wDef as unknown as Record<string, unknown>)?.config as Record<
               string,
@@ -15183,6 +15190,13 @@ function FieldGroupsTab({
           }> | null) ?? []
         const derivedInputs: Array<{ key: string; label: string; type: string }> = (() => {
           if (declaredInputs.length > 0) return []
+          // review_list widgets declare no static inputs, but always need
+          // record_id — surface it here so it's visible/editable like any
+          // other widget's bindings (TableEditor.tsx Add Widget already
+          // defaults its binding_value to 'id').
+          if (wDef?.widget_type === 'review_list') {
+            return [{ key: 'record_id', label: 'Record ID', type: 'string' }]
+          }
           const cfg =
             ((wDef as unknown as Record<string, unknown>)?.config as Record<
               string,
@@ -15834,7 +15848,13 @@ function FieldGroupsTab({
                                   name: w.name,
                                   label_override: null,
                                   is_visible: true,
-                                  input_bindings: []
+                                  // review_list widgets need record_id bound to the host
+                                  // record's id to resolve rows — default it so the
+                                  // widget works without an extra manual binding step.
+                                  input_bindings:
+                                    w.widget_type === 'review_list'
+                                      ? [{ key: 'record_id', binding_type: 'item_field', binding_value: 'id' }]
+                                      : []
                                 }
                               }))
                               setLocalFieldOrder((prev) => ({

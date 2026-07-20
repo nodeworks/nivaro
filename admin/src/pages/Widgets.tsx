@@ -91,6 +91,12 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { cn, formatDate } from '@/lib/utils'
+import {
+  type ReviewListCfg,
+  ReviewListConfigForm,
+  rawToReviewList,
+  reviewListToRaw
+} from './widgets/ReviewListConfigForm'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -166,7 +172,7 @@ function feedToForm(feed: WidgetFeed): FeedFormData {
 
 // ─── Combobox helper (shadcn Popover + Command — never native select) ─────────
 
-function PickCombobox({
+export function PickCombobox({
   value,
   onChange,
   options,
@@ -828,7 +834,14 @@ interface InternalWidget {
   name: string
   description: string | null
   icon: string | null
-  widget_type: 'stat' | 'action-buttons' | 'custom-query' | 'external-api' | 'list' | 'button-group'
+  widget_type:
+    | 'stat'
+    | 'action-buttons'
+    | 'custom-query'
+    | 'external-api'
+    | 'list'
+    | 'button-group'
+    | 'review_list'
   inputs: unknown[] | null
   config: unknown | null
   is_active: boolean
@@ -841,7 +854,8 @@ const WIDGET_TYPE_OPTIONS = [
   { value: 'custom-query', label: 'Custom Query' },
   { value: 'action-buttons', label: 'Action Buttons (server)' },
   { value: 'button-group', label: 'Button Group (client)' },
-  { value: 'external-api', label: 'External API' }
+  { value: 'external-api', label: 'External API' },
+  { value: 'review_list', label: 'Review List' }
 ] as const
 
 interface InternalWidgetFormData {
@@ -1710,7 +1724,7 @@ const ACTION_TYPE_OPTS = [
   { value: 'external-api', label: 'Call External API' }
 ]
 
-function useCollectionOptions() {
+export function useCollectionOptions() {
   const q = useQuery({
     queryKey: ['widget-cfg-cols'],
     queryFn: () => api.get<{ data: Array<{ collection: string; display_name: string | null }> }>('/collections').then((r) => r.data.data)
@@ -1718,7 +1732,7 @@ function useCollectionOptions() {
   return q.data?.map((c) => ({ value: c.collection, label: c.display_name || c.collection })) ?? []
 }
 
-function useFieldOptions(collection: string) {
+export function useFieldOptions(collection: string) {
   const q = useQuery({
     queryKey: ['widget-cfg-fields', collection],
     queryFn: () =>
@@ -2053,11 +2067,13 @@ function ActionButtonsConfigForm({ cfg, onChange }: { cfg: BtnsCfg; onChange: (c
 function WidgetConfigEditor({
   type,
   config,
-  onChange
+  onChange,
+  onValidityChange
 }: {
   type: InternalWidget['widget_type']
   config: string
   onChange: (json: string) => void
+  onValidityChange?: (valid: boolean) => void
 }) {
   const [rawMode, setRawMode] = useState(false)
   const [rawText, setRawText] = useState(config)
@@ -2070,7 +2086,15 @@ function WidgetConfigEditor({
   const [extApiCfg, setExtApiCfg] = useState<ExtApiCfg>(() => rawToExtApi(parsed))
   const [btnsCfg, setBtnsCfg] = useState<BtnsCfg>(() => rawToBtns(parsed))
   const [btnGroupCfg, setBtnGroupCfg] = useState<BtnGroupCfg>(() => rawToBtnGroup(parsed))
+  const [rlCfg, setRlCfg] = useState<ReviewListCfg>(() => rawToReviewList(parsed))
   const [compactStyle, setCompactStyle] = useState<string>(() => String(parsed.compact_style ?? 'default'))
+
+  // Non-review_list types have no client-side completeness gate today — only
+  // review_list reports its own validity (via ReviewListConfigForm below).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when the active type changes
+  useEffect(() => {
+    if (type !== 'review_list') onValidityChange?.(true)
+  }, [type])
 
   function currentJson(overrideStyle?: string): string {
     try {
@@ -2081,6 +2105,7 @@ function WidgetConfigEditor({
       else if (type === 'external-api') raw = extApiToRaw(extApiCfg)
       else if (type === 'action-buttons') raw = btnsToRaw(btnsCfg)
       else if (type === 'button-group') raw = btnGroupToRaw(btnGroupCfg)
+      else if (type === 'review_list') raw = reviewListToRaw(rlCfg)
       const style = overrideStyle ?? compactStyle
       if (style && style !== 'default') raw.compact_style = style
       return JSON.stringify(raw, null, 2)
@@ -2102,6 +2127,7 @@ function WidgetConfigEditor({
       setExtApiCfg(rawToExtApi(raw))
       setBtnsCfg(rawToBtns(raw))
       setBtnGroupCfg(rawToBtnGroup(raw))
+      setRlCfg(rawToReviewList(raw))
       setCompactStyle(String(raw.compact_style ?? 'default'))
       onChange(rawText)
       setParseError(null)
@@ -2122,6 +2148,7 @@ function WidgetConfigEditor({
   function onExtApiChange(c: ExtApiCfg) { setExtApiCfg(c); onChange(JSON.stringify({ ...extApiToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) }, null, 2)) }
   function onBtnsChange(c: BtnsCfg) { setBtnsCfg(c); onChange(JSON.stringify({ ...btnsToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) }, null, 2)) }
   function onBtnGroupChange(c: BtnGroupCfg) { setBtnGroupCfg(c); onChange(JSON.stringify(btnGroupToRaw(c), null, 2)) }
+  function onReviewListChange(c: ReviewListCfg) { setRlCfg(c); onChange(JSON.stringify(reviewListToRaw(c), null, 2)) }
 
   return (
     <div className='space-y-2'>
@@ -2196,6 +2223,9 @@ function WidgetConfigEditor({
             {type === 'external-api' && <ExtApiConfigForm cfg={extApiCfg} onChange={onExtApiChange} />}
             {type === 'action-buttons' && <ActionButtonsConfigForm cfg={btnsCfg} onChange={onBtnsChange} />}
             {type === 'button-group' && <BtnGroupConfigForm cfg={btnGroupCfg} onChange={onBtnGroupChange} />}
+            {type === 'review_list' && (
+              <ReviewListConfigForm cfg={rlCfg} onChange={onReviewListChange} onValidityChange={onValidityChange} />
+            )}
           </div>
         </div>
       )}
@@ -2217,11 +2247,13 @@ function InternalWidgetForm({
     widget ? widgetToForm(widget) : INTERNAL_WIDGET_DEFAULTS
   )
   const [configError, setConfigError] = useState<string | null>(null)
+  const [configValid, setConfigValid] = useState(true)
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on widget change
   useEffect(() => {
     setForm(widget ? widgetToForm(widget) : INTERNAL_WIDGET_DEFAULTS)
     setConfigError(null)
+    setConfigValid(true)
   }, [widget?.id])
 
   function set<K extends keyof InternalWidgetFormData>(key: K, value: InternalWidgetFormData[K]) {
@@ -2256,14 +2288,15 @@ function InternalWidgetForm({
       toast.success(widget ? 'Widget updated' : 'Widget created')
       onSaved(saved)
     },
-    onError: (err: Error) => {
+    onError: (err: Error & { response?: { data?: { error?: string } } }) => {
       if (err.message !== 'Invalid JSON in config') {
-        toast.error('Failed to save widget')
+        toast.error(err.response?.data?.error ?? 'Failed to save widget')
       }
     }
   })
 
-  const isValid = form.name.trim() !== '' && form.widget_type !== ('' as InternalWidget['widget_type'])
+  const isValid =
+    form.name.trim() !== '' && form.widget_type !== ('' as InternalWidget['widget_type']) && configValid
 
   return (
     <div className='space-y-4'>
@@ -2303,6 +2336,7 @@ function InternalWidgetForm({
         type={form.widget_type}
         config={form.config}
         onChange={(json) => set('config', json)}
+        onValidityChange={setConfigValid}
       />
       {configError && (
         <p className='text-[11px] text-destructive'>{configError}</p>
