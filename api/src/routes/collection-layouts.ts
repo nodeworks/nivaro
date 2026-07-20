@@ -11,6 +11,8 @@ import { getStorage, getStorageProviderName } from '../services/storage/index.js
 
 type LayoutConditions = { role_ids?: string[] } | null
 
+export type RecordConditionRule = { field: string; op: 'eq' | 'neq' | 'nnull'; value?: unknown }
+
 // Safely parse the conditions JSON text column into an object (or null).
 function parseConditions(raw: unknown): LayoutConditions {
   if (raw == null) return null
@@ -24,21 +26,118 @@ function parseConditions(raw: unknown): LayoutConditions {
   }
 }
 
-// Resolve the best-matching layout for a collection given the user's role.
-// Conditional layouts (conditions.role_ids includes userRoleId) win over the
-// default (is_active=1) layout; among conditional matches the most specific
-// (most role_ids) wins, ties resolved by first match. Returns the raw DB row
-// (conditions still as a JSON string) or null when no layout exists.
-async function resolveLayout(collection: string, userRoleId: string | null | undefined) {
+// Safely parse the record_conditions JSON text column into a rule array (or null).
+function parseRecordConditions(raw: unknown): RecordConditionRule[] | null {
+  if (raw == null) return null
+  if (Array.isArray(raw)) return raw as RecordConditionRule[]
+  if (typeof raw !== 'string') return null
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as RecordConditionRule[]) : null
+  } catch {
+    return null
+  }
+}
+
+// Safely parse the default_values JSON text column into a plain object (or null).
+function parseDefaultValues(raw: unknown): Record<string, unknown> | null {
+  if (raw == null) return null
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>
+  if (typeof raw !== 'string') return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+// Does every rule match the given record? eq/neq compare via
+// String(raw ?? '') === String(value) (tolerant of numeric/string mismatches,
+// e.g. workflow_type stored as 2 vs '2'); nnull checks raw != null.
+export function matchesRecordConditions(rules: RecordConditionRule[], record: Record<string, unknown>): boolean {
+  return rules.every((rule) => {
+    const raw = record[rule.field]
+    if (rule.op === 'nnull') return raw != null
+    if (rule.op === 'eq') return String(raw ?? '') === String(rule.value)
+    return String(raw ?? '') !== String(rule.value)
+  })
+}
+
+const FIELD_IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+
+// Validate a PATCH body's record_conditions array; returns an error string
+// (naming the offending index) or null when valid.
+function validateRecordConditions(rules: unknown): string | null {
+  if (!Array.isArray(rules)) return 'record_conditions must be an array'
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i] as Record<string, unknown> | null
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+      return `record_conditions[${i}] must be an object`
+    }
+    if (typeof rule.field !== 'string' || !FIELD_IDENTIFIER_RE.test(rule.field)) {
+      return `record_conditions[${i}].field must be a valid field identifier`
+    }
+    if (rule.op !== 'eq' && rule.op !== 'neq' && rule.op !== 'nnull') {
+      return `record_conditions[${i}].op must be one of eq, neq, nnull`
+    }
+    if ((rule.op === 'eq' || rule.op === 'neq') && rule.value === undefined) {
+      return `record_conditions[${i}].value is required for op ${rule.op}`
+    }
+  }
+  return null
+}
+
+// Validate a PATCH body's default_values object; returns an error string
+// (naming the offending key) or null when valid.
+function validateDefaultValues(values: unknown): string | null {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) {
+    return 'default_values must be an object'
+  }
+  for (const key of Object.keys(values as Record<string, unknown>)) {
+    if (!FIELD_IDENTIFIER_RE.test(key)) return `default_values.${key} is not a valid field identifier`
+  }
+  return null
+}
+
+// Resolve the best-matching layout for a collection given the user's role and
+// (optionally) the record being edited. Precedence: record-condition layouts
+// (ALL rules match; most rules wins; ties by is_active desc, sort asc) > role
+// -condition layouts (conditions.role_ids includes userRoleId; most role_ids
+// wins) > default (is_active=1) > first by sort. A layout carrying
+// record_conditions is excluded from the role/default fallback pool entirely
+// when it does not match (or no record is supplied) — it can never leak to
+// non-matching records. Returns the raw DB row (JSON columns still strings)
+// or null when no layout exists.
+async function resolveLayout(
+  collection: string,
+  userRoleId: string | null | undefined,
+  record: Record<string, unknown> | null
+) {
   const layouts = await db('nivaro_collection_layouts')
     .where({ collection })
     .orderByRaw('is_active desc, sort asc')
 
   if (layouts.length === 0) return null
 
+  const fallbackPool: typeof layouts = []
+  let bestRecordMatch: { row: (typeof layouts)[number]; matches: number } | null = null
+  for (const row of layouts) {
+    const rules = parseRecordConditions(row.record_conditions)
+    if (rules) {
+      if (record && matchesRecordConditions(rules, record)) {
+        const matches = rules.length
+        if (!bestRecordMatch || matches > bestRecordMatch.matches) bestRecordMatch = { row, matches }
+      }
+      continue // excluded from the role/default fallback pool regardless of match
+    }
+    fallbackPool.push(row)
+  }
+  if (bestRecordMatch) return bestRecordMatch.row
+
   if (userRoleId) {
     let best: { row: (typeof layouts)[number]; matches: number } | null = null
-    for (const row of layouts) {
+    for (const row of fallbackPool) {
       const cond = parseConditions(row.conditions)
       const roleIds = cond?.role_ids
       if (Array.isArray(roleIds) && roleIds.includes(userRoleId)) {
@@ -50,17 +149,17 @@ async function resolveLayout(collection: string, userRoleId: string | null | und
   }
 
   // Fall back to the active (default) layout, else the first by sort.
-  return layouts.find((l) => l.is_active) ?? layouts[0]
+  return fallbackPool.find((l) => l.is_active) ?? fallbackPool[0] ?? null
 }
 
 export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // GET /collection-layouts/active?collection=x — MUST be before /:id
   app.get('/active', { preHandler: authenticate }, async (req, reply) => {
-    const { collection, slug } = req.query as { collection?: string; slug?: string }
+    const { collection, slug, item } = req.query as { collection?: string; slug?: string; item?: string }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
     // Explicit slug pins a specific layout (any type — detail layouts use this
-    // for drill-down rendering), bypassing role-conditional resolution.
+    // for drill-down rendering), bypassing role- and record-conditional resolution.
     let layout: Record<string, unknown> | undefined | null
     if (slug) {
       layout = await db('nivaro_collection_layouts').where({ collection, slug }).first()
@@ -68,11 +167,18 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!layout) {
       // Admins always see the default layout (no conditional override).
       const userRoleId = req.isAdmin ? null : (req.user?.role ?? null)
-      layout = await resolveLayout(collection, userRoleId)
+      // An unknown/missing item id resolves to no record — falls through to
+      // the role/default path exactly like the no-item case.
+      const record = item
+        ? ((await db(collection).where({ id: item }).first().catch(() => null)) ?? null)
+        : null
+      layout = await resolveLayout(collection, userRoleId, record)
     }
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
 
     layout.conditions = parseConditions(layout.conditions)
+    layout.record_conditions = parseRecordConditions(layout.record_conditions)
+    layout.default_values = parseDefaultValues(layout.default_values)
 
     const [groups, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
@@ -136,12 +242,17 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'allow_disable_pickers', 'layout_type', 'row_order_field',
         'pdf_theme', 'pdf_template_id', 'pdf_cover_enabled', 'pdf_cover_title_field',
         'pdf_cover_subtitle', 'pdf_show_logo', 'pdf_page_size', 'pdf_orientation', 'pdf_button_label',
-        'addendum_layout_id', 'workflow_template_id', 'single_active_addendum', 'addendum_default_view'
+        'addendum_layout_id', 'workflow_template_id', 'single_active_addendum', 'addendum_default_view',
+        'record_conditions', 'default_values'
       )
     if (active === 'true') q = q.where({ is_active: 1 })
 
     const rows = await q
-    for (const row of rows) row.conditions = parseConditions(row.conditions)
+    for (const row of rows) {
+      row.conditions = parseConditions(row.conditions)
+      row.record_conditions = parseRecordConditions(row.record_conditions)
+      row.default_values = parseDefaultValues(row.default_values)
+    }
     return reply.send({ data: rows })
   })
 
@@ -181,6 +292,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const row = await db('nivaro_collection_layouts').where({ id }).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
     row.conditions = parseConditions(row.conditions)
+    row.record_conditions = parseRecordConditions(row.record_conditions)
+    row.default_values = parseDefaultValues(row.default_values)
     return reply.send({ data: row })
   })
 
@@ -190,7 +303,17 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; is_active: boolean; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; addendum_layout_id: number | null; workflow_template_id: string | null; single_active_addendum: boolean; addendum_default_view: boolean }>
+    const body = req.body as Partial<{ name: string; slug: string | null; sort: number; is_active: boolean; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; addendum_layout_id: number | null; workflow_template_id: string | null; single_active_addendum: boolean; addendum_default_view: boolean; record_conditions: RecordConditionRule[] | null; default_values: Record<string, unknown> | null }>
+
+    if (body.record_conditions !== undefined && body.record_conditions !== null) {
+      const err = validateRecordConditions(body.record_conditions)
+      if (err) return reply.code(400).send({ error: err })
+    }
+    if (body.default_values !== undefined && body.default_values !== null) {
+      const err = validateDefaultValues(body.default_values)
+      if (err) return reply.code(400).send({ error: err })
+    }
+
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
     if (body.slug !== undefined) patch.slug = body.slug ?? null
@@ -212,12 +335,16 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.workflow_template_id !== undefined) patch.workflow_template_id = body.workflow_template_id ?? null
     if (body.single_active_addendum !== undefined) patch.single_active_addendum = body.single_active_addendum ? 1 : 0
     if (body.addendum_default_view !== undefined) patch.addendum_default_view = body.addendum_default_view ? 1 : 0
+    if (body.record_conditions !== undefined) patch.record_conditions = body.record_conditions == null ? null : JSON.stringify(body.record_conditions)
+    if (body.default_values !== undefined) patch.default_values = body.default_values == null ? null : JSON.stringify(body.default_values)
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 
     await db('nivaro_collection_layouts').where({ id }).update(patch)
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
     updated.conditions = parseConditions(updated.conditions)
+    updated.record_conditions = parseRecordConditions(updated.record_conditions)
+    updated.default_values = parseDefaultValues(updated.default_values)
 
     await logActivity({ action: 'update', user: req.user?.id, collection: 'nivaro_collection_layouts', item: id, req })
     return reply.send({ data: updated })
