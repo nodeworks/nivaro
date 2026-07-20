@@ -263,6 +263,13 @@ interface WidgetSlotProps {
   strip?: boolean
   onClientAction?: (action: ClientAction) => void
   onWidgetType?: (type: string) => void
+  /**
+   * Reports whether the widget has anything to show (review_list: any rows;
+   * other types: any successful render; errors count as content so failures
+   * stay visible). Lets a host section's hide_when_empty consider widget
+   * content, not just field values.
+   */
+  onContentChange?: (hasContent: boolean) => void
 }
 
 function resolveDraftPath(draft: Record<string, unknown>, path: string): unknown {
@@ -1000,7 +1007,8 @@ export function WidgetSlot({
   compact = false,
   strip = false,
   onClientAction,
-  onWidgetType
+  onWidgetType,
+  onContentChange
 }: WidgetSlotProps) {
   const fetchCfg = useApiFetchConfig()
   const apiBase = apiBaseProp ?? fetchCfg.apiBase
@@ -1124,6 +1132,23 @@ export function WidgetSlot({
       cancelled = true
     }
   }, [widgetId, apiBase, debouncedInputsKey, ready, refetchTick])
+
+  // Content report for hide_when_empty hosts. No report while loading with
+  // nothing fetched yet — the host treats unreported widgets as empty.
+  useEffect(() => {
+    if (!onContentChange) return
+    if (error) {
+      onContentChange(true)
+      return
+    }
+    if (!renderData) return
+    if (widget?.widget_type === 'review_list') {
+      const rows = (renderData as { rows?: unknown }).rows
+      onContentChange(Array.isArray(rows) && rows.length > 0)
+      return
+    }
+    onContentChange(true)
+  }, [renderData, error, widget?.widget_type, onContentChange])
 
   const title = label || widget?.name || `Widget ${widgetId}`
 

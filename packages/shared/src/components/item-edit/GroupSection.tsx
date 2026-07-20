@@ -933,6 +933,12 @@ export function GroupSection({
   alternateWidths?: Record<string, 1 | 2>
 }) {
   const [localCollapsed, setLocalCollapsed] = useState(group.is_collapsed ?? false)
+  // Widget content reports (WidgetSlot onContentChange) — hide_when_empty must
+  // consider widget rows, not just field values, or a widget-only section is
+  // permanently hidden (empty fieldValues → every() is vacuously true).
+  // Unreported widgets count as empty, so the section stays hidden until
+  // rows actually arrive.
+  const [widgetContent, setWidgetContent] = useState<Record<string, boolean>>({})
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
   const controlled = onToggle !== undefined
   const collapsed = controlled ? !isOpen : localCollapsed
@@ -943,12 +949,18 @@ export function GroupSection({
   const visibilityMode = group.visibility_mode ?? 'always'
   if (visibilityMode === 'new_only' && !isNew) return null
   if (visibilityMode === 'existing_only' && isNew) return null
+  const groupWidgets = widgetAssignments ?? []
+  let hiddenWhenEmpty = false
   if (group.hide_when_empty && fieldValues) {
     const allEmpty = fieldValues.every(
       (v) => v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)
     )
-    if (allEmpty) return null
+    hiddenWhenEmpty = allEmpty && groupWidgets.every((ws) => !widgetContent[ws.field])
   }
+  // Without widgets the section can unmount outright. With widgets it must
+  // stay mounted (CSS-hidden) so they can fetch and report content — an
+  // unmounted WidgetSlot could never reveal the section.
+  if (hiddenWhenEmpty && groupWidgets.length === 0) return null
   const gridRef = useRef<HTMLDivElement>(null)
   const containerWidth = useContainerWidth(gridRef)
   const GroupIcon = resolveIcon(group.icon)
@@ -958,7 +970,8 @@ export function GroupSection({
   return (
     <div className={cn(
       'rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border',
-      displayOnly && 'bg-slate-50/60 dark:bg-slate-900/20'
+      displayOnly && 'bg-slate-50/60 dark:bg-slate-900/20',
+      hiddenWhenEmpty && 'hidden'
     )}>
       <button
         type='button'
@@ -1103,6 +1116,13 @@ export function GroupSection({
                           defaultExpanded={item.slot.default_expanded ?? true}
                           frameless
                           apiBase={widgetApiBase}
+                          onContentChange={(has) =>
+                            setWidgetContent((prev) =>
+                              prev[item.slot.field] === has
+                                ? prev
+                                : { ...prev, [item.slot.field]: has }
+                            )
+                          }
                         />
                       </div>
                     )
