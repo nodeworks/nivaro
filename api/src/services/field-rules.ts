@@ -280,14 +280,19 @@ async function resolveSetFromTrigger(
     }
     const oneCollection = triggerRel.one_collection
 
-    const record = (await database(oneCollection).where({ id: fkId }).first()) as
-      | Record<string, unknown>
-      | undefined
+    // Only project cfg.field when it's a real column — for an O2M/M2M alias
+    // it isn't one, and selecting it would error, so the existence check
+    // must run before the projected fetch, not after.
+    const oneColumns = await getActualColumns(oneCollection)
+    const isPlainColumn = oneColumns.has(cfg.field)
+    const record = (await database(oneCollection)
+      .where({ id: fkId })
+      .select(isPlainColumn ? ['id', cfg.field] : ['id'])
+      .first()) as Record<string, unknown> | undefined
     if (!record) return undefined
 
     // Plain column on the related record.
-    const oneColumns = await getActualColumns(oneCollection)
-    if (oneColumns.has(cfg.field)) {
+    if (isPlainColumn) {
       return record[cfg.field] ?? undefined
     }
 

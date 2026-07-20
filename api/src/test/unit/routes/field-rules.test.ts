@@ -532,7 +532,10 @@ describe('evaluateRulesForTrigger — set_from_trigger', () => {
         if (table === 'project_types_plain') {
           return {
             where: vi.fn(() => ({
-              first: vi.fn(() => Promise.resolve({ id: 'pt1', notes: 'hello' }))
+              select: vi.fn((cols: string[]) => {
+                expect(cols).toEqual(['id', 'notes'])
+                return { first: vi.fn(() => Promise.resolve({ id: 'pt1', notes: 'hello' })) }
+              })
             }))
           }
         }
@@ -589,7 +592,14 @@ describe('evaluateRulesForTrigger — set_from_trigger', () => {
           }
         }
         if (table === 'project_types_m2m') {
-          return { where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve({ id: 'pt1' })) })) }
+          return {
+            where: vi.fn(() => ({
+              select: vi.fn((cols: string[]) => {
+                expect(cols).toEqual(['id']) // categories isn't a real column — id-only projection
+                return { first: vi.fn(() => Promise.resolve({ id: 'pt1' })) }
+              })
+            }))
+          }
         }
         if (table === 'project_type_categories') {
           return {
@@ -660,7 +670,11 @@ describe('evaluateRulesForTrigger — set_from_trigger', () => {
           }
         }
         if (table === 'project_types_nomap') {
-          return { where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve({ id: 'pt1' })) })) }
+          return {
+            where: vi.fn(() => ({
+              select: vi.fn(() => ({ first: vi.fn(() => Promise.resolve({ id: 'pt1' })) }))
+            }))
+          }
         }
         throw new Error(`unexpected table ${table}`)
       },
