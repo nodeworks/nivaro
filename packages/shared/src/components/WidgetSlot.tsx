@@ -78,6 +78,7 @@ import {
   type ReviewListResult,
   ReviewListWidget
 } from './widgets/ReviewListWidget'
+import { type RollupConfig, type RollupResult, RollupWidget } from './widgets/RollupWidget'
 
 const ICON_MAP: Record<string, LucideIcon> = {
   ArrowRight,
@@ -1085,12 +1086,12 @@ export function WidgetSlot({
   // biome-ignore lint/correctness/useExhaustiveDependencies: inputs/itemDraft/bindings are captured via debouncedInputsKey; fetchCfg/buildHeaders stable in content
   useEffect(() => {
     if (!ready) return
-    // review_list has no meaning for a record that doesn't exist yet — the
-    // server 400s on a missing record_id. Skip the fetch entirely rather
-    // than surfacing that 400 as a sticky "Render failed" (the review_list
+    // review_list/rollup have no meaning for a record that doesn't exist yet
+    // — the server 400s on a missing record_id. Skip the fetch entirely
+    // rather than surfacing that 400 as a sticky "Render failed" (the
     // null-render gate below already handles the empty-record display).
     if (
-      widget?.widget_type === 'review_list' &&
+      (widget?.widget_type === 'review_list' || widget?.widget_type === 'rollup') &&
       (inputs.record_id == null || inputs.record_id === '')
     ) {
       return
@@ -1142,7 +1143,7 @@ export function WidgetSlot({
       return
     }
     if (!renderData) return
-    if (widget?.widget_type === 'review_list') {
+    if (widget?.widget_type === 'review_list' || widget?.widget_type === 'rollup') {
       const rows = (renderData as { rows?: unknown }).rows
       onContentChange(Array.isArray(rows) && rows.length > 0)
       return
@@ -1152,14 +1153,14 @@ export function WidgetSlot({
 
   const title = label || widget?.name || `Widget ${widgetId}`
 
-  // review_list has no meaning for a record that doesn't exist yet (no rows
-  // to reach via the relation path) — render nothing rather than surfacing
-  // the render endpoint's 400 for a missing record_id. Mirrors the server's
-  // own emptiness check (renderWidget's review_list branch) so a falsy-but-
-  // valid id (e.g. 0) isn't misread as "new".
+  // review_list/rollup have no meaning for a record that doesn't exist yet
+  // (no rows to reach via the relation path) — render nothing rather than
+  // surfacing the render endpoint's 400 for a missing record_id. Mirrors the
+  // server's own emptiness check (renderWidget's review_list/rollup branch)
+  // so a falsy-but-valid id (e.g. 0) isn't misread as "new".
   const reviewListRecordId = inputs.record_id
   if (
-    widget?.widget_type === 'review_list' &&
+    (widget?.widget_type === 'review_list' || widget?.widget_type === 'rollup') &&
     (reviewListRecordId == null || reviewListRecordId === '')
   )
     return null
@@ -1335,6 +1336,12 @@ export function WidgetSlot({
             onRefetch={() => setRefetchTick((t) => t + 1)}
           />
         )}
+        {widget.widget_type === 'rollup' && (
+          <RollupWidget
+            data={renderData as unknown as RollupResult}
+            config={(widget.config ?? {}) as unknown as RollupConfig}
+          />
+        )}
         {widget.widget_type === 'action-buttons' && (
           <ActionButtonsDisplay
             data={renderData}
@@ -1359,7 +1366,8 @@ export function WidgetSlot({
           'action-buttons',
           'custom-query',
           'button-group',
-          'review_list'
+          'review_list',
+          'rollup'
         ].includes(widget.widget_type) && (
           <pre className='whitespace-pre-wrap text-[11px] text-slate-500'>
             {JSON.stringify(renderData, null, 2)}

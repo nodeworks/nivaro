@@ -83,7 +83,7 @@ function isTruthyFlag(v: unknown): boolean {
 // Display-only; non-numeric values under currency/number (and unparseable
 // dates) fall back to the raw string rather than rendering NaN.
 
-function formatValue(v: unknown, format: ReviewListColumnFormat | null | undefined): string {
+export function formatValue(v: unknown, format: ReviewListColumnFormat | null | undefined): string {
   if (v == null || v === '') return '—'
   if (format === 'currency' || format === 'number') {
     const n = Number(v)
@@ -104,7 +104,7 @@ function formatValue(v: unknown, format: ReviewListColumnFormat | null | undefin
 // Same hex + alpha idiom as PipelinePanel's StateBadge, generalized from the
 // named palette the config's status.options[].color is restricted to.
 
-const STATUS_COLOR_HEX: Record<string, string> = {
+export const STATUS_COLOR_HEX: Record<string, string> = {
   green: '#16a34a',
   red: '#dc2626',
   amber: '#d97706',
