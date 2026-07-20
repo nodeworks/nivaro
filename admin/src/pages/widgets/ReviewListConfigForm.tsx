@@ -31,6 +31,12 @@ export interface RLStatusOption {
   label: string
   color: string
 }
+/** Column entry — label/format '' means unset (serialized back to plain string). */
+export interface RLColumn {
+  field: string
+  label: string
+  format: string
+}
 export interface ReviewListCfg {
   host_collection: string
   collection: string
@@ -38,12 +44,38 @@ export interface ReviewListCfg {
   static_filter: RLFilterRow[]
   group_by: string
   aggregate_sum: string
-  group_meta: string[]
-  line_columns: string[]
+  aggregate_sum_format: string
+  group_meta: RLColumn[]
+  line_columns: RLColumn[]
   status_field: string
   status_options: RLStatusOption[]
   stamp_user_field: string
   stamp_date_field: string
+}
+
+function rawColumns(v: unknown): RLColumn[] {
+  if (!Array.isArray(v)) return []
+  return (v as unknown[]).map((e) => {
+    if (typeof e === 'object' && e !== null) {
+      const o = e as Record<string, unknown>
+      return {
+        field: String(o.field ?? ''),
+        label: o.label != null ? String(o.label) : '',
+        format: o.format != null ? String(o.format) : ''
+      }
+    }
+    return { field: String(e), label: '', format: '' }
+  })
+}
+
+function columnsToRaw(cols: RLColumn[]): Array<string | Record<string, unknown>> {
+  return cols.map((c) => {
+    if (!c.label && !c.format) return c.field
+    const out: Record<string, unknown> = { field: c.field }
+    if (c.label) out.label = c.label
+    if (c.format) out.format = c.format
+    return out
+  })
 }
 
 export function rawToReviewList(r: Record<string, unknown>): ReviewListCfg {
@@ -83,8 +115,9 @@ export function rawToReviewList(r: Record<string, unknown>): ReviewListCfg {
     static_filter: staticFilter,
     group_by: String(r.group_by ?? ''),
     aggregate_sum: r.aggregate_sum != null ? String(r.aggregate_sum) : '',
-    group_meta: Array.isArray(r.group_meta) ? (r.group_meta as unknown[]).map(String) : [],
-    line_columns: Array.isArray(r.line_columns) ? (r.line_columns as unknown[]).map(String) : [],
+    aggregate_sum_format: r.aggregate_sum_format != null ? String(r.aggregate_sum_format) : '',
+    group_meta: rawColumns(r.group_meta),
+    line_columns: rawColumns(r.line_columns),
     status_field: String(status.field ?? ''),
     status_options: statusOptions,
     stamp_user_field: status.stamp_user_field != null ? String(status.stamp_user_field) : '',
@@ -106,8 +139,9 @@ export function reviewListToRaw(c: ReviewListCfg): Record<string, unknown> {
     )
   }
   if (c.aggregate_sum) out.aggregate_sum = c.aggregate_sum
-  if (c.group_meta.length) out.group_meta = c.group_meta
-  if (c.line_columns.length) out.line_columns = c.line_columns
+  if (c.aggregate_sum && c.aggregate_sum_format) out.aggregate_sum_format = c.aggregate_sum_format
+  if (c.group_meta.length) out.group_meta = columnsToRaw(c.group_meta)
+  if (c.line_columns.length) out.line_columns = columnsToRaw(c.line_columns)
   const status: Record<string, unknown> = { field: c.status_field, options: c.status_options }
   if (c.stamp_user_field) status.stamp_user_field = c.stamp_user_field
   if (c.stamp_date_field) status.stamp_date_field = c.stamp_date_field
@@ -259,20 +293,34 @@ function ReviewListFilterRows({
   )
 }
 
+const FORMAT_OPTS = [
+  { value: '', label: 'Raw' },
+  { value: 'number', label: 'Number' },
+  { value: 'currency', label: 'Currency' },
+  { value: 'date', label: 'Date' },
+  { value: 'datetime', label: 'Date + time' }
+]
+
 function MultiFieldPicker({
   fieldOptions,
   value,
   onChange
 }: {
   fieldOptions: { value: string; label: string }[]
-  value: string[]
-  onChange: (v: string[]) => void
+  value: RLColumn[]
+  onChange: (v: RLColumn[]) => void
 }) {
+  const selected = (field: string) => value.some((c) => c.field === field)
   function toggle(field: string, checked: boolean) {
-    onChange(checked ? [...value, field] : value.filter((v) => v !== field))
+    onChange(
+      checked
+        ? [...value, { field, label: '', format: '' }]
+        : value.filter((c) => c.field !== field)
+    )
   }
-  const knownValues = new Set(fieldOptions.map((o) => o.value))
-  const customEntries = value.filter((v) => !knownValues.has(v))
+  function upd(field: string, patch: Partial<RLColumn>) {
+    onChange(value.map((c) => (c.field === field ? { ...c, ...patch } : c)))
+  }
   return (
     <div className='space-y-1.5'>
       <div className='max-h-40 space-y-1 overflow-y-auto rounded-md border border-slate-200 p-2 dark:border-border'>
@@ -285,7 +333,7 @@ function MultiFieldPicker({
           <label key={f.value} className='flex items-center gap-2 text-[12px]'>
             <input
               type='checkbox'
-              checked={value.includes(f.value)}
+              checked={selected(f.value)}
               onChange={(e) => toggle(f.value, e.target.checked)}
               className='h-3.5 w-3.5 rounded border-slate-300'
             />
@@ -293,26 +341,46 @@ function MultiFieldPicker({
           </label>
         ))}
       </div>
-      {customEntries.length > 0 && (
-        <div className='flex flex-wrap items-center gap-1.5'>
-          {customEntries.map((v) => (
-            <Badge key={v} variant='outline' className='gap-1 font-mono text-[11px]'>
-              {v}
-              <button
-                type='button'
-                aria-label={`Remove ${v}`}
-                onClick={() => onChange(value.filter((x) => x !== v))}
-                className='ml-0.5 rounded-sm opacity-60 hover:opacity-100'
+      {value.length > 0 && (
+        <div className='space-y-1'>
+          {value.map((c) => (
+            <div key={c.field} className='flex items-center gap-1.5'>
+              <Badge
+                variant='outline'
+                className='w-[130px] shrink-0 justify-start font-mono text-[10px]'
+              >
+                <span className='truncate'>{c.field}</span>
+              </Badge>
+              <Input
+                className='h-6 flex-1 text-[11px]'
+                value={c.label}
+                onChange={(e) => upd(c.field, { label: e.target.value })}
+                placeholder='Label override'
+              />
+              <div className='w-[100px]'>
+                <PickCombobox
+                  value={c.format}
+                  onChange={(v) => upd(c.field, { format: v })}
+                  options={FORMAT_OPTS}
+                  widthClass='w-[130px]'
+                />
+              </div>
+              <Button
+                size='icon'
+                variant='ghost'
+                className='h-6 w-6 shrink-0'
+                aria-label={`Remove ${c.field}`}
+                onClick={() => onChange(value.filter((x) => x.field !== c.field))}
               >
                 <X className='h-3 w-3' />
-              </button>
-            </Badge>
+              </Button>
+            </div>
           ))}
         </div>
       )}
       <CustomDotPathInput
         onAdd={(v) => {
-          if (!value.includes(v)) onChange([...value, v])
+          if (!selected(v)) onChange([...value, { field: v, label: '', format: '' }])
         }}
       />
     </div>
@@ -564,18 +632,32 @@ export function ReviewListConfigForm({
           <Label className='text-[11px] text-muted-foreground'>
             Sum aggregate <span className='text-[10px] opacity-60'>(optional)</span>
           </Label>
-          <PickCombobox
-            value={cfg.aggregate_sum}
-            onChange={(v) => set('aggregate_sum', v)}
-            options={nullableTargetFieldOpts}
-            placeholder='None'
-            disabled={!cfg.collection}
-          />
+          <div className='flex items-center gap-1.5'>
+            <div className='flex-1'>
+              <PickCombobox
+                value={cfg.aggregate_sum}
+                onChange={(v) => set('aggregate_sum', v)}
+                options={nullableTargetFieldOpts}
+                placeholder='None'
+                disabled={!cfg.collection}
+              />
+            </div>
+            {cfg.aggregate_sum && (
+              <div className='w-[100px]'>
+                <PickCombobox
+                  value={cfg.aggregate_sum_format}
+                  onChange={(v) => set('aggregate_sum_format', v)}
+                  options={FORMAT_OPTS.filter((o) => !o.value.startsWith('date'))}
+                  widthClass='w-[130px]'
+                />
+              </div>
+            )}
+          </div>
         </div>
       </div>
       {cfg.aggregate_sum &&
-        !cfg.group_meta.includes(cfg.aggregate_sum) &&
-        !cfg.line_columns.includes(cfg.aggregate_sum) && (
+        !cfg.group_meta.some((c) => c.field === cfg.aggregate_sum) &&
+        !cfg.line_columns.some((c) => c.field === cfg.aggregate_sum) && (
           <p className='text-[11px] text-amber-600 dark:text-amber-500'>
             "{cfg.aggregate_sum}" only displays if also added to Group meta or Line columns below.
           </p>

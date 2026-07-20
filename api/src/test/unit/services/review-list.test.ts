@@ -210,12 +210,12 @@ describe('resolveReviewListRows — invoices 2-hop reverse walk (pinned fixture)
     expect(result.truncated).toBe(false)
     expect(result.columns).toEqual({
       group_meta: [
-        { field: 'number', label: 'PO Number' },
-        { field: 'hold_reason', label: 'hold_reason' }
+        { field: 'number', label: 'PO Number', format: null },
+        { field: 'hold_reason', label: 'hold_reason', format: null }
       ],
       line_columns: [
-        { field: 'line_item_number', label: 'line_item_number' },
-        { field: 'amount', label: 'amount' }
+        { field: 'line_item_number', label: 'line_item_number', format: null },
+        { field: 'amount', label: 'amount', format: null }
       ]
     })
     expect(result.rows).toEqual([
@@ -469,8 +469,43 @@ describe('resolveReviewListRows — dot-path label resolution (one M2O hop)', ()
 
     expect(result.rows[0].values).toEqual({ 'purchase_order.number': 'PO-100' })
     expect(result.columns.group_meta).toEqual([
-      { field: 'purchase_order.number', label: 'purchase_order.number' }
+      { field: 'purchase_order.number', label: 'purchase_order.number', format: null }
     ])
+  })
+})
+
+describe('resolveReviewListRows — object column specs (label override + format)', () => {
+  it('emits config label/format in columns and keys values by the spec field', async () => {
+    const config: ReviewListConfig = {
+      ...invoicesConfig,
+      group_meta: [{ field: 'number', label: 'Invoice #' }],
+      line_columns: ['line_item_number', { field: 'amount', label: 'Amount', format: 'currency' }]
+    }
+    vi.mocked(getCollection).mockResolvedValueOnce({
+      display_template: '{{first_name}} {{last_name}}'
+    } as unknown as Awaited<ReturnType<typeof getCollection>>)
+    const db = makeDb(invoicesResolver, [])
+
+    const result = await resolveReviewListRows(
+      db as unknown as Parameters<typeof resolveReviewListRows>[0],
+      config,
+      '373944'
+    )
+
+    // Config label wins over the nivaro_fields label ('PO Number'); string
+    // entries stay back-compatible with format: null.
+    expect(result.columns).toEqual({
+      group_meta: [{ field: 'number', label: 'Invoice #', format: null }],
+      line_columns: [
+        { field: 'line_item_number', label: 'line_item_number', format: null },
+        { field: 'amount', label: 'Amount', format: 'currency' }
+      ]
+    })
+    expect(result.rows[0].values).toEqual({
+      number: 'INV-1',
+      line_item_number: 'LI-1',
+      amount: 100
+    })
   })
 })
 
@@ -553,6 +588,36 @@ describe('validateReviewListConfig', () => {
     const cfg = baseValidConfig() as Record<string, unknown>
     cfg.status = { field: 'efp_review_status', options: [] }
     expect(validateReviewListConfig(cfg, RELATIONS)).toMatch(/non-empty/)
+  })
+
+  it('accepts object column specs and rejects bad format / empty label', () => {
+    const ok = baseValidConfig() as Record<string, unknown>
+    ok.group_meta = ['number', { field: 'amount', label: 'Amount', format: 'currency' }]
+    ok.line_columns = [{ field: 'purchase_order.number' }]
+    expect(validateReviewListConfig(ok, RELATIONS)).toBeNull()
+
+    const badFormat = baseValidConfig() as Record<string, unknown>
+    badFormat.line_columns = [{ field: 'amount', format: 'money' }]
+    expect(validateReviewListConfig(badFormat, RELATIONS)).toMatch(/line_columns\[0\].format/)
+
+    const emptyLabel = baseValidConfig() as Record<string, unknown>
+    emptyLabel.group_meta = [{ field: 'amount', label: '' }]
+    expect(validateReviewListConfig(emptyLabel, RELATIONS)).toMatch(/group_meta\[0\].label/)
+
+    const badField = baseValidConfig() as Record<string, unknown>
+    badField.group_meta = [{ field: 'a.b.c' }]
+    expect(validateReviewListConfig(badField, RELATIONS)).toMatch(/group_meta\[0\].field/)
+  })
+
+  it('validates aggregate_sum_format against the format enum', () => {
+    const ok = baseValidConfig() as Record<string, unknown>
+    ok.aggregate_sum = 'amount'
+    ok.aggregate_sum_format = 'currency'
+    expect(validateReviewListConfig(ok, RELATIONS)).toBeNull()
+
+    const bad = baseValidConfig() as Record<string, unknown>
+    bad.aggregate_sum_format = 'money'
+    expect(validateReviewListConfig(bad, RELATIONS)).toMatch(/aggregate_sum_format/)
   })
 
   it('rejects a dot-path with more than one hop', () => {

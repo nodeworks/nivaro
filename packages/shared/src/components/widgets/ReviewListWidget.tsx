@@ -2,7 +2,7 @@ import { AlertCircle, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { patch } from '../../lib/commands'
-import { formatDateTime } from '../../lib/utils'
+import { formatDate, formatDateTime } from '../../lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -16,6 +16,14 @@ export interface ReviewListStatusOption {
   color: string
 }
 
+export type ReviewListColumnFormat = 'currency' | 'number' | 'date' | 'datetime'
+
+export interface ReviewListColumnSpec {
+  field: string
+  label?: string
+  format?: ReviewListColumnFormat
+}
+
 export interface ReviewListConfig {
   host_collection: string
   collection: string
@@ -23,8 +31,9 @@ export interface ReviewListConfig {
   static_filter?: Array<{ field: string; op: 'eq' | 'neq' | 'nnull'; value?: unknown }>
   group_by: string
   aggregate_sum?: string | null
-  group_meta?: string[]
-  line_columns?: string[]
+  aggregate_sum_format?: ReviewListColumnFormat | null
+  group_meta?: Array<string | ReviewListColumnSpec>
+  line_columns?: Array<string | ReviewListColumnSpec>
   status: {
     field: string
     options: ReviewListStatusOption[]
@@ -45,10 +54,31 @@ export interface ReviewListRow {
 export interface ReviewListResult {
   rows: ReviewListRow[]
   columns: {
-    group_meta: Array<{ field: string; label: string }>
-    line_columns: Array<{ field: string; label: string }>
+    group_meta: Array<{ field: string; label: string; format?: ReviewListColumnFormat | null }>
+    line_columns: Array<{ field: string; label: string; format?: ReviewListColumnFormat | null }>
   }
   truncated: boolean
+}
+
+// ─── Value formatting ───────────────────────────────────────────────────────
+// Display-only; non-numeric values under currency/number (and unparseable
+// dates) fall back to the raw string rather than rendering NaN.
+
+function formatValue(v: unknown, format: ReviewListColumnFormat | null | undefined): string {
+  if (v == null || v === '') return '—'
+  if (format === 'currency' || format === 'number') {
+    const n = Number(v)
+    if (Number.isNaN(n)) return String(v)
+    return format === 'currency'
+      ? new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(n)
+      : new Intl.NumberFormat().format(n)
+  }
+  if (format === 'date' || format === 'datetime') {
+    const d = new Date(v as string)
+    if (Number.isNaN(d.getTime())) return String(v)
+    return format === 'date' ? formatDate(d) : formatDateTime(d)
+  }
+  return String(v)
 }
 
 // ─── Color mapping ──────────────────────────────────────────────────────────
@@ -261,7 +291,9 @@ export function ReviewListWidget({
                   </span>
                   <span className='text-[11px] text-slate-400'>
                     {group.count} row{group.count === 1 ? '' : 's'}
-                    {group.sum != null ? ` · ${new Intl.NumberFormat().format(group.sum)}` : ''}
+                    {group.sum != null
+                      ? ` · ${formatValue(group.sum, config.aggregate_sum_format ?? 'number')}`
+                      : ''}
                   </span>
                   {groupMetaCols.map((c) => {
                     const v = firstRow.values[c.field]
@@ -271,7 +303,7 @@ export function ReviewListWidget({
                         key={c.field}
                         className='rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400'
                       >
-                        {c.label}: {String(v)}
+                        {c.label}: {formatValue(v, c.format)}
                       </span>
                     )
                   })}
@@ -346,9 +378,7 @@ export function ReviewListWidget({
                               key={c.field}
                               className='px-2.5 py-1.5 text-slate-600 dark:text-slate-300'
                             >
-                              {row.values[c.field] == null || row.values[c.field] === ''
-                                ? '—'
-                                : String(row.values[c.field])}
+                              {formatValue(row.values[c.field], c.format)}
                             </td>
                           ))}
                         </tr>

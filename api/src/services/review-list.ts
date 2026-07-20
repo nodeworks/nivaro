@@ -28,6 +28,16 @@ export const IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 const MAX_PATH_HOPS = 4
 const CAP = 2000
 
+export const COLUMN_FORMATS = ['currency', 'number', 'date', 'datetime'] as const
+export type ColumnFormat = (typeof COLUMN_FORMATS)[number]
+
+/** Object form of a group_meta / line_columns entry. Plain strings remain valid. */
+export interface ColumnSpec {
+  field: string
+  label?: string
+  format?: ColumnFormat
+}
+
 export interface ReviewListConfig {
   host_collection: string
   collection: string
@@ -35,8 +45,9 @@ export interface ReviewListConfig {
   static_filter?: Array<{ field: string; op: 'eq' | 'neq' | 'nnull'; value?: unknown }>
   group_by: string
   aggregate_sum?: string | null
-  group_meta?: string[]
-  line_columns?: string[]
+  aggregate_sum_format?: ColumnFormat | null
+  group_meta?: Array<string | ColumnSpec>
+  line_columns?: Array<string | ColumnSpec>
   status: {
     field: string
     options: Array<{ value: string; label: string; color: string }>
@@ -66,10 +77,17 @@ export interface ReviewListRow {
 export interface ReviewListResult {
   rows: ReviewListRow[]
   columns: {
-    group_meta: Array<{ field: string; label: string }>
-    line_columns: Array<{ field: string; label: string }>
+    group_meta: Array<{ field: string; label: string; format: ColumnFormat | null }>
+    line_columns: Array<{ field: string; label: string; format: ColumnFormat | null }>
   }
   truncated: boolean
+}
+
+/** Collapse the string | ColumnSpec union to ColumnSpec (validated by this point). */
+export function normalizeColumnSpecs(
+  entries: Array<string | ColumnSpec> | undefined
+): ColumnSpec[] {
+  return (entries ?? []).map((e) => (typeof e === 'string' ? { field: e } : e))
 }
 
 // ─── Relation resolution ────────────────────────────────────────────────────
@@ -214,17 +232,44 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
   ) {
     return 'aggregate_sum must be a valid identifier'
   }
+  if (
+    c.aggregate_sum_format !== undefined &&
+    c.aggregate_sum_format !== null &&
+    !COLUMN_FORMATS.includes(c.aggregate_sum_format as ColumnFormat)
+  ) {
+    return `aggregate_sum_format must be one of: ${COLUMN_FORMATS.join(', ')}`
+  }
 
-  if (c.group_meta !== undefined) {
-    if (!Array.isArray(c.group_meta) || !c.group_meta.every(isDotPathIdentifier)) {
-      return 'group_meta must be an array of valid field names (one dot-path hop max)'
+  const columnSpecError = (key: 'group_meta' | 'line_columns'): string | null => {
+    const entries = c[key]
+    if (entries === undefined) return null
+    if (!Array.isArray(entries)) return `${key} must be an array`
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]
+      if (typeof e === 'string') {
+        if (!isDotPathIdentifier(e))
+          return `${key}[${i}] must be a valid field name (one dot-path hop max)`
+        continue
+      }
+      if (!e || typeof e !== 'object' || Array.isArray(e)) {
+        return `${key}[${i}] must be a field name or an object`
+      }
+      const spec = e as Record<string, unknown>
+      if (!isDotPathIdentifier(spec.field))
+        return `${key}[${i}].field must be a valid field name (one dot-path hop max)`
+      if (spec.label !== undefined && (typeof spec.label !== 'string' || !spec.label)) {
+        return `${key}[${i}].label must be a non-empty string`
+      }
+      if (spec.format !== undefined && !COLUMN_FORMATS.includes(spec.format as ColumnFormat)) {
+        return `${key}[${i}].format must be one of: ${COLUMN_FORMATS.join(', ')}`
+      }
     }
+    return null
   }
-  if (c.line_columns !== undefined) {
-    if (!Array.isArray(c.line_columns) || !c.line_columns.every(isDotPathIdentifier)) {
-      return 'line_columns must be an array of valid field names (one dot-path hop max)'
-    }
-  }
+  const metaError = columnSpecError('group_meta')
+  if (metaError) return metaError
+  const lineError = columnSpecError('line_columns')
+  if (lineError) return lineError
 
   if (!c.status || typeof c.status !== 'object' || Array.isArray(c.status))
     return 'status must be an object'
@@ -405,9 +450,9 @@ export async function resolveReviewListRows(
     }
   }
 
-  const groupMetaSpecs = config.group_meta ?? []
-  const lineColumnSpecs = config.line_columns ?? []
-  const allSpecs = [...new Set([...groupMetaSpecs, ...lineColumnSpecs])]
+  const groupMetaSpecs = normalizeColumnSpecs(config.group_meta)
+  const lineColumnSpecs = normalizeColumnSpecs(config.line_columns)
+  const allSpecs = [...new Set([...groupMetaSpecs, ...lineColumnSpecs].map((s) => s.field))]
   const dotSpecs = splitDotSpecs(allSpecs)
   const dotSpecByRaw = new Map(dotSpecs.map((d) => [d.raw, d]))
   const plainSpecs = allSpecs.filter((s) => !dotSpecByRaw.has(s))
@@ -538,7 +583,12 @@ export async function resolveReviewListRows(
     .where({ collection: config.collection })
     .select('field', 'label')) as Array<{ field: string; label: string | null }>
   const labelByField = new Map(fieldLabelRows.map((r) => [r.field, r.label]))
-  const toColumnMeta = (spec: string) => ({ field: spec, label: labelByField.get(spec) || spec })
+  // Label precedence: config override > nivaro_fields label > raw field name.
+  const toColumnMeta = (spec: ColumnSpec) => ({
+    field: spec.field,
+    label: spec.label || labelByField.get(spec.field) || spec.field,
+    format: spec.format ?? null
+  })
 
   return {
     rows,
