@@ -2703,6 +2703,27 @@ export function ItemEditForm({
               )
             })}
           </GridContainer>
+          {widgetSlots
+            .filter((ws) => (ws.group_key ?? null) === activeChild.key)
+            .map((ws) => {
+              // Container tab bodies bypass GroupSection, so widget slots in tab
+              // groups render here. input_bindings arrives as a JSON string.
+              let bindings: InputBinding[] = []
+              try { bindings = typeof ws.input_bindings === 'string' ? JSON.parse(ws.input_bindings) : ((ws.input_bindings ?? []) as unknown as InputBinding[]) } catch { /* noop */ }
+              return (
+                <div key={ws.field} className='mt-4'>
+                  <WidgetSlot
+                    widgetId={ws.widget_id as number}
+                    inputBindings={bindings}
+                    itemDraft={draft}
+                    itemCollection={collection}
+                    ready={isNew || (!itemLoading && Object.keys(draft).length > 0)}
+                    label={ws.label_override ?? undefined}
+                    defaultExpanded={ws.default_expanded ?? true}
+                  />
+                </div>
+              )
+            })}
           {pdfInContainer && (
             <div className='mt-4 flex items-center gap-2'>
               <button
