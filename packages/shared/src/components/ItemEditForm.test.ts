@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   applyLayoutDefaults,
   computeM2MEffectiveIds,
+  dropUnsettledAliasResults,
   type FieldRule,
+  type M2MFieldState,
   mergeRuleResults,
   partitionRuleResults,
   resolveM2MAlias,
+  resolveM2MFieldState,
   rulesForTriggerField
 } from './ItemEditForm'
 import type { CMSRelation } from './item-edit/types'
@@ -244,5 +247,57 @@ describe('partitionRuleResults', () => {
   it('tolerates a null/undefined results object', () => {
     expect(partitionRuleResults(null, new Set(['regions']))).toEqual({ scalar: {}, alias: {} })
     expect(partitionRuleResults(undefined, new Set(['regions']))).toEqual({ scalar: {}, alias: {} })
+  })
+})
+
+describe('resolveM2MFieldState', () => {
+  const junctionItems = [{ id: 'j1', division_id: 'd1' }]
+
+  it('is known and empty on a new record (query disabled)', () => {
+    const result = resolveM2MFieldState(false, false, undefined, 'division_id', [], new Set())
+    expect(result).toEqual({ known: true, ids: [] })
+  })
+
+  it('is unknown while an existing record\'s committed query is still in flight', () => {
+    const result = resolveM2MFieldState(true, false, undefined, 'division_id', ['d2'], new Set())
+    expect(result).toEqual({ known: false, ids: [] })
+  })
+
+  it('is known once the committed query has settled, combining committed and staged ids', () => {
+    const result = resolveM2MFieldState(true, true, junctionItems, 'division_id', ['d2'], new Set())
+    expect(result).toEqual({ known: true, ids: ['d1', 'd2'] })
+  })
+
+  it('is known and empty once a settled query returns no committed rows', () => {
+    const result = resolveM2MFieldState(true, true, [], 'division_id', [], new Set())
+    expect(result).toEqual({ known: true, ids: [] })
+  })
+})
+
+describe('dropUnsettledAliasResults', () => {
+  it('keeps results for fields whose state is known', () => {
+    const alias = { regions: ['r1'], categories: ['c1'] }
+    const fieldStates: Record<string, M2MFieldState> = {
+      regions: { known: true, ids: [] },
+      categories: { known: true, ids: [] }
+    }
+    expect(dropUnsettledAliasResults(alias, fieldStates)).toEqual(alias)
+  })
+
+  it('drops results for fields whose state is unknown', () => {
+    const alias = { regions: ['r1'], categories: ['c1'] }
+    const fieldStates: Record<string, M2MFieldState> = {
+      regions: { known: false, ids: [] },
+      categories: { known: true, ids: [] }
+    }
+    expect(dropUnsettledAliasResults(alias, fieldStates)).toEqual({ categories: ['c1'] })
+  })
+
+  it('drops results for fields with no recorded state', () => {
+    expect(dropUnsettledAliasResults({ regions: ['r1'] }, {})).toEqual({})
+  })
+
+  it('returns an empty object when alias is empty', () => {
+    expect(dropUnsettledAliasResults({}, { regions: { known: true, ids: [] } })).toEqual({})
   })
 })

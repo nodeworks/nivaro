@@ -400,6 +400,50 @@ export function computeM2MEffectiveIds(
   return [...new Set([...committed, ...staged])]
 }
 
+// An M2M alias field's committed junction rows load asynchronously (the
+// query is shared with M2MCombobox, but on an existing record it may not
+// have settled yet by the time a rule fires). Reporting [] in that window
+// would misrepresent "unknown" as "genuinely empty" — wrongly making
+// only_when_empty targets look fillable, or wrongly making already-committed
+// target ids look unselected (and so get re-staged as duplicates). New
+// records never have committed rows to wait for (`queryEnabled` is false),
+// so they're always "known" and behave exactly as before.
+export interface M2MFieldState {
+  known: boolean
+  ids: string[]
+}
+
+export function resolveM2MFieldState(
+  queryEnabled: boolean,
+  querySettled: boolean,
+  junctionItems: Record<string, unknown>[] | null | undefined,
+  junctionField: string,
+  stagedLinks: unknown[] | null | undefined,
+  stagedUnlinks: Set<unknown> | null | undefined
+): M2MFieldState {
+  if (queryEnabled && !querySettled) return { known: false, ids: [] }
+  return {
+    known: true,
+    ids: computeM2MEffectiveIds(junctionItems, junctionField, stagedLinks, stagedUnlinks)
+  }
+}
+
+// Drops alias targets whose committed-selection state is still unknown from
+// a partitioned result set — applying them (merge or stage) would either
+// falsely fill an already-populated target or duplicate-stage an
+// already-committed id. The rule gets another chance on the next trigger
+// fire, by which point the query has almost always settled.
+export function dropUnsettledAliasResults(
+  alias: Record<string, unknown[]>,
+  fieldStates: Record<string, M2MFieldState | undefined>
+): Record<string, unknown[]> {
+  const out: Record<string, unknown[]> = {}
+  for (const [field, ids] of Object.entries(alias)) {
+    if (fieldStates[field]?.known) out[field] = ids
+  }
+  return out
+}
+
 // Splits /field-rules/evaluate results into scalar targets (merged into the
 // draft, unchanged path) and M2M-alias targets (staged as links instead —
 // alias fields don't exist in the draft). `aliasFields` is the set of target
@@ -1413,36 +1457,50 @@ export function ItemEditForm({
       staleTime: 30_000
     }))
   })
-  const m2mAliasCommittedByField = useMemo(() => {
-    const out: Record<string, Record<string, unknown>[]> = {}
-    ;[...m2mAliasFieldsForRules.keys()].forEach((field, i) => {
-      out[field] = m2mAliasCommittedResults[i]?.data ?? []
-    })
-    return out
-  }, [m2mAliasFieldsForRules, m2mAliasCommittedResults])
-
-  const getM2MEffectiveIds = useCallback(
-    (field: string): string[] | undefined => {
-      const info = m2mAliasFieldsForRules.get(field)
-      if (!info) return undefined
-      return computeM2MEffectiveIds(
-        m2mAliasCommittedByField[field],
+  // Per alias field: whether its committed-selection state is known yet
+  // (false only while an existing record's junction query is still in
+  // flight) and, if known, the current effective id set.
+  const m2mAliasFieldStates = useMemo(() => {
+    const out: Record<string, M2MFieldState> = {}
+    ;[...m2mAliasFieldsForRules.entries()].forEach(([field, info], i) => {
+      const q = m2mAliasCommittedResults[i]
+      out[field] = resolveM2MFieldState(
+        !!itemId && !isNew,
+        q?.isSuccess ?? false,
+        q?.data,
         info.junctionField,
         m2mLinks.get(info.stagingKey),
         m2mUnlinks.get(info.stagingKey)
       )
-    },
-    [m2mAliasFieldsForRules, m2mAliasCommittedByField, m2mLinks, m2mUnlinks]
+    })
+    return out
+  }, [m2mAliasFieldsForRules, m2mAliasCommittedResults, m2mLinks, m2mUnlinks, itemId, isNew])
+
+  // undefined = not an alias field (existing scalar/M2O behavior unaffected).
+  // An alias field's ids default to [] while unknown — callers that need to
+  // tell "unknown" apart from "genuinely empty" must check m2mAliasFieldStates
+  // (or isM2MFieldKnown) directly rather than trusting an empty array here.
+  const getM2MEffectiveIds = useCallback(
+    (field: string): string[] | undefined => m2mAliasFieldStates[field]?.ids,
+    [m2mAliasFieldStates]
+  )
+  const isM2MFieldKnown = useCallback(
+    (field: string): boolean => m2mAliasFieldStates[field]?.known ?? true,
+    [m2mAliasFieldStates]
   )
 
   // Dispatches /field-rules/evaluate results: scalar targets merge into the
   // draft as before; M2M-alias targets (which don't exist in the draft) are
   // staged as links instead, skipping ids that are already effectively
-  // selected so re-triggering a satisfied rule is a no-op.
+  // selected so re-triggering a satisfied rule is a no-op. Alias targets
+  // whose committed state hasn't settled yet are dropped entirely rather
+  // than applied against a possibly-stale effective set — the rule gets
+  // another chance on the next trigger fire.
   const applyFieldRuleResults = useCallback(
     (results: Record<string, unknown> | null | undefined) => {
       const { scalar, alias } = partitionRuleResults(results, new Set(m2mAliasFieldsForRules.keys()))
-      for (const [field, ids] of Object.entries(alias)) {
+      const settledAlias = dropUnsettledAliasResults(alias, m2mAliasFieldStates)
+      for (const [field, ids] of Object.entries(settledAlias)) {
         const info = m2mAliasFieldsForRules.get(field)
         if (!info) continue
         const currentIds = new Set((getM2MEffectiveIds(field) ?? []).map(String))
@@ -1456,7 +1514,7 @@ export function ItemEditForm({
         setDraft(merged)
       }
     },
-    [m2mAliasFieldsForRules, getM2MEffectiveIds, m2mStagingCtx]
+    [m2mAliasFieldsForRules, m2mAliasFieldStates, getM2MEffectiveIds, m2mStagingCtx]
   )
 
   const fieldRuleTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -1539,9 +1597,21 @@ export function ItemEditForm({
       const prev = m2mStagingTrackerRef.current[field]
       if (prev && prev.links === links && prev.unlinks === unlinks) continue
       m2mStagingTrackerRef.current[field] = { links, unlinks }
+      // A trigger whose own committed selection hasn't settled yet would
+      // send an incomplete trigger_value — defer rather than fire; the next
+      // staging change (almost always after the query has settled) re-runs
+      // this same check.
+      if (!isM2MFieldKnown(field)) continue
       evaluateFieldRulesForChange(field, getM2MEffectiveIds(field) ?? [])
     }
-  }, [m2mLinks, m2mUnlinks, m2mTriggerAliasFields, getM2MEffectiveIds, evaluateFieldRulesForChange])
+  }, [
+    m2mLinks,
+    m2mUnlinks,
+    m2mTriggerAliasFields,
+    getM2MEffectiveIds,
+    isM2MFieldKnown,
+    evaluateFieldRulesForChange
+  ])
 
   const handleFieldChange = useCallback(
     (field: string, value: unknown) => {
