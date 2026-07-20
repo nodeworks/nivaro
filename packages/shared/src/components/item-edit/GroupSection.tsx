@@ -1079,11 +1079,25 @@ export function GroupSection({
                   if (item._t === 'widget') {
                     if (!item.slot.widget_id) return null
                     const span = item.slot.col_span ?? 12
+                    // input_bindings arrives as a JSON string from the layout API —
+                    // parse like the header widget path does, or inputs resolve empty.
+                    const rawBindings = item.slot.input_bindings
+                    const bindings = (
+                      typeof rawBindings === 'string'
+                        ? (() => {
+                            try {
+                              return JSON.parse(rawBindings)
+                            } catch {
+                              return []
+                            }
+                          })()
+                        : (rawBindings ?? [])
+                    ) as import('../WidgetSlot').InputBinding[]
                     return (
                       <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
                         <WidgetSlot
                           widgetId={item.slot.widget_id}
-                          inputBindings={(item.slot.input_bindings ?? []) as import('../WidgetSlot').InputBinding[]}
+                          inputBindings={bindings}
                           itemDraft={draft}
                           label={item.slot.label_override ?? undefined}
                           defaultExpanded={item.slot.default_expanded ?? true}
