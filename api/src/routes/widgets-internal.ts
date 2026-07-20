@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
+import { type RelRow, type ReviewListConfig, resolveReviewListRows, validateReviewListConfig } from '../services/review-list.js'
 import type { User } from '../types.js'
 import { emitTrigger } from '../flows/registry.js'
 
@@ -35,6 +36,10 @@ function substituteFilters(filters: unknown, inputs: Record<string, unknown>): u
 async function collectionHasWorkspaceId(collection: string): Promise<boolean> {
   const row = await db('nivaro_fields').where({ collection, field: 'workspace_id' }).first()
   return !!row
+}
+
+async function fetchRelRows(): Promise<RelRow[]> {
+  return (await db('nivaro_relations').select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field')) as RelRow[]
 }
 
 // Only allow relative paths — blocks javascript:, data:, open-redirect to external hosts
@@ -123,6 +128,22 @@ async function renderWidget(
     if (orderField) query = query.orderBy(orderField, orderDir)
     const rows = await query
     return { rows, fields, display: config.display ?? {} }
+  }
+
+  if (type === 'review_list') {
+    const cfg = config as unknown as ReviewListConfig
+
+    // Permission check — caller must be able to read the target collection
+    if (user && !(await can(user, 'read', cfg.collection))) {
+      throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
+    }
+
+    const recordId = inputs.record_id
+    if (recordId == null || recordId === '') {
+      throw Object.assign(new Error('Missing input: record_id'), { statusCode: 400 })
+    }
+
+    return await resolveReviewListRows(db, cfg, String(recordId))
   }
 
   if (type === 'custom-query') {
@@ -292,6 +313,10 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
 
   app.post('/', { preHandler: requireAdmin }, async (req, reply) => {
     const body = req.body as Record<string, unknown>
+    if (body.widget_type === 'review_list') {
+      const configError = validateReviewListConfig(body.config, await fetchRelRows())
+      if (configError) return reply.code(400).send({ error: configError })
+    }
     await db('nivaro_widgets').insert({
       name: body.name,
       description: body.description ?? null,
@@ -326,6 +351,20 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     if ('config' in body) p.config = body.config != null ? JSON.stringify(body.config) : null
     if ('is_active' in body) p.is_active = body.is_active ? 1 : 0
     if (Object.keys(p).length === 0) return reply.code(400).send({ error: 'No fields to update' })
+
+    if ('config' in body) {
+      let effectiveType = body.widget_type as string | undefined
+      if (effectiveType === undefined) {
+        const existing = await db('nivaro_widgets').where({ id: Number(id) }).first()
+        if (!existing) return reply.code(404).send({ error: 'Not found' })
+        effectiveType = existing.widget_type as string
+      }
+      if (effectiveType === 'review_list') {
+        const configError = validateReviewListConfig(body.config, await fetchRelRows())
+        if (configError) return reply.code(400).send({ error: configError })
+      }
+    }
+
     await db('nivaro_widgets').where({ id: Number(id) }).update(p)
     const row = await db('nivaro_widgets').where({ id: Number(id) }).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
