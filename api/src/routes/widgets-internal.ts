@@ -4,6 +4,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
 import { type RelRow, type ReviewListConfig, resolveReviewListRows, validateReviewListConfig } from '../services/review-list.js'
+import { type RollupConfig, resolveRollupRows, validateRollupConfig } from '../services/rollup.js'
 import type { User } from '../types.js'
 import { emitTrigger } from '../flows/registry.js'
 
@@ -144,6 +145,22 @@ async function renderWidget(
     }
 
     return await resolveReviewListRows(db, cfg, String(recordId))
+  }
+
+  if (type === 'rollup') {
+    const cfg = config as unknown as RollupConfig
+
+    // Permission check — caller must be able to read the target collection
+    if (user && !(await can(user, 'read', cfg.collection))) {
+      throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
+    }
+
+    const recordId = inputs.record_id
+    if (recordId == null || recordId === '') {
+      throw Object.assign(new Error('Missing input: record_id'), { statusCode: 400 })
+    }
+
+    return await resolveRollupRows(db, cfg, String(recordId))
   }
 
   if (type === 'custom-query') {
@@ -317,6 +334,10 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       const configError = validateReviewListConfig(body.config, await fetchRelRows())
       if (configError) return reply.code(400).send({ error: configError })
     }
+    if (body.widget_type === 'rollup') {
+      const configError = validateRollupConfig(body.config, await fetchRelRows())
+      if (configError) return reply.code(400).send({ error: configError })
+    }
     await db('nivaro_widgets').insert({
       name: body.name,
       description: body.description ?? null,
@@ -361,6 +382,10 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       }
       if (effectiveType === 'review_list') {
         const configError = validateReviewListConfig(body.config, await fetchRelRows())
+        if (configError) return reply.code(400).send({ error: configError })
+      }
+      if (effectiveType === 'rollup') {
+        const configError = validateRollupConfig(body.config, await fetchRelRows())
         if (configError) return reply.code(400).send({ error: configError })
       }
     }

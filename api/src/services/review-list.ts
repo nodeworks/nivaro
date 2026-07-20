@@ -12,12 +12,12 @@ import { resolveDisplayValue } from './display-value.js'
 // resolution (widget render). See
 // docs/superpowers/specs/2026-07-19-review-list-widget-design.md.
 
-type Logger = Pick<FastifyBaseLogger, 'warn'>
+export type Logger = Pick<FastifyBaseLogger, 'warn'>
 
 // Mirrors the logger fallback idiom in transition-requirements.ts — callers
 // without a Fastify request logger (tests, future non-request callers) fall
 // back to console rather than requiring a logger everywhere.
-const consoleLogger: Logger = {
+export const consoleLogger: Logger = {
   warn: ((...args: unknown[]) => {
     console.warn(...args)
   }) as unknown as Logger['warn']
@@ -26,7 +26,7 @@ const consoleLogger: Logger = {
 export const IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
 const MAX_PATH_HOPS = 4
-const CAP = 2000
+export const CAP = 2000
 
 // 'flag' renders a colored pill bearing the column label when the value is
 // truthy (and nothing when falsy) — for boolean badges like "On Hold".
@@ -42,10 +42,15 @@ export interface ColumnSpec {
   color?: string
 }
 
-export interface ReviewListConfig {
+/** Minimal shape shared by any widget config that walks a relation path from
+ * a host record to a target collection (review_list, rollup, ...). */
+export interface PathWalkConfig {
   host_collection: string
   collection: string
   path: Array<{ kind: 'm2o' | 'm2m'; field: string }>
+}
+
+export interface ReviewListConfig extends PathWalkConfig {
   static_filter?: Array<{ field: string; op: 'eq' | 'neq' | 'nnull'; value?: unknown }>
   group_by: string
   aggregate_sum?: string | null
@@ -115,7 +120,7 @@ export function normalizeColumnSpecs(
 // and `opts.owner`/`opts.related` (m2m) let each caller supply whichever end
 // it already knows and solve for the other.
 
-function findM2oRelation(
+export function findM2oRelation(
   relations: RelRow[],
   field: string,
   opts: { many?: string; one?: string }
@@ -143,7 +148,7 @@ interface M2mAliasResolution {
 // column). Same fallback policy as transition-requirements.ts's m2mByField
 // resolution: match by one_field first, fall back to the junction table's
 // own name as the alias field.
-function findM2mAlias(
+export function findM2mAlias(
   relations: RelRow[],
   field: string,
   opts: { owner?: string; related?: string }
@@ -172,13 +177,13 @@ function findM2mAlias(
 
 // ─── Config validation (widget create/PATCH) ───────────────────────────────
 
-function isPlainIdentifier(v: unknown): v is string {
+export function isPlainIdentifier(v: unknown): v is string {
   return typeof v === 'string' && IDENTIFIER_RE.test(v)
 }
 
 // group_meta / line_columns allow ONE dot-path hop (`purchase_order.number`) —
 // at most one '.', every segment a valid identifier.
-function isDotPathIdentifier(v: unknown): v is string {
+export function isDotPathIdentifier(v: unknown): v is string {
   if (typeof v !== 'string') return false
   const parts = v.split('.')
   if (parts.length > 2) return false
@@ -347,12 +352,12 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
 
 // ─── Render-time reverse path walk + row resolution ────────────────────────
 
-function badConfig(message: string): never {
+export function badConfig(message: string): never {
   throw Object.assign(new Error(message), { statusCode: 400 })
 }
 
-function hopError(field: string): never {
-  throw Object.assign(new Error(`review_list: no relation found for path hop "${field}"`), {
+export function hopError(field: string, logPrefix = 'review_list'): never {
+  throw Object.assign(new Error(`${logPrefix}: no relation found for path hop "${field}"`), {
     statusCode: 400
   })
 }
@@ -366,41 +371,185 @@ function hopError(field: string): never {
 // reverse walk can borrow its "owning collection" per hop as the second
 // anchor. Config is validated by this point, so this mirrors a walk that is
 // guaranteed to succeed — the hopError fallback exists only for defense.
-function computeForwardChain(config: ReviewListConfig, relations: RelRow[]): string[] {
+export function computeForwardChain(
+  config: PathWalkConfig,
+  relations: RelRow[],
+  logPrefix = 'review_list'
+): string[] {
   const owners: string[] = []
   let cur = config.collection
   for (const hop of config.path) {
     owners.push(cur)
     if (hop.kind === 'm2o') {
       const rel = findM2oRelation(relations, hop.field, { many: cur })
-      if (!rel?.one_collection) hopError(hop.field)
+      if (!rel?.one_collection) hopError(hop.field, logPrefix)
       cur = rel.one_collection
     } else {
       const alias = findM2mAlias(relations, hop.field, { owner: cur })
-      if (!alias) hopError(hop.field)
+      if (!alias) hopError(hop.field, logPrefix)
       cur = alias.relatedCollection
     }
   }
   return owners
 }
 
-function dedupIds(values: unknown[]): string[] {
+export function dedupIds(values: unknown[]): string[] {
   return [...new Set(values.filter((v) => v != null).map(String))]
 }
 
-interface DotSpec {
+export interface DotSpec {
   raw: string
   fkField: string
   subField: string
 }
 
-function splitDotSpecs(specs: string[]): DotSpec[] {
+export function splitDotSpecs(specs: string[]): DotSpec[] {
   const dot: DotSpec[] = []
   for (const s of specs) {
     const parts = s.split('.')
     if (parts.length === 2) dot.push({ raw: s, fkField: parts[0], subField: parts[1] })
   }
   return dot
+}
+
+// Reverse walk (host → target): process path hops from LAST to FIRST, each
+// hop resolving "ids of the next collection outward related to the current
+// id set." Anchors every hop at BOTH ends of the relation (the owning
+// collection from the deterministic forward chain, and the current
+// collection) — see the C1 test in review-list.test.ts for why a single-end
+// anchor is unsafe when two collections share an FK field name to the same
+// target. Shared by review_list and rollup (both walk host → target the same
+// way); logPrefix keys the 400/warn messages to the calling widget type.
+export async function walkReversePath(
+  database: Knex,
+  config: PathWalkConfig,
+  relations: RelRow[],
+  recordId: string,
+  logger: Logger = consoleLogger,
+  logPrefix = 'review_list'
+): Promise<{ idSet: string[]; truncated: boolean }> {
+  let currentCollection = config.host_collection
+  let idSet: string[] = [recordId]
+  let truncated = false
+
+  const hopOwners = computeForwardChain(config, relations, logPrefix)
+
+  for (let i = config.path.length - 1; i >= 0; i--) {
+    const hop = config.path[i]
+    const owner = hopOwners[i]
+
+    if (hop.kind === 'm2m') {
+      const alias = findM2mAlias(relations, hop.field, { owner, related: currentCollection })
+      if (!alias) hopError(hop.field, logPrefix)
+      if (idSet.length > 0) {
+        const junctionRows = (await database(alias.junction)
+          .whereIn(alias.fkToRelated, idSet)
+          .limit(CAP)
+          .select(alias.fkToOwner)) as Array<Record<string, unknown>>
+        if (junctionRows.length === CAP) {
+          truncated = true
+          logger.warn(
+            { junction: alias.junction, hop: hop.field },
+            `${logPrefix}: hop query truncated at cap`
+          )
+        }
+        idSet = dedupIds(junctionRows.map((r) => r[alias.fkToOwner]))
+      }
+      currentCollection = alias.aliasCollection
+    } else {
+      const rel = findM2oRelation(relations, hop.field, { many: owner, one: currentCollection })
+      if (!rel) hopError(hop.field, logPrefix)
+      if (idSet.length > 0) {
+        const rows = (await database(rel.many_collection)
+          .whereIn(hop.field, idSet)
+          .limit(CAP)
+          .select('id')) as Array<{ id: unknown }>
+        if (rows.length === CAP) {
+          truncated = true
+          logger.warn(
+            { collection: rel.many_collection, hop: hop.field },
+            `${logPrefix}: hop query truncated at cap`
+          )
+        }
+        idSet = dedupIds(rows.map((r) => r.id))
+      }
+      currentCollection = rel.many_collection
+    }
+  }
+
+  return { idSet, truncated }
+}
+
+// Dot-path resolution: batched IN query per FK field, mirroring the batched
+// related-label approach in transition-requirements.ts's relatedLabel helper
+// — but resolving a NAMED sub-field, not a display template. Dead relation
+// degrades to the raw fk value (display polish must never crash the render).
+// Shared by review_list (group_meta/line_columns) and rollup (levels/
+// leaf_columns/measure sum+filter fields) — same one-hop dot-path semantics.
+export async function resolveDotSpecValues(
+  database: Knex,
+  collection: string,
+  relations: RelRow[],
+  dotSpecs: DotSpec[],
+  targetRows: Array<Record<string, unknown>>,
+  logger: Logger = consoleLogger,
+  logPrefix = 'review_list'
+): Promise<Map<string, Map<string, unknown>>> {
+  const dotByFk = new Map<string, Set<string>>()
+  for (const d of dotSpecs) {
+    const set = dotByFk.get(d.fkField) ?? new Set<string>()
+    set.add(d.subField)
+    dotByFk.set(d.fkField, set)
+  }
+  const dotValueMaps = new Map<string, Map<string, unknown>>()
+  for (const [fkField, subFields] of dotByFk) {
+    const rel = findM2oRelation(relations, fkField, { many: collection })
+    if (!rel?.one_collection) {
+      logger.warn(
+        { collection, field: fkField },
+        `${logPrefix}: dot-path relation not found, falling back to raw value`
+      )
+      continue
+    }
+    const distinctIds = dedupIds(targetRows.map((r) => r[fkField]))
+    if (distinctIds.length === 0) continue
+    const subFieldList = [...subFields]
+    const related = (await database(rel.one_collection)
+      .whereIn('id', distinctIds)
+      .limit(500)
+      .select(['id', ...subFieldList])) as Array<Record<string, unknown>>
+    for (const sub of subFieldList) {
+      const m = new Map<string, unknown>()
+      for (const r of related) m.set(String(r.id), r[sub] ?? null)
+      dotValueMaps.set(`${fkField}.${sub}`, m)
+    }
+  }
+  return dotValueMaps
+}
+
+// Batched id → display-label resolution against a related collection's
+// display_template (falls back to resolveDisplayValue's own heuristics when
+// there's no template). Shared by review_list's stamp_user label and
+// rollup's level-label resolution — both are "M2O FK ids on the fetched rows
+// → human labels" lookups.
+export async function resolveRelatedLabels(
+  database: Knex,
+  collection: string,
+  ids: unknown[]
+): Promise<Map<string, string>> {
+  const distinctIds = dedupIds(ids)
+  if (distinctIds.length === 0) return new Map()
+  let template: string | null = null
+  try {
+    template = (await getCollection(collection))?.display_template ?? null
+  } catch {
+    template = null
+  }
+  const rows = (await database(collection)
+    .whereIn('id', distinctIds)
+    .limit(500)
+    .select('*')) as Array<Record<string, unknown>>
+  return new Map(rows.map((r) => [String(r.id), resolveDisplayValue(r, template)]))
 }
 
 function toIso(v: unknown): string | null {
@@ -429,60 +578,14 @@ export async function resolveReviewListRows(
   const configError = validateReviewListConfig(config, relations)
   if (configError) badConfig(`review_list: ${configError}`)
 
-  let currentCollection = config.host_collection
-  let idSet: string[] = [recordId]
-  let truncated = false
-
-  // Owning collection per hop, taken from the deterministic forward walk —
-  // anchors the reverse walk below at both ends of each relation.
-  const hopOwners = computeForwardChain(config, relations)
-
-  // Reverse walk (host → target): process hops from LAST to FIRST, each hop
-  // resolving "ids of the next collection outward related to the current id
-  // set." After the loop currentCollection === config.collection and idSet IS
-  // the target row ids.
-  for (let i = config.path.length - 1; i >= 0; i--) {
-    const hop = config.path[i]
-    const owner = hopOwners[i]
-
-    if (hop.kind === 'm2m') {
-      const alias = findM2mAlias(relations, hop.field, { owner, related: currentCollection })
-      if (!alias) hopError(hop.field)
-      if (idSet.length > 0) {
-        const junctionRows = (await database(alias.junction)
-          .whereIn(alias.fkToRelated, idSet)
-          .limit(CAP)
-          .select(alias.fkToOwner)) as Array<Record<string, unknown>>
-        if (junctionRows.length === CAP) {
-          truncated = true
-          logger.warn(
-            { junction: alias.junction, hop: hop.field },
-            'review_list: hop query truncated at cap'
-          )
-        }
-        idSet = dedupIds(junctionRows.map((r) => r[alias.fkToOwner]))
-      }
-      currentCollection = alias.aliasCollection
-    } else {
-      const rel = findM2oRelation(relations, hop.field, { many: owner, one: currentCollection })
-      if (!rel) hopError(hop.field)
-      if (idSet.length > 0) {
-        const rows = (await database(rel.many_collection)
-          .whereIn(hop.field, idSet)
-          .limit(CAP)
-          .select('id')) as Array<{ id: unknown }>
-        if (rows.length === CAP) {
-          truncated = true
-          logger.warn(
-            { collection: rel.many_collection, hop: hop.field },
-            'review_list: hop query truncated at cap'
-          )
-        }
-        idSet = dedupIds(rows.map((r) => r.id))
-      }
-      currentCollection = rel.many_collection
-    }
-  }
+  const { idSet, truncated: walkTruncated } = await walkReversePath(
+    database,
+    config,
+    relations,
+    recordId,
+    logger
+  )
+  let truncated = walkTruncated
 
   const groupMetaSpecs = normalizeColumnSpecs(config.group_meta)
   const lineColumnSpecs = normalizeColumnSpecs(config.line_columns)
@@ -517,61 +620,24 @@ export async function resolveReviewListRows(
     }
   }
 
-  // Dot-path resolution: batched IN query per FK field, mirroring the
-  // batched related-label approach in transition-requirements.ts's
-  // relatedLabel helper — but resolving a NAMED sub-field, not a display
-  // template. Dead relation here degrades to the raw fk value (display
-  // polish must never crash the render), unlike a dead hop in the walk above.
-  const dotByFk = new Map<string, Set<string>>()
-  for (const d of dotSpecs) {
-    const set = dotByFk.get(d.fkField) ?? new Set<string>()
-    set.add(d.subField)
-    dotByFk.set(d.fkField, set)
-  }
-  const dotValueMaps = new Map<string, Map<string, unknown>>()
-  for (const [fkField, subFields] of dotByFk) {
-    const rel = findM2oRelation(relations, fkField, { many: config.collection })
-    if (!rel?.one_collection) {
-      logger.warn(
-        { collection: config.collection, field: fkField },
-        'review_list: dot-path relation not found, falling back to raw value'
-      )
-      continue
-    }
-    const distinctIds = dedupIds(targetRows.map((r) => r[fkField]))
-    if (distinctIds.length === 0) continue
-    const subFieldList = [...subFields]
-    const related = (await database(rel.one_collection)
-      .whereIn('id', distinctIds)
-      .limit(500)
-      .select(['id', ...subFieldList])) as Array<Record<string, unknown>>
-    for (const sub of subFieldList) {
-      const m = new Map<string, unknown>()
-      for (const r of related) m.set(String(r.id), r[sub] ?? null)
-      dotValueMaps.set(`${fkField}.${sub}`, m)
-    }
-  }
+  const dotValueMaps = await resolveDotSpecValues(
+    database,
+    config.collection,
+    relations,
+    dotSpecs,
+    targetRows,
+    logger
+  )
 
   // Stamp-user label resolution (audit tooltip).
   let stampUserLabels: Map<string, string> | null = null
   const stampUserField = config.status.stamp_user_field ?? null
   if (stampUserField) {
-    const distinctIds = dedupIds(targetRows.map((r) => r[stampUserField]))
-    if (distinctIds.length > 0) {
-      let template: string | null = null
-      try {
-        template = (await getCollection('nivaro_users'))?.display_template ?? null
-      } catch {
-        template = null
-      }
-      const users = (await database('nivaro_users')
-        .whereIn('id', distinctIds)
-        .limit(500)
-        .select('*')) as Array<Record<string, unknown>>
-      stampUserLabels = new Map(users.map((u) => [String(u.id), resolveDisplayValue(u, template)]))
-    } else {
-      stampUserLabels = new Map()
-    }
+    stampUserLabels = await resolveRelatedLabels(
+      database,
+      'nivaro_users',
+      targetRows.map((r) => r[stampUserField])
+    )
   }
 
   const stampDateField = config.status.stamp_date_field ?? null
