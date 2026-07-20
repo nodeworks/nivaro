@@ -95,8 +95,11 @@ function makeActiveDbMock(opts: {
   records?: Record<string, Record<string, unknown>>
   groups?: unknown[]
   assignments?: unknown[]
+  registered?: boolean // is `collection` present in nivaro_collections? defaults true
 }) {
-  return vi.fn((table: string) => {
+  const registered = opts.registered ?? true
+  const capturedSelects: unknown[][] = []
+  const fn = vi.fn((table: string) => {
     if (table === 'nivaro_collection_layouts') {
       return {
         where: vi.fn((cond: Record<string, unknown>) => {
@@ -105,6 +108,13 @@ function makeActiveDbMock(opts: {
           }
           return { orderByRaw: vi.fn(() => Promise.resolve(opts.layouts)) }
         })
+      }
+    }
+    if (table === 'nivaro_collections') {
+      return {
+        where: vi.fn(() => ({
+          first: vi.fn(() => Promise.resolve(registered ? { collection: 'workflows' } : undefined))
+        }))
       }
     }
     if (table === 'nivaro_field_groups') {
@@ -117,13 +127,18 @@ function makeActiveDbMock(opts: {
         }))
       }
     }
-    // Dynamic item-record lookup, e.g. table === 'workflows'.
+    // Dynamic item-record lookup, e.g. table === 'workflows'. The route
+    // restricts the select to record_conditions-referenced fields + id.
     return {
       where: vi.fn((cond: Record<string, unknown>) => ({
-        first: vi.fn(() => Promise.resolve(opts.records?.[String(cond.id)]))
+        select: vi.fn((cols: unknown[]) => {
+          capturedSelects.push(cols)
+          return { first: vi.fn(() => Promise.resolve(opts.records?.[String(cond.id)])) }
+        })
       }))
     }
   })
+  return Object.assign(fn, { capturedSelects })
 }
 
 async function getActive(query: Record<string, string>) {
@@ -332,6 +347,72 @@ describe('GET /collection-layouts/active — record-condition precedence', () =>
     const res = await getActive({ collection: 'workflows', item: 'missing' })
     expect(res.statusCode).toBe(200)
     expect((JSON.parse(res.body).data.layout as { id: number }).id).toBe(3)
+  })
+
+  it('does not query the item table when the collection is not a registered collection', async () => {
+    const defaultLayout = {
+      id: 3,
+      is_active: 1,
+      sort: 0,
+      conditions: null,
+      record_conditions: null,
+      default_values: null
+    }
+    const recordLayout = {
+      id: 2,
+      is_active: 0,
+      sort: 1,
+      conditions: null,
+      record_conditions: JSON.stringify([{ field: 'workflow_type', op: 'eq', value: 2 }]),
+      default_values: null
+    }
+
+    const dbMock = makeActiveDbMock({
+      layouts: [defaultLayout, recordLayout],
+      records: { w1: { id: 'w1', workflow_type: 2 } },
+      registered: false
+    })
+    vi.mocked(db).mockImplementation(dbMock as unknown as typeof db)
+
+    const res = await getActive({ collection: 'nivaro_users', item: 'w1' })
+    expect(res.statusCode).toBe(200)
+    // Same result as the no-item / unknown-item path — the conditional
+    // layout is excluded, default wins.
+    expect((JSON.parse(res.body).data.layout as { id: number }).id).toBe(3)
+    expect(dbMock.mock.calls.some((call) => call[0] === 'nivaro_users')).toBe(false)
+  })
+
+  it('restricts the item-record select to exactly the record_conditions fields plus id', async () => {
+    const recordLayout = {
+      id: 2,
+      is_active: 0,
+      sort: 0,
+      conditions: null,
+      record_conditions: JSON.stringify([
+        { field: 'workflow_type', op: 'eq', value: 2 },
+        { field: 'region', op: 'eq', value: 'west' }
+      ]),
+      default_values: null
+    }
+    const roleLayout = {
+      id: 1,
+      is_active: 0,
+      sort: 1,
+      conditions: JSON.stringify({ role_ids: ['user'] }),
+      record_conditions: null,
+      default_values: null
+    }
+
+    const dbMock = makeActiveDbMock({
+      layouts: [recordLayout, roleLayout],
+      records: { w1: { id: 'w1', workflow_type: 2, region: 'west' } }
+    })
+    vi.mocked(db).mockImplementation(dbMock as unknown as typeof db)
+
+    const res = await getActive({ collection: 'workflows', item: 'w1' })
+    expect(res.statusCode).toBe(200)
+    expect(dbMock.capturedSelects).toHaveLength(1)
+    expect(new Set(dbMock.capturedSelects[0])).toEqual(new Set(['id', 'workflow_type', 'region']))
   })
 
   it('no item, no slug (legacy path): behaves exactly as before, conditional layouts excluded', async () => {

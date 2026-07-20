@@ -100,24 +100,42 @@ function validateDefaultValues(values: unknown): string | null {
   return null
 }
 
-// Resolve the best-matching layout for a collection given the user's role and
-// (optionally) the record being edited. Precedence: record-condition layouts
-// (ALL rules match; most rules wins; ties by is_active desc, sort asc) > role
-// -condition layouts (conditions.role_ids includes userRoleId; most role_ids
-// wins) > default (is_active=1) > first by sort. A layout carrying
+// Fetch the DB-ordered layout candidates for a collection (is_active desc,
+// sort asc — the idiom both role- and record-condition tie-breaking rely on).
+async function fetchLayoutsForCollection(collection: string) {
+  return db('nivaro_collection_layouts').where({ collection }).orderByRaw('is_active desc, sort asc')
+}
+
+// Union of field names referenced by any candidate layout's record_conditions.
+// Used to restrict the item-record select to exactly what selection needs —
+// the record fetch (against a caller-supplied collection name) must never be
+// able to read a column no layout rule references.
+function collectRecordConditionFields(layouts: Record<string, unknown>[]): string[] {
+  const fields = new Set<string>()
+  for (const row of layouts) {
+    const rules = parseRecordConditions(row.record_conditions)
+    if (!rules) continue
+    for (const rule of rules) {
+      if (typeof rule.field === 'string') fields.add(rule.field)
+    }
+  }
+  return [...fields]
+}
+
+// Pick the best-matching layout given its DB-ordered candidates, the user's
+// role, and (optionally) the record being edited. Precedence: record-condition
+// layouts (ALL rules match; most rules wins; ties by is_active desc, sort asc)
+// > role-condition layouts (conditions.role_ids includes userRoleId; most
+// role_ids wins) > default (is_active=1) > first by sort. A layout carrying
 // record_conditions is excluded from the role/default fallback pool entirely
 // when it does not match (or no record is supplied) — it can never leak to
 // non-matching records. Returns the raw DB row (JSON columns still strings)
 // or null when no layout exists.
-async function resolveLayout(
-  collection: string,
+function pickBestLayout(
+  layouts: Record<string, unknown>[],
   userRoleId: string | null | undefined,
   record: Record<string, unknown> | null
 ) {
-  const layouts = await db('nivaro_collection_layouts')
-    .where({ collection })
-    .orderByRaw('is_active desc, sort asc')
-
   if (layouts.length === 0) return null
 
   const fallbackPool: typeof layouts = []
@@ -167,12 +185,25 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!layout) {
       // Admins always see the default layout (no conditional override).
       const userRoleId = req.isAdmin ? null : (req.user?.role ?? null)
-      // An unknown/missing item id resolves to no record — falls through to
-      // the role/default path exactly like the no-item case.
-      const record = item
-        ? ((await db(collection).where({ id: item }).first().catch(() => null)) ?? null)
-        : null
-      layout = await resolveLayout(collection, userRoleId, record)
+      const layouts = await fetchLayoutsForCollection(collection)
+
+      // An unknown/missing item id, or a collection that isn't a registered
+      // nivaro_collections entry, resolves to no record — falls through to
+      // the role/default path exactly like the no-item case. The registry
+      // gate stops `collection` (a caller-supplied query param) from ever
+      // being used as an arbitrary table identifier, and the select below is
+      // restricted to exactly the fields the candidate layouts' rules
+      // reference, so this can't become a column-value probing oracle.
+      let record: Record<string, unknown> | null = null
+      if (item) {
+        const registered = await db('nivaro_collections').where({ collection }).first()
+        if (registered) {
+          const columns = [...new Set(['id', ...collectRecordConditionFields(layouts)])]
+          record =
+            (await db(collection).where({ id: item }).select(columns).first().catch(() => null)) ?? null
+        }
+      }
+      layout = pickBestLayout(layouts, userRoleId, record)
     }
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
 
