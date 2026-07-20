@@ -1133,7 +1133,9 @@ function PipelinePanelInner({
           className='flex w-full cursor-pointer items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
         >
           <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-          <span className='font-semibold text-sm text-slate-700'>{title || 'Pipeline'}</span>
+          <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
+            {title || 'Pipeline'}
+          </span>
           <div className='flex items-center gap-1.5'>
             {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
             {addendumPending && (

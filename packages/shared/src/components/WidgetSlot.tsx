@@ -1301,7 +1301,7 @@ export function WidgetSlot({
         className='flex w-full items-center justify-between px-4 py-3 text-left'
         onClick={() => setOpen((o) => !o)}
       >
-        <span className='text-[13px] font-medium text-slate-700 dark:text-slate-200'>{title}</span>
+        <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>{title}</span>
         <span className={`text-slate-400 transition-transform ${open ? 'rotate-90' : ''}`}>›</span>
       </button>
       {open && (

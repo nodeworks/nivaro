@@ -302,7 +302,9 @@ export function CommentPanel({
         className='flex w-full items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
       >
         <MessageSquare className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        <span className='font-semibold text-sm text-slate-700'>{title || 'Comments'}</span>
+        <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
+          {title || 'Comments'}
+        </span>
         {!expanded && (comments.length > 0 || (queuedComments ?? []).length > 0) && (
           <span className='ml-1 text-[11px] text-slate-400'>
             {isNew
