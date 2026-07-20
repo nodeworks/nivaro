@@ -256,6 +256,8 @@ interface WidgetSlotProps {
   ready?: boolean
   label?: string
   defaultExpanded?: boolean
+  /** Render body only — no card border/header/collapse (host provides chrome). */
+  frameless?: boolean
   apiBase?: string
   compact?: boolean
   strip?: boolean
@@ -993,6 +995,7 @@ export function WidgetSlot({
   ready = true,
   label,
   defaultExpanded = true,
+  frameless = false,
   apiBase: apiBaseProp,
   compact = false,
   strip = false,
@@ -1254,6 +1257,17 @@ export function WidgetSlot({
     )
   }
 
+  // Host-provided chrome (group sections, container tabs) → body only.
+  if (frameless) {
+    return (
+      <div>
+        {loading && <p className='text-[12px] text-slate-400'>Loading…</p>}
+        {error && <p className='text-[12px] text-red-500'>{error}</p>}
+        {!loading && !error && renderData && widget && renderTypedBody()}
+      </div>
+    )
+  }
+
   return (
     <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
       <button
@@ -1268,60 +1282,65 @@ export function WidgetSlot({
         <div className='border-t border-slate-100 px-4 py-3 dark:border-border'>
           {loading && <p className='text-[12px] text-slate-400'>Loading…</p>}
           {error && <p className='text-[12px] text-red-500'>{error}</p>}
-          {!loading && !error && renderData && widget && (
-            <>
-              {(widget.widget_type === 'stat' ||
-                (widget.widget_type === 'custom-query' && 'value' in renderData)) && (
-                <StatDisplay data={renderData} />
-              )}
-              {widget.widget_type === 'custom-query' && 'values' in renderData && (
-                <MultiStatDisplay data={renderData} />
-              )}
-              {(widget.widget_type === 'list' ||
-                (widget.widget_type === 'custom-query' && 'rows' in renderData)) && (
-                <ListDisplay data={renderData} />
-              )}
-              {widget.widget_type === 'review_list' && (
-                <ReviewListWidget
-                  data={renderData as unknown as ReviewListResult}
-                  config={(widget.config ?? {}) as unknown as ReviewListConfig}
-                  onRefetch={() => setRefetchTick((t) => t + 1)}
-                />
-              )}
-              {widget.widget_type === 'action-buttons' && (
-                <ActionButtonsDisplay
-                  data={renderData}
-                  widgetId={widgetId}
-                  inputs={inputs}
-                  apiBase={apiBase}
-                />
-              )}
-              {widget.widget_type === 'button-group' && (
-                <ButtonGroupDisplay
-                  buttons={(renderData.buttons ?? []) as BtnGroupButton[]}
-                  layout={(renderData.layout as string) ?? 'flat'}
-                  widgetId={widgetId}
-                  inputs={inputs}
-                  apiBase={apiBase}
-                  onClientAction={onClientAction}
-                />
-              )}
-              {![
-                'stat',
-                'list',
-                'action-buttons',
-                'custom-query',
-                'button-group',
-                'review_list'
-              ].includes(widget.widget_type) && (
-                <pre className='whitespace-pre-wrap text-[11px] text-slate-500'>
-                  {JSON.stringify(renderData, null, 2)}
-                </pre>
-              )}
-            </>
-          )}
+          {!loading && !error && renderData && widget && renderTypedBody()}
         </div>
       )}
     </div>
   )
+
+  function renderTypedBody() {
+    if (!renderData || !widget) return null
+    return (
+      <>
+        {(widget.widget_type === 'stat' ||
+          (widget.widget_type === 'custom-query' && 'value' in renderData)) && (
+          <StatDisplay data={renderData} />
+        )}
+        {widget.widget_type === 'custom-query' && 'values' in renderData && (
+          <MultiStatDisplay data={renderData} />
+        )}
+        {(widget.widget_type === 'list' ||
+          (widget.widget_type === 'custom-query' && 'rows' in renderData)) && (
+          <ListDisplay data={renderData} />
+        )}
+        {widget.widget_type === 'review_list' && (
+          <ReviewListWidget
+            data={renderData as unknown as ReviewListResult}
+            config={(widget.config ?? {}) as unknown as ReviewListConfig}
+            onRefetch={() => setRefetchTick((t) => t + 1)}
+          />
+        )}
+        {widget.widget_type === 'action-buttons' && (
+          <ActionButtonsDisplay
+            data={renderData}
+            widgetId={widgetId}
+            inputs={inputs}
+            apiBase={apiBase}
+          />
+        )}
+        {widget.widget_type === 'button-group' && (
+          <ButtonGroupDisplay
+            buttons={(renderData.buttons ?? []) as BtnGroupButton[]}
+            layout={(renderData.layout as string) ?? 'flat'}
+            widgetId={widgetId}
+            inputs={inputs}
+            apiBase={apiBase}
+            onClientAction={onClientAction}
+          />
+        )}
+        {![
+          'stat',
+          'list',
+          'action-buttons',
+          'custom-query',
+          'button-group',
+          'review_list'
+        ].includes(widget.widget_type) && (
+          <pre className='whitespace-pre-wrap text-[11px] text-slate-500'>
+            {JSON.stringify(renderData, null, 2)}
+          </pre>
+        )}
+      </>
+    )
+  }
 }

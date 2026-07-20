@@ -15059,7 +15059,23 @@ function FieldGroupsTab({
           changeSeqRef.current++
         }
         return (
-          <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5'>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type='button'
+                className='mt-1 inline-flex items-center gap-1 rounded p-0.5 text-[10px] text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Settings2 className='h-3 w-3' />
+                Widget settings
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              className='w-64 p-2.5 space-y-1.5'
+              side='bottom'
+              align='start'
+              onClick={(e) => e.stopPropagation()}
+            >
             <div className='flex items-center gap-1.5'>
               <input
                 type='text'
@@ -15155,7 +15171,8 @@ function FieldGroupsTab({
                 })}
               </div>
             )}
-          </div>
+            </PopoverContent>
+          </Popover>
         )
       }
       return undefined

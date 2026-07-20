@@ -1101,6 +1101,7 @@ export function GroupSection({
                           itemDraft={draft}
                           label={item.slot.label_override ?? undefined}
                           defaultExpanded={item.slot.default_expanded ?? true}
+                          frameless
                           apiBase={widgetApiBase}
                         />
                       </div>
