@@ -296,6 +296,23 @@ function valuesEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
+// ─── Layout default values ──────────────────────────────────────────────────────
+
+// Fills only the keys a new-record draft doesn't already have a set value
+// for (absent, null, or undefined) — 0/false/'' count as set and are left
+// alone. Tolerates a null/undefined defaults object.
+export function applyLayoutDefaults(
+  draft: Record<string, unknown>,
+  defaults: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  if (!defaults) return draft
+  const next = { ...draft }
+  for (const [key, value] of Object.entries(defaults)) {
+    if (next[key] === undefined || next[key] === null) next[key] = value
+  }
+  return next
+}
+
 // ─── ItemEditForm ──────────────────────────────────────────────────────────────
 
 export function ItemEditForm({
@@ -330,11 +347,14 @@ export function ItemEditForm({
 
   // ── Data fetching ──────────────────────────────────────────────────────────
   const { data: activeLayoutData } = useQuery<ActiveLayoutData | null>({
-    queryKey: ['active-layout', collection, layoutSlug ?? null],
+    queryKey: ['active-layout', collection, layoutSlug ?? null, itemId],
     queryFn: () =>
       client
         .request<{ data: ActiveLayoutData | null }>(
-          get('/collection-layouts/active', { collection, ...(layoutSlug ? { slug: layoutSlug } : {}) })
+          get('/collection-layouts/active', {
+            collection,
+            ...(layoutSlug ? { slug: layoutSlug } : itemId !== 'new' ? { item: itemId } : {})
+          })
         )
         .then((r) => r.data)
         .catch(() => null),
@@ -595,6 +615,7 @@ export function ItemEditForm({
   // ── Import from file (new records) ─────────────────────────────────────────
   const [importIssues, setImportIssues] = useState<ImportParseResponse['issues']>([])
   const appliedInitialImportRef = useRef(false)
+  const appliedLayoutDefaultsRef = useRef(false)
 
   // ── M2M staging ────────────────────────────────────────────────────────────
   const [m2mLinks, setM2mLinks] = useState<Map<string, unknown[]>>(new Map())
@@ -1172,6 +1193,18 @@ export function ItemEditForm({
       setIsDirty(false)
     }
   }, [itemData])
+
+  // New records: stamp the resolved layout's default_values onto the draft,
+  // once, filling only keys the draft doesn't already have a value for.
+  useEffect(() => {
+    if (!isNew || activeLayoutData === undefined || appliedLayoutDefaultsRef.current) return
+    appliedLayoutDefaultsRef.current = true
+    const defaults = activeLayoutData?.layout?.default_values
+    if (!defaults) return
+    const next = applyLayoutDefaults(draftRef.current, defaults)
+    draftRef.current = next
+    setDraft(next)
+  }, [isNew, activeLayoutData])
 
   // Relation-path fields ('purchase_order.workflow.workflow_id'): read-only
   // values reached through M2O hops, resolved server-side in one batched call

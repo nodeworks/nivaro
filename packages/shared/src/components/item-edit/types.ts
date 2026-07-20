@@ -92,6 +92,7 @@ export interface LayoutMeta {
   accordion_mode?: boolean | number
   addendum_layout_id?: number | null
   addendum_default_view?: boolean | number
+  default_values?: Record<string, unknown> | null
 }
 
 export interface ActiveLayoutData {
