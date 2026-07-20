@@ -772,7 +772,7 @@ function FeedDetail({ feed, onDeleted }: { feed: WidgetFeed; onDeleted: () => vo
   })
 
   return (
-    <div className='mx-auto w-full max-w-3xl space-y-6 p-6'>
+    <div className='w-full space-y-6 p-6'>
       <div className='flex items-start justify-between gap-4'>
         <div>
           <h2 className='text-[15px] font-semibold'>{feed.name}</h2>
@@ -890,30 +890,57 @@ function widgetToForm(w: InternalWidget): InternalWidgetFormData {
 // ─── Widget Config Editor ─────────────────────────────────────────────────────
 
 function tryParse(json: string): Record<string, unknown> {
-  try { return (JSON.parse(json || '{}') as Record<string, unknown>) } catch { return {} }
+  try {
+    return JSON.parse(json || '{}') as Record<string, unknown>
+  } catch {
+    return {}
+  }
 }
 
 // ── shared types
-interface FilterRow { col: string; value: string }
-interface ParamBinding { param: string; input_key: string; default_value?: string }
+interface FilterRow {
+  col: string
+  value: string
+}
+interface ParamBinding {
+  param: string
+  input_key: string
+  default_value?: string
+}
 
 // ── stat
 interface StatCfg {
-  collection: string; field: string; aggregation: string; id_input: string
-  filters: FilterRow[]; prefix: string; suffix: string; format: string
+  collection: string
+  field: string
+  aggregation: string
+  id_input: string
+  filters: FilterRow[]
+  prefix: string
+  suffix: string
+  format: string
 }
 function rawToStat(r: Record<string, unknown>): StatCfg {
-  const rf = typeof r.filters === 'object' && r.filters && !Array.isArray(r.filters)
-    ? r.filters as Record<string, unknown> : {}
+  const rf =
+    typeof r.filters === 'object' && r.filters && !Array.isArray(r.filters)
+      ? (r.filters as Record<string, unknown>)
+      : {}
   const filters = Object.entries(rf).map(([col, cond]) => ({
-    col, value: cond && typeof cond === 'object' && '_eq' in (cond as object)
-      ? String((cond as Record<string, unknown>)._eq ?? '') : ''
+    col,
+    value:
+      cond && typeof cond === 'object' && '_eq' in (cond as object)
+        ? String((cond as Record<string, unknown>)._eq ?? '')
+        : ''
   }))
   const d = (typeof r.display === 'object' && r.display ? r.display : {}) as Record<string, unknown>
   return {
-    collection: String(r.collection ?? ''), field: String(r.field ?? ''),
-    aggregation: String(r.aggregation ?? 'none'), id_input: String(r.id_input ?? ''),
-    filters, prefix: String(d.prefix ?? ''), suffix: String(d.suffix ?? ''), format: String(d.format ?? '')
+    collection: String(r.collection ?? ''),
+    field: String(r.field ?? ''),
+    aggregation: String(r.aggregation ?? 'none'),
+    id_input: String(r.id_input ?? ''),
+    filters,
+    prefix: String(d.prefix ?? ''),
+    suffix: String(d.suffix ?? ''),
+    format: String(d.format ?? '')
   }
 }
 function statToRaw(c: StatCfg): Record<string, unknown> {
@@ -933,51 +960,86 @@ function statToRaw(c: StatCfg): Record<string, unknown> {
 
 // ── list
 interface ListCfg {
-  collection: string; fields: string; filters: FilterRow[]
-  limit: number; order_field: string; order_dir: string
+  collection: string
+  fields: string
+  filters: FilterRow[]
+  limit: number
+  order_field: string
+  order_dir: string
 }
 function rawToList(r: Record<string, unknown>): ListCfg {
-  const rf = typeof r.filters === 'object' && r.filters && !Array.isArray(r.filters)
-    ? r.filters as Record<string, unknown> : {}
+  const rf =
+    typeof r.filters === 'object' && r.filters && !Array.isArray(r.filters)
+      ? (r.filters as Record<string, unknown>)
+      : {}
   const filters = Object.entries(rf).map(([col, cond]) => ({
-    col, value: cond && typeof cond === 'object' && '_eq' in (cond as object)
-      ? String((cond as Record<string, unknown>)._eq ?? '') : ''
+    col,
+    value:
+      cond && typeof cond === 'object' && '_eq' in (cond as object)
+        ? String((cond as Record<string, unknown>)._eq ?? '')
+        : ''
   }))
   return {
     collection: String(r.collection ?? ''),
     fields: Array.isArray(r.fields) ? (r.fields as string[]).join(', ') : String(r.fields ?? ''),
-    filters, limit: Number(r.limit ?? 50),
-    order_field: String(r.order_field ?? ''), order_dir: String(r.order_dir ?? 'asc')
+    filters,
+    limit: Number(r.limit ?? 50),
+    order_field: String(r.order_field ?? ''),
+    order_dir: String(r.order_dir ?? 'asc')
   }
 }
 function listToRaw(c: ListCfg): Record<string, unknown> {
   const f: Record<string, unknown> = {}
   for (const r of c.filters) if (r.col.trim()) f[r.col.trim()] = { _eq: r.value }
   const out: Record<string, unknown> = { collection: c.collection }
-  const fields = c.fields.split(',').map((x) => x.trim()).filter(Boolean)
+  const fields = c.fields
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
   if (fields.length) out.fields = fields
   if (Object.keys(f).length) out.filters = f
   if (c.limit) out.limit = c.limit
-  if (c.order_field) { out.order_field = c.order_field; out.order_dir = c.order_dir || 'asc' }
+  if (c.order_field) {
+    out.order_field = c.order_field
+    out.order_dir = c.order_dir || 'asc'
+  }
   return out
 }
 
 // ── custom query
-interface CQValueField { field: string; label: string; prefix: string; suffix: string; format: string }
-interface CQCfg { query_id: string; param_bindings: ParamBinding[]; value_fields: CQValueField[] }
+interface CQValueField {
+  field: string
+  label: string
+  prefix: string
+  suffix: string
+  format: string
+}
+interface CQCfg {
+  query_id: string
+  param_bindings: ParamBinding[]
+  value_fields: CQValueField[]
+}
 const BLANK_CQ_VF: CQValueField = { field: '', label: '', prefix: '', suffix: '', format: '' }
 function rawToCQ(r: Record<string, unknown>): CQCfg {
-  const pb = Array.isArray(r.param_bindings) ? r.param_bindings as Array<Record<string, unknown>> : []
-  const vf = Array.isArray(r.value_fields) ? r.value_fields as Array<Record<string, unknown>> : []
+  const pb = Array.isArray(r.param_bindings)
+    ? (r.param_bindings as Array<Record<string, unknown>>)
+    : []
+  const vf = Array.isArray(r.value_fields) ? (r.value_fields as Array<Record<string, unknown>>) : []
   return {
     query_id: String(r.query_id ?? ''),
     param_bindings: pb.map((b) => ({
-      param: String(b.param ?? ''), input_key: String(b.input_key ?? ''),
-      ...(b.default_value != null && b.default_value !== '' ? { default_value: String(b.default_value) } : {})
+      param: String(b.param ?? ''),
+      input_key: String(b.input_key ?? ''),
+      ...(b.default_value != null && b.default_value !== ''
+        ? { default_value: String(b.default_value) }
+        : {})
     })),
     value_fields: vf.map((v) => ({
-      field: String(v.field ?? ''), label: String(v.label ?? ''),
-      prefix: String(v.prefix ?? ''), suffix: String(v.suffix ?? ''), format: String(v.format ?? '')
+      field: String(v.field ?? ''),
+      label: String(v.label ?? ''),
+      prefix: String(v.prefix ?? ''),
+      suffix: String(v.suffix ?? ''),
+      format: String(v.format ?? '')
     }))
   }
 }
@@ -985,23 +1047,35 @@ function cqToRaw(c: CQCfg): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (c.query_id) out.query_id = c.query_id
   if (c.param_bindings.length) out.param_bindings = c.param_bindings
-  const vf = c.value_fields.filter(v => v.field.trim())
+  const vf = c.value_fields.filter((v) => v.field.trim())
   if (vf.length) out.value_fields = vf
   return out
 }
 
 // ── external api
-interface ExtApiCfg { api_id: string; endpoint_slug: string; param_bindings: ParamBinding[]; display_fields: string }
+interface ExtApiCfg {
+  api_id: string
+  endpoint_slug: string
+  param_bindings: ParamBinding[]
+  display_fields: string
+}
 function rawToExtApi(r: Record<string, unknown>): ExtApiCfg {
-  const pb = Array.isArray(r.param_bindings) ? r.param_bindings as Array<Record<string, unknown>> : []
+  const pb = Array.isArray(r.param_bindings)
+    ? (r.param_bindings as Array<Record<string, unknown>>)
+    : []
   return {
-    api_id: String(r.api_id ?? ''), endpoint_slug: String(r.endpoint_slug ?? ''),
+    api_id: String(r.api_id ?? ''),
+    endpoint_slug: String(r.endpoint_slug ?? ''),
     param_bindings: pb.map((b) => ({
-      param: String(b.param ?? ''), input_key: String(b.input_key ?? ''),
-      ...(b.default_value != null && b.default_value !== '' ? { default_value: String(b.default_value) } : {})
+      param: String(b.param ?? ''),
+      input_key: String(b.input_key ?? ''),
+      ...(b.default_value != null && b.default_value !== ''
+        ? { default_value: String(b.default_value) }
+        : {})
     })),
     display_fields: Array.isArray(r.display_fields)
-      ? (r.display_fields as string[]).join(', ') : String(r.display_fields ?? '')
+      ? (r.display_fields as string[]).join(', ')
+      : String(r.display_fields ?? '')
   }
 }
 function extApiToRaw(c: ExtApiCfg): Record<string, unknown> {
@@ -1009,42 +1083,78 @@ function extApiToRaw(c: ExtApiCfg): Record<string, unknown> {
   if (c.api_id) out.api_id = Number(c.api_id) || c.api_id
   if (c.endpoint_slug) out.endpoint_slug = c.endpoint_slug
   if (c.param_bindings.length) out.param_bindings = c.param_bindings
-  const df = c.display_fields.split(',').map((x) => x.trim()).filter(Boolean)
+  const df = c.display_fields
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
   if (df.length) out.display_fields = df
   return out
 }
 
 // ── action buttons
 interface ActionBtn {
-  label: string; style: string; action_type: string
-  ac_url: string; ac_trigger: string; ac_payload: string
-  ac_collection: string; ac_id_input: string; ac_field: string; ac_value: string
-  ac_api_id: string; ac_endpoint: string
+  label: string
+  style: string
+  action_type: string
+  ac_url: string
+  ac_trigger: string
+  ac_payload: string
+  ac_collection: string
+  ac_id_input: string
+  ac_field: string
+  ac_value: string
+  ac_api_id: string
+  ac_endpoint: string
 }
 const BLANK_BTN: ActionBtn = {
-  label: '', style: 'default', action_type: 'navigate',
-  ac_url: '', ac_trigger: '', ac_payload: '{}',
-  ac_collection: '', ac_id_input: '', ac_field: '', ac_value: '',
-  ac_api_id: '', ac_endpoint: ''
+  label: '',
+  style: 'default',
+  action_type: 'navigate',
+  ac_url: '',
+  ac_trigger: '',
+  ac_payload: '{}',
+  ac_collection: '',
+  ac_id_input: '',
+  ac_field: '',
+  ac_value: '',
+  ac_api_id: '',
+  ac_endpoint: ''
 }
-interface BtnsCfg { buttons: ActionBtn[] }
+interface BtnsCfg {
+  buttons: ActionBtn[]
+}
 function rawToBtns(r: Record<string, unknown>): BtnsCfg {
-  const btns = Array.isArray(r.buttons) ? r.buttons as Array<Record<string, unknown>> : []
+  const btns = Array.isArray(r.buttons) ? (r.buttons as Array<Record<string, unknown>>) : []
   return {
     buttons: btns.map((b) => {
       const at = String(b.action_type ?? 'navigate')
-      const ac = (typeof b.action_config === 'object' && b.action_config ? b.action_config : {}) as Record<string, unknown>
+      const ac = (
+        typeof b.action_config === 'object' && b.action_config ? b.action_config : {}
+      ) as Record<string, unknown>
       return {
-        label: String(b.label ?? ''), style: String(b.style ?? 'default'), action_type: at,
+        label: String(b.label ?? ''),
+        style: String(b.style ?? 'default'),
+        action_type: at,
         ac_url: at === 'navigate' ? String(ac.url ?? '') : '',
         ac_trigger: at === 'flow' ? String(ac.trigger_type ?? '') : '',
-        ac_payload: at === 'flow'
-          ? (typeof ac.payload === 'object' ? JSON.stringify(ac.payload, null, 2) : String(ac.payload ?? '{}'))
-          : '{}',
+        ac_payload:
+          at === 'flow'
+            ? typeof ac.payload === 'object'
+              ? JSON.stringify(ac.payload, null, 2)
+              : String(ac.payload ?? '{}')
+            : '{}',
         ac_collection: at === 'field-update' ? String(ac.collection ?? '') : '',
         ac_id_input: at === 'field-update' ? String(ac.id_input ?? '') : '',
-        ac_field: at === 'field-update' ? String(Object.keys(ac).find((k) => k !== 'collection' && k !== 'id_input') ?? '') : '',
-        ac_value: at === 'field-update' ? String(Object.entries(ac).find(([k]) => k !== 'collection' && k !== 'id_input')?.[1] ?? '') : '',
+        ac_field:
+          at === 'field-update'
+            ? String(Object.keys(ac).find((k) => k !== 'collection' && k !== 'id_input') ?? '')
+            : '',
+        ac_value:
+          at === 'field-update'
+            ? String(
+                Object.entries(ac).find(([k]) => k !== 'collection' && k !== 'id_input')?.[1] ?? ''
+              )
+            : '',
         ac_api_id: at === 'external-api' ? String(ac.api_id ?? '') : '',
         ac_endpoint: at === 'external-api' ? String(ac.endpoint_slug ?? '') : ''
       }
@@ -1054,19 +1164,28 @@ function rawToBtns(r: Record<string, unknown>): BtnsCfg {
 function btnsToRaw(c: BtnsCfg): Record<string, unknown> {
   return {
     buttons: c.buttons.map((b) => {
-      const base: Record<string, unknown> = { label: b.label, style: b.style, action_type: b.action_type }
+      const base: Record<string, unknown> = {
+        label: b.label,
+        style: b.style,
+        action_type: b.action_type
+      }
       if (b.action_type === 'navigate') {
         base.action_config = { url: b.ac_url }
       } else if (b.action_type === 'flow') {
         let payload: unknown = {}
-        try { payload = JSON.parse(b.ac_payload || '{}') } catch {}
+        try {
+          payload = JSON.parse(b.ac_payload || '{}')
+        } catch {}
         base.action_config = { trigger_type: b.ac_trigger, payload }
       } else if (b.action_type === 'field-update') {
         const ac: Record<string, unknown> = { collection: b.ac_collection, id_input: b.ac_id_input }
         if (b.ac_field) ac[b.ac_field] = b.ac_value
         base.action_config = ac
       } else if (b.action_type === 'external-api') {
-        base.action_config = { api_id: Number(b.ac_api_id) || b.ac_api_id, endpoint_slug: b.ac_endpoint }
+        base.action_config = {
+          api_id: Number(b.ac_api_id) || b.ac_api_id,
+          endpoint_slug: b.ac_endpoint
+        }
       }
       return base
     })
@@ -1116,22 +1235,51 @@ interface BtnGroupBtn {
   toggle_off_value: string
 }
 const BLANK_BG_BTN: BtnGroupBtn = {
-  id: '', label: '', icon: '', variant: 'secondary', color: '', action: 'open-url',
-  url: '', new_tab: false, email_to: '', email_subject: '', email_body: '',
-  copy_input: '', sidebar_collection: '', sidebar_id_input: '',
-  ac_url: '', ac_trigger: '', ac_payload: '{}',
-  ac_collection: '', ac_id_input: '', ac_field: '', ac_value: '',
-  toggle_input: '', label_on: '', label_off: '', variant_on: 'destructive', variant_off: 'default',
-  toggle_collection: '', toggle_id_input: 'id', toggle_field: '', toggle_on_value: '1', toggle_off_value: '0'
+  id: '',
+  label: '',
+  icon: '',
+  variant: 'secondary',
+  color: '',
+  action: 'open-url',
+  url: '',
+  new_tab: false,
+  email_to: '',
+  email_subject: '',
+  email_body: '',
+  copy_input: '',
+  sidebar_collection: '',
+  sidebar_id_input: '',
+  ac_url: '',
+  ac_trigger: '',
+  ac_payload: '{}',
+  ac_collection: '',
+  ac_id_input: '',
+  ac_field: '',
+  ac_value: '',
+  toggle_input: '',
+  label_on: '',
+  label_off: '',
+  variant_on: 'destructive',
+  variant_off: 'default',
+  toggle_collection: '',
+  toggle_id_input: 'id',
+  toggle_field: '',
+  toggle_on_value: '1',
+  toggle_off_value: '0'
 }
-interface BtnGroupCfg { buttons: BtnGroupBtn[]; layout: string }
+interface BtnGroupCfg {
+  buttons: BtnGroupBtn[]
+  layout: string
+}
 function rawToBtnGroup(r: Record<string, unknown>): BtnGroupCfg {
-  const btns = Array.isArray(r.buttons) ? r.buttons as Array<Record<string, unknown>> : []
+  const btns = Array.isArray(r.buttons) ? (r.buttons as Array<Record<string, unknown>>) : []
   return {
     layout: String(r.layout ?? 'flat'),
     buttons: btns.map((b) => {
       const at = String(b.action ?? 'open-url')
-      const ac = (typeof b.action_config === 'object' && b.action_config ? b.action_config : {}) as Record<string, unknown>
+      const ac = (
+        typeof b.action_config === 'object' && b.action_config ? b.action_config : {}
+      ) as Record<string, unknown>
       return {
         id: String(b.id ?? ''),
         label: String(b.label ?? ''),
@@ -1152,8 +1300,16 @@ function rawToBtnGroup(r: Record<string, unknown>): BtnGroupCfg {
         ac_payload: at === 'flow' ? JSON.stringify(ac.payload ?? {}, null, 2) : '{}',
         ac_collection: at === 'field-update' ? String(ac.collection ?? '') : '',
         ac_id_input: at === 'field-update' ? String(ac.id_input ?? '') : '',
-        ac_field: at === 'field-update' ? String(Object.keys(ac).find((k) => k !== 'collection' && k !== 'id_input') ?? '') : '',
-        ac_value: at === 'field-update' ? String(Object.entries(ac).find(([k]) => k !== 'collection' && k !== 'id_input')?.[1] ?? '') : '',
+        ac_field:
+          at === 'field-update'
+            ? String(Object.keys(ac).find((k) => k !== 'collection' && k !== 'id_input') ?? '')
+            : '',
+        ac_value:
+          at === 'field-update'
+            ? String(
+                Object.entries(ac).find(([k]) => k !== 'collection' && k !== 'id_input')?.[1] ?? ''
+              )
+            : '',
         toggle_input: at === 'toggle' ? String(b.toggle_input ?? '') : '',
         label_on: at === 'toggle' ? String(b.label_on ?? '') : '',
         label_off: at === 'toggle' ? String(b.label_off ?? '') : '',
@@ -1172,23 +1328,46 @@ function btnGroupToRaw(c: BtnGroupCfg): Record<string, unknown> {
   return {
     layout: c.layout,
     buttons: c.buttons.map((b) => {
-      const base: Record<string, unknown> = { id: b.id || crypto.randomUUID(), label: b.label, variant: b.variant, action: b.action }
+      const base: Record<string, unknown> = {
+        id: b.id || crypto.randomUUID(),
+        label: b.label,
+        variant: b.variant,
+        action: b.action
+      }
       if (b.icon) base.icon = b.icon
       if (b.color) base.color = b.color
       // client-side actions
-      if (b.action === 'open-url') { base.url = b.url; if (b.new_tab) base.new_tab = true }
-      if (b.action === 'email') { base.email_to = b.email_to; if (b.email_subject) base.email_subject = b.email_subject; if (b.email_body) base.email_body = b.email_body }
+      if (b.action === 'open-url') {
+        base.url = b.url
+        if (b.new_tab) base.new_tab = true
+      }
+      if (b.action === 'email') {
+        base.email_to = b.email_to
+        if (b.email_subject) base.email_subject = b.email_subject
+        if (b.email_body) base.email_body = b.email_body
+      }
       if (b.action === 'copy') base.copy_input = b.copy_input
-      if (b.action === 'open-sidebar') { base.sidebar_collection = b.sidebar_collection; base.sidebar_id_input = b.sidebar_id_input }
+      if (b.action === 'open-sidebar') {
+        base.sidebar_collection = b.sidebar_collection
+        base.sidebar_id_input = b.sidebar_id_input
+      }
       // server-side actions
       if (b.action === 'navigate') base.action_config = { url: b.ac_url }
       if (b.action === 'flow') {
         let payload = {}
-        try { payload = JSON.parse(b.ac_payload || '{}') } catch { /* invalid JSON — use empty */ }
+        try {
+          payload = JSON.parse(b.ac_payload || '{}')
+        } catch {
+          /* invalid JSON — use empty */
+        }
         base.action_config = { trigger_type: b.ac_trigger, payload }
       }
       if (b.action === 'field-update' && b.ac_field) {
-        base.action_config = { collection: b.ac_collection, id_input: b.ac_id_input, [b.ac_field]: b.ac_value }
+        base.action_config = {
+          collection: b.ac_collection,
+          id_input: b.ac_id_input,
+          [b.ac_field]: b.ac_value
+        }
       }
       if (b.action === 'toggle') {
         base.toggle_input = b.toggle_input
@@ -1197,9 +1376,12 @@ function btnGroupToRaw(c: BtnGroupCfg): Record<string, unknown> {
         if (b.variant_on) base.variant_on = b.variant_on
         if (b.variant_off) base.variant_off = b.variant_off
         base.action_config = {
-          collection: b.toggle_collection, id_input: b.toggle_id_input,
-          field: b.toggle_field, toggle_input: b.toggle_input,
-          on_value: b.toggle_on_value, off_value: b.toggle_off_value
+          collection: b.toggle_collection,
+          id_input: b.toggle_id_input,
+          field: b.toggle_field,
+          toggle_input: b.toggle_input,
+          on_value: b.toggle_on_value,
+          off_value: b.toggle_off_value
         }
       }
       return base
@@ -1230,41 +1412,133 @@ const BG_LAYOUT_OPTS = [
   { value: 'split', label: 'Split (primary + dropdown)' }
 ]
 const LUCIDE_ICON_OPTS = [
-  'ArrowRight','ArrowLeft','ArrowUp','ArrowDown','ArrowUpRight',
-  'ExternalLink','Link','Share2',
-  'Check','CheckCircle','X','XCircle',
-  'Plus','Minus','Edit','Edit2','Trash2',
-  'Save','Download','Upload','Send',
-  'Eye','EyeOff','Lock','Unlock',
-  'Star','Heart','Bookmark','Flag',
-  'AlertCircle','AlertTriangle','Info','HelpCircle',
-  'Play','Pause','RefreshCw','RotateCcw',
-  'Settings','Sliders','Filter','Search',
-  'Power','Zap','Activity',
-  'User','Users','UserPlus','UserCheck',
-  'Mail','MessageSquare','Phone','Bell',
-  'FileText','File','Folder','Paperclip',
-  'Calendar','Clock',
-  'Copy','Clipboard','MoreHorizontal','MoreVertical',
-].map(v => ({ value: v, label: v }))
+  'ArrowRight',
+  'ArrowLeft',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowUpRight',
+  'ExternalLink',
+  'Link',
+  'Share2',
+  'Check',
+  'CheckCircle',
+  'X',
+  'XCircle',
+  'Plus',
+  'Minus',
+  'Edit',
+  'Edit2',
+  'Trash2',
+  'Save',
+  'Download',
+  'Upload',
+  'Send',
+  'Eye',
+  'EyeOff',
+  'Lock',
+  'Unlock',
+  'Star',
+  'Heart',
+  'Bookmark',
+  'Flag',
+  'AlertCircle',
+  'AlertTriangle',
+  'Info',
+  'HelpCircle',
+  'Play',
+  'Pause',
+  'RefreshCw',
+  'RotateCcw',
+  'Settings',
+  'Sliders',
+  'Filter',
+  'Search',
+  'Power',
+  'Zap',
+  'Activity',
+  'User',
+  'Users',
+  'UserPlus',
+  'UserCheck',
+  'Mail',
+  'MessageSquare',
+  'Phone',
+  'Bell',
+  'FileText',
+  'File',
+  'Folder',
+  'Paperclip',
+  'Calendar',
+  'Clock',
+  'Copy',
+  'Clipboard',
+  'MoreHorizontal',
+  'MoreVertical'
+].map((v) => ({ value: v, label: v }))
 
 const WIDGETS_ICON_MAP: Record<string, LucideIcon> = {
-  ArrowRight, ArrowLeft, ArrowUp, ArrowDown, ArrowUpRight,
-  ExternalLink, Link, Share2,
-  Check, CheckCircle, X, XCircle,
-  Plus, Minus, Edit, Edit2, Trash2,
-  Save, Download, Upload, Send,
-  Eye, EyeOff, Lock, Unlock,
-  Star, Heart, Bookmark, Flag,
-  AlertCircle, AlertTriangle, Info, HelpCircle,
-  Play, Pause, RefreshCw, RotateCcw,
-  Settings, Sliders, Filter, Search,
-  Power, Zap, Activity,
-  User, Users, UserPlus, UserCheck,
-  Mail, MessageSquare, Phone, Bell,
-  FileText, File, Folder, Paperclip,
-  Calendar, Clock,
-  Copy, Clipboard, MoreHorizontal, MoreVertical,
+  ArrowRight,
+  ArrowLeft,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpRight,
+  ExternalLink,
+  Link,
+  Share2,
+  Check,
+  CheckCircle,
+  X,
+  XCircle,
+  Plus,
+  Minus,
+  Edit,
+  Edit2,
+  Trash2,
+  Save,
+  Download,
+  Upload,
+  Send,
+  Eye,
+  EyeOff,
+  Lock,
+  Unlock,
+  Star,
+  Heart,
+  Bookmark,
+  Flag,
+  AlertCircle,
+  AlertTriangle,
+  Info,
+  HelpCircle,
+  Play,
+  Pause,
+  RefreshCw,
+  RotateCcw,
+  Settings,
+  Sliders,
+  Filter,
+  Search,
+  Power,
+  Zap,
+  Activity,
+  User,
+  Users,
+  UserPlus,
+  UserCheck,
+  Mail,
+  MessageSquare,
+  Phone,
+  Bell,
+  FileText,
+  File,
+  Folder,
+  Paperclip,
+  Calendar,
+  Clock,
+  Copy,
+  Clipboard,
+  MoreHorizontal,
+  MoreVertical
 }
 
 const PRESET_COLORS = [
@@ -1276,12 +1550,12 @@ const PRESET_COLORS = [
   { label: 'Orange', value: '#f97316' },
   { label: 'Purple', value: '#8b5cf6' },
   { label: 'Rose', value: '#f43f5e' },
-  { label: 'Slate', value: '#64748b' },
+  { label: 'Slate', value: '#64748b' }
 ]
 
 function IconPickerPopover({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false)
-  const iconNames = LUCIDE_ICON_OPTS.map(o => o.value).filter(Boolean)
+  const iconNames = LUCIDE_ICON_OPTS.map((o) => o.value).filter(Boolean)
   const selectedIcon = value ? WIDGETS_ICON_MAP[value] : null
   const SelectedIC = selectedIcon as LucideIcon | null
   return (
@@ -1291,7 +1565,11 @@ function IconPickerPopover({ value, onChange }: { value: string; onChange: (v: s
           type='button'
           className='flex h-7 min-w-[80px] items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-[12px] hover:bg-accent transition-colors'
         >
-          {SelectedIC ? <SelectedIC className='h-3.5 w-3.5 shrink-0' /> : <span className='text-muted-foreground'>None</span>}
+          {SelectedIC ? (
+            <SelectedIC className='h-3.5 w-3.5 shrink-0' />
+          ) : (
+            <span className='text-muted-foreground'>None</span>
+          )}
           {value && <span className='truncate text-[11px] text-muted-foreground'>{value}</span>}
           <ChevronsUpDown className='ml-auto h-3 w-3 shrink-0 text-muted-foreground' />
         </button>
@@ -1300,7 +1578,14 @@ function IconPickerPopover({ value, onChange }: { value: string; onChange: (v: s
         <div className='mb-2 flex items-center justify-between'>
           <span className='text-[11px] font-medium text-muted-foreground'>Choose icon</span>
           {value && (
-            <button type='button' className='text-[11px] text-muted-foreground hover:text-foreground' onClick={() => { onChange(''); setOpen(false) }}>
+            <button
+              type='button'
+              className='text-[11px] text-muted-foreground hover:text-foreground'
+              onClick={() => {
+                onChange('')
+                setOpen(false)
+              }}
+            >
               Clear
             </button>
           )}
@@ -1314,7 +1599,10 @@ function IconPickerPopover({ value, onChange }: { value: string; onChange: (v: s
                 key={name}
                 type='button'
                 title={name}
-                onClick={() => { onChange(name); setOpen(false) }}
+                onClick={() => {
+                  onChange(name)
+                  setOpen(false)
+                }}
                 className={`flex h-8 w-8 items-center justify-center rounded transition-colors hover:bg-slate-100 dark:hover:bg-muted ${value === name ? 'bg-[#00ceff]/10 text-[#00ceff]' : 'text-slate-600 dark:text-slate-400'}`}
               >
                 <IC className='h-4 w-4' />
@@ -1337,7 +1625,16 @@ function BtnColorPicker({ value, onChange }: { value: string; onChange: (v: stri
           title={p.label}
           onClick={() => onChange(p.value)}
           className={`h-5 w-5 rounded-full border-2 transition-all ${value === p.value ? 'border-slate-900 dark:border-slate-100 scale-110' : 'border-transparent hover:border-slate-400'}`}
-          style={p.value ? { backgroundColor: p.value } : { backgroundColor: '#e2e8f0', backgroundImage: 'repeating-linear-gradient(45deg, #94a3b8 0, #94a3b8 2px, transparent 0, transparent 50%)', backgroundSize: '6px 6px' }}
+          style={
+            p.value
+              ? { backgroundColor: p.value }
+              : {
+                  backgroundColor: '#e2e8f0',
+                  backgroundImage:
+                    'repeating-linear-gradient(45deg, #94a3b8 0, #94a3b8 2px, transparent 0, transparent 50%)',
+                  backgroundSize: '6px 6px'
+                }
+          }
         />
       ))}
       <input
@@ -1348,50 +1645,103 @@ function BtnColorPicker({ value, onChange }: { value: string; onChange: (v: stri
         title='Custom color'
         style={{ appearance: 'none', backgroundColor: 'transparent' }}
       />
-      {value && (
-        <span className='font-mono text-[11px] text-muted-foreground'>{value}</span>
-      )}
+      {value && <span className='font-mono text-[11px] text-muted-foreground'>{value}</span>}
     </div>
   )
 }
 
-function BtnFieldUpdateForm({ btn, i, colOpts, updateBtn }: { btn: BtnGroupBtn; i: number; colOpts: {value: string; label: string}[]; updateBtn: (i: number, patch: Partial<BtnGroupBtn>) => void }) {
+function BtnFieldUpdateForm({
+  btn,
+  i,
+  colOpts,
+  updateBtn
+}: {
+  btn: BtnGroupBtn
+  i: number
+  colOpts: { value: string; label: string }[]
+  updateBtn: (i: number, patch: Partial<BtnGroupBtn>) => void
+}) {
   const fields = useCollectionFields(btn.ac_collection)
-  const fieldOpts = fields.map(f => ({ value: f.field, label: f.label ? `${f.label} (${f.field})` : f.field }))
-  const idOpts = [{ value: 'id', label: 'id (default)' }, ...fieldOpts.filter(o => o.value !== 'id')]
+  const fieldOpts = fields.map((f) => ({
+    value: f.field,
+    label: f.label ? `${f.label} (${f.field})` : f.field
+  }))
+  const idOpts = [
+    { value: 'id', label: 'id (default)' },
+    ...fieldOpts.filter((o) => o.value !== 'id')
+  ]
   return (
     <div className='space-y-2'>
       <div className='grid grid-cols-2 gap-2'>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>Collection</Label>
-          <PickCombobox value={btn.ac_collection} onChange={(v) => updateBtn(i, { ac_collection: v, ac_field: '', ac_id_input: 'id' })} options={colOpts} placeholder='Select…' />
+          <PickCombobox
+            value={btn.ac_collection}
+            onChange={(v) => updateBtn(i, { ac_collection: v, ac_field: '', ac_id_input: 'id' })}
+            options={colOpts}
+            placeholder='Select…'
+          />
         </div>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
-          <PickCombobox value={btn.ac_id_input || 'id'} onChange={(v) => updateBtn(i, { ac_id_input: v })} options={idOpts.length > 1 ? idOpts : [{ value: 'id', label: 'id (default)' }]} placeholder='id' />
+          <PickCombobox
+            value={btn.ac_id_input || 'id'}
+            onChange={(v) => updateBtn(i, { ac_id_input: v })}
+            options={idOpts.length > 1 ? idOpts : [{ value: 'id', label: 'id (default)' }]}
+            placeholder='id'
+          />
         </div>
       </div>
       <div className='grid grid-cols-2 gap-2'>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>Field</Label>
-          <PickCombobox value={btn.ac_field} onChange={(v) => updateBtn(i, { ac_field: v })} options={fieldOpts.length > 0 ? fieldOpts : []} placeholder={btn.ac_collection ? 'Select field…' : 'Choose collection first'} disabled={!btn.ac_collection} />
+          <PickCombobox
+            value={btn.ac_field}
+            onChange={(v) => updateBtn(i, { ac_field: v })}
+            options={fieldOpts.length > 0 ? fieldOpts : []}
+            placeholder={btn.ac_collection ? 'Select field…' : 'Choose collection first'}
+            disabled={!btn.ac_collection}
+          />
         </div>
         <div className='space-y-1'>
-          <Label className='text-[11px] text-muted-foreground'>Value <span className='text-[10px] opacity-60'>({"{{input_key}}"})</span></Label>
-          <Input className='h-7 font-mono text-[12px]' value={btn.ac_value} onChange={(e) => updateBtn(i, { ac_value: e.target.value })} placeholder='approved' />
+          <Label className='text-[11px] text-muted-foreground'>
+            Value <span className='text-[10px] opacity-60'>({'{{input_key}}'})</span>
+          </Label>
+          <Input
+            className='h-7 font-mono text-[12px]'
+            value={btn.ac_value}
+            onChange={(e) => updateBtn(i, { ac_value: e.target.value })}
+            placeholder='approved'
+          />
         </div>
       </div>
     </div>
   )
 }
 
-function BtnToggleForm({ btn, i, colOpts, updateBtn }: { btn: BtnGroupBtn; i: number; colOpts: {value: string; label: string}[]; updateBtn: (i: number, patch: Partial<BtnGroupBtn>) => void }) {
+function BtnToggleForm({
+  btn,
+  i,
+  colOpts,
+  updateBtn
+}: {
+  btn: BtnGroupBtn
+  i: number
+  colOpts: { value: string; label: string }[]
+  updateBtn: (i: number, patch: Partial<BtnGroupBtn>) => void
+}) {
   const fields = useCollectionFields(btn.toggle_collection)
-  const fieldOpts = fields.map(f => ({ value: f.field, label: f.label ? `${f.label} (${f.field})` : f.field }))
-  const idOpts = [{ value: 'id', label: 'id (default)' }, ...fieldOpts.filter(o => o.value !== 'id')]
+  const fieldOpts = fields.map((f) => ({
+    value: f.field,
+    label: f.label ? `${f.label} (${f.field})` : f.field
+  }))
+  const idOpts = [
+    { value: 'id', label: 'id (default)' },
+    ...fieldOpts.filter((o) => o.value !== 'id')
+  ]
 
   function handleToggleInputChange(fieldName: string) {
-    const f = fields.find(x => x.field === fieldName)
+    const f = fields.find((x) => x.field === fieldName)
     const patch: Partial<BtnGroupBtn> = { toggle_input: fieldName }
     if (f && (f.type === 'boolean' || f.type === 'bit')) {
       patch.toggle_on_value = '1'
@@ -1403,62 +1753,138 @@ function BtnToggleForm({ btn, i, colOpts, updateBtn }: { btn: BtnGroupBtn; i: nu
   return (
     <div className='space-y-3'>
       <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
-        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>Field to update</p>
+        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
+          Field to update
+        </p>
         <div className='grid grid-cols-2 gap-2'>
           <div className='space-y-1'>
             <Label className='text-[11px] text-muted-foreground'>Collection</Label>
-            <PickCombobox value={btn.toggle_collection} onChange={(v) => updateBtn(i, { toggle_collection: v, toggle_field: '', toggle_input: '', toggle_id_input: 'id' })} options={colOpts} placeholder='Select…' />
+            <PickCombobox
+              value={btn.toggle_collection}
+              onChange={(v) =>
+                updateBtn(i, {
+                  toggle_collection: v,
+                  toggle_field: '',
+                  toggle_input: '',
+                  toggle_id_input: 'id'
+                })
+              }
+              options={colOpts}
+              placeholder='Select…'
+            />
           </div>
           <div className='space-y-1'>
             <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
-            <PickCombobox value={btn.toggle_id_input || 'id'} onChange={(v) => updateBtn(i, { toggle_id_input: v })} options={idOpts.length > 1 ? idOpts : [{ value: 'id', label: 'id (default)' }]} placeholder='id' />
+            <PickCombobox
+              value={btn.toggle_id_input || 'id'}
+              onChange={(v) => updateBtn(i, { toggle_id_input: v })}
+              options={idOpts.length > 1 ? idOpts : [{ value: 'id', label: 'id (default)' }]}
+              placeholder='id'
+            />
           </div>
         </div>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>Field name</Label>
-          <PickCombobox value={btn.toggle_field} onChange={(v) => updateBtn(i, { toggle_field: v })} options={fieldOpts.length > 0 ? fieldOpts : []} placeholder={btn.toggle_collection ? 'Select field…' : 'Choose collection first'} disabled={!btn.toggle_collection} />
+          <PickCombobox
+            value={btn.toggle_field}
+            onChange={(v) => updateBtn(i, { toggle_field: v })}
+            options={fieldOpts.length > 0 ? fieldOpts : []}
+            placeholder={btn.toggle_collection ? 'Select field…' : 'Choose collection first'}
+            disabled={!btn.toggle_collection}
+          />
         </div>
       </div>
       <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
-        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>State detection</p>
+        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
+          State detection
+        </p>
         <div className='space-y-1'>
-          <Label className='text-[11px] text-muted-foreground'>Input key <span className='text-[10px] opacity-60'>(field whose value determines current state)</span></Label>
-          <PickCombobox value={btn.toggle_input} onChange={handleToggleInputChange} options={fieldOpts.length > 0 ? fieldOpts : []} placeholder={btn.toggle_collection ? 'Select field…' : 'Choose collection first'} disabled={!btn.toggle_collection} />
+          <Label className='text-[11px] text-muted-foreground'>
+            Input key{' '}
+            <span className='text-[10px] opacity-60'>
+              (field whose value determines current state)
+            </span>
+          </Label>
+          <PickCombobox
+            value={btn.toggle_input}
+            onChange={handleToggleInputChange}
+            options={fieldOpts.length > 0 ? fieldOpts : []}
+            placeholder={btn.toggle_collection ? 'Select field…' : 'Choose collection first'}
+            disabled={!btn.toggle_collection}
+          />
         </div>
         <div className='grid grid-cols-2 gap-2'>
           <div className='space-y-1'>
-            <Label className='text-[11px] text-muted-foreground'>ON value <span className='text-[10px] opacity-60'>(means enabled)</span></Label>
-            <Input className='h-7 font-mono text-[12px]' value={btn.toggle_on_value} onChange={(e) => updateBtn(i, { toggle_on_value: e.target.value })} placeholder='1' />
+            <Label className='text-[11px] text-muted-foreground'>
+              ON value <span className='text-[10px] opacity-60'>(means enabled)</span>
+            </Label>
+            <Input
+              className='h-7 font-mono text-[12px]'
+              value={btn.toggle_on_value}
+              onChange={(e) => updateBtn(i, { toggle_on_value: e.target.value })}
+              placeholder='1'
+            />
           </div>
           <div className='space-y-1'>
-            <Label className='text-[11px] text-muted-foreground'>OFF value <span className='text-[10px] opacity-60'>(means disabled)</span></Label>
-            <Input className='h-7 font-mono text-[12px]' value={btn.toggle_off_value} onChange={(e) => updateBtn(i, { toggle_off_value: e.target.value })} placeholder='0' />
+            <Label className='text-[11px] text-muted-foreground'>
+              OFF value <span className='text-[10px] opacity-60'>(means disabled)</span>
+            </Label>
+            <Input
+              className='h-7 font-mono text-[12px]'
+              value={btn.toggle_off_value}
+              onChange={(e) => updateBtn(i, { toggle_off_value: e.target.value })}
+              placeholder='0'
+            />
           </div>
         </div>
       </div>
       <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
-        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>When currently ON (click to disable)</p>
+        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
+          When currently ON (click to disable)
+        </p>
         <div className='grid grid-cols-2 gap-2'>
           <div className='space-y-1'>
             <Label className='text-[11px] text-muted-foreground'>Label</Label>
-            <Input className='h-7 text-[12px]' value={btn.label_on} onChange={(e) => updateBtn(i, { label_on: e.target.value })} placeholder='Disable Auto Reforecast' />
+            <Input
+              className='h-7 text-[12px]'
+              value={btn.label_on}
+              onChange={(e) => updateBtn(i, { label_on: e.target.value })}
+              placeholder='Disable Auto Reforecast'
+            />
           </div>
           <div className='space-y-1'>
             <Label className='text-[11px] text-muted-foreground'>Variant</Label>
-            <PickCombobox value={btn.variant_on} onChange={(v) => updateBtn(i, { variant_on: v })} options={BG_VARIANT_OPTS} widthClass='w-[160px]' />
+            <PickCombobox
+              value={btn.variant_on}
+              onChange={(v) => updateBtn(i, { variant_on: v })}
+              options={BG_VARIANT_OPTS}
+              widthClass='w-[160px]'
+            />
           </div>
         </div>
       </div>
       <div className='rounded-md bg-slate-50 dark:bg-muted/20 px-3 py-2 space-y-2'>
-        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>When currently OFF (click to enable)</p>
+        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
+          When currently OFF (click to enable)
+        </p>
         <div className='grid grid-cols-2 gap-2'>
           <div className='space-y-1'>
             <Label className='text-[11px] text-muted-foreground'>Label</Label>
-            <Input className='h-7 text-[12px]' value={btn.label_off} onChange={(e) => updateBtn(i, { label_off: e.target.value })} placeholder='Enable Auto Reforecast' />
+            <Input
+              className='h-7 text-[12px]'
+              value={btn.label_off}
+              onChange={(e) => updateBtn(i, { label_off: e.target.value })}
+              placeholder='Enable Auto Reforecast'
+            />
           </div>
           <div className='space-y-1'>
             <Label className='text-[11px] text-muted-foreground'>Variant</Label>
-            <PickCombobox value={btn.variant_off} onChange={(v) => updateBtn(i, { variant_off: v })} options={BG_VARIANT_OPTS} widthClass='w-[160px]' />
+            <PickCombobox
+              value={btn.variant_off}
+              onChange={(v) => updateBtn(i, { variant_off: v })}
+              options={BG_VARIANT_OPTS}
+              widthClass='w-[160px]'
+            />
           </div>
         </div>
       </div>
@@ -1466,12 +1892,18 @@ function BtnToggleForm({ btn, i, colOpts, updateBtn }: { btn: BtnGroupBtn; i: nu
   )
 }
 
-function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c: BtnGroupCfg) => void }) {
+function BtnGroupConfigForm({
+  cfg,
+  onChange
+}: {
+  cfg: BtnGroupCfg
+  onChange: (c: BtnGroupCfg) => void
+}) {
   const [openIdx, setOpenIdx] = useState<number | null>(cfg.buttons.length === 0 ? null : 0)
   const colOpts = useCollectionOptions()
 
   function updateBtn(i: number, patch: Partial<BtnGroupBtn>) {
-    onChange({ ...cfg, buttons: cfg.buttons.map((b, j) => j === i ? { ...b, ...patch } : b) })
+    onChange({ ...cfg, buttons: cfg.buttons.map((b, j) => (j === i ? { ...b, ...patch } : b)) })
   }
   function addBtn() {
     const next = [...cfg.buttons, { ...BLANK_BG_BTN }]
@@ -1496,9 +1928,16 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
     <div className='space-y-3'>
       <div className='space-y-1'>
         <Label className='text-[11px] text-muted-foreground'>Layout</Label>
-        <PickCombobox value={cfg.layout} onChange={(v) => onChange({ ...cfg, layout: v })} options={BG_LAYOUT_OPTS} widthClass='w-[280px]' />
+        <PickCombobox
+          value={cfg.layout}
+          onChange={(v) => onChange({ ...cfg, layout: v })}
+          options={BG_LAYOUT_OPTS}
+          widthClass='w-[280px]'
+        />
         {cfg.layout === 'split' && (
-          <p className='text-[10px] text-muted-foreground mt-1'>First button is primary — remaining buttons appear in a dropdown chevron.</p>
+          <p className='text-[10px] text-muted-foreground mt-1'>
+            First button is primary — remaining buttons appear in a dropdown chevron.
+          </p>
         )}
       </div>
       <Separator />
@@ -1512,18 +1951,34 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
           >
             <div className='flex items-center gap-1.5'>
               <div className='flex flex-col gap-px' onClick={(e) => e.stopPropagation()}>
-                <button type='button' className='h-3.5 w-3.5 rounded text-muted-foreground hover:text-foreground disabled:opacity-20' disabled={i === 0} onClick={() => moveBtn(i, -1)}>
+                <button
+                  type='button'
+                  className='h-3.5 w-3.5 rounded text-muted-foreground hover:text-foreground disabled:opacity-20'
+                  disabled={i === 0}
+                  onClick={() => moveBtn(i, -1)}
+                >
                   <ArrowUp className='h-3 w-3' />
                 </button>
-                <button type='button' className='h-3.5 w-3.5 rounded text-muted-foreground hover:text-foreground disabled:opacity-20' disabled={i === cfg.buttons.length - 1} onClick={() => moveBtn(i, 1)}>
+                <button
+                  type='button'
+                  className='h-3.5 w-3.5 rounded text-muted-foreground hover:text-foreground disabled:opacity-20'
+                  disabled={i === cfg.buttons.length - 1}
+                  onClick={() => moveBtn(i, 1)}
+                >
                   <ArrowDown className='h-3 w-3' />
                 </button>
               </div>
               <span className='font-medium'>{btn.label || `Button ${i + 1}`}</span>
             </div>
             <div className='flex items-center gap-2'>
-              <Badge variant='outline' className='h-5 px-1.5 font-mono text-[10px]'>{btn.action}</Badge>
-              {openIdx === i ? <ChevronDown className='h-3.5 w-3.5 text-muted-foreground' /> : <ChevronRight className='h-3.5 w-3.5 text-muted-foreground' />}
+              <Badge variant='outline' className='h-5 px-1.5 font-mono text-[10px]'>
+                {btn.action}
+              </Badge>
+              {openIdx === i ? (
+                <ChevronDown className='h-3.5 w-3.5 text-muted-foreground' />
+              ) : (
+                <ChevronRight className='h-3.5 w-3.5 text-muted-foreground' />
+              )}
             </div>
           </button>
           {openIdx === i && (
@@ -1531,17 +1986,32 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
               <div className='grid grid-cols-2 gap-3'>
                 <div className='space-y-1'>
                   <Label className='text-[11px] text-muted-foreground'>Label</Label>
-                  <Input className='h-7 text-[12px]' value={btn.label} onChange={(e) => updateBtn(i, { label: e.target.value })} placeholder='View record' />
+                  <Input
+                    className='h-7 text-[12px]'
+                    value={btn.label}
+                    onChange={(e) => updateBtn(i, { label: e.target.value })}
+                    placeholder='View record'
+                  />
                 </div>
                 <div className='space-y-1'>
                   <Label className='text-[11px] text-muted-foreground'>Variant</Label>
-                  <PickCombobox value={btn.variant} onChange={(v) => updateBtn(i, { variant: v })} options={BG_VARIANT_OPTS} widthClass='w-[180px]' />
+                  <PickCombobox
+                    value={btn.variant}
+                    onChange={(v) => updateBtn(i, { variant: v })}
+                    options={BG_VARIANT_OPTS}
+                    widthClass='w-[180px]'
+                  />
                 </div>
               </div>
               <div className='grid grid-cols-2 gap-3'>
                 <div className='space-y-1'>
                   <Label className='text-[11px] text-muted-foreground'>Action</Label>
-                  <PickCombobox value={btn.action} onChange={(v) => updateBtn(i, { action: v })} options={BG_ACTION_OPTS} widthClass='w-[220px]' />
+                  <PickCombobox
+                    value={btn.action}
+                    onChange={(v) => updateBtn(i, { action: v })}
+                    options={BG_ACTION_OPTS}
+                    widthClass='w-[220px]'
+                  />
                 </div>
                 <div className='space-y-1'>
                   <Label className='text-[11px] text-muted-foreground'>Icon</Label>
@@ -1549,17 +2019,34 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
                 </div>
               </div>
               <div className='space-y-1'>
-                <Label className='text-[11px] text-muted-foreground'>Color <span className='text-[10px] opacity-60'>(overrides variant)</span></Label>
+                <Label className='text-[11px] text-muted-foreground'>
+                  Color <span className='text-[10px] opacity-60'>(overrides variant)</span>
+                </Label>
                 <BtnColorPicker value={btn.color} onChange={(v) => updateBtn(i, { color: v })} />
               </div>
               {btn.action === 'open-url' && (
                 <div className='space-y-2'>
                   <div className='space-y-1'>
-                    <Label className='text-[11px] text-muted-foreground'>URL <span className='text-[10px] opacity-60'>({'{{input_key}} or absolute URL'})</span></Label>
-                    <Input className='h-7 font-mono text-[12px]' value={btn.url} onChange={(e) => updateBtn(i, { url: e.target.value })} placeholder='/collections/contacts/{{contact_id}}' />
+                    <Label className='text-[11px] text-muted-foreground'>
+                      URL{' '}
+                      <span className='text-[10px] opacity-60'>
+                        ({'{{input_key}} or absolute URL'})
+                      </span>
+                    </Label>
+                    <Input
+                      className='h-7 font-mono text-[12px]'
+                      value={btn.url}
+                      onChange={(e) => updateBtn(i, { url: e.target.value })}
+                      placeholder='/collections/contacts/{{contact_id}}'
+                    />
                   </div>
                   <label className='flex cursor-pointer items-center gap-2 text-[12px] text-slate-600 dark:text-slate-400'>
-                    <input type='checkbox' checked={btn.new_tab} onChange={(e) => updateBtn(i, { new_tab: e.target.checked })} className='h-3.5 w-3.5 rounded' />
+                    <input
+                      type='checkbox'
+                      checked={btn.new_tab}
+                      onChange={(e) => updateBtn(i, { new_tab: e.target.checked })}
+                      className='h-3.5 w-3.5 rounded'
+                    />
                     Open in new tab
                   </label>
                 </div>
@@ -1567,60 +2054,133 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
               {btn.action === 'email' && (
                 <div className='space-y-2'>
                   <div className='space-y-1'>
-                    <Label className='text-[11px] text-muted-foreground'>To <span className='text-[10px] opacity-60'>({'{{input_key}} or fixed address'})</span></Label>
-                    <Input className='h-7 font-mono text-[12px]' value={btn.email_to} onChange={(e) => updateBtn(i, { email_to: e.target.value })} placeholder='{{email}} or user@example.com' />
+                    <Label className='text-[11px] text-muted-foreground'>
+                      To{' '}
+                      <span className='text-[10px] opacity-60'>
+                        ({'{{input_key}} or fixed address'})
+                      </span>
+                    </Label>
+                    <Input
+                      className='h-7 font-mono text-[12px]'
+                      value={btn.email_to}
+                      onChange={(e) => updateBtn(i, { email_to: e.target.value })}
+                      placeholder='{{email}} or user@example.com'
+                    />
                   </div>
                   <div className='space-y-1'>
-                    <Label className='text-[11px] text-muted-foreground'>Subject <span className='text-[10px] opacity-60'>(optional, {'{{input_key}}'})</span></Label>
-                    <Input className='h-7 font-mono text-[12px]' value={btn.email_subject} onChange={(e) => updateBtn(i, { email_subject: e.target.value })} placeholder='Re: {{name}}' />
+                    <Label className='text-[11px] text-muted-foreground'>
+                      Subject{' '}
+                      <span className='text-[10px] opacity-60'>(optional, {'{{input_key}}'})</span>
+                    </Label>
+                    <Input
+                      className='h-7 font-mono text-[12px]'
+                      value={btn.email_subject}
+                      onChange={(e) => updateBtn(i, { email_subject: e.target.value })}
+                      placeholder='Re: {{name}}'
+                    />
                   </div>
                   <div className='space-y-1'>
-                    <Label className='text-[11px] text-muted-foreground'>Body <span className='text-[10px] opacity-60'>(optional)</span></Label>
-                    <Input className='h-7 font-mono text-[12px]' value={btn.email_body} onChange={(e) => updateBtn(i, { email_body: e.target.value })} placeholder='Hi {{name}},' />
+                    <Label className='text-[11px] text-muted-foreground'>
+                      Body <span className='text-[10px] opacity-60'>(optional)</span>
+                    </Label>
+                    <Input
+                      className='h-7 font-mono text-[12px]'
+                      value={btn.email_body}
+                      onChange={(e) => updateBtn(i, { email_body: e.target.value })}
+                      placeholder='Hi {{name}},'
+                    />
                   </div>
                 </div>
               )}
               {btn.action === 'copy' && (
                 <div className='space-y-1'>
                   <Label className='text-[11px] text-muted-foreground'>Input key to copy</Label>
-                  <Input className='h-7 font-mono text-[12px]' value={btn.copy_input} onChange={(e) => updateBtn(i, { copy_input: e.target.value })} placeholder='id' />
+                  <Input
+                    className='h-7 font-mono text-[12px]'
+                    value={btn.copy_input}
+                    onChange={(e) => updateBtn(i, { copy_input: e.target.value })}
+                    placeholder='id'
+                  />
                 </div>
               )}
               {btn.action === 'open-sidebar' && (
                 <div className='grid grid-cols-2 gap-2'>
                   <div className='space-y-1'>
                     <Label className='text-[11px] text-muted-foreground'>Collection</Label>
-                    <PickCombobox value={btn.sidebar_collection} onChange={(v) => updateBtn(i, { sidebar_collection: v })} options={colOpts} placeholder='Select…' />
+                    <PickCombobox
+                      value={btn.sidebar_collection}
+                      onChange={(v) => updateBtn(i, { sidebar_collection: v })}
+                      options={colOpts}
+                      placeholder='Select…'
+                    />
                   </div>
                   <div className='space-y-1'>
                     <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
-                    <Input className='h-7 font-mono text-[12px]' value={btn.sidebar_id_input} onChange={(e) => updateBtn(i, { sidebar_id_input: e.target.value })} placeholder='contact_id' />
+                    <Input
+                      className='h-7 font-mono text-[12px]'
+                      value={btn.sidebar_id_input}
+                      onChange={(e) => updateBtn(i, { sidebar_id_input: e.target.value })}
+                      placeholder='contact_id'
+                    />
                   </div>
                 </div>
               )}
               {btn.action === 'navigate' && (
                 <div className='space-y-1'>
-                  <Label className='text-[11px] text-muted-foreground'>Path <span className='text-[10px] opacity-60'>({'{{input_key}} — must start with /'})</span></Label>
-                  <Input className='h-7 font-mono text-[12px]' value={btn.ac_url} onChange={(e) => updateBtn(i, { ac_url: e.target.value })} placeholder='/collections/contacts/{{id}}' />
+                  <Label className='text-[11px] text-muted-foreground'>
+                    Path{' '}
+                    <span className='text-[10px] opacity-60'>
+                      ({'{{input_key}} — must start with /'})
+                    </span>
+                  </Label>
+                  <Input
+                    className='h-7 font-mono text-[12px]'
+                    value={btn.ac_url}
+                    onChange={(e) => updateBtn(i, { ac_url: e.target.value })}
+                    placeholder='/collections/contacts/{{id}}'
+                  />
                 </div>
               )}
               {btn.action === 'flow' && (
                 <div className='space-y-2'>
                   <div className='space-y-1'>
                     <Label className='text-[11px] text-muted-foreground'>Trigger type</Label>
-                    <Input className='h-7 font-mono text-[12px]' value={btn.ac_trigger} onChange={(e) => updateBtn(i, { ac_trigger: e.target.value })} placeholder='my-custom-trigger' />
+                    <Input
+                      className='h-7 font-mono text-[12px]'
+                      value={btn.ac_trigger}
+                      onChange={(e) => updateBtn(i, { ac_trigger: e.target.value })}
+                      placeholder='my-custom-trigger'
+                    />
                   </div>
                   <div className='space-y-1'>
-                    <Label className='text-[11px] text-muted-foreground'>Payload JSON <span className='text-[10px] opacity-60'>(optional, {'{{input_key}}'})</span></Label>
-                    <Input className='h-7 font-mono text-[12px]' value={btn.ac_payload} onChange={(e) => updateBtn(i, { ac_payload: e.target.value })} placeholder='{}' />
+                    <Label className='text-[11px] text-muted-foreground'>
+                      Payload JSON{' '}
+                      <span className='text-[10px] opacity-60'>(optional, {'{{input_key}}'})</span>
+                    </Label>
+                    <Input
+                      className='h-7 font-mono text-[12px]'
+                      value={btn.ac_payload}
+                      onChange={(e) => updateBtn(i, { ac_payload: e.target.value })}
+                      placeholder='{}'
+                    />
                   </div>
                 </div>
               )}
-              {btn.action === 'field-update' && <BtnFieldUpdateForm btn={btn} i={i} colOpts={colOpts} updateBtn={updateBtn} />}
-              {btn.action === 'toggle' && <BtnToggleForm btn={btn} i={i} colOpts={colOpts} updateBtn={updateBtn} />}
+              {btn.action === 'field-update' && (
+                <BtnFieldUpdateForm btn={btn} i={i} colOpts={colOpts} updateBtn={updateBtn} />
+              )}
+              {btn.action === 'toggle' && (
+                <BtnToggleForm btn={btn} i={i} colOpts={colOpts} updateBtn={updateBtn} />
+              )}
               <div className='flex justify-end'>
-                <Button size='sm' variant='ghost' className='h-7 px-2 text-[11px] text-destructive hover:text-destructive' onClick={() => removeBtn(i)}>
-                  <Trash2 className='mr-1 h-3 w-3' />Remove
+                <Button
+                  size='sm'
+                  variant='ghost'
+                  className='h-7 px-2 text-[11px] text-destructive hover:text-destructive'
+                  onClick={() => removeBtn(i)}
+                >
+                  <Trash2 className='mr-1 h-3 w-3' />
+                  Remove
                 </Button>
               </div>
             </div>
@@ -1628,7 +2188,8 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
         </div>
       ))}
       <Button size='sm' variant='outline' className='h-8 w-full text-[12px]' onClick={addBtn}>
-        <Plus className='mr-1.5 h-3.5 w-3.5' />Add button
+        <Plus className='mr-1.5 h-3.5 w-3.5' />
+        Add button
       </Button>
     </div>
   )
@@ -1638,31 +2199,62 @@ function BtnGroupConfigForm({ cfg, onChange }: { cfg: BtnGroupCfg; onChange: (c:
 
 function FilterRows({ rows, onChange }: { rows: FilterRow[]; onChange: (r: FilterRow[]) => void }) {
   function upd(i: number, k: keyof FilterRow, v: string) {
-    const n = [...rows]; n[i] = { ...n[i], [k]: v }; onChange(n)
+    const n = [...rows]
+    n[i] = { ...n[i], [k]: v }
+    onChange(n)
   }
   return (
     <div className='space-y-1.5'>
       {rows.map((r, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: stable list
         <div key={i} className='flex items-center gap-1.5'>
-          <Input className='h-7 flex-1 font-mono text-[12px]' placeholder='column' value={r.col} onChange={(e) => upd(i, 'col', e.target.value)} />
+          <Input
+            className='h-7 flex-1 font-mono text-[12px]'
+            placeholder='column'
+            value={r.col}
+            onChange={(e) => upd(i, 'col', e.target.value)}
+          />
           <span className='shrink-0 text-[11px] text-muted-foreground'>=</span>
-          <Input className='h-7 flex-1 font-mono text-[12px]' placeholder='value or {{input}}' value={r.value} onChange={(e) => upd(i, 'value', e.target.value)} />
-          <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+          <Input
+            className='h-7 flex-1 font-mono text-[12px]'
+            placeholder='value or {{input}}'
+            value={r.value}
+            onChange={(e) => upd(i, 'value', e.target.value)}
+          />
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-7 w-7 p-0'
+            onClick={() => onChange(rows.filter((_, j) => j !== i))}
+          >
             <X className='h-3 w-3' />
           </Button>
         </div>
       ))}
-      <Button size='sm' variant='ghost' className='h-7 px-2 text-[12px]' onClick={() => onChange([...rows, { col: '', value: '' }])}>
-        <Plus className='mr-1 h-3 w-3' />Add filter
+      <Button
+        size='sm'
+        variant='ghost'
+        className='h-7 px-2 text-[12px]'
+        onClick={() => onChange([...rows, { col: '', value: '' }])}
+      >
+        <Plus className='mr-1 h-3 w-3' />
+        Add filter
       </Button>
     </div>
   )
 }
 
-function ParamBindings({ bindings, onChange }: { bindings: ParamBinding[]; onChange: (b: ParamBinding[]) => void }) {
+function ParamBindings({
+  bindings,
+  onChange
+}: {
+  bindings: ParamBinding[]
+  onChange: (b: ParamBinding[]) => void
+}) {
   function upd(i: number, k: keyof ParamBinding, v: string) {
-    const n = [...bindings]; n[i] = { ...n[i], [k]: v }; onChange(n)
+    const n = [...bindings]
+    n[i] = { ...n[i], [k]: v }
+    onChange(n)
   }
   return (
     <div className='space-y-1.5'>
@@ -1677,16 +2269,42 @@ function ParamBindings({ bindings, onChange }: { bindings: ParamBinding[]; onCha
       {bindings.map((b, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: stable list
         <div key={i} className='grid grid-cols-[1fr_1fr_1fr_28px] items-center gap-1.5'>
-          <Input className='h-7 font-mono text-[12px]' placeholder=':param_name' value={b.param} onChange={(e) => upd(i, 'param', e.target.value)} />
-          <Input className='h-7 font-mono text-[12px]' placeholder='input key' value={b.input_key} onChange={(e) => upd(i, 'input_key', e.target.value)} />
-          <Input className='h-7 font-mono text-[12px]' placeholder='NULL' value={b.default_value ?? ''} onChange={(e) => upd(i, 'default_value', e.target.value)} />
-          <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={() => onChange(bindings.filter((_, j) => j !== i))}>
+          <Input
+            className='h-7 font-mono text-[12px]'
+            placeholder=':param_name'
+            value={b.param}
+            onChange={(e) => upd(i, 'param', e.target.value)}
+          />
+          <Input
+            className='h-7 font-mono text-[12px]'
+            placeholder='input key'
+            value={b.input_key}
+            onChange={(e) => upd(i, 'input_key', e.target.value)}
+          />
+          <Input
+            className='h-7 font-mono text-[12px]'
+            placeholder='NULL'
+            value={b.default_value ?? ''}
+            onChange={(e) => upd(i, 'default_value', e.target.value)}
+          />
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-7 w-7 p-0'
+            onClick={() => onChange(bindings.filter((_, j) => j !== i))}
+          >
             <X className='h-3 w-3' />
           </Button>
         </div>
       ))}
-      <Button size='sm' variant='ghost' className='h-7 px-2 text-[12px]' onClick={() => onChange([...bindings, { param: '', input_key: '' }])}>
-        <Plus className='mr-1 h-3 w-3' />Add binding
+      <Button
+        size='sm'
+        variant='ghost'
+        className='h-7 px-2 text-[12px]'
+        onClick={() => onChange([...bindings, { param: '', input_key: '' }])}
+      >
+        <Plus className='mr-1 h-3 w-3' />
+        Add binding
       </Button>
     </div>
   )
@@ -1709,7 +2327,10 @@ const FORMAT_OPTS = [
   { value: 'percent', label: 'Percent (12%)' },
   { value: 'compact', label: 'Compact (1.2k)' }
 ]
-const ORDER_OPTS = [{ value: 'asc', label: 'Ascending' }, { value: 'desc', label: 'Descending' }]
+const ORDER_OPTS = [
+  { value: 'asc', label: 'Ascending' },
+  { value: 'desc', label: 'Descending' }
+]
 const BTN_STYLE_OPTS = [
   { value: 'default', label: 'Default' },
   { value: 'primary', label: 'Primary' },
@@ -1727,7 +2348,10 @@ const ACTION_TYPE_OPTS = [
 export function useCollectionOptions() {
   const q = useQuery({
     queryKey: ['widget-cfg-cols'],
-    queryFn: () => api.get<{ data: Array<{ collection: string; display_name: string | null }> }>('/collections').then((r) => r.data.data)
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ collection: string; display_name: string | null }> }>('/collections')
+        .then((r) => r.data.data)
   })
   return q.data?.map((c) => ({ value: c.collection, label: c.display_name || c.collection })) ?? []
 }
@@ -1736,18 +2360,29 @@ export function useFieldOptions(collection: string) {
   const q = useQuery({
     queryKey: ['widget-cfg-fields', collection],
     queryFn: () =>
-      api.get<{ data: { fields: Array<{ field: string; label: string | null }> } }>(`/collections/${collection}`)
+      api
+        .get<{ data: { fields: Array<{ field: string; label: string | null }> } }>(
+          `/collections/${collection}`
+        )
         .then((r) => r.data.data.fields),
     enabled: !!collection
   })
-  return q.data?.map((f) => ({ value: f.field, label: f.label ? `${f.label} (${f.field})` : f.field })) ?? []
+  return (
+    q.data?.map((f) => ({
+      value: f.field,
+      label: f.label ? `${f.label} (${f.field})` : f.field
+    })) ?? []
+  )
 }
 
 function useCollectionFields(collection: string) {
   const q = useQuery({
     queryKey: ['widget-cfg-fields-full', collection],
     queryFn: () =>
-      api.get<{ data: { fields: Array<{ field: string; label: string | null; type: string }> } }>(`/collections/${collection}`)
+      api
+        .get<{ data: { fields: Array<{ field: string; label: string | null; type: string }> } }>(
+          `/collections/${collection}`
+        )
         .then((r) => r.data.data.fields),
     enabled: !!collection
   })
@@ -1757,29 +2392,54 @@ function useCollectionFields(collection: string) {
 function StatConfigForm({ cfg, onChange }: { cfg: StatCfg; onChange: (c: StatCfg) => void }) {
   const colOpts = useCollectionOptions()
   const fieldOpts = useFieldOptions(cfg.collection)
-  function set<K extends keyof StatCfg>(k: K, v: StatCfg[K]) { onChange({ ...cfg, [k]: v }) }
+  function set<K extends keyof StatCfg>(k: K, v: StatCfg[K]) {
+    onChange({ ...cfg, [k]: v })
+  }
   return (
     <div className='space-y-4'>
       <div className='grid grid-cols-2 gap-3'>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>Collection</Label>
-          <PickCombobox value={cfg.collection} onChange={(v) => { set('collection', v); set('field', '') }} options={colOpts} placeholder='Select collection…' />
+          <PickCombobox
+            value={cfg.collection}
+            onChange={(v) => {
+              set('collection', v)
+              set('field', '')
+            }}
+            options={colOpts}
+            placeholder='Select collection…'
+          />
         </div>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>Field</Label>
-          <PickCombobox value={cfg.field} onChange={(v) => set('field', v)} options={fieldOpts} placeholder='Select field…' disabled={!cfg.collection} />
+          <PickCombobox
+            value={cfg.field}
+            onChange={(v) => set('field', v)}
+            options={fieldOpts}
+            placeholder='Select field…'
+            disabled={!cfg.collection}
+          />
         </div>
       </div>
       <div className='grid grid-cols-2 gap-3'>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>Aggregation</Label>
-          <PickCombobox value={cfg.aggregation} onChange={(v) => set('aggregation', v)} options={AGG_OPTS} />
+          <PickCombobox
+            value={cfg.aggregation}
+            onChange={(v) => set('aggregation', v)}
+            options={AGG_OPTS}
+          />
         </div>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>
             ID input key <span className='text-[10px] opacity-60'>(single record lookup)</span>
           </Label>
-          <Input className='h-8 font-mono text-[12px]' value={cfg.id_input} onChange={(e) => set('id_input', e.target.value)} placeholder='e.g. project_id' />
+          <Input
+            className='h-8 font-mono text-[12px]'
+            value={cfg.id_input}
+            onChange={(e) => set('id_input', e.target.value)}
+            placeholder='e.g. project_id'
+          />
         </div>
       </div>
       <div>
@@ -1792,15 +2452,30 @@ function StatConfigForm({ cfg, onChange }: { cfg: StatCfg; onChange: (c: StatCfg
         <div className='grid grid-cols-3 gap-2'>
           <div className='space-y-1'>
             <Label className='text-[11px] text-muted-foreground'>Prefix</Label>
-            <Input className='h-7 text-[12px]' value={cfg.prefix} onChange={(e) => set('prefix', e.target.value)} placeholder='$' />
+            <Input
+              className='h-7 text-[12px]'
+              value={cfg.prefix}
+              onChange={(e) => set('prefix', e.target.value)}
+              placeholder='$'
+            />
           </div>
           <div className='space-y-1'>
             <Label className='text-[11px] text-muted-foreground'>Suffix</Label>
-            <Input className='h-7 text-[12px]' value={cfg.suffix} onChange={(e) => set('suffix', e.target.value)} placeholder='%' />
+            <Input
+              className='h-7 text-[12px]'
+              value={cfg.suffix}
+              onChange={(e) => set('suffix', e.target.value)}
+              placeholder='%'
+            />
           </div>
           <div className='space-y-1'>
             <Label className='text-[11px] text-muted-foreground'>Format</Label>
-            <PickCombobox value={cfg.format} onChange={(v) => set('format', v)} options={FORMAT_OPTS} placeholder='Default' />
+            <PickCombobox
+              value={cfg.format}
+              onChange={(v) => set('format', v)}
+              options={FORMAT_OPTS}
+              placeholder='Default'
+            />
           </div>
         </div>
       </div>
@@ -1811,16 +2486,31 @@ function StatConfigForm({ cfg, onChange }: { cfg: StatCfg; onChange: (c: StatCfg
 function ListConfigForm({ cfg, onChange }: { cfg: ListCfg; onChange: (c: ListCfg) => void }) {
   const colOpts = useCollectionOptions()
   const fieldOpts = useFieldOptions(cfg.collection)
-  function set<K extends keyof ListCfg>(k: K, v: ListCfg[K]) { onChange({ ...cfg, [k]: v }) }
+  function set<K extends keyof ListCfg>(k: K, v: ListCfg[K]) {
+    onChange({ ...cfg, [k]: v })
+  }
   return (
     <div className='space-y-4'>
       <div className='space-y-1'>
         <Label className='text-[11px] text-muted-foreground'>Collection</Label>
-        <PickCombobox value={cfg.collection} onChange={(v) => set('collection', v)} options={colOpts} placeholder='Select collection…' />
+        <PickCombobox
+          value={cfg.collection}
+          onChange={(v) => set('collection', v)}
+          options={colOpts}
+          placeholder='Select collection…'
+        />
       </div>
       <div className='space-y-1'>
-        <Label className='text-[11px] text-muted-foreground'>Fields <span className='text-[10px] opacity-60'>(comma-separated, leave blank for all)</span></Label>
-        <Input className='h-8 font-mono text-[12px]' value={cfg.fields} onChange={(e) => set('fields', e.target.value)} placeholder='id, title, status' />
+        <Label className='text-[11px] text-muted-foreground'>
+          Fields{' '}
+          <span className='text-[10px] opacity-60'>(comma-separated, leave blank for all)</span>
+        </Label>
+        <Input
+          className='h-8 font-mono text-[12px]'
+          value={cfg.fields}
+          onChange={(e) => set('fields', e.target.value)}
+          placeholder='id, title, status'
+        />
       </div>
       <div>
         <Label className='mb-2 block text-[11px] text-muted-foreground'>Static filters</Label>
@@ -1829,15 +2519,32 @@ function ListConfigForm({ cfg, onChange }: { cfg: ListCfg; onChange: (c: ListCfg
       <div className='grid grid-cols-3 gap-3'>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>Limit</Label>
-          <Input className='h-8 text-[12px]' type='number' min={1} max={500} value={cfg.limit} onChange={(e) => set('limit', Number(e.target.value))} />
+          <Input
+            className='h-8 text-[12px]'
+            type='number'
+            min={1}
+            max={500}
+            value={cfg.limit}
+            onChange={(e) => set('limit', Number(e.target.value))}
+          />
         </div>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>Order by</Label>
-          <PickCombobox value={cfg.order_field} onChange={(v) => set('order_field', v)} options={fieldOpts} placeholder='None' disabled={!cfg.collection} />
+          <PickCombobox
+            value={cfg.order_field}
+            onChange={(v) => set('order_field', v)}
+            options={fieldOpts}
+            placeholder='None'
+            disabled={!cfg.collection}
+          />
         </div>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>Direction</Label>
-          <PickCombobox value={cfg.order_dir} onChange={(v) => set('order_dir', v)} options={ORDER_OPTS} />
+          <PickCombobox
+            value={cfg.order_dir}
+            onChange={(v) => set('order_dir', v)}
+            options={ORDER_OPTS}
+          />
         </div>
       </div>
     </div>
@@ -1847,53 +2554,109 @@ function ListConfigForm({ cfg, onChange }: { cfg: ListCfg; onChange: (c: ListCfg
 function CQConfigForm({ cfg, onChange }: { cfg: CQCfg; onChange: (c: CQCfg) => void }) {
   const queriesQ = useQuery({
     queryKey: ['widget-cfg-cqs'],
-    queryFn: () => api.get<{ data: Array<{ id: number; name: string }> }>('/custom-queries').then((r) => r.data.data)
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: number; name: string }> }>('/custom-queries')
+        .then((r) => r.data.data)
   })
   const opts = queriesQ.data?.map((q) => ({ value: String(q.id), label: q.name })) ?? []
   return (
     <div className='space-y-4'>
       <div className='space-y-1'>
         <Label className='text-[11px] text-muted-foreground'>Custom query</Label>
-        <PickCombobox value={cfg.query_id} onChange={(v) => onChange({ ...cfg, query_id: v })} options={opts} placeholder='Select query…' />
+        <PickCombobox
+          value={cfg.query_id}
+          onChange={(v) => onChange({ ...cfg, query_id: v })}
+          options={opts}
+          placeholder='Select query…'
+        />
       </div>
       <div>
         <Label className='mb-2 block text-[11px] text-muted-foreground'>
           Parameter bindings <span className='text-[10px] opacity-60'>(:param ← input key)</span>
         </Label>
-        <ParamBindings bindings={cfg.param_bindings} onChange={(v) => onChange({ ...cfg, param_bindings: v })} />
+        <ParamBindings
+          bindings={cfg.param_bindings}
+          onChange={(v) => onChange({ ...cfg, param_bindings: v })}
+        />
       </div>
       <Separator />
       <div>
         <div className='mb-2 flex items-center justify-between'>
           <Label className='text-[11px] text-muted-foreground'>
-            Value fields <span className='text-[10px] opacity-60'>(leave empty to show raw list)</span>
+            Value fields{' '}
+            <span className='text-[10px] opacity-60'>(leave empty to show raw list)</span>
           </Label>
-          <Button size='sm' variant='outline' className='h-6 gap-1 px-2 text-[11px]'
-            onClick={() => onChange({ ...cfg, value_fields: [...cfg.value_fields, { ...BLANK_CQ_VF }] })}>
-            <Plus className='h-3 w-3' />Add
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-6 gap-1 px-2 text-[11px]'
+            onClick={() =>
+              onChange({ ...cfg, value_fields: [...cfg.value_fields, { ...BLANK_CQ_VF }] })
+            }
+          >
+            <Plus className='h-3 w-3' />
+            Add
           </Button>
         </div>
         {cfg.value_fields.length === 0 && (
-          <p className='text-[11px] text-slate-400'>No value fields — widget renders as list table.</p>
+          <p className='text-[11px] text-slate-400'>
+            No value fields — widget renders as list table.
+          </p>
         )}
         <div className='space-y-2'>
           {cfg.value_fields.map((vf, i) => {
             const upd = (patch: Partial<CQValueField>) => {
-              const next = cfg.value_fields.map((v, j) => j === i ? { ...v, ...patch } : v)
+              const next = cfg.value_fields.map((v, j) => (j === i ? { ...v, ...patch } : v))
               onChange({ ...cfg, value_fields: next })
             }
-            const remove = () => onChange({ ...cfg, value_fields: cfg.value_fields.filter((_, j) => j !== i) })
+            const remove = () =>
+              onChange({ ...cfg, value_fields: cfg.value_fields.filter((_, j) => j !== i) })
             return (
-              <div key={i} className='rounded border border-slate-200 bg-slate-50/50 p-2 space-y-1.5'>
+              <div
+                key={i}
+                className='rounded border border-slate-200 bg-slate-50/50 p-2 space-y-1.5'
+              >
                 <div className='flex items-center gap-1.5'>
-                  <Input className='h-7 flex-1 font-mono text-[11px]' value={vf.field} onChange={e => upd({ field: e.target.value })} placeholder='column name' />
-                  <Input className='h-7 flex-1 text-[11px]' value={vf.label} onChange={e => upd({ label: e.target.value })} placeholder='label' />
-                  <button type='button' onClick={remove} className='text-slate-300 hover:text-red-400'>✕</button>
+                  <Input
+                    className='h-7 flex-1 font-mono text-[11px]'
+                    value={vf.field}
+                    onChange={(e) => upd({ field: e.target.value })}
+                    placeholder='column name'
+                  />
+                  <Input
+                    className='h-7 flex-1 text-[11px]'
+                    value={vf.label}
+                    onChange={(e) => upd({ label: e.target.value })}
+                    placeholder='label'
+                  />
+                  <button
+                    type='button'
+                    onClick={remove}
+                    className='text-slate-300 hover:text-red-400'
+                  >
+                    ✕
+                  </button>
                 </div>
                 <div className='grid grid-cols-3 gap-1.5'>
-                  <Input className='h-6 text-[11px]' value={vf.prefix} onChange={e => upd({ prefix: e.target.value })} placeholder='prefix ($)' />
-                  <Input className='h-6 text-[11px]' value={vf.suffix} onChange={e => upd({ suffix: e.target.value })} placeholder='suffix (%)' />
-                  <PickCombobox value={vf.format} onChange={v => upd({ format: v })} options={FORMAT_OPTS} placeholder='Format' />
+                  <Input
+                    className='h-6 text-[11px]'
+                    value={vf.prefix}
+                    onChange={(e) => upd({ prefix: e.target.value })}
+                    placeholder='prefix ($)'
+                  />
+                  <Input
+                    className='h-6 text-[11px]'
+                    value={vf.suffix}
+                    onChange={(e) => upd({ suffix: e.target.value })}
+                    placeholder='suffix (%)'
+                  />
+                  <PickCombobox
+                    value={vf.format}
+                    onChange={(v) => upd({ format: v })}
+                    options={FORMAT_OPTS}
+                    placeholder='Format'
+                  />
                 </div>
               </div>
             )
@@ -1907,51 +2670,85 @@ function CQConfigForm({ cfg, onChange }: { cfg: CQCfg; onChange: (c: CQCfg) => v
 function ExtApiConfigForm({ cfg, onChange }: { cfg: ExtApiCfg; onChange: (c: ExtApiCfg) => void }) {
   const apisQ = useQuery({
     queryKey: ['widget-cfg-apis'],
-    queryFn: () => api.get<{ data: Array<{ id: number; name: string }> }>('/external-apis').then((r) => r.data.data)
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: number; name: string }> }>('/external-apis')
+        .then((r) => r.data.data)
   })
   const endpointsQ = useQuery({
     queryKey: ['widget-cfg-ep', cfg.api_id],
     queryFn: () =>
-      api.get<{ data: Array<{ slug: string; name: string | null; path: string; method: string }> }>(`/external-apis/${cfg.api_id}/endpoints`)
+      api
+        .get<{ data: Array<{ slug: string; name: string | null; path: string; method: string }> }>(
+          `/external-apis/${cfg.api_id}/endpoints`
+        )
         .then((r) => r.data.data),
     enabled: !!cfg.api_id
   })
   const apiOpts = apisQ.data?.map((a) => ({ value: String(a.id), label: a.name })) ?? []
-  const epOpts = endpointsQ.data?.map((e) => ({ value: e.slug, label: `${e.method} ${e.path} (${e.slug})` })) ?? []
+  const epOpts =
+    endpointsQ.data?.map((e) => ({ value: e.slug, label: `${e.method} ${e.path} (${e.slug})` })) ??
+    []
   return (
     <div className='space-y-4'>
       <div className='grid grid-cols-2 gap-3'>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>External API</Label>
-          <PickCombobox value={cfg.api_id} onChange={(v) => onChange({ ...cfg, api_id: v, endpoint_slug: '' })} options={apiOpts} placeholder='Select API…' />
+          <PickCombobox
+            value={cfg.api_id}
+            onChange={(v) => onChange({ ...cfg, api_id: v, endpoint_slug: '' })}
+            options={apiOpts}
+            placeholder='Select API…'
+          />
         </div>
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>Endpoint</Label>
-          <PickCombobox value={cfg.endpoint_slug} onChange={(v) => onChange({ ...cfg, endpoint_slug: v })} options={epOpts} placeholder='Select endpoint…' disabled={!cfg.api_id} />
+          <PickCombobox
+            value={cfg.endpoint_slug}
+            onChange={(v) => onChange({ ...cfg, endpoint_slug: v })}
+            options={epOpts}
+            placeholder='Select endpoint…'
+            disabled={!cfg.api_id}
+          />
         </div>
       </div>
       <div>
         <Label className='mb-2 block text-[11px] text-muted-foreground'>
           Parameter bindings <span className='text-[10px] opacity-60'>(URL param ← input key)</span>
         </Label>
-        <ParamBindings bindings={cfg.param_bindings} onChange={(v) => onChange({ ...cfg, param_bindings: v })} />
+        <ParamBindings
+          bindings={cfg.param_bindings}
+          onChange={(v) => onChange({ ...cfg, param_bindings: v })}
+        />
       </div>
       <div className='space-y-1'>
         <Label className='text-[11px] text-muted-foreground'>
-          Display fields <span className='text-[10px] opacity-60'>(comma-separated response keys to show)</span>
+          Display fields{' '}
+          <span className='text-[10px] opacity-60'>(comma-separated response keys to show)</span>
         </Label>
-        <Input className='h-8 font-mono text-[12px]' value={cfg.display_fields} onChange={(e) => onChange({ ...cfg, display_fields: e.target.value })} placeholder='status, amount, name' />
+        <Input
+          className='h-8 font-mono text-[12px]'
+          value={cfg.display_fields}
+          onChange={(e) => onChange({ ...cfg, display_fields: e.target.value })}
+          placeholder='status, amount, name'
+        />
       </div>
     </div>
   )
 }
 
-function ActionButtonsConfigForm({ cfg, onChange }: { cfg: BtnsCfg; onChange: (c: BtnsCfg) => void }) {
+function ActionButtonsConfigForm({
+  cfg,
+  onChange
+}: {
+  cfg: BtnsCfg
+  onChange: (c: BtnsCfg) => void
+}) {
   const [openIdx, setOpenIdx] = useState<number | null>(cfg.buttons.length === 0 ? null : 0)
   const colOpts = useCollectionOptions()
 
   function updateBtn(i: number, patch: Partial<ActionBtn>) {
-    const next = cfg.buttons.map((b, j) => j === i ? { ...b, ...patch } : b)
+    const next = cfg.buttons.map((b, j) => (j === i ? { ...b, ...patch } : b))
     onChange({ buttons: next })
   }
   function addBtn() {
@@ -1977,8 +2774,14 @@ function ActionButtonsConfigForm({ cfg, onChange }: { cfg: BtnsCfg; onChange: (c
           >
             <span className='font-medium'>{btn.label || `Button ${i + 1}`}</span>
             <div className='flex items-center gap-2'>
-              <Badge variant='outline' className='h-5 px-1.5 font-mono text-[10px]'>{btn.action_type}</Badge>
-              {openIdx === i ? <ChevronDown className='h-3.5 w-3.5 text-muted-foreground' /> : <ChevronRight className='h-3.5 w-3.5 text-muted-foreground' />}
+              <Badge variant='outline' className='h-5 px-1.5 font-mono text-[10px]'>
+                {btn.action_type}
+              </Badge>
+              {openIdx === i ? (
+                <ChevronDown className='h-3.5 w-3.5 text-muted-foreground' />
+              ) : (
+                <ChevronRight className='h-3.5 w-3.5 text-muted-foreground' />
+              )}
             </div>
           </button>
           {openIdx === i && (
@@ -1986,32 +2789,70 @@ function ActionButtonsConfigForm({ cfg, onChange }: { cfg: BtnsCfg; onChange: (c
               <div className='grid grid-cols-2 gap-3'>
                 <div className='space-y-1'>
                   <Label className='text-[11px] text-muted-foreground'>Label</Label>
-                  <Input className='h-7 text-[12px]' value={btn.label} onChange={(e) => updateBtn(i, { label: e.target.value })} placeholder='Click me' />
+                  <Input
+                    className='h-7 text-[12px]'
+                    value={btn.label}
+                    onChange={(e) => updateBtn(i, { label: e.target.value })}
+                    placeholder='Click me'
+                  />
                 </div>
                 <div className='space-y-1'>
                   <Label className='text-[11px] text-muted-foreground'>Style</Label>
-                  <PickCombobox value={btn.style} onChange={(v) => updateBtn(i, { style: v })} options={BTN_STYLE_OPTS} widthClass='w-[200px]' />
+                  <PickCombobox
+                    value={btn.style}
+                    onChange={(v) => updateBtn(i, { style: v })}
+                    options={BTN_STYLE_OPTS}
+                    widthClass='w-[200px]'
+                  />
                 </div>
               </div>
               <div className='space-y-1'>
                 <Label className='text-[11px] text-muted-foreground'>Action type</Label>
-                <PickCombobox value={btn.action_type} onChange={(v) => updateBtn(i, { action_type: v })} options={ACTION_TYPE_OPTS} widthClass='w-[240px]' />
+                <PickCombobox
+                  value={btn.action_type}
+                  onChange={(v) => updateBtn(i, { action_type: v })}
+                  options={ACTION_TYPE_OPTS}
+                  widthClass='w-[240px]'
+                />
               </div>
               {btn.action_type === 'navigate' && (
                 <div className='space-y-1'>
-                  <Label className='text-[11px] text-muted-foreground'>URL <span className='text-[10px] opacity-60'>{'(relative path, {{input_key}} allowed)'}</span></Label>
-                  <Input className='h-7 font-mono text-[12px]' value={btn.ac_url} onChange={(e) => updateBtn(i, { ac_url: e.target.value })} placeholder='/collections/projects/{{project_id}}' />
+                  <Label className='text-[11px] text-muted-foreground'>
+                    URL{' '}
+                    <span className='text-[10px] opacity-60'>
+                      {'(relative path, {{input_key}} allowed)'}
+                    </span>
+                  </Label>
+                  <Input
+                    className='h-7 font-mono text-[12px]'
+                    value={btn.ac_url}
+                    onChange={(e) => updateBtn(i, { ac_url: e.target.value })}
+                    placeholder='/collections/projects/{{project_id}}'
+                  />
                 </div>
               )}
               {btn.action_type === 'flow' && (
                 <div className='space-y-3'>
                   <div className='space-y-1'>
                     <Label className='text-[11px] text-muted-foreground'>Trigger type</Label>
-                    <Input className='h-7 font-mono text-[12px]' value={btn.ac_trigger} onChange={(e) => updateBtn(i, { ac_trigger: e.target.value })} placeholder='my-custom-trigger' />
+                    <Input
+                      className='h-7 font-mono text-[12px]'
+                      value={btn.ac_trigger}
+                      onChange={(e) => updateBtn(i, { ac_trigger: e.target.value })}
+                      placeholder='my-custom-trigger'
+                    />
                   </div>
                   <div className='space-y-1'>
-                    <Label className='text-[11px] text-muted-foreground'>Extra payload (JSON)</Label>
-                    <Textarea className='font-mono text-[12px]' rows={3} value={btn.ac_payload} onChange={(e) => updateBtn(i, { ac_payload: e.target.value })} spellCheck={false} />
+                    <Label className='text-[11px] text-muted-foreground'>
+                      Extra payload (JSON)
+                    </Label>
+                    <Textarea
+                      className='font-mono text-[12px]'
+                      rows={3}
+                      value={btn.ac_payload}
+                      onChange={(e) => updateBtn(i, { ac_payload: e.target.value })}
+                      spellCheck={false}
+                    />
                   </div>
                 </div>
               )}
@@ -2020,37 +2861,75 @@ function ActionButtonsConfigForm({ cfg, onChange }: { cfg: BtnsCfg; onChange: (c
                   <div className='grid grid-cols-2 gap-2'>
                     <div className='space-y-1'>
                       <Label className='text-[11px] text-muted-foreground'>Collection</Label>
-                      <PickCombobox value={btn.ac_collection} onChange={(v) => updateBtn(i, { ac_collection: v })} options={colOpts} placeholder='Select…' />
+                      <PickCombobox
+                        value={btn.ac_collection}
+                        onChange={(v) => updateBtn(i, { ac_collection: v })}
+                        options={colOpts}
+                        placeholder='Select…'
+                      />
                     </div>
                     <div className='space-y-1'>
                       <Label className='text-[11px] text-muted-foreground'>ID input key</Label>
-                      <Input className='h-7 font-mono text-[12px]' value={btn.ac_id_input} onChange={(e) => updateBtn(i, { ac_id_input: e.target.value })} placeholder='item_id' />
+                      <Input
+                        className='h-7 font-mono text-[12px]'
+                        value={btn.ac_id_input}
+                        onChange={(e) => updateBtn(i, { ac_id_input: e.target.value })}
+                        placeholder='item_id'
+                      />
                     </div>
                   </div>
                   <div className='grid grid-cols-2 gap-2'>
                     <div className='space-y-1'>
                       <Label className='text-[11px] text-muted-foreground'>Field name</Label>
-                      <Input className='h-7 font-mono text-[12px]' value={btn.ac_field} onChange={(e) => updateBtn(i, { ac_field: e.target.value })} placeholder='status' />
+                      <Input
+                        className='h-7 font-mono text-[12px]'
+                        value={btn.ac_field}
+                        onChange={(e) => updateBtn(i, { ac_field: e.target.value })}
+                        placeholder='status'
+                      />
                     </div>
                     <div className='space-y-1'>
                       <Label className='text-[11px] text-muted-foreground'>Value</Label>
-                      <Input className='h-7 font-mono text-[12px]' value={btn.ac_value} onChange={(e) => updateBtn(i, { ac_value: e.target.value })} placeholder='approved' />
+                      <Input
+                        className='h-7 font-mono text-[12px]'
+                        value={btn.ac_value}
+                        onChange={(e) => updateBtn(i, { ac_value: e.target.value })}
+                        placeholder='approved'
+                      />
                     </div>
                   </div>
                 </div>
               )}
               {btn.action_type === 'external-api' && (
                 <div className='space-y-1'>
-                  <Label className='text-[11px] text-muted-foreground'>API ID + endpoint slug</Label>
+                  <Label className='text-[11px] text-muted-foreground'>
+                    API ID + endpoint slug
+                  </Label>
                   <div className='flex gap-2'>
-                    <Input className='h-7 w-24 font-mono text-[12px]' value={btn.ac_api_id} onChange={(e) => updateBtn(i, { ac_api_id: e.target.value })} placeholder='API ID' />
-                    <Input className='h-7 flex-1 font-mono text-[12px]' value={btn.ac_endpoint} onChange={(e) => updateBtn(i, { ac_endpoint: e.target.value })} placeholder='endpoint-slug' />
+                    <Input
+                      className='h-7 w-24 font-mono text-[12px]'
+                      value={btn.ac_api_id}
+                      onChange={(e) => updateBtn(i, { ac_api_id: e.target.value })}
+                      placeholder='API ID'
+                    />
+                    <Input
+                      className='h-7 flex-1 font-mono text-[12px]'
+                      value={btn.ac_endpoint}
+                      onChange={(e) => updateBtn(i, { ac_endpoint: e.target.value })}
+                      placeholder='endpoint-slug'
+                    />
                   </div>
                 </div>
               )}
               <div className='flex justify-end'>
-                <Button size='sm' variant='ghost' className='h-7 px-2 text-[11px] text-destructive hover:text-destructive' onClick={() => removeBtn(i)}>
-                  <Trash2 className='mr-1 h-3 w-3' />Remove
+                <Button
+                  size='sm'
+                  variant='ghost'
+                  className='h-7 px-2 text-[11px] text-destructive hover:text-destructive'
+                  onClick={() => removeBtn(i)}
+                >
+                  <Trash2 className='mr-1 h-3 w-3' />
+                  Remove
                 </Button>
               </div>
             </div>
@@ -2058,7 +2937,8 @@ function ActionButtonsConfigForm({ cfg, onChange }: { cfg: BtnsCfg; onChange: (c
         </div>
       ))}
       <Button size='sm' variant='outline' className='h-8 w-full text-[12px]' onClick={addBtn}>
-        <Plus className='mr-1.5 h-3.5 w-3.5' />Add button
+        <Plus className='mr-1.5 h-3.5 w-3.5' />
+        Add button
       </Button>
     </div>
   )
@@ -2087,7 +2967,9 @@ function WidgetConfigEditor({
   const [btnsCfg, setBtnsCfg] = useState<BtnsCfg>(() => rawToBtns(parsed))
   const [btnGroupCfg, setBtnGroupCfg] = useState<BtnGroupCfg>(() => rawToBtnGroup(parsed))
   const [rlCfg, setRlCfg] = useState<ReviewListCfg>(() => rawToReviewList(parsed))
-  const [compactStyle, setCompactStyle] = useState<string>(() => String(parsed.compact_style ?? 'default'))
+  const [compactStyle, setCompactStyle] = useState<string>(() =>
+    String(parsed.compact_style ?? 'default')
+  )
 
   // Non-review_list types have no client-side completeness gate today — only
   // review_list reports its own validity (via ReviewListConfigForm below).
@@ -2109,7 +2991,9 @@ function WidgetConfigEditor({
       const style = overrideStyle ?? compactStyle
       if (style && style !== 'default') raw.compact_style = style
       return JSON.stringify(raw, null, 2)
-    } catch { return '{}' }
+    } catch {
+      return '{}'
+    }
   }
 
   function switchToRaw() {
@@ -2142,13 +3026,67 @@ function WidgetConfigEditor({
     onChange(currentJson(style))
   }
 
-  function onStatChange(c: StatCfg) { setStatCfg(c); onChange(JSON.stringify({ ...statToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) }, null, 2)) }
-  function onListChange(c: ListCfg) { setListCfg(c); onChange(JSON.stringify({ ...listToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) }, null, 2)) }
-  function onCQChange(c: CQCfg) { setCqCfg(c); onChange(JSON.stringify({ ...cqToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) }, null, 2)) }
-  function onExtApiChange(c: ExtApiCfg) { setExtApiCfg(c); onChange(JSON.stringify({ ...extApiToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) }, null, 2)) }
-  function onBtnsChange(c: BtnsCfg) { setBtnsCfg(c); onChange(JSON.stringify({ ...btnsToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) }, null, 2)) }
-  function onBtnGroupChange(c: BtnGroupCfg) { setBtnGroupCfg(c); onChange(JSON.stringify(btnGroupToRaw(c), null, 2)) }
-  function onReviewListChange(c: ReviewListCfg) { setRlCfg(c); onChange(JSON.stringify(reviewListToRaw(c), null, 2)) }
+  function onStatChange(c: StatCfg) {
+    setStatCfg(c)
+    onChange(
+      JSON.stringify(
+        { ...statToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) },
+        null,
+        2
+      )
+    )
+  }
+  function onListChange(c: ListCfg) {
+    setListCfg(c)
+    onChange(
+      JSON.stringify(
+        { ...listToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) },
+        null,
+        2
+      )
+    )
+  }
+  function onCQChange(c: CQCfg) {
+    setCqCfg(c)
+    onChange(
+      JSON.stringify(
+        { ...cqToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) },
+        null,
+        2
+      )
+    )
+  }
+  function onExtApiChange(c: ExtApiCfg) {
+    setExtApiCfg(c)
+    onChange(
+      JSON.stringify(
+        {
+          ...extApiToRaw(c),
+          ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {})
+        },
+        null,
+        2
+      )
+    )
+  }
+  function onBtnsChange(c: BtnsCfg) {
+    setBtnsCfg(c)
+    onChange(
+      JSON.stringify(
+        { ...btnsToRaw(c), ...(compactStyle !== 'default' ? { compact_style: compactStyle } : {}) },
+        null,
+        2
+      )
+    )
+  }
+  function onBtnGroupChange(c: BtnGroupCfg) {
+    setBtnGroupCfg(c)
+    onChange(JSON.stringify(btnGroupToRaw(c), null, 2))
+  }
+  function onReviewListChange(c: ReviewListCfg) {
+    setRlCfg(c)
+    onChange(JSON.stringify(reviewListToRaw(c), null, 2))
+  }
 
   return (
     <div className='space-y-2'>
@@ -2171,7 +3109,10 @@ function WidgetConfigEditor({
             className='font-mono text-[12px]'
             rows={10}
             value={rawText}
-            onChange={(e) => { setRawText(e.target.value); onChange(e.target.value) }}
+            onChange={(e) => {
+              setRawText(e.target.value)
+              onChange(e.target.value)
+            }}
             spellCheck={false}
           />
           {parseError && <p className='text-[11px] text-destructive'>{parseError}</p>}
@@ -2184,8 +3125,16 @@ function WidgetConfigEditor({
               <div className='flex gap-2'>
                 {[
                   { value: 'default', label: 'Default', preview: 'plain value in header bar' },
-                  { value: 'pill-light', label: 'Inline chip', preview: 'compact chip, light header' },
-                  { value: 'pill-dark', label: 'Inline chip (dark)', preview: 'compact chip, dark context' },
+                  {
+                    value: 'pill-light',
+                    label: 'Inline chip',
+                    preview: 'compact chip, light header'
+                  },
+                  {
+                    value: 'pill-dark',
+                    label: 'Inline chip (dark)',
+                    preview: 'compact chip, dark context'
+                  }
                 ].map((opt) => (
                   <button
                     key={opt.value}
@@ -2200,14 +3149,22 @@ function WidgetConfigEditor({
                   >
                     {opt.value === 'pill-light' && (
                       <span className='inline-flex flex-col justify-center rounded border border-slate-200 bg-white px-1.5 py-0.5 leading-none'>
-                        <span className='text-[7px] font-medium uppercase tracking-wider text-slate-400 leading-none'>LABEL</span>
-                        <span className='text-[9px] font-semibold text-slate-900 leading-none'>123</span>
+                        <span className='text-[7px] font-medium uppercase tracking-wider text-slate-400 leading-none'>
+                          LABEL
+                        </span>
+                        <span className='text-[9px] font-semibold text-slate-900 leading-none'>
+                          123
+                        </span>
                       </span>
                     )}
                     {opt.value === 'pill-dark' && (
                       <span className='inline-flex flex-col justify-center rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 leading-none'>
-                        <span className='text-[7px] font-medium uppercase tracking-wider text-slate-500 leading-none'>LABEL</span>
-                        <span className='text-[9px] font-semibold text-slate-100 leading-none'>123</span>
+                        <span className='text-[7px] font-medium uppercase tracking-wider text-slate-500 leading-none'>
+                          LABEL
+                        </span>
+                        <span className='text-[9px] font-semibold text-slate-100 leading-none'>
+                          123
+                        </span>
                       </span>
                     )}
                     {opt.label}
@@ -2220,11 +3177,21 @@ function WidgetConfigEditor({
             {type === 'stat' && <StatConfigForm cfg={statCfg} onChange={onStatChange} />}
             {type === 'list' && <ListConfigForm cfg={listCfg} onChange={onListChange} />}
             {type === 'custom-query' && <CQConfigForm cfg={cqCfg} onChange={onCQChange} />}
-            {type === 'external-api' && <ExtApiConfigForm cfg={extApiCfg} onChange={onExtApiChange} />}
-            {type === 'action-buttons' && <ActionButtonsConfigForm cfg={btnsCfg} onChange={onBtnsChange} />}
-            {type === 'button-group' && <BtnGroupConfigForm cfg={btnGroupCfg} onChange={onBtnGroupChange} />}
+            {type === 'external-api' && (
+              <ExtApiConfigForm cfg={extApiCfg} onChange={onExtApiChange} />
+            )}
+            {type === 'action-buttons' && (
+              <ActionButtonsConfigForm cfg={btnsCfg} onChange={onBtnsChange} />
+            )}
+            {type === 'button-group' && (
+              <BtnGroupConfigForm cfg={btnGroupCfg} onChange={onBtnGroupChange} />
+            )}
             {type === 'review_list' && (
-              <ReviewListConfigForm cfg={rlCfg} onChange={onReviewListChange} onValidityChange={onValidityChange} />
+              <ReviewListConfigForm
+                cfg={rlCfg}
+                onChange={onReviewListChange}
+                onValidityChange={onValidityChange}
+              />
             )}
           </div>
         </div>
@@ -2296,7 +3263,9 @@ function InternalWidgetForm({
   })
 
   const isValid =
-    form.name.trim() !== '' && form.widget_type !== ('' as InternalWidget['widget_type']) && configValid
+    form.name.trim() !== '' &&
+    form.widget_type !== ('' as InternalWidget['widget_type']) &&
+    configValid
 
   return (
     <div className='space-y-4'>
@@ -2338,9 +3307,7 @@ function InternalWidgetForm({
         onChange={(json) => set('config', json)}
         onValidityChange={setConfigValid}
       />
-      {configError && (
-        <p className='text-[11px] text-destructive'>{configError}</p>
-      )}
+      {configError && <p className='text-[11px] text-destructive'>{configError}</p>}
 
       <div className='flex items-center gap-2'>
         <Switch checked={form.is_active} onCheckedChange={(v) => set('is_active', v)} />
@@ -2383,7 +3350,7 @@ function InternalWidgetDetail({
   })
 
   return (
-    <div className='mx-auto w-full max-w-3xl space-y-6 p-6'>
+    <div className='w-full space-y-6 p-6'>
       <div className='flex items-start justify-between gap-4'>
         <div>
           <h2 className='text-[15px] font-semibold'>{widget.name}</h2>
@@ -2437,8 +3404,7 @@ function InternalWidgetsTab() {
 
   const { data: widgets = [], isLoading } = useQuery<InternalWidget[]>({
     queryKey: ['internal-widgets'],
-    queryFn: () =>
-      api.get<{ data: InternalWidget[] }>('/widgets-internal').then((r) => r.data.data)
+    queryFn: () => api.get<{ data: InternalWidget[] }>('/widgets-internal').then((r) => r.data.data)
   })
 
   const selected = widgets.find((w) => w.id === selectedId) ?? null
@@ -2525,7 +3491,7 @@ function InternalWidgetsTab() {
       {/* Right: detail */}
       <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         {creating ? (
-          <div className='mx-auto w-full max-w-3xl space-y-4 p-6'>
+          <div className='w-full space-y-4 p-6'>
             <h2 className='text-[15px] font-semibold'>New internal widget</h2>
             <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
               <InternalWidgetForm
@@ -2653,7 +3619,7 @@ function EmbedFeedsTab() {
       {/* Right: detail */}
       <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         {creating ? (
-          <div className='mx-auto w-full max-w-3xl space-y-4 p-6'>
+          <div className='w-full space-y-4 p-6'>
             <h2 className='text-[15px] font-semibold'>New widget feed</h2>
             <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
               <FeedForm

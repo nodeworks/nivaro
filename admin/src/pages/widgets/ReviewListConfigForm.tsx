@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, Plus, Trash2, X } from 'lucide-react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -313,63 +313,78 @@ const FORMAT_OPTS = [
   { value: 'flag', label: 'Flag badge' }
 ]
 
-function MultiFieldPicker({
+/** "Vendor Name (vendor_name)" → "Vendor Name"; falls back to the raw field. */
+function fieldLabelOf(options: { value: string; label: string }[], field: string): string {
+  const opt = options.find((o) => o.value === field)
+  if (!opt) return field
+  const suffix = ` (${field})`
+  return opt.label.endsWith(suffix) ? opt.label.slice(0, -suffix.length) : opt.label
+}
+
+// Guided column editor — columns are added through pickers (target fields, or
+// one M2O hop into a related record), never typed as raw dot-paths. Each
+// selected column row carries its own label override and display format.
+function ColumnListEditor({
+  collection,
   fieldOptions,
   value,
   onChange
 }: {
+  collection: string
   fieldOptions: { value: string; label: string }[]
   value: RLColumn[]
   onChange: (v: RLColumn[]) => void
 }) {
-  const selected = (field: string) => value.some((c) => c.field === field)
-  function toggle(field: string, checked: boolean) {
-    onChange(
-      checked
-        ? [...value, { field, label: '', format: '', color: '' }]
-        : value.filter((c) => c.field !== field)
-    )
+  const relQ = useRelationsFor(collection)
+  const m2oOpts = (relQ.data ?? [])
+    .filter((r) => r.many_collection === collection && !r.junction_field && r.one_collection)
+    .map((r) => ({
+      field: r.many_field,
+      related: r.one_collection as string,
+      label: fieldLabelOf(fieldOptions, r.many_field)
+    }))
+  const [relField, setRelField] = useState('')
+  const activeRel = m2oOpts.find((o) => o.field === relField) ?? null
+  const relatedFieldOpts = useFieldOptions(activeRel?.related ?? '')
+
+  const has = (field: string) => value.some((c) => c.field === field)
+  function add(field: string) {
+    if (field && !has(field)) onChange([...value, { field, label: '', format: '', color: '' }])
   }
   function upd(field: string, patch: Partial<RLColumn>) {
     onChange(value.map((c) => (c.field === field ? { ...c, ...patch } : c)))
   }
+  function displayName(c: RLColumn): string {
+    if (c.label) return c.label
+    const [head, sub] = c.field.split('.')
+    if (sub) return `${fieldLabelOf(fieldOptions, head)} → ${sub.replace(/_/g, ' ')}`
+    return fieldLabelOf(fieldOptions, c.field)
+  }
+
   return (
-    <div className='space-y-1.5'>
-      <div className='max-h-40 space-y-1 overflow-y-auto rounded-md border border-slate-200 p-2 dark:border-border'>
-        {fieldOptions.length === 0 && (
-          <p className='text-[11px] text-slate-400'>
-            No fields — select a target collection first.
-          </p>
-        )}
-        {fieldOptions.map((f) => (
-          <label key={f.value} className='flex items-center gap-2 text-[12px]'>
-            <input
-              type='checkbox'
-              checked={selected(f.value)}
-              onChange={(e) => toggle(f.value, e.target.checked)}
-              className='h-3.5 w-3.5 rounded border-slate-300'
-            />
-            <span className='font-mono'>{f.value}</span>
-          </label>
-        ))}
-      </div>
+    <div className='space-y-2'>
       {value.length > 0 && (
-        <div className='space-y-1'>
+        <div className='space-y-1.5'>
           {value.map((c) => (
-            <div key={c.field} className='flex items-center gap-1.5'>
-              <Badge
-                variant='outline'
-                className='w-[130px] shrink-0 justify-start font-mono text-[10px]'
-              >
-                <span className='truncate'>{c.field}</span>
-              </Badge>
+            <div
+              key={c.field}
+              className='flex items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 dark:border-border'
+            >
+              <div className='min-w-0 flex-1'>
+                <p className='truncate text-[12px] text-slate-700 dark:text-slate-300'>
+                  {displayName(c)}
+                </p>
+                <p className='truncate font-mono text-[10px] text-slate-400 dark:text-slate-500'>
+                  {c.field}
+                </p>
+              </div>
               <Input
-                className='h-6 flex-1 text-[11px]'
+                className='h-7 w-[150px] text-[11px]'
                 value={c.label}
                 onChange={(e) => upd(c.field, { label: e.target.value })}
-                placeholder='Label override'
+                placeholder='Custom label'
               />
-              <div className='w-[100px]'>
+              <div className='w-[104px]'>
                 <PickCombobox
                   value={c.format}
                   onChange={(v) => upd(c.field, { format: v })}
@@ -378,7 +393,7 @@ function MultiFieldPicker({
                 />
               </div>
               {c.format === 'flag' && (
-                <div className='w-[90px]'>
+                <div className='w-[92px]'>
                   <PickCombobox
                     value={c.color || 'amber'}
                     onChange={(v) => upd(c.field, { color: v })}
@@ -390,40 +405,76 @@ function MultiFieldPicker({
               <Button
                 size='icon'
                 variant='ghost'
-                className='h-6 w-6 shrink-0'
-                aria-label={`Remove ${c.field}`}
+                className='h-7 w-7 shrink-0'
+                aria-label={`Remove ${displayName(c)}`}
                 onClick={() => onChange(value.filter((x) => x.field !== c.field))}
               >
-                <X className='h-3 w-3' />
+                <X className='h-3.5 w-3.5' />
               </Button>
             </div>
           ))}
         </div>
       )}
-      <CustomDotPathInput
-        onAdd={(v) => {
-          if (!selected(v)) onChange([...value, { field: v, label: '', format: '', color: '' }])
-        }}
-      />
+      {fieldOptions.length === 0 ? (
+        <p className='text-[11px] text-slate-400'>Select a target collection first.</p>
+      ) : (
+        <div className='flex flex-wrap items-center gap-1.5'>
+          <div className='w-[200px]'>
+            <PickCombobox
+              value=''
+              onChange={add}
+              options={fieldOptions.filter((f) => !has(f.value))}
+              placeholder='Add field…'
+            />
+          </div>
+          <div className='w-[200px]'>
+            <PickCombobox
+              value={relField}
+              onChange={setRelField}
+              options={m2oOpts.map((o) => ({
+                value: o.field,
+                label: `${o.label} → ${o.related}`
+              }))}
+              placeholder='From related record…'
+            />
+          </div>
+          {activeRel && (
+            <div className='w-[200px]'>
+              <PickCombobox
+                value=''
+                onChange={(v) => {
+                  add(`${relField}.${v}`)
+                  setRelField('')
+                }}
+                options={relatedFieldOpts}
+                placeholder={`Field on ${activeRel.related}…`}
+              />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
 
-function CustomDotPathInput({ onAdd }: { onAdd: (v: string) => void }) {
+/** Titled form region — carries the semantic grouping of the config editor. */
+function Section({
+  title,
+  hint,
+  children
+}: {
+  title: string
+  hint?: string
+  children: React.ReactNode
+}) {
   return (
-    <Input
-      className='h-7 font-mono text-[12px]'
-      placeholder='dot-path e.g. purchase_order.number — Enter to add'
-      onKeyDown={(e) => {
-        if (e.key !== 'Enter') return
-        e.preventDefault()
-        const v = e.currentTarget.value.trim()
-        if (v) {
-          onAdd(v)
-          e.currentTarget.value = ''
-        }
-      }}
-    />
+    <section className='space-y-3'>
+      <div>
+        <h4 className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>{title}</h4>
+        {hint && <p className='mt-0.5 text-[11px] text-slate-500 dark:text-slate-400'>{hint}</p>}
+      </div>
+      {children}
+    </section>
   )
 }
 
@@ -526,323 +577,354 @@ export function ReviewListConfigForm({
   }
 
   return (
-    <div className='space-y-4'>
-      <div className='grid grid-cols-2 gap-3'>
-        <div className='space-y-1'>
-          <Label className='text-[11px] text-muted-foreground'>
-            Host collection{' '}
-            <span className='text-[10px] opacity-60'>(record the widget is placed on)</span>
-          </Label>
-          <PickCombobox
-            value={cfg.host_collection}
-            onChange={setHostCollection}
-            options={colOpts}
-            placeholder='Select host collection…'
-          />
-        </div>
-        <div className='space-y-1'>
-          <Label className='text-[11px] text-muted-foreground'>
-            Target collection <span className='text-[10px] opacity-60'>(rows being reviewed)</span>
-          </Label>
-          <PickCombobox
-            value={cfg.collection}
-            onChange={setCollection}
-            options={colOpts}
-            placeholder='Select target collection…'
-          />
-        </div>
-      </div>
-
-      <div className='space-y-1.5'>
-        <Label className='text-[11px] text-muted-foreground'>
-          Relation path <span className='text-[10px] opacity-60'>(target → host, hop by hop)</span>
-        </Label>
-        {!cfg.collection || !cfg.host_collection ? (
-          <p className='text-[11px] text-slate-400'>Select host and target collections first.</p>
-        ) : (
-          <div className='space-y-1.5'>
-            {cfg.path.map((hop, i) => {
-              const source = chainSourceArr[i] ?? ''
-              const opts = chainOptsArr[i] ?? []
-              const resolved = chainResultsArr[i]
-              const matched = opts.find((o) => o.kind === hop.kind && o.field === hop.field)
-              return (
-                <div
-                  // biome-ignore lint/suspicious/noArrayIndexKey: stable list — removing truncates from this index
-                  key={i}
-                  className='flex items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 dark:border-border'
-                >
-                  <span className='shrink-0 font-mono text-[11px] text-slate-400'>{i + 1}.</span>
-                  <span className='flex-1 font-mono text-[12px]'>
-                    {source || '?'}
-                    <ArrowRight className='mx-1 inline h-3 w-3 text-slate-400' />
-                    {hop.field}
-                    <Badge variant='outline' className='ml-1.5 h-4 px-1 text-[10px] uppercase'>
-                      {hop.kind}
-                    </Badge>
-                  </span>
-                  <span className='shrink-0 font-mono text-[11px] text-slate-500'>
-                    {resolved ?? (matched ? matched.resultCollection : 'unresolved')}
-                  </span>
-                  <Button
-                    size='icon'
-                    variant='ghost'
-                    className='h-6 w-6 shrink-0'
-                    aria-label='Remove hop'
-                    onClick={() => set('path', cfg.path.slice(0, i))}
-                  >
-                    <X className='h-3 w-3' />
-                  </Button>
-                </div>
-              )
-            })}
-            {cfg.path.length < 4 && (
-              <div className='w-[320px]'>
-                <PickCombobox
-                  value=''
-                  onChange={(v) => {
-                    const opts = chainOptsArr[cfg.path.length] ?? []
-                    const opt = opts.find((o) => `${o.kind}::${o.field}` === v)
-                    if (opt) set('path', [...cfg.path, { kind: opt.kind, field: opt.field }])
-                  }}
-                  options={(chainOptsArr[cfg.path.length] ?? []).map((o) => ({
-                    value: `${o.kind}::${o.field}`,
-                    label: `${o.label} (${o.kind.toUpperCase()})`
-                  }))}
-                  placeholder={
-                    cfg.path.length === 0 ? `Add hop from ${cfg.collection}…` : 'Add next hop…'
-                  }
-                  disabled={cfg.path.length > 0 && finalResolved === null}
-                />
-              </div>
-            )}
-            {!pathValid && (
-              <p className='text-[11px] text-amber-600 dark:text-amber-500'>
-                Path must end at host collection "{cfg.host_collection}"
-                {finalResolved ? ` — currently ends at "${finalResolved}"` : ' — incomplete'}.
-              </p>
-            )}
+    <div className='space-y-5'>
+      <Section
+        title='Data source'
+        hint='Which records are reviewed, and how they connect to the record this widget sits on.'
+      >
+        <div className='grid grid-cols-2 gap-3'>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>
+              Host collection{' '}
+              <span className='text-[10px] opacity-60'>(record the widget is placed on)</span>
+            </Label>
+            <PickCombobox
+              value={cfg.host_collection}
+              onChange={setHostCollection}
+              options={colOpts}
+              placeholder='Select host collection…'
+            />
           </div>
-        )}
-      </div>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>
+              Target collection{' '}
+              <span className='text-[10px] opacity-60'>(rows being reviewed)</span>
+            </Label>
+            <PickCombobox
+              value={cfg.collection}
+              onChange={setCollection}
+              options={colOpts}
+              placeholder='Select target collection…'
+            />
+          </div>
+        </div>
+
+        <div className='space-y-1.5'>
+          <Label className='text-[11px] text-muted-foreground'>
+            Relation path{' '}
+            <span className='text-[10px] opacity-60'>(target → host, hop by hop)</span>
+          </Label>
+          {!cfg.collection || !cfg.host_collection ? (
+            <p className='text-[11px] text-slate-400'>Select host and target collections first.</p>
+          ) : (
+            <div className='space-y-1.5'>
+              {cfg.path.map((hop, i) => {
+                const source = chainSourceArr[i] ?? ''
+                const opts = chainOptsArr[i] ?? []
+                const resolved = chainResultsArr[i]
+                const matched = opts.find((o) => o.kind === hop.kind && o.field === hop.field)
+                return (
+                  <div
+                    // biome-ignore lint/suspicious/noArrayIndexKey: stable list — removing truncates from this index
+                    key={i}
+                    className='flex items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 dark:border-border'
+                  >
+                    <span className='shrink-0 font-mono text-[11px] text-slate-400'>{i + 1}.</span>
+                    <span className='flex-1 font-mono text-[12px]'>
+                      {source || '?'}
+                      <ArrowRight className='mx-1 inline h-3 w-3 text-slate-400' />
+                      {hop.field}
+                      <Badge variant='outline' className='ml-1.5 h-4 px-1 text-[10px] uppercase'>
+                        {hop.kind}
+                      </Badge>
+                    </span>
+                    <span className='shrink-0 font-mono text-[11px] text-slate-500'>
+                      {resolved ?? (matched ? matched.resultCollection : 'unresolved')}
+                    </span>
+                    <Button
+                      size='icon'
+                      variant='ghost'
+                      className='h-6 w-6 shrink-0'
+                      aria-label='Remove hop'
+                      onClick={() => set('path', cfg.path.slice(0, i))}
+                    >
+                      <X className='h-3 w-3' />
+                    </Button>
+                  </div>
+                )
+              })}
+              {cfg.path.length < 4 && (
+                <div className='w-[320px]'>
+                  <PickCombobox
+                    value=''
+                    onChange={(v) => {
+                      const opts = chainOptsArr[cfg.path.length] ?? []
+                      const opt = opts.find((o) => `${o.kind}::${o.field}` === v)
+                      if (opt) set('path', [...cfg.path, { kind: opt.kind, field: opt.field }])
+                    }}
+                    options={(chainOptsArr[cfg.path.length] ?? []).map((o) => ({
+                      value: `${o.kind}::${o.field}`,
+                      label: `${o.label} (${o.kind.toUpperCase()})`
+                    }))}
+                    placeholder={
+                      cfg.path.length === 0 ? `Add hop from ${cfg.collection}…` : 'Add next hop…'
+                    }
+                    disabled={cfg.path.length > 0 && finalResolved === null}
+                  />
+                </div>
+              )}
+              {!pathValid && (
+                <p className='text-[11px] text-amber-600 dark:text-amber-500'>
+                  Path must end at host collection "{cfg.host_collection}"
+                  {finalResolved ? ` — currently ends at "${finalResolved}"` : ' — incomplete'}.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </Section>
 
       <Separator />
 
-      <div>
-        <Label className='mb-2 block text-[11px] text-muted-foreground'>Static filters</Label>
+      <Section
+        title='Row filters'
+        hint='Only rows matching every filter appear in the list (e.g. is_on_hold = true).'
+      >
         <ReviewListFilterRows
           rows={cfg.static_filter}
           fieldOptions={targetFieldOpts}
           onChange={(v) => set('static_filter', v)}
         />
-      </div>
+      </Section>
 
       <Separator />
 
-      <div className='grid grid-cols-2 gap-3'>
+      <Section
+        title='Grouping & totals'
+        hint='Rows are grouped into collapsible bands; the total shows in each band header.'
+      >
+        <div className='grid grid-cols-2 gap-3'>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>Group by</Label>
+            <PickCombobox
+              value={cfg.group_by}
+              onChange={(v) => set('group_by', v)}
+              options={targetFieldOpts}
+              placeholder='Select field…'
+              disabled={!cfg.collection}
+            />
+          </div>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>
+              Sum aggregate <span className='text-[10px] opacity-60'>(optional)</span>
+            </Label>
+            <div className='flex items-center gap-1.5'>
+              <div className='flex-1'>
+                <PickCombobox
+                  value={cfg.aggregate_sum}
+                  onChange={(v) => set('aggregate_sum', v)}
+                  options={nullableTargetFieldOpts}
+                  placeholder='None'
+                  disabled={!cfg.collection}
+                />
+              </div>
+              {cfg.aggregate_sum && (
+                <div className='w-[100px]'>
+                  <PickCombobox
+                    value={cfg.aggregate_sum_format}
+                    onChange={(v) => set('aggregate_sum_format', v)}
+                    options={FORMAT_OPTS.filter((o) =>
+                      ['', 'number', 'currency'].includes(o.value)
+                    )}
+                    widthClass='w-[130px]'
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        {cfg.aggregate_sum &&
+          !cfg.group_meta.some((c) => c.field === cfg.aggregate_sum) &&
+          !cfg.line_columns.some((c) => c.field === cfg.aggregate_sum) && (
+            <p className='text-[11px] text-amber-600 dark:text-amber-500'>
+              "{cfg.aggregate_sum}" only displays if also added to Group chips or Line columns
+              below.
+            </p>
+          )}
+      </Section>
+
+      <Separator />
+
+      <Section
+        title='Columns'
+        hint='What each group shows. Add fields from the target collection, or reach one hop into a related record.'
+      >
+        <div className='grid grid-cols-2 gap-4'>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>
+              Group chips <span className='text-[10px] opacity-60'>(shown on the band header)</span>
+            </Label>
+            <ColumnListEditor
+              collection={cfg.collection}
+              fieldOptions={targetFieldOpts}
+              value={cfg.group_meta}
+              onChange={(v) => set('group_meta', v)}
+            />
+          </div>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>
+              Line columns <span className='text-[10px] opacity-60'>(the expanded table)</span>
+            </Label>
+            <ColumnListEditor
+              collection={cfg.collection}
+              fieldOptions={targetFieldOpts}
+              value={cfg.line_columns}
+              onChange={(v) => set('line_columns', v)}
+            />
+          </div>
+        </div>
+      </Section>
+
+      <Separator />
+
+      <Section
+        title='Review actions'
+        hint='The status written by the Approve/Reject-style buttons, and who/when stamps.'
+      >
         <div className='space-y-1'>
-          <Label className='text-[11px] text-muted-foreground'>Group by</Label>
+          <Label className='text-[11px] text-muted-foreground'>Status field</Label>
           <PickCombobox
-            value={cfg.group_by}
-            onChange={(v) => set('group_by', v)}
+            value={cfg.status_field}
+            onChange={(v) => set('status_field', v)}
             options={targetFieldOpts}
             placeholder='Select field…'
             disabled={!cfg.collection}
           />
         </div>
+
+        <div>
+          <div className='mb-2 flex items-center justify-between'>
+            <Label className='text-[11px] text-muted-foreground'>Status options</Label>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-6 gap-1 px-2 text-[11px]'
+              onClick={() =>
+                set('status_options', [
+                  ...cfg.status_options,
+                  { value: '', label: '', color: 'green' }
+                ])
+              }
+            >
+              <Plus className='h-3 w-3' />
+              Add
+            </Button>
+          </div>
+          <div className='space-y-1.5'>
+            {cfg.status_options.length === 0 && (
+              <p className='text-[11px] text-slate-400'>No status options — add at least one.</p>
+            )}
+            {cfg.status_options.map((opt, i) => {
+              const upd = (patch: Partial<RLStatusOption>) =>
+                set(
+                  'status_options',
+                  cfg.status_options.map((o, j) => (j === i ? { ...o, ...patch } : o))
+                )
+              return (
+                // biome-ignore lint/suspicious/noArrayIndexKey: stable list
+                <div key={i} className='flex items-center gap-1.5'>
+                  <Input
+                    className='h-7 w-[120px] font-mono text-[12px]'
+                    value={opt.value}
+                    onChange={(e) => upd({ value: e.target.value })}
+                    placeholder='value'
+                  />
+                  <Input
+                    className='h-7 flex-1 text-[12px]'
+                    value={opt.label}
+                    onChange={(e) => upd({ label: e.target.value })}
+                    placeholder='Label'
+                  />
+                  <div className='w-[110px]'>
+                    <PickCombobox
+                      value={opt.color}
+                      onChange={(v) => upd({ color: v })}
+                      options={STATUS_COLOR_OPTS}
+                      widthClass='w-[140px]'
+                    />
+                  </div>
+                  <Button
+                    size='icon'
+                    variant='ghost'
+                    className='h-7 w-7 shrink-0'
+                    aria-label='Remove option'
+                    onClick={() =>
+                      set(
+                        'status_options',
+                        cfg.status_options.filter((_, j) => j !== i)
+                      )
+                    }
+                  >
+                    <Trash2 className='h-3.5 w-3.5' />
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
         <div className='space-y-1'>
           <Label className='text-[11px] text-muted-foreground'>
-            Sum aggregate <span className='text-[10px] opacity-60'>(optional)</span>
+            Empty status badge{' '}
+            <span className='text-[10px] opacity-60'>(shown when a row has no status yet)</span>
           </Label>
           <div className='flex items-center gap-1.5'>
-            <div className='flex-1'>
-              <PickCombobox
-                value={cfg.aggregate_sum}
-                onChange={(v) => set('aggregate_sum', v)}
-                options={nullableTargetFieldOpts}
-                placeholder='None'
-                disabled={!cfg.collection}
-              />
-            </div>
-            {cfg.aggregate_sum && (
-              <div className='w-[100px]'>
+            <Input
+              className='h-7 flex-1 text-[12px]'
+              value={cfg.status_empty_label}
+              onChange={(e) => set('status_empty_label', e.target.value)}
+              placeholder='e.g. Unreviewed — empty for a plain dash'
+            />
+            {cfg.status_empty_label && (
+              <div className='w-[110px]'>
                 <PickCombobox
-                  value={cfg.aggregate_sum_format}
-                  onChange={(v) => set('aggregate_sum_format', v)}
-                  options={FORMAT_OPTS.filter((o) => ['', 'number', 'currency'].includes(o.value))}
-                  widthClass='w-[130px]'
+                  value={cfg.status_empty_color || 'blue'}
+                  onChange={(v) => set('status_empty_color', v)}
+                  options={STATUS_COLOR_OPTS}
+                  widthClass='w-[140px]'
                 />
               </div>
             )}
           </div>
         </div>
-      </div>
-      {cfg.aggregate_sum &&
-        !cfg.group_meta.some((c) => c.field === cfg.aggregate_sum) &&
-        !cfg.line_columns.some((c) => c.field === cfg.aggregate_sum) && (
-          <p className='text-[11px] text-amber-600 dark:text-amber-500'>
-            "{cfg.aggregate_sum}" only displays if also added to Group meta or Line columns below.
-          </p>
-        )}
 
-      <div className='grid grid-cols-2 gap-3'>
-        <div className='space-y-1'>
-          <Label className='text-[11px] text-muted-foreground'>
-            Group meta <span className='text-[10px] opacity-60'>(chips on the group row)</span>
-          </Label>
-          <MultiFieldPicker
-            fieldOptions={targetFieldOpts}
-            value={cfg.group_meta}
-            onChange={(v) => set('group_meta', v)}
-          />
+        <div className='grid grid-cols-2 gap-3'>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>
+              Stamp user field <span className='text-[10px] opacity-60'>(optional)</span>
+            </Label>
+            <PickCombobox
+              value={cfg.stamp_user_field}
+              onChange={(v) => set('stamp_user_field', v)}
+              options={nullableTargetFieldOpts}
+              placeholder='None'
+              disabled={!cfg.collection}
+            />
+          </div>
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>
+              Stamp date field <span className='text-[10px] opacity-60'>(optional)</span>
+            </Label>
+            <PickCombobox
+              value={cfg.stamp_date_field}
+              onChange={(v) => set('stamp_date_field', v)}
+              options={nullableTargetFieldOpts}
+              placeholder='None'
+              disabled={!cfg.collection}
+            />
+          </div>
         </div>
-        <div className='space-y-1'>
-          <Label className='text-[11px] text-muted-foreground'>
-            Line columns <span className='text-[10px] opacity-60'>(child table columns)</span>
-          </Label>
-          <MultiFieldPicker
-            fieldOptions={targetFieldOpts}
-            value={cfg.line_columns}
-            onChange={(v) => set('line_columns', v)}
-          />
-        </div>
-      </div>
-
-      <Separator />
-
-      <div className='space-y-1'>
-        <Label className='text-[11px] text-muted-foreground'>Status field</Label>
-        <PickCombobox
-          value={cfg.status_field}
-          onChange={(v) => set('status_field', v)}
-          options={targetFieldOpts}
-          placeholder='Select field…'
-          disabled={!cfg.collection}
-        />
-      </div>
-
-      <div>
-        <div className='mb-2 flex items-center justify-between'>
-          <Label className='text-[11px] text-muted-foreground'>Status options</Label>
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-6 gap-1 px-2 text-[11px]'
-            onClick={() =>
-              set('status_options', [
-                ...cfg.status_options,
-                { value: '', label: '', color: 'green' }
-              ])
-            }
-          >
-            <Plus className='h-3 w-3' />
-            Add
-          </Button>
-        </div>
-        <div className='space-y-1.5'>
-          {cfg.status_options.length === 0 && (
-            <p className='text-[11px] text-slate-400'>No status options — add at least one.</p>
-          )}
-          {cfg.status_options.map((opt, i) => {
-            const upd = (patch: Partial<RLStatusOption>) =>
-              set(
-                'status_options',
-                cfg.status_options.map((o, j) => (j === i ? { ...o, ...patch } : o))
-              )
-            return (
-              // biome-ignore lint/suspicious/noArrayIndexKey: stable list
-              <div key={i} className='flex items-center gap-1.5'>
-                <Input
-                  className='h-7 w-[120px] font-mono text-[12px]'
-                  value={opt.value}
-                  onChange={(e) => upd({ value: e.target.value })}
-                  placeholder='value'
-                />
-                <Input
-                  className='h-7 flex-1 text-[12px]'
-                  value={opt.label}
-                  onChange={(e) => upd({ label: e.target.value })}
-                  placeholder='Label'
-                />
-                <div className='w-[110px]'>
-                  <PickCombobox
-                    value={opt.color}
-                    onChange={(v) => upd({ color: v })}
-                    options={STATUS_COLOR_OPTS}
-                    widthClass='w-[140px]'
-                  />
-                </div>
-                <Button
-                  size='icon'
-                  variant='ghost'
-                  className='h-7 w-7 shrink-0'
-                  aria-label='Remove option'
-                  onClick={() =>
-                    set(
-                      'status_options',
-                      cfg.status_options.filter((_, j) => j !== i)
-                    )
-                  }
-                >
-                  <Trash2 className='h-3.5 w-3.5' />
-                </Button>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      <div className='space-y-1'>
-        <Label className='text-[11px] text-muted-foreground'>
-          Empty status badge{' '}
-          <span className='text-[10px] opacity-60'>(shown when a row has no status yet)</span>
-        </Label>
-        <div className='flex items-center gap-1.5'>
-          <Input
-            className='h-7 flex-1 text-[12px]'
-            value={cfg.status_empty_label}
-            onChange={(e) => set('status_empty_label', e.target.value)}
-            placeholder='e.g. Unreviewed — empty for a plain dash'
-          />
-          {cfg.status_empty_label && (
-            <div className='w-[110px]'>
-              <PickCombobox
-                value={cfg.status_empty_color || 'blue'}
-                onChange={(v) => set('status_empty_color', v)}
-                options={STATUS_COLOR_OPTS}
-                widthClass='w-[140px]'
-              />
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className='grid grid-cols-2 gap-3'>
-        <div className='space-y-1'>
-          <Label className='text-[11px] text-muted-foreground'>
-            Stamp user field <span className='text-[10px] opacity-60'>(optional)</span>
-          </Label>
-          <PickCombobox
-            value={cfg.stamp_user_field}
-            onChange={(v) => set('stamp_user_field', v)}
-            options={nullableTargetFieldOpts}
-            placeholder='None'
-            disabled={!cfg.collection}
-          />
-        </div>
-        <div className='space-y-1'>
-          <Label className='text-[11px] text-muted-foreground'>
-            Stamp date field <span className='text-[10px] opacity-60'>(optional)</span>
-          </Label>
-          <PickCombobox
-            value={cfg.stamp_date_field}
-            onChange={(v) => set('stamp_date_field', v)}
-            options={nullableTargetFieldOpts}
-            placeholder='None'
-            disabled={!cfg.collection}
-          />
-        </div>
-      </div>
+      </Section>
 
       <div className='rounded-md bg-slate-50 px-3 py-2 text-[11px] text-slate-500 dark:bg-muted/20 dark:text-muted-foreground'>
         When placing this widget on a layout, bind input{' '}
