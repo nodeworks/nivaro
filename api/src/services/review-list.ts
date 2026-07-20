@@ -26,6 +26,9 @@ export const consoleLogger: Logger = {
 export const IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
 const MAX_PATH_HOPS = 4
+const MAX_LOOKUP_MATCH_PAIRS = 3
+const LOOKUP_TUPLE_CHUNK_SIZE = 100
+const LOOKUP_QUERY_LIMIT = 500
 export const CAP = 2000
 
 // 'flag' renders a colored pill bearing the column label when the value is
@@ -33,13 +36,39 @@ export const CAP = 2000
 export const COLUMN_FORMATS = ['currency', 'number', 'date', 'datetime', 'flag'] as const
 export type ColumnFormat = (typeof COLUMN_FORMATS)[number]
 
-/** Object form of a group_meta / line_columns entry. Plain strings remain valid. */
-export interface ColumnSpec {
+export interface LookupMatchPair {
+  local: string
+  remote: string
+}
+
+/** Reaches a related row via a composite (non-FK) match — e.g. invoice
+ * quantities from line_items matched on purchase_order + line_number. See
+ * docs/superpowers/specs/2026-07-20-rollup-widget-lookup-columns-design.md §2. */
+export interface LookupSpec {
+  collection: string
+  field: string
+  match: LookupMatchPair[]
+}
+
+/** Object form of a group_meta / line_columns entry. Plain strings remain
+ * valid. Exactly one of `field` (direct/dot-path column) or `lookup`
+ * (composite-match related column) is present — `label` is required on the
+ * lookup form since there's no field name to fall back to. */
+export type ColumnSpec =
+  | { field: string; label?: string; format?: ColumnFormat; color?: string }
+  | { label: string; format?: ColumnFormat; color?: string; lookup: LookupSpec }
+
+/** ColumnSpec after normalizeColumnSpecs assigns a key: always has `field`.
+ * For a lookup entry, `field` is the synthesized
+ * `$lookup.<collection>.<field>.<entryIndex>` key (the `$` prefix can never
+ * collide with a real column name) and `lookup` carries the match spec for
+ * resolution. */
+export interface NormalizedColumnSpec {
   field: string
   label?: string
   format?: ColumnFormat
-  /** Pill color for format 'flag' (same palette as status option colors). */
   color?: string
+  lookup?: LookupSpec
 }
 
 /** Minimal shape shared by any widget config that walks a relation path from
@@ -105,11 +134,26 @@ export interface ReviewListResult {
   truncated: boolean
 }
 
-/** Collapse the string | ColumnSpec union to ColumnSpec (validated by this point). */
+/** Collapse the string | ColumnSpec union to NormalizedColumnSpec (validated
+ * by this point), assigning the `$lookup...` key to lookup entries. The
+ * entryIndex is positional within THIS entries array — group_meta and
+ * line_columns are normalized separately, each with their own indexing. */
 export function normalizeColumnSpecs(
   entries: Array<string | ColumnSpec> | undefined
-): ColumnSpec[] {
-  return (entries ?? []).map((e) => (typeof e === 'string' ? { field: e } : e))
+): NormalizedColumnSpec[] {
+  return (entries ?? []).map((e, i) => {
+    if (typeof e === 'string') return { field: e }
+    if ('lookup' in e) {
+      return {
+        field: `$lookup.${e.lookup.collection}.${e.lookup.field}.${i}`,
+        label: e.label,
+        format: e.format,
+        color: e.color,
+        lookup: e.lookup
+      }
+    }
+    return e
+  })
 }
 
 // ─── Relation resolution ────────────────────────────────────────────────────
@@ -262,6 +306,42 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
     return `aggregate_sum_format must be one of: ${COLUMN_FORMATS.join(', ')}`
   }
 
+  const lookupSpecError = (
+    key: 'group_meta' | 'line_columns',
+    i: number,
+    lookup: unknown
+  ): string | null => {
+    if (!lookup || typeof lookup !== 'object' || Array.isArray(lookup)) {
+      return `${key}[${i}].lookup must be an object`
+    }
+    const l = lookup as Record<string, unknown>
+    if (!isPlainIdentifier(l.collection)) {
+      return `${key}[${i}].lookup.collection must be a valid identifier`
+    }
+    if (!isPlainIdentifier(l.field)) return `${key}[${i}].lookup.field must be a valid identifier`
+    if (
+      !Array.isArray(l.match) ||
+      l.match.length === 0 ||
+      l.match.length > MAX_LOOKUP_MATCH_PAIRS
+    ) {
+      return `${key}[${i}].lookup.match must be a non-empty array of at most ${MAX_LOOKUP_MATCH_PAIRS} pairs`
+    }
+    for (let j = 0; j < l.match.length; j++) {
+      const pair = l.match[j]
+      if (!pair || typeof pair !== 'object' || Array.isArray(pair)) {
+        return `${key}[${i}].lookup.match[${j}] must be an object`
+      }
+      const p = pair as Record<string, unknown>
+      if (!isPlainIdentifier(p.local)) {
+        return `${key}[${i}].lookup.match[${j}].local must be a valid identifier`
+      }
+      if (!isPlainIdentifier(p.remote)) {
+        return `${key}[${i}].lookup.match[${j}].remote must be a valid identifier`
+      }
+    }
+    return null
+  }
+
   const columnSpecError = (key: 'group_meta' | 'line_columns'): string | null => {
     const entries = c[key]
     if (entries === undefined) return null
@@ -277,8 +357,21 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
         return `${key}[${i}] must be a field name or an object`
       }
       const spec = e as Record<string, unknown>
-      if (!isDotPathIdentifier(spec.field))
-        return `${key}[${i}].field must be a valid field name (one dot-path hop max)`
+      const hasField = spec.field !== undefined
+      const hasLookup = spec.lookup !== undefined
+      if (hasField === hasLookup) {
+        return `${key}[${i}] must have exactly one of field or lookup`
+      }
+      if (hasField) {
+        if (!isDotPathIdentifier(spec.field))
+          return `${key}[${i}].field must be a valid field name (one dot-path hop max)`
+      } else {
+        if (typeof spec.label !== 'string' || !spec.label) {
+          return `${key}[${i}].label is required for lookup columns`
+        }
+        const lookupError = lookupSpecError(key, i, spec.lookup)
+        if (lookupError) return lookupError
+      }
       if (spec.label !== undefined && (typeof spec.label !== 'string' || !spec.label)) {
         return `${key}[${i}].label must be a non-empty string`
       }
@@ -527,6 +620,106 @@ export async function resolveDotSpecValues(
   return dotValueMaps
 }
 
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+
+// Stable key for a local-value / remote-value tuple, keyed positionally
+// (match-pair order) rather than by field name — so a target row's local
+// values and a resolved remote row's values compare equal regardless of
+// local/remote field-name differences.
+function lookupTupleKey(values: unknown[]): string {
+  return JSON.stringify(values.map((v) => (v == null ? null : String(v))))
+}
+
+// Lookup-column resolution: batched composite-match tuple queries against a
+// related (non-FK) collection. Distinct local-value tuples are collected
+// from targetRows (any null local value → that row's value is null, no query
+// contribution), chunked ≤100 tuples per query as orWhere groups of ANDed
+// pairs, ordered by id + limited per query so ambiguous matches resolve to
+// the first (lowest-id) candidate deterministically. Total resolved rows
+// across the whole call share the module CAP; a dead lookup
+// collection/column degrades that lookup to null values rather than crashing
+// the render (display polish, same policy as resolveDotSpecValues).
+export async function resolveLookupColumnValues(
+  database: Knex,
+  lookupSpecs: Array<{ field: string; lookup: LookupSpec }>,
+  targetRows: Array<Record<string, unknown>>,
+  logger: Logger = consoleLogger,
+  logPrefix = 'review_list'
+): Promise<{ valueMaps: Map<string, Map<string, unknown>>; truncated: boolean }> {
+  const valueMaps = new Map<string, Map<string, unknown>>()
+  let truncated = false
+
+  // Specs sharing an identical (collection, field, match) definition are
+  // resolved with the same query set even if referenced by multiple columns.
+  const groups = new Map<string, { spec: LookupSpec; keys: string[] }>()
+  for (const s of lookupSpecs) {
+    const sig = JSON.stringify([s.lookup.collection, s.lookup.field, s.lookup.match])
+    const g = groups.get(sig)
+    if (g) g.keys.push(s.field)
+    else groups.set(sig, { spec: s.lookup, keys: [s.field] })
+  }
+
+  let totalResolved = 0
+  for (const { spec, keys } of groups.values()) {
+    const sharedMap = new Map<string, unknown>()
+    for (const key of keys) valueMaps.set(key, sharedMap)
+
+    const distinctTuples = new Map<string, unknown[]>()
+    for (const row of targetRows) {
+      const values = spec.match.map((p) => row[p.local])
+      if (values.some((v) => v == null)) continue
+      const tk = lookupTupleKey(values)
+      if (!distinctTuples.has(tk)) distinctTuples.set(tk, values)
+    }
+    if (distinctTuples.size === 0) continue
+
+    const remoteCols = spec.match.map((p) => p.remote)
+    const chunks = chunkArray([...distinctTuples.values()], LOOKUP_TUPLE_CHUNK_SIZE)
+    for (const chunk of chunks) {
+      if (totalResolved >= CAP) {
+        truncated = true
+        logger.warn(
+          { collection: spec.collection, field: spec.field },
+          `${logPrefix}: lookup resolution truncated at cap`
+        )
+        break
+      }
+      try {
+        const rows = (await database(spec.collection)
+          .where((builder: Knex.QueryBuilder) => {
+            for (const tupleValues of chunk) {
+              builder.orWhere((sub: Knex.QueryBuilder) => {
+                spec.match.forEach((pair, i) => {
+                  sub.andWhere(pair.remote, tupleValues[i] as Knex.Value)
+                })
+              })
+            }
+          })
+          .orderBy('id')
+          .limit(LOOKUP_QUERY_LIMIT)
+          .select([...remoteCols, spec.field])) as Array<Record<string, unknown>>
+        totalResolved += rows.length
+        for (const r of rows) {
+          const rk = lookupTupleKey(remoteCols.map((c) => r[c]))
+          if (!sharedMap.has(rk)) sharedMap.set(rk, r[spec.field] ?? null)
+        }
+      } catch (err) {
+        logger.warn(
+          { collection: spec.collection, field: spec.field, err },
+          `${logPrefix}: lookup collection/field unavailable, degrading to null`
+        )
+        break
+      }
+    }
+  }
+
+  return { valueMaps, truncated }
+}
+
 // Batched id → display-label resolution against a related collection's
 // display_template (falls back to resolveDisplayValue's own heuristics when
 // there's no template). Shared by review_list's stamp_user label and
@@ -589,15 +782,25 @@ export async function resolveReviewListRows(
 
   const groupMetaSpecs = normalizeColumnSpecs(config.group_meta)
   const lineColumnSpecs = normalizeColumnSpecs(config.line_columns)
-  const allSpecs = [...new Set([...groupMetaSpecs, ...lineColumnSpecs].map((s) => s.field))]
-  const dotSpecs = splitDotSpecs(allSpecs)
+  const allSpecsByField = new Map<string, NormalizedColumnSpec>()
+  for (const s of [...groupMetaSpecs, ...lineColumnSpecs]) allSpecsByField.set(s.field, s)
+  const allSpecs = [...allSpecsByField.values()]
+
+  const lookupSpecs = allSpecs.filter(
+    (s): s is NormalizedColumnSpec & { lookup: LookupSpec } => !!s.lookup
+  )
+  const nonLookupFields = allSpecs.filter((s) => !s.lookup).map((s) => s.field)
+  const dotSpecs = splitDotSpecs(nonLookupFields)
   const dotSpecByRaw = new Map(dotSpecs.map((d) => [d.raw, d]))
-  const plainSpecs = allSpecs.filter((s) => !dotSpecByRaw.has(s))
+  const plainSpecs = nonLookupFields.filter((s) => !dotSpecByRaw.has(s))
 
   const selectFields = new Set<string>(['id', config.group_by])
   if (config.aggregate_sum) selectFields.add(config.aggregate_sum)
   for (const f of plainSpecs) selectFields.add(f)
   for (const d of dotSpecs) selectFields.add(d.fkField)
+  for (const s of lookupSpecs) {
+    for (const pair of s.lookup.match) selectFields.add(pair.local)
+  }
   selectFields.add(config.status.field)
   if (config.status.stamp_user_field) selectFields.add(config.status.stamp_user_field)
   if (config.status.stamp_date_field) selectFields.add(config.status.stamp_date_field)
@@ -629,6 +832,10 @@ export async function resolveReviewListRows(
     logger
   )
 
+  const { valueMaps: lookupValueMaps, truncated: lookupTruncated } =
+    await resolveLookupColumnValues(database, lookupSpecs, targetRows, logger)
+  if (lookupTruncated) truncated = true
+
   // Stamp-user label resolution (audit tooltip).
   let stampUserLabels: Map<string, string> | null = null
   const stampUserField = config.status.stamp_user_field ?? null
@@ -649,13 +856,20 @@ export async function resolveReviewListRows(
     // caller needing to duplicate the field into line_columns just to fetch it.
     if (config.aggregate_sum) values[config.aggregate_sum] = row[config.aggregate_sum] ?? null
     for (const spec of allSpecs) {
-      const dot = dotSpecByRaw.get(spec)
+      if (spec.lookup) {
+        const localValues = spec.lookup.match.map((p) => row[p.local])
+        values[spec.field] = localValues.some((v) => v == null)
+          ? null
+          : (lookupValueMaps.get(spec.field)?.get(lookupTupleKey(localValues)) ?? null)
+        continue
+      }
+      const dot = dotSpecByRaw.get(spec.field)
       if (dot) {
         const raw = row[dot.fkField]
         const map = dotValueMaps.get(`${dot.fkField}.${dot.subField}`)
-        values[spec] = raw == null ? null : (map?.get(String(raw)) ?? raw)
+        values[spec.field] = raw == null ? null : (map?.get(String(raw)) ?? raw)
       } else {
-        values[spec] = row[spec] ?? null
+        values[spec.field] = row[spec.field] ?? null
       }
     }
 
@@ -684,7 +898,7 @@ export async function resolveReviewListRows(
     .select('field', 'label')) as Array<{ field: string; label: string | null }>
   const labelByField = new Map(fieldLabelRows.map((r) => [r.field, r.label]))
   // Label precedence: config override > nivaro_fields label > raw field name.
-  const toColumnMeta = (spec: ColumnSpec) => ({
+  const toColumnMeta = (spec: NormalizedColumnSpec) => ({
     field: spec.field,
     label: spec.label || labelByField.get(spec.field) || spec.field,
     format: spec.format ?? null,

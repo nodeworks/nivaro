@@ -28,6 +28,11 @@ interface QueryState {
   whereIns: Array<[string, unknown[]]>
   limitVal?: number
   selectArgs: unknown[]
+  orderByField?: string
+  // Populated when `.where(callback)` is used (the lookup-column tuple-match
+  // query shape): one entry per `orWhere` group, each an ordered list of the
+  // `andWhere(field, value)` pairs recorded inside that group.
+  orWhereGroups?: Array<Array<[string, unknown]>>
 }
 
 function makeDb(resolver: (state: QueryState) => unknown[], capturedStates?: QueryState[]) {
@@ -42,8 +47,26 @@ function makeDb(resolver: (state: QueryState) => unknown[], capturedStates?: Que
     }
     capturedStates?.push(state)
     const qb: Record<string, unknown> = {}
-    qb.where = vi.fn((field: string, val: unknown) => {
-      state.wheres.push([field, val])
+    qb.where = vi.fn((fieldOrFn: string | ((b: unknown) => void), val?: unknown) => {
+      if (typeof fieldOrFn === 'function') {
+        const groups: Array<Array<[string, unknown]>> = []
+        const groupBuilder: Record<string, unknown> = {}
+        groupBuilder.orWhere = vi.fn((fn: (b: unknown) => void) => {
+          const group: Array<[string, unknown]> = []
+          const pairBuilder: Record<string, unknown> = {}
+          pairBuilder.andWhere = vi.fn((field: string, v: unknown) => {
+            group.push([field, v])
+            return pairBuilder
+          })
+          fn(pairBuilder)
+          groups.push(group)
+          return groupBuilder
+        })
+        fieldOrFn(groupBuilder)
+        state.orWhereGroups = groups
+        return qb
+      }
+      state.wheres.push([fieldOrFn, val])
       return qb
     })
     qb.whereNot = vi.fn((field: string, val: unknown) => {
@@ -56,6 +79,10 @@ function makeDb(resolver: (state: QueryState) => unknown[], capturedStates?: Que
     })
     qb.whereIn = vi.fn((field: string, vals: unknown[]) => {
       state.whereIns.push([field, vals])
+      return qb
+    })
+    qb.orderBy = vi.fn((field: string) => {
+      state.orderByField = field
       return qb
     })
     qb.limit = vi.fn((n: number) => {
@@ -895,5 +922,295 @@ describe('resolveReviewListRows — 4-hop reverse walk (m2o, m2m, m2o, m2m)', ()
     expect(states[3].selectArgs).toEqual(['invoice'])
 
     expect(states[4].whereIns).toEqual([['invoice', ['inv-9']]])
+  })
+})
+
+// ─── Lookup columns — composite (non-FK) match against a related collection ─
+//
+// Invoice quantities live on line_items, reached only by
+// line_items.purchase_order = invoice.purchase_order AND
+// line_items.line_number = invoice.line_item_number (no FK). See
+// docs/superpowers/specs/2026-07-20-rollup-widget-lookup-columns-design.md §2.
+
+describe('resolveReviewListRows — lookup columns (composite match)', () => {
+  const lookupConfig: ReviewListConfig = {
+    host_collection: 'purchase_orders',
+    collection: 'invoices',
+    path: [{ kind: 'm2o', field: 'purchase_order' }],
+    group_by: 'invoice_id',
+    line_columns: [
+      {
+        label: 'Quantity Billed',
+        format: 'number',
+        lookup: {
+          collection: 'line_items',
+          field: 'quantity_billed',
+          match: [
+            { local: 'purchase_order', remote: 'purchase_order' },
+            { local: 'line_item_number', remote: 'line_number' }
+          ]
+        }
+      }
+    ],
+    status: { field: 'efp_review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
+  }
+
+  const invoiceRowsForLookup = [
+    {
+      id: 'inv-1',
+      invoice_id: 'GRP-1',
+      purchase_order: 'po-1',
+      line_item_number: 'LI-1',
+      efp_review_status: 'under_review'
+    },
+    {
+      // null local match value → value null, no query contribution for this tuple.
+      id: 'inv-2',
+      invoice_id: 'GRP-2',
+      purchase_order: null,
+      line_item_number: 'LI-2',
+      efp_review_status: 'under_review'
+    },
+    {
+      // Same (purchase_order, line_item_number) tuple matches two line_items
+      // rows below (li-2, li-3) — ambiguous; first by id wins.
+      id: 'inv-3',
+      invoice_id: 'GRP-3',
+      purchase_order: 'po-1',
+      line_item_number: 'LI-2',
+      efp_review_status: 'under_review'
+    }
+  ]
+
+  const lineItemsLookupRows = [
+    { id: 'li-1', purchase_order: 'po-1', line_number: 'LI-1', quantity_billed: 10 },
+    { id: 'li-2', purchase_order: 'po-1', line_number: 'LI-2', quantity_billed: 5 },
+    { id: 'li-3', purchase_order: 'po-1', line_number: 'LI-2', quantity_billed: 99 }
+  ]
+
+  it('resolves lookup values via a composite-match tuple query, keyed by $lookup.<collection>.<field>.<i>', async () => {
+    const states: QueryState[] = []
+    const db = makeDb((state) => {
+      if (state.table === 'nivaro_relations') return RELATIONS
+      if (state.table === 'invoices') {
+        const byId = state.whereIns.find(([f]) => f === 'id')
+        if (byId) return invoiceRowsForLookup
+        return [{ id: 'inv-1' }, { id: 'inv-2' }, { id: 'inv-3' }]
+      }
+      if (state.table === 'line_items') return lineItemsLookupRows
+      if (state.table === 'nivaro_fields') return []
+      throw new Error(`unexpected table: ${state.table}`)
+    }, states)
+
+    const result = await resolveReviewListRows(
+      db as unknown as Parameters<typeof resolveReviewListRows>[0],
+      lookupConfig,
+      'po-1'
+    )
+
+    const lookupField = '$lookup.line_items.quantity_billed.0'
+
+    expect(result.columns.line_columns).toEqual([
+      { field: lookupField, label: 'Quantity Billed', format: 'number', color: null }
+    ])
+    expect(result.rows).toEqual([
+      {
+        id: 'inv-1',
+        group: 'GRP-1',
+        values: { [lookupField]: 10 },
+        status: 'under_review',
+        stamp_user: null,
+        stamp_date: null
+      },
+      {
+        id: 'inv-2',
+        group: 'GRP-2',
+        values: { [lookupField]: null },
+        status: 'under_review',
+        stamp_user: null,
+        stamp_date: null
+      },
+      {
+        id: 'inv-3',
+        group: 'GRP-3',
+        // Ambiguous tuple (po-1, LI-2) matches li-2 (5) and li-3 (99) — first
+        // by orderBy('id') wins, so 5 not 99.
+        values: { [lookupField]: 5 },
+        status: 'under_review',
+        stamp_user: null,
+        stamp_date: null
+      }
+    ])
+    expect(result.truncated).toBe(false)
+
+    // Target SELECT included the local match columns even though they're not
+    // otherwise requested as plain/dot columns.
+    const targetCall = states.find(
+      (s) => s.table === 'invoices' && s.whereIns.some(([f]) => f === 'id')
+    )
+    expect(targetCall?.selectArgs).toEqual(
+      expect.arrayContaining(['purchase_order', 'line_item_number'])
+    )
+
+    // Lookup query shape: one query, distinct non-null tuples only (2, not 3
+    // — inv-2's null local skips it), orWhere-group-of-ANDed-pairs, ordered
+    // and limited for determinism/bounding.
+    const lookupCall = states.find((s) => s.table === 'line_items')
+    expect(lookupCall?.orderByField).toBe('id')
+    expect(lookupCall?.limitVal).toBe(500)
+    expect(lookupCall?.selectArgs).toEqual(['purchase_order', 'line_number', 'quantity_billed'])
+    expect(lookupCall?.orWhereGroups).toEqual([
+      [
+        ['purchase_order', 'po-1'],
+        ['line_number', 'LI-1']
+      ],
+      [
+        ['purchase_order', 'po-1'],
+        ['line_number', 'LI-2']
+      ]
+    ])
+  })
+
+  it('degrades to null values and warns when the lookup collection/column is dead, without crashing the render', async () => {
+    const logger = makeLogger()
+    const db = makeDb((state) => {
+      if (state.table === 'nivaro_relations') return RELATIONS
+      if (state.table === 'invoices') {
+        const byId = state.whereIns.find(([f]) => f === 'id')
+        if (byId) return invoiceRowsForLookup
+        return [{ id: 'inv-1' }, { id: 'inv-2' }, { id: 'inv-3' }]
+      }
+      if (state.table === 'line_items') throw new Error('relation "line_items" does not exist')
+      if (state.table === 'nivaro_fields') return []
+      throw new Error(`unexpected table: ${state.table}`)
+    })
+
+    const result = await resolveReviewListRows(
+      db as unknown as Parameters<typeof resolveReviewListRows>[0],
+      lookupConfig,
+      'po-1',
+      logger
+    )
+
+    const lookupField = '$lookup.line_items.quantity_billed.0'
+    expect(result.rows.map((r) => r.values[lookupField])).toEqual([null, null, null])
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: 'line_items', field: 'quantity_billed' }),
+      expect.stringContaining('lookup')
+    )
+  })
+})
+
+// ─── validateReviewListConfig — lookup column spec validation ──────────────
+
+function validLookupEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    label: 'Quantity Billed',
+    format: 'number',
+    lookup: {
+      collection: 'line_items',
+      field: 'quantity_billed',
+      match: [
+        { local: 'purchase_order', remote: 'purchase_order' },
+        { local: 'line_item_number', remote: 'line_number' }
+      ]
+    },
+    ...overrides
+  }
+}
+
+describe('validateReviewListConfig — lookup columns', () => {
+  it('accepts a valid lookup column spec', () => {
+    const cfg = baseValidConfig() as Record<string, unknown>
+    cfg.line_columns = [validLookupEntry()]
+    expect(validateReviewListConfig(cfg, RELATIONS)).toBeNull()
+  })
+
+  it('rejects an entry with both field and lookup', () => {
+    const cfg = baseValidConfig() as Record<string, unknown>
+    cfg.line_columns = [{ ...validLookupEntry(), field: 'amount' }]
+    expect(validateReviewListConfig(cfg, RELATIONS)).toMatch(
+      /line_columns\[0\].*exactly one of field or lookup/
+    )
+  })
+
+  it('rejects an entry with neither field nor lookup', () => {
+    const cfg = baseValidConfig() as Record<string, unknown>
+    cfg.line_columns = [{ label: 'Nothing' }]
+    expect(validateReviewListConfig(cfg, RELATIONS)).toMatch(
+      /line_columns\[0\].*exactly one of field or lookup/
+    )
+  })
+
+  it('requires a non-empty label on lookup columns', () => {
+    const cfg = baseValidConfig() as Record<string, unknown>
+    const entry = validLookupEntry()
+    delete (entry as Record<string, unknown>).label
+    cfg.line_columns = [entry]
+    expect(validateReviewListConfig(cfg, RELATIONS)).toMatch(/line_columns\[0\].label/)
+
+    const cfg2 = baseValidConfig() as Record<string, unknown>
+    cfg2.line_columns = [validLookupEntry({ label: '' })]
+    expect(validateReviewListConfig(cfg2, RELATIONS)).toMatch(/line_columns\[0\].label/)
+  })
+
+  it('rejects a bad lookup.collection identifier', () => {
+    const cfg = baseValidConfig() as Record<string, unknown>
+    cfg.line_columns = [
+      validLookupEntry({ lookup: { ...validLookupEntry().lookup, collection: 'bad; drop table' } })
+    ]
+    expect(validateReviewListConfig(cfg, RELATIONS)).toMatch(
+      /line_columns\[0\]\.lookup\.collection/
+    )
+  })
+
+  it('rejects a bad lookup.field identifier', () => {
+    const cfg = baseValidConfig() as Record<string, unknown>
+    cfg.line_columns = [validLookupEntry({ lookup: { ...validLookupEntry().lookup, field: '' } })]
+    expect(validateReviewListConfig(cfg, RELATIONS)).toMatch(/line_columns\[0\]\.lookup\.field/)
+  })
+
+  it('rejects an empty lookup.match array', () => {
+    const cfg = baseValidConfig() as Record<string, unknown>
+    cfg.line_columns = [validLookupEntry({ lookup: { ...validLookupEntry().lookup, match: [] } })]
+    expect(validateReviewListConfig(cfg, RELATIONS)).toMatch(/line_columns\[0\]\.lookup\.match/)
+  })
+
+  it('rejects more than 3 lookup.match pairs', () => {
+    const cfg = baseValidConfig() as Record<string, unknown>
+    cfg.line_columns = [
+      validLookupEntry({
+        lookup: {
+          ...validLookupEntry().lookup,
+          match: [
+            { local: 'a', remote: 'a' },
+            { local: 'b', remote: 'b' },
+            { local: 'c', remote: 'c' },
+            { local: 'd', remote: 'd' }
+          ]
+        }
+      })
+    ]
+    expect(validateReviewListConfig(cfg, RELATIONS)).toMatch(/line_columns\[0\]\.lookup\.match/)
+  })
+
+  it('names the entry and pair index for a bad match identifier', () => {
+    const cfg = baseValidConfig() as Record<string, unknown>
+    cfg.group_meta = ['number']
+    cfg.line_columns = [
+      { field: 'amount' },
+      validLookupEntry({
+        lookup: {
+          ...validLookupEntry().lookup,
+          match: [
+            { local: 'purchase_order', remote: 'purchase_order' },
+            { local: 'line_item_number', remote: 'not a field!' }
+          ]
+        }
+      })
+    ]
+    expect(validateReviewListConfig(cfg, RELATIONS)).toMatch(
+      /line_columns\[1\]\.lookup\.match\[1\]\.remote must be a valid identifier/
+    )
   })
 })
