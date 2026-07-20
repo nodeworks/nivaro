@@ -266,11 +266,15 @@ describe('resolveReviewListRows — invoices 2-hop reverse walk (pinned fixture)
 })
 
 describe('resolveReviewListRows — m2o-only single hop', () => {
+  // aggregate_sum ('amount') is deliberately NOT in line_columns here — it
+  // must still ride in `values` (see the "aggregate_sum" test below), and
+  // this base config exercises the plain single-hop walk otherwise.
   const config: ReviewListConfig = {
     host_collection: 'purchase_orders',
     collection: 'invoices',
     path: [{ kind: 'm2o', field: 'purchase_order' }],
     group_by: 'invoice_id',
+    aggregate_sum: 'amount',
     status: { field: 'efp_review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
   }
 
@@ -284,6 +288,7 @@ describe('resolveReviewListRows — m2o-only single hop', () => {
             {
               id: 'inv-9',
               invoice_id: 'GRP-9',
+              amount: 42,
               efp_review_status: 'under_review'
             }
           ]
@@ -300,11 +305,13 @@ describe('resolveReviewListRows — m2o-only single hop', () => {
       'po-1'
     )
 
+    // aggregate_sum rides in `values` even though it isn't in line_columns
+    // (line_columns is unset here entirely).
     expect(result.rows).toEqual([
       {
         id: 'inv-9',
         group: 'GRP-9',
-        values: {},
+        values: { amount: 42 },
         status: 'under_review',
         stamp_user: null,
         stamp_date: null
@@ -583,5 +590,229 @@ describe('static_filter value requirement', () => {
         RELATIONS
       )
     ).toBeNull()
+  })
+})
+
+// ─── C1: reverse-walk anchoring must use BOTH ends of the relation ─────────
+//
+// A reverse hop keyed only on `one_collection === currentCollection` (or
+// `related === currentCollection` for m2m) picks the FIRST matching relation
+// row — ambiguous when two collections carry the same FK field name to the
+// same target. The fix anchors every reverse hop with the owning collection
+// taken from the deterministic forward chain (target → host) as well.
+
+describe('resolveReviewListRows — ambiguous relation anchoring (C1)', () => {
+  // unit_materials and unit_workflows both have a field named "unit" pointing
+  // at "units" — real shape in this schema. unit_materials is listed FIRST so
+  // a first-match lookup keyed only on one_collection would wrongly resolve
+  // to it instead of unit_workflows (the collection config.path actually names).
+  const AMBIGUOUS_RELATIONS: RelRow[] = [
+    {
+      many_collection: 'unit_materials',
+      many_field: 'unit',
+      one_collection: 'units',
+      one_field: null,
+      junction_field: null
+    },
+    {
+      many_collection: 'unit_workflows',
+      many_field: 'unit',
+      one_collection: 'units',
+      one_field: null,
+      junction_field: null
+    }
+  ]
+
+  const config: ReviewListConfig = {
+    host_collection: 'units',
+    collection: 'unit_workflows',
+    path: [{ kind: 'm2o', field: 'unit' }],
+    group_by: 'status_group',
+    status: { field: 'status', options: [{ value: 'open', label: 'Open', color: 'blue' }] }
+  }
+
+  it('anchors the reverse m2o hop on the forward-chain owning collection, not the first one_collection match', async () => {
+    const states: QueryState[] = []
+    const db = makeDb((state) => {
+      if (state.table === 'nivaro_relations') return AMBIGUOUS_RELATIONS
+      if (state.table === 'unit_workflows') {
+        const byId = state.whereIns.find(([f]) => f === 'id')
+        if (byId) return [{ id: 'uw-1', status_group: 'G1', status: 'open' }]
+        return [{ id: 'uw-1' }]
+      }
+      if (state.table === 'unit_materials') {
+        throw new Error('review_list resolved the wrong table: unit_materials')
+      }
+      if (state.table === 'nivaro_fields') return []
+      throw new Error(`unexpected table: ${state.table}`)
+    }, states)
+
+    const result = await resolveReviewListRows(
+      db as unknown as Parameters<typeof resolveReviewListRows>[0],
+      config,
+      'unit-1'
+    )
+
+    expect(result.rows).toEqual([
+      { id: 'uw-1', group: 'G1', values: {}, status: 'open', stamp_user: null, stamp_date: null }
+    ])
+
+    const hopCall = states.find(
+      (s) => s.table === 'unit_workflows' && s.whereIns.some(([f]) => f === 'unit')
+    )
+    expect(hopCall?.whereIns).toEqual([['unit', ['unit-1']]])
+    expect(states.some((s) => s.table === 'unit_materials')).toBe(false)
+  })
+})
+
+describe('resolveReviewListRows — m2m-only single hop (executed)', () => {
+  const config: ReviewListConfig = {
+    host_collection: 'workflows',
+    collection: 'purchase_orders',
+    path: [{ kind: 'm2m', field: 'workflows' }],
+    group_by: 'number',
+    status: { field: 'po_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
+  }
+
+  it('walks workflows → purchase_orders via the m2m alias/junction and resolves target rows', async () => {
+    const states: QueryState[] = []
+    const db = makeDb((state) => {
+      if (state.table === 'nivaro_relations') return RELATIONS
+      if (state.table === 'workflow_purchase_orders_junction') return [{ purchase_order: 'po-5' }]
+      if (state.table === 'purchase_orders') {
+        const byId = state.whereIns.find(([f]) => f === 'id')
+        if (byId) return [{ id: 'po-5', number: 'PO-5', po_status: 'open' }]
+        return [{ id: 'po-5' }]
+      }
+      if (state.table === 'nivaro_fields') return []
+      throw new Error(`unexpected table: ${state.table}`)
+    }, states)
+
+    const result = await resolveReviewListRows(
+      db as unknown as Parameters<typeof resolveReviewListRows>[0],
+      config,
+      'wf-1'
+    )
+
+    expect(result.rows).toEqual([
+      { id: 'po-5', group: 'PO-5', values: {}, status: 'open', stamp_user: null, stamp_date: null }
+    ])
+
+    const junctionCall = states.find((s) => s.table === 'workflow_purchase_orders_junction')
+    expect(junctionCall?.whereIns).toEqual([['workflow', ['wf-1']]])
+    expect(junctionCall?.selectArgs).toEqual(['purchase_order'])
+  })
+})
+
+describe('resolveReviewListRows — 4-hop reverse walk (m2o, m2m, m2o, m2m)', () => {
+  const RELATIONS_4HOP: RelRow[] = [
+    // line_items.invoice (m2o) → invoices
+    {
+      many_collection: 'line_items',
+      many_field: 'invoice',
+      one_collection: 'invoices',
+      one_field: null,
+      junction_field: null
+    },
+    // invoices m2m alias "purchase_orders" via invoice_po_junction
+    {
+      many_collection: 'invoice_po_junction',
+      many_field: 'invoice',
+      one_collection: 'invoices',
+      one_field: 'purchase_orders',
+      junction_field: 'purchase_order'
+    },
+    {
+      many_collection: 'invoice_po_junction',
+      many_field: 'purchase_order',
+      one_collection: 'purchase_orders',
+      one_field: null,
+      junction_field: null
+    },
+    // purchase_orders.workflow (m2o) → workflows
+    {
+      many_collection: 'purchase_orders',
+      many_field: 'workflow',
+      one_collection: 'workflows',
+      one_field: null,
+      junction_field: null
+    },
+    // workflows m2m alias "companies" via workflow_company_junction
+    {
+      many_collection: 'workflow_company_junction',
+      many_field: 'workflow',
+      one_collection: 'workflows',
+      one_field: 'companies',
+      junction_field: 'company'
+    },
+    {
+      many_collection: 'workflow_company_junction',
+      many_field: 'company',
+      one_collection: 'companies',
+      one_field: null,
+      junction_field: null
+    }
+  ]
+
+  const config: ReviewListConfig = {
+    host_collection: 'companies',
+    collection: 'line_items',
+    path: [
+      { kind: 'm2o', field: 'invoice' },
+      { kind: 'm2m', field: 'purchase_orders' },
+      { kind: 'm2o', field: 'workflow' },
+      { kind: 'm2m', field: 'companies' }
+    ],
+    group_by: 'li_group',
+    status: { field: 'li_status', options: [{ value: 'open', label: 'Open', color: 'blue' }] }
+  }
+
+  it('walks companies → workflows → purchase_orders → invoices → line_items across all 4 hops, in table order', async () => {
+    const states: QueryState[] = []
+    const db = makeDb((state) => {
+      if (state.table === 'nivaro_relations') return RELATIONS_4HOP
+      if (state.table === 'workflow_company_junction') return [{ workflow: 'wf-9' }]
+      if (state.table === 'purchase_orders') return [{ id: 'po-9' }]
+      if (state.table === 'invoice_po_junction') return [{ invoice: 'inv-9' }]
+      if (state.table === 'line_items') {
+        const byId = state.whereIns.find(([f]) => f === 'id')
+        if (byId) return [{ id: 'li-9', li_group: 'GRP-9', li_status: 'open' }]
+        return [{ id: 'li-9' }]
+      }
+      if (state.table === 'nivaro_fields') return []
+      throw new Error(`unexpected table: ${state.table}`)
+    }, states)
+
+    const result = await resolveReviewListRows(
+      db as unknown as Parameters<typeof resolveReviewListRows>[0],
+      config,
+      'company-1'
+    )
+
+    expect(result.rows).toEqual([
+      { id: 'li-9', group: 'GRP-9', values: {}, status: 'open', stamp_user: null, stamp_date: null }
+    ])
+
+    // Full table-query sequence, in order — proves every hop anchored to the
+    // correct table across the entire chain, not just a lucky first match.
+    expect(states.map((s) => s.table)).toEqual([
+      'nivaro_relations',
+      'workflow_company_junction',
+      'purchase_orders',
+      'invoice_po_junction',
+      'line_items',
+      'line_items',
+      'nivaro_fields'
+    ])
+
+    expect(states[1].whereIns).toEqual([['company', ['company-1']]])
+    expect(states[1].selectArgs).toEqual(['workflow'])
+
+    expect(states[2].whereIns).toEqual([['workflow', ['wf-9']]])
+
+    expect(states[3].whereIns).toEqual([['purchase_order', ['po-9']]])
+    expect(states[3].selectArgs).toEqual(['invoice'])
+
+    expect(states[4].whereIns).toEqual([['invoice', ['inv-9']]])
   })
 })

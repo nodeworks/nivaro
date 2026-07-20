@@ -278,6 +278,33 @@ function hopError(field: string): never {
   })
 }
 
+// The reverse walk (below) must anchor each hop by BOTH ends of the relation
+// — the collection the field lives on AND the related collection — or an
+// ambiguous relation name (two collections with the same FK field name to
+// the same target) can resolve to the wrong table. The forward walk (target
+// → host, used by the validator) already anchors deterministically by the
+// collection the field lives on; recompute that same chain here so the
+// reverse walk can borrow its "owning collection" per hop as the second
+// anchor. Config is validated by this point, so this mirrors a walk that is
+// guaranteed to succeed — the hopError fallback exists only for defense.
+function computeForwardChain(config: ReviewListConfig, relations: RelRow[]): string[] {
+  const owners: string[] = []
+  let cur = config.collection
+  for (const hop of config.path) {
+    owners.push(cur)
+    if (hop.kind === 'm2o') {
+      const rel = findM2oRelation(relations, hop.field, { many: cur })
+      if (!rel?.one_collection) hopError(hop.field)
+      cur = rel.one_collection
+    } else {
+      const alias = findM2mAlias(relations, hop.field, { owner: cur })
+      if (!alias) hopError(hop.field)
+      cur = alias.relatedCollection
+    }
+  }
+  return owners
+}
+
 function dedupIds(values: unknown[]): string[] {
   return [...new Set(values.filter((v) => v != null).map(String))]
 }
@@ -327,15 +354,20 @@ export async function resolveReviewListRows(
   let idSet: string[] = [recordId]
   let truncated = false
 
+  // Owning collection per hop, taken from the deterministic forward walk —
+  // anchors the reverse walk below at both ends of each relation.
+  const hopOwners = computeForwardChain(config, relations)
+
   // Reverse walk (host → target): process hops from LAST to FIRST, each hop
   // resolving "ids of the next collection outward related to the current id
   // set." After the loop currentCollection === config.collection and idSet IS
   // the target row ids.
   for (let i = config.path.length - 1; i >= 0; i--) {
     const hop = config.path[i]
+    const owner = hopOwners[i]
 
     if (hop.kind === 'm2m') {
-      const alias = findM2mAlias(relations, hop.field, { related: currentCollection })
+      const alias = findM2mAlias(relations, hop.field, { owner, related: currentCollection })
       if (!alias) hopError(hop.field)
       if (idSet.length > 0) {
         const junctionRows = (await database(alias.junction)
@@ -353,7 +385,7 @@ export async function resolveReviewListRows(
       }
       currentCollection = alias.aliasCollection
     } else {
-      const rel = findM2oRelation(relations, hop.field, { one: currentCollection })
+      const rel = findM2oRelation(relations, hop.field, { many: owner, one: currentCollection })
       if (!rel) hopError(hop.field)
       if (idSet.length > 0) {
         const rows = (await database(rel.many_collection)
@@ -467,6 +499,10 @@ export async function resolveReviewListRows(
 
   const rows: ReviewListRow[] = targetRows.map((row) => {
     const values: Record<string, unknown> = {}
+    // aggregate_sum always rides in `values`, even when it isn't also listed
+    // in line_columns, so the client can compute the group sum without the
+    // caller needing to duplicate the field into line_columns just to fetch it.
+    if (config.aggregate_sum) values[config.aggregate_sum] = row[config.aggregate_sum] ?? null
     for (const spec of allSpecs) {
       const dot = dotSpecByRaw.get(spec)
       if (dot) {

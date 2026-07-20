@@ -1074,6 +1074,16 @@ export function WidgetSlot({
   // biome-ignore lint/correctness/useExhaustiveDependencies: inputs/itemDraft/bindings are captured via debouncedInputsKey; fetchCfg/buildHeaders stable in content
   useEffect(() => {
     if (!ready) return
+    // review_list has no meaning for a record that doesn't exist yet — the
+    // server 400s on a missing record_id. Skip the fetch entirely rather
+    // than surfacing that 400 as a sticky "Render failed" (the review_list
+    // null-render gate below already handles the empty-record display).
+    if (
+      widget?.widget_type === 'review_list' &&
+      (inputs.record_id == null || inputs.record_id === '')
+    ) {
+      return
+    }
     let cancelled = false
     if (!hasRenderDataRef.current) {
       setRenderLoading(true)
@@ -1099,6 +1109,7 @@ export function WidgetSlot({
           hasRenderDataRef.current = true
           setRenderData(renderJson.data)
           setRenderLoading(false)
+          setError(null)
         }
       } catch (e) {
         if (!cancelled) setError(String(e))
