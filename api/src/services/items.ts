@@ -16,6 +16,7 @@ import {
 } from './auto-ids.js'
 import { getCollection, getFields, getRelations } from './collections.js'
 import { decryptItemFields, encryptItemFields } from './encryption.js'
+import { evaluateRulesForTrigger } from './field-rules.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
 import { writeTrashRow } from './trash.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
@@ -372,19 +373,6 @@ async function evaluateRules(
 
 // ─── Field rules ───────────────────────────────────────────────────────────────
 
-interface FieldRuleRow {
-  id: number
-  collection: string
-  trigger_field: string
-  trigger_op: string
-  trigger_value: string | null
-  target_field: string
-  target_type: string
-  target_value: string | null
-  sort: number
-  is_active: boolean | number
-}
-
 /**
  * Apply per-collection field rules to a payload. Lightweight inline field
  * defaults: when a trigger field matches a condition, set/clear a target field.
@@ -419,53 +407,28 @@ export async function applyFieldRules(
   payload: Record<string, unknown>,
   changedField?: string
 ): Promise<void> {
-  let rules: FieldRuleRow[]
+  let triggerFields: string[]
   try {
-    rules = (await db('nivaro_field_rules')
-      .where({ collection, is_active: true })
-      .orderBy('sort')
-      .select('*')) as FieldRuleRow[]
+    if (changedField) {
+      triggerFields = [changedField]
+    } else {
+      triggerFields = ((await db('nivaro_field_rules')
+        .where({ collection, is_active: true })
+        .orderBy('sort')
+        .distinct('trigger_field')
+        .pluck('trigger_field')) as string[]).filter((f) => f in payload)
+    }
   } catch {
     // Table may not exist yet before migration runs — non-fatal.
     return
   }
 
-  for (const rule of rules) {
-    // Only evaluate rules triggered by the changed field (or all if no changedField specified)
-    if (changedField && rule.trigger_field !== changedField) continue
-    if (!(rule.trigger_field in payload)) continue
-
-    const val = payload[rule.trigger_field]
-    let triggered = false
-    switch (rule.trigger_op) {
-      case 'eq':
-        triggered = String(val) === String(rule.trigger_value)
-        break
-      case 'neq':
-        triggered = String(val) !== String(rule.trigger_value)
-        break
-      case 'null':
-        triggered = val == null
-        break
-      case 'nnull':
-        triggered = val != null
-        break
-      case 'in': {
-        const list = parseJson<unknown[]>(rule.trigger_value) ?? []
-        triggered = list.map(String).includes(String(val))
-        break
-      }
-      case 'contains':
-        triggered = String(val).includes(String(rule.trigger_value ?? ''))
-        break
-    }
-    if (!triggered) continue
-
-    if (rule.target_type === 'clear') {
-      payload[rule.target_field] = null
-    } else if (rule.target_type === 'set' && rule.target_value !== null) {
-      payload[rule.target_field] = rule.target_value
-    }
+  // Delegates static set/clear matching and dynamic (set_lookup/set_from_trigger)
+  // + only_when_empty resolution to the shared engine used by POST /field-rules/evaluate.
+  for (const triggerField of triggerFields) {
+    if (!(triggerField in payload)) continue
+    const updates = await evaluateRulesForTrigger(db, collection, triggerField, payload[triggerField], payload)
+    Object.assign(payload, updates)
   }
 }
 

@@ -2,7 +2,14 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  evaluateRulesForTrigger,
+  VALID_OPS,
+  VALID_TARGET_TYPES,
+  validateDynamicConfig
+} from '../services/field-rules.js'
 import { applyFieldRules } from '../services/items.js'
+import { can } from '../services/permissions.js'
 
 interface FieldRuleBody {
   collection?: string
@@ -12,12 +19,18 @@ interface FieldRuleBody {
   target_field?: string
   target_type?: string
   target_value?: string | null
+  only_when_empty?: boolean
+  dynamic_config?: string | Record<string, unknown> | null
   sort?: number
   is_active?: boolean
 }
 
-const VALID_OPS = new Set(['eq', 'neq', 'null', 'nnull', 'in', 'contains'])
-const VALID_TARGET_TYPES = new Set(['set', 'clear'])
+// dynamic_config may arrive as an object (admin UI) or a JSON string — always
+// stored as text.
+function normalizeDynamicConfig(v: FieldRuleBody['dynamic_config']): string | null {
+  if (v == null) return null
+  return typeof v === 'string' ? v : JSON.stringify(v)
+}
 
 export async function fieldRulesRoutes(app: FastifyInstance) {
   // GET /field-rules?collection=xxx — list rules for a collection
@@ -53,6 +66,11 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: `Invalid target_type "${target_type}"` })
     }
 
+    const dynamicConfigError = validateDynamicConfig(target_type, body.dynamic_config)
+    if (dynamicConfigError) {
+      return reply.code(400).send({ error: dynamicConfigError })
+    }
+
     const insert = {
       collection: body.collection,
       trigger_field: body.trigger_field,
@@ -61,6 +79,8 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       target_field: body.target_field,
       target_type,
       target_value: target_type === 'clear' ? null : (body.target_value ?? null),
+      only_when_empty: body.only_when_empty ?? false,
+      dynamic_config: normalizeDynamicConfig(body.dynamic_config),
       sort: body.sort ?? 0,
       is_active: body.is_active ?? true,
       created_by: req.user?.id ?? null,
@@ -110,12 +130,26 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         patch.target_type = body.target_type
       }
       if ('target_value' in body) patch.target_value = body.target_value ?? null
+      if (body.only_when_empty != null) patch.only_when_empty = body.only_when_empty
       if (body.sort != null) patch.sort = body.sort
       if (body.is_active != null) patch.is_active = body.is_active
 
       // Clearing target type means no literal value is stored
       const effectiveType = (patch.target_type ?? existing.target_type) as string
       if (effectiveType === 'clear') patch.target_value = null
+
+      // Validate dynamic_config against the effective (patched or existing) target_type.
+      // Required+shape-checked for set_lookup/set_from_trigger; forbidden (and cleared) otherwise.
+      if (effectiveType === 'set_lookup' || effectiveType === 'set_from_trigger') {
+        const effectiveDynamicConfig = 'dynamic_config' in body ? body.dynamic_config : existing.dynamic_config
+        const dynamicConfigError = validateDynamicConfig(effectiveType, effectiveDynamicConfig)
+        if (dynamicConfigError) {
+          return reply.code(400).send({ error: dynamicConfigError })
+        }
+        if ('dynamic_config' in body) patch.dynamic_config = normalizeDynamicConfig(body.dynamic_config)
+      } else {
+        patch.dynamic_config = null
+      }
 
       if (Object.keys(patch).length > 0) {
         await db('nivaro_field_rules').where({ id }).update(patch)
@@ -154,8 +188,52 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     }
   )
 
-  // POST /field-rules/evaluate — evaluate rules for a payload without saving
+  // POST /field-rules/evaluate — evaluate rules for a payload without saving.
+  //
+  // Two request shapes share this path: the legacy row_rules/data shape (below)
+  // used by ItemEditForm's O2M/repeater row cascades, and the newer
+  // trigger_field/trigger_value/draft shape used for dynamic (set_lookup /
+  // set_from_trigger) cascading auto-fill against stored nivaro_field_rules.
+  // The two never overlap on required keys, so dispatch is unambiguous.
   app.post('/evaluate', { preHandler: authenticate }, async (req, reply) => {
+    const rawBody = req.body as Record<string, unknown>
+
+    if ('trigger_field' in rawBody || 'draft' in rawBody) {
+      const evalBody = rawBody as {
+        collection?: string
+        trigger_field?: string
+        trigger_value?: unknown
+        draft?: Record<string, unknown>
+      }
+      const { collection, trigger_field } = evalBody
+      if (!collection || !trigger_field) {
+        return reply.code(400).send({ error: 'collection and trigger_field are required' })
+      }
+
+      // Registry gate: collection must be a REGISTERED nivaro_collections entry —
+      // never db(<caller-string>) against an unregistered table. Mirrors
+      // collection-layouts.ts's /active gate (never getCollection's synthetic-
+      // collection allowance, which leaves a real-table-without-registry-row hole).
+      const registered = await db('nivaro_collections').where({ collection }).first()
+      if (!registered) {
+        return reply.code(400).send({ error: `Unknown collection "${collection}"` })
+      }
+      if (!(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+
+      const draft = evalBody.draft ?? {}
+      const data = await evaluateRulesForTrigger(
+        db,
+        collection,
+        trigger_field,
+        evalBody.trigger_value,
+        draft,
+        req.log
+      )
+      return reply.send({ data })
+    }
+
     const body = req.body as {
       collection?: string
       data?: Record<string, unknown>
