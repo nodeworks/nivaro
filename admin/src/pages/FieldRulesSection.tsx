@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Plus, Trash2, Wand2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { FieldPicker } from '@/components/field-picker'
 import { RelationPicker } from '@/components/relation-picker'
@@ -31,8 +31,24 @@ interface FieldRule {
   target_field: string
   target_type: string
   target_value: string | null
+  only_when_empty: boolean | number
+  dynamic_config: string | Record<string, unknown> | null
   sort: number
   is_active: boolean | number
+}
+
+interface SetLookupConfig {
+  collection: string
+  filter_field: string
+  filter_op: 'in' | 'eq'
+  select: string
+  [key: string]: unknown
+}
+
+interface SetFromTriggerConfig {
+  field: string
+  map: string
+  [key: string]: unknown
 }
 
 interface OpOption {
@@ -52,11 +68,28 @@ const OPS: OpOption[] = [
 
 const TARGET_TYPES = [
   { value: 'set', label: 'set to' },
-  { value: 'clear', label: 'clear' }
+  { value: 'clear', label: 'clear' },
+  { value: 'set_lookup', label: 'set from lookup' },
+  { value: 'set_from_trigger', label: "set from trigger's record" }
 ]
+
+// Mirrors api/src/services/field-rules.ts IDENTIFIER_RE — client-side gate so
+// we never fire a PATCH the server will reject with a shape error.
+const IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
 function opNeedsValue(op: string): boolean {
   return OPS.find((o) => o.value === op)?.needsValue ?? false
+}
+
+function parseDynamicConfig(raw: FieldRule['dynamic_config']): Record<string, unknown> {
+  if (raw == null) return {}
+  if (typeof raw === 'object') return raw
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
 }
 
 // ─── Combobox helper ──────────────────────────────────────────────────────────
@@ -240,6 +273,127 @@ function ValueInput({
   )
 }
 
+// ─── Dynamic target-type config rows ───────────────────────────────────────────
+
+function SetLookupConfigRow({
+  cfg,
+  collections,
+  onChange
+}: {
+  cfg: SetLookupConfig
+  collections: { collection: string }[]
+  onChange: (patch: Partial<SetLookupConfig>) => void
+}) {
+  const { data: lookupMeta } = useQuery({
+    queryKey: ['collection-meta', cfg.collection],
+    queryFn: () => api.get(`/collections/${cfg.collection}`).then((r) => r.data.data),
+    enabled: !!cfg.collection,
+    staleTime: 30_000
+  })
+
+  const fieldOptions = ((lookupMeta?.fields ?? []) as CMSField[])
+    .filter((f) => !f.hidden)
+    .slice()
+    .sort((a, b) => a.field.localeCompare(b.field))
+    .map((f) => ({ value: f.field, label: f.field }))
+
+  return (
+    <>
+      <div className='w-[170px]'>
+        <Combobox
+          value={cfg.collection}
+          onChange={(v) => onChange({ collection: v, filter_field: '', select: 'id' })}
+          options={collections.map((c) => ({ value: c.collection, label: c.collection }))}
+          placeholder='lookup collection…'
+          width={210}
+        />
+      </div>
+      <div className='w-[160px]'>
+        <Combobox
+          value={cfg.filter_field}
+          onChange={(v) => onChange({ filter_field: v })}
+          options={fieldOptions}
+          placeholder={cfg.collection ? 'filter field…' : 'collection first'}
+          disabled={!cfg.collection}
+          width={200}
+        />
+      </div>
+      <div className='w-[150px]'>
+        <Combobox
+          value={cfg.filter_op}
+          onChange={(v) => onChange({ filter_op: v as 'in' | 'eq' })}
+          options={[
+            { value: 'in', label: 'in (informational)' },
+            { value: 'eq', label: 'equals (informational)' }
+          ]}
+          width={210}
+        />
+      </div>
+      <div className='w-[150px]'>
+        <Combobox
+          value={cfg.select}
+          onChange={(v) => onChange({ select: v })}
+          options={fieldOptions}
+          placeholder='select column…'
+          disabled={!cfg.collection}
+          width={200}
+        />
+      </div>
+    </>
+  )
+}
+
+function SetFromTriggerConfigRow({
+  cfg,
+  relatedCollection,
+  onChange
+}: {
+  cfg: SetFromTriggerConfig
+  relatedCollection: string | null
+  onChange: (patch: Partial<SetFromTriggerConfig>) => void
+}) {
+  const { data: relatedMeta } = useQuery({
+    queryKey: ['collection-meta', relatedCollection],
+    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
+    enabled: !!relatedCollection,
+    staleTime: 30_000
+  })
+
+  if (!relatedCollection) {
+    return (
+      <span className='text-[11px] text-slate-400'>
+        Pick an M2O trigger field above to configure this.
+      </span>
+    )
+  }
+
+  const fieldOptions = ((relatedMeta?.fields ?? []) as CMSField[])
+    .filter((f) => !f.hidden)
+    .slice()
+    .sort((a, b) => a.field.localeCompare(b.field))
+    .map((f) => ({ value: f.field, label: f.field }))
+
+  return (
+    <>
+      <div className='w-[190px]'>
+        <Combobox
+          value={cfg.field}
+          onChange={(v) => onChange({ field: v })}
+          options={fieldOptions}
+          placeholder={`field on ${relatedCollection}…`}
+          width={230}
+        />
+      </div>
+      <Input
+        value={cfg.map}
+        onChange={(e) => onChange({ map: e.target.value })}
+        placeholder='junction column (optional)'
+        className='h-8 w-[190px] font-mono text-[12px]'
+      />
+    </>
+  )
+}
+
 // ─── Rule row ─────────────────────────────────────────────────────────────────
 
 function RuleRow({
@@ -247,6 +401,7 @@ function RuleRow({
   fields,
   relations,
   collection,
+  collections,
   isFirst,
   isLast,
   onPatch,
@@ -257,6 +412,7 @@ function RuleRow({
   fields: CMSField[]
   relations: CMSRelation[]
   collection: string
+  collections: { collection: string }[]
   isFirst: boolean
   isLast: boolean
   onPatch: (patch: Partial<FieldRule>) => void
@@ -265,7 +421,93 @@ function RuleRow({
 }) {
   const active = rule.is_active === true || rule.is_active === 1
   const showTriggerValue = opNeedsValue(rule.trigger_op)
-  const showTargetValue = rule.target_type === 'set'
+
+  // Dynamic target types (set_lookup / set_from_trigger) need several
+  // sub-fields filled in before the server will accept dynamic_config, so we
+  // buffer the pending selection + config locally and only PATCH once it's
+  // complete — otherwise every keystroke would 400. Re-synced only when the
+  // row identity changes (mirrors LayoutsTab's record-condition rows), not on
+  // every server-echoed update, so mid-edit state survives round-trips.
+  const [localTargetType, setLocalTargetType] = useState(rule.target_type)
+  const [lookupCfg, setLookupCfg] = useState<SetLookupConfig>({
+    collection: '',
+    filter_field: '',
+    filter_op: 'in',
+    select: 'id'
+  })
+  const [triggerCfg, setTriggerCfg] = useState<SetFromTriggerConfig>({ field: '', map: '' })
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sync only on row identity change, not every server echo
+  useEffect(() => {
+    setLocalTargetType(rule.target_type)
+    const cfg = parseDynamicConfig(rule.dynamic_config)
+    setLookupCfg({
+      collection: typeof cfg.collection === 'string' ? cfg.collection : '',
+      filter_field: typeof cfg.filter_field === 'string' ? cfg.filter_field : '',
+      filter_op: cfg.filter_op === 'eq' ? 'eq' : 'in',
+      select: typeof cfg.select === 'string' ? cfg.select : 'id'
+    })
+    setTriggerCfg({
+      field: typeof cfg.field === 'string' ? cfg.field : '',
+      map: typeof cfg.map === 'string' ? cfg.map : ''
+    })
+  }, [rule.id])
+
+  const showTargetValue = localTargetType === 'set'
+  const showLookupConfig = localTargetType === 'set_lookup'
+  const showTriggerConfig = localTargetType === 'set_from_trigger'
+  const triggerRelatedCollection =
+    findM2ORelation(relations, collection, rule.trigger_field)?.one_collection ?? null
+
+  function commitLookup(cfg: SetLookupConfig) {
+    if (
+      !IDENTIFIER_RE.test(cfg.collection) ||
+      !IDENTIFIER_RE.test(cfg.filter_field) ||
+      !IDENTIFIER_RE.test(cfg.select)
+    ) {
+      return
+    }
+    onPatch({ target_type: 'set_lookup', dynamic_config: cfg })
+  }
+
+  function commitTrigger(cfg: SetFromTriggerConfig) {
+    if (!IDENTIFIER_RE.test(cfg.field)) return
+    if (cfg.map && !IDENTIFIER_RE.test(cfg.map)) return
+    onPatch({
+      target_type: 'set_from_trigger',
+      dynamic_config: cfg.map ? cfg : { field: cfg.field }
+    })
+  }
+
+  function handleTargetTypeChange(v: string) {
+    setLocalTargetType(v)
+    if (v === 'set' || v === 'clear') {
+      onPatch({ target_type: v })
+    } else if (v === 'set_lookup') {
+      commitLookup(lookupCfg)
+    } else if (v === 'set_from_trigger') {
+      commitTrigger(triggerCfg)
+    }
+  }
+
+  function updateLookupCfg(patch: Partial<SetLookupConfig>) {
+    const next = { ...lookupCfg, ...patch }
+    setLookupCfg(next)
+    commitLookup(next)
+  }
+
+  function updateTriggerCfg(patch: Partial<SetFromTriggerConfig>) {
+    const next = { ...triggerCfg, ...patch }
+    setTriggerCfg(next)
+    commitTrigger(next)
+  }
+
+  let summary: string | null = null
+  if (showLookupConfig && lookupCfg.collection && lookupCfg.filter_field) {
+    summary = `${rule.target_field || '(target)'} ← lookup ${lookupCfg.collection} where ${lookupCfg.filter_field} matches trigger`
+  } else if (showTriggerConfig && triggerCfg.field) {
+    summary = `${rule.target_field || '(target)'} ← trigger record's ${triggerCfg.field}${triggerCfg.map ? `.${triggerCfg.map}` : ''}`
+  }
 
   return (
     <div
@@ -316,13 +558,13 @@ function RuleRow({
       <div className='flex items-center gap-2 px-3 py-2.5'>
         <span className='w-9 shrink-0 text-[11px] font-medium text-slate-400'>Then</span>
         <div className='flex flex-1 flex-wrap items-center gap-2'>
-          <div className='w-[110px]'>
+          <div className='w-[130px]'>
             <Combobox
-              value={rule.target_type}
-              onChange={(v) => onPatch({ target_type: v })}
+              value={localTargetType}
+              onChange={handleTargetTypeChange}
               options={TARGET_TYPES}
               placeholder='action…'
-              width={140}
+              width={190}
             />
           </div>
           <div className='w-[180px]'>
@@ -352,6 +594,18 @@ function RuleRow({
 
         {/* Controls */}
         <div className='ml-auto flex shrink-0 items-center gap-0.5'>
+          <label
+            className='flex cursor-pointer select-none items-center gap-1.5 pr-1.5 text-[11px] text-slate-400 hover:text-slate-600'
+            title='Apply only when the target field is currently empty'
+          >
+            <input
+              type='checkbox'
+              checked={rule.only_when_empty === true || rule.only_when_empty === 1}
+              onChange={(e) => onPatch({ only_when_empty: e.target.checked })}
+              className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+            />
+            Empty only
+          </label>
           <label className='flex cursor-pointer select-none items-center gap-1.5 pr-1.5 text-[11px] text-slate-400 hover:text-slate-600'>
             <input
               type='checkbox'
@@ -392,6 +646,39 @@ function RuleRow({
           </Button>
         </div>
       </div>
+
+      {/* Using row (dynamic target-type config) */}
+      {(showLookupConfig || showTriggerConfig) && (
+        <div className='flex items-center gap-2 border-t border-slate-100 px-3 py-2.5 dark:border-border'>
+          <span className='w-9 shrink-0 text-[11px] font-medium text-slate-400'>Using</span>
+          <div className='flex flex-1 flex-wrap items-center gap-2'>
+            {showLookupConfig ? (
+              <SetLookupConfigRow
+                cfg={lookupCfg}
+                collections={collections}
+                onChange={updateLookupCfg}
+              />
+            ) : (
+              <SetFromTriggerConfigRow
+                cfg={triggerCfg}
+                relatedCollection={triggerRelatedCollection}
+                onChange={updateTriggerCfg}
+              />
+            )}
+          </div>
+        </div>
+      )}
+      {showLookupConfig && (
+        <p className='px-3 pb-2 text-[10px] text-slate-400 dark:text-slate-500'>
+          The condition above is informational only — the engine matches by the trigger value's
+          shape (array → "in", scalar → "eq").
+        </p>
+      )}
+      {summary && (
+        <p className='px-3 pb-2.5 font-mono text-[10px] text-slate-400 dark:text-slate-500'>
+          {summary}
+        </p>
+      )}
     </div>
   )
 }
@@ -412,6 +699,15 @@ export function FieldRulesSection({
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
     enabled: !!collection,
     staleTime: 30_000
+  })
+
+  // For set_lookup's "lookup collection" pick — matches the collection-select
+  // idiom in TableEditor.tsx's rollup-source editor.
+  const { data: collectionsList } = useQuery({
+    queryKey: ['collections'],
+    queryFn: () =>
+      api.get<{ data: { collection: string }[] }>('/collections').then((r) => r.data.data),
+    staleTime: 60_000
   })
 
   const { data: rules, isLoading } = useQuery({
@@ -532,6 +828,7 @@ export function FieldRulesSection({
               fields={allFields}
               relations={relations}
               collection={collection}
+              collections={collectionsList ?? []}
               isFirst={index === 0}
               isLast={index === list.length - 1}
               onPatch={(patch) => patchRule.mutate({ id: rule.id, patch })}
