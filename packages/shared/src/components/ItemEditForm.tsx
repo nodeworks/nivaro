@@ -313,6 +313,40 @@ export function applyLayoutDefaults(
   return next
 }
 
+// ─── Dynamic field rules (in-form cascading auto-fill) ──────────────────────────
+// See docs/superpowers/specs/2026-07-20-dynamic-field-rules-design.md §3.
+
+export interface FieldRule {
+  id: number | string
+  collection: string
+  trigger_field: string
+  target_field: string
+  is_active: boolean | number
+}
+
+// Active rules that fire when `field` changes. `is_active` may come back as a
+// bit column (0/1) rather than a boolean, so both are accepted.
+export function rulesForTriggerField(
+  rules: FieldRule[] | null | undefined,
+  field: string
+): FieldRule[] {
+  if (!rules) return []
+  return rules.filter(
+    (r) => r.trigger_field === field && (r.is_active === true || r.is_active === 1)
+  )
+}
+
+// Merges /field-rules/evaluate results into a draft. Returned values overwrite
+// (the only-when-empty decision already happened server-side against the
+// draft snapshot that was sent). Tolerates a null/empty results object.
+export function mergeRuleResults(
+  draft: Record<string, unknown>,
+  results: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  if (!results || Object.keys(results).length === 0) return draft
+  return { ...draft, ...results }
+}
+
 // ─── ItemEditForm ──────────────────────────────────────────────────────────────
 
 export function ItemEditForm({
@@ -379,6 +413,19 @@ export function ItemEditForm({
       client
         .request<{ data: CMSRelation[] }>(get(`/data-model/relations/for/${collection}`))
         .then((r) => r.data ?? []),
+    staleTime: 60_000
+  })
+
+  // Dynamic field rules (cascading auto-fill) — fetched once per collection.
+  // When empty, handleFieldChange's rulesForTriggerField lookup always
+  // returns [], so no listeners/timers/requests are ever set up.
+  const { data: fieldRules = [] } = useQuery<FieldRule[]>({
+    queryKey: ['field-rules', collection],
+    queryFn: () =>
+      client
+        .request<{ data: FieldRule[] }>(get('/field-rules', { collection }))
+        .then((r) => r.data ?? []),
+    enabled: !!collection,
     staleTime: 60_000
   })
 
@@ -1251,6 +1298,49 @@ export function ItemEditForm({
     setDraft((prev) => ({ ...prev, ...merged }))
   }, [resolvedPaths])
 
+  const fieldRuleTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  useEffect(() => {
+    const timers = fieldRuleTimersRef.current
+    return () => {
+      for (const t of Object.values(timers)) clearTimeout(t)
+    }
+  }, [])
+
+  // Debounced (300ms per trigger field) in-form evaluation of dynamic field
+  // rules: POSTs /field-rules/evaluate and merges returned targets into the
+  // draft. No-ops entirely (no timer, no request) when the collection has no
+  // active rules for the changed field. Only ever called from user-driven
+  // edits (handleFieldChange) — never on initial load/hydrate.
+  const evaluateFieldRulesForChange = useCallback(
+    (field: string) => {
+      const rules = rulesForTriggerField(fieldRules, field)
+      if (rules.length === 0) return
+      const existingTimer = fieldRuleTimersRef.current[field]
+      if (existingTimer) clearTimeout(existingTimer)
+      fieldRuleTimersRef.current[field] = setTimeout(() => {
+        delete fieldRuleTimersRef.current[field]
+        const targetDraft: Record<string, unknown> = {}
+        for (const rule of rules) targetDraft[rule.target_field] = draftRef.current[rule.target_field]
+        client
+          .request<{ data: Record<string, unknown> }>(
+            post('/field-rules/evaluate', {
+              collection,
+              trigger_field: field,
+              trigger_value: draftRef.current[field],
+              draft: targetDraft
+            })
+          )
+          .then((res) => {
+            const merged = mergeRuleResults(draftRef.current, res.data)
+            draftRef.current = merged
+            setDraft(merged)
+          })
+          .catch(() => {})
+      }, 300)
+    },
+    [fieldRules, collection, client]
+  )
+
   const handleFieldChange = useCallback(
     (field: string, value: unknown) => {
       const next = { ...draftRef.current, [field]: value }
@@ -1288,8 +1378,9 @@ export function ItemEditForm({
         }
         return next
       })
+      evaluateFieldRulesForChange(field)
     },
-    [fieldConfig]
+    [fieldConfig, evaluateFieldRulesForChange]
   )
 
   const [fieldCounts, setFieldCounts] = useState<Record<string, number>>({})
