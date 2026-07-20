@@ -29,6 +29,8 @@ export interface TransitionRequirementRow {
   label: string
   complete: boolean
   values: Record<string, unknown>
+  /** Read-only context values for the entry's display_fields. */
+  display: Record<string, unknown>
 }
 
 export interface TransitionRequirementEntry {
@@ -37,6 +39,8 @@ export interface TransitionRequirementEntry {
   fk_field: string
   title: string
   fields: TransitionRequirementFieldMeta[]
+  /** Context columns rendered read-only per row. */
+  display_fields: TransitionRequirementFieldMeta[]
   rows: TransitionRequirementRow[]
 }
 
@@ -200,6 +204,11 @@ export function TransitionRequirementsDialog({
               {entry.fields.length > 0 && (
                 <div className='flex items-center gap-2 px-1 text-[11px] font-medium text-slate-400'>
                   <span className='min-w-0 flex-1'>Row</span>
+                  {(entry.display_fields ?? []).map((f) => (
+                    <span key={f.field} className='w-32 shrink-0'>
+                      {f.label}
+                    </span>
+                  ))}
                   {entry.fields.map((f) => (
                     <span key={f.field} className='w-36 shrink-0'>
                       {f.label}
@@ -228,6 +237,15 @@ export function TransitionRequirementsDialog({
                           {row.label}
                         </span>
                       </span>
+                      {(entry.display_fields ?? []).map((f) => (
+                        <span
+                          key={f.field}
+                          className='w-32 shrink-0 truncate text-[12px] text-slate-500'
+                          title={toInputValue(row.display?.[f.field])}
+                        >
+                          {toInputValue(row.display?.[f.field]) || '—'}
+                        </span>
+                      ))}
                       <div className='flex flex-wrap items-center gap-1.5'>
                         {entry.fields.map((f) => (
                           <Input

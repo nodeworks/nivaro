@@ -1174,6 +1174,12 @@ function TransitionRequirementEntry({
     onChange({ labels: Object.keys(labels).length > 0 ? labels : undefined })
   }
 
+  const toggleDisplayField = (field: string, checked: boolean) => {
+    const current = requirement.display_fields ?? []
+    const next = checked ? [...current, field] : current.filter((f) => f !== field)
+    onChange({ display_fields: next.length > 0 ? next : undefined })
+  }
+
   return (
     <div className='space-y-2.5 rounded-lg border border-slate-200 bg-white p-3'>
       <div className='flex items-start gap-2'>
@@ -1187,6 +1193,7 @@ function TransitionRequirementEntry({
                 collection: coll ?? '',
                 fk_field: fk ?? '',
                 fields: [],
+                display_fields: undefined,
                 labels: undefined
               })
             }}
@@ -1232,6 +1239,30 @@ function TransitionRequirementEntry({
                 </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {requirement.collection && (
+        <div className='space-y-1.5'>
+          <Label className='text-[11px]'>
+            Context Columns{' '}
+            <span className='font-normal text-slate-400'>(shown read-only in the dialog)</span>
+          </Label>
+          <div className='max-h-36 space-y-1 overflow-y-auto rounded-md border border-slate-200 p-2'>
+            {childFields
+              .filter((f) => !requirement.fields.includes(f.field))
+              .map((f) => (
+                <div key={f.field} className='flex items-center gap-2'>
+                  <input
+                    type='checkbox'
+                    checked={(requirement.display_fields ?? []).includes(f.field)}
+                    onChange={(e) => toggleDisplayField(f.field, e.target.checked)}
+                    className='h-3.5 w-3.5 shrink-0 rounded border-slate-300'
+                  />
+                  <span className='flex-1 text-[12px] text-slate-700'>{f.field}</span>
+                </div>
+              ))}
           </div>
         </div>
       )}

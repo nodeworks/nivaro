@@ -37,6 +37,8 @@ export interface RequirementRow {
   label: string
   complete: boolean
   values: Record<string, unknown>
+  /** Read-only context values for the entry's display_fields. */
+  display: Record<string, unknown>
 }
 
 export interface RequirementBlockResult {
@@ -45,6 +47,8 @@ export interface RequirementBlockResult {
   fk_field: string
   title: string
   fields: RequirementFieldMeta[]
+  /** Context columns shown read-only per row in the dialog. */
+  display_fields: RequirementFieldMeta[]
   rows: RequirementRow[]
 }
 
@@ -112,6 +116,16 @@ export async function evaluateTransitionRequirements(
     }
 
     const requiredFields = fields as string[]
+    // Optional context columns. Invalid names are filtered (with a log), never
+    // fatal — display config must not block a transition.
+    const rawDisplay = Array.isArray(entry.display_fields) ? entry.display_fields : []
+    const displayFields = rawDisplay.filter(
+      (f): f is string =>
+        typeof f === 'string' && IDENTIFIER_RE.test(f) && !requiredFields.includes(f)
+    )
+    if (displayFields.length !== rawDisplay.length) {
+      logger.warn({ entry }, 'transition requirements: dropped invalid display_fields entries')
+    }
     const labelsOverride =
       entry.labels && typeof entry.labels === 'object' && !Array.isArray(entry.labels)
         ? (entry.labels as Record<string, unknown>)
@@ -135,12 +149,14 @@ export async function evaluateTransitionRequirements(
     }
     const nivaroFieldByField = new Map(fieldInfoRows.map((r) => [r.field, r]))
 
-    const fieldMeta: RequirementFieldMeta[] = requiredFields.map((f) => {
+    const toMeta = (f: string): RequirementFieldMeta => {
       const info = nivaroFieldByField.get(f)
       const override = labelsOverride[f]
       const label = (typeof override === 'string' && override.trim()) || info?.label || f
       return { field: f, label, type: info?.type ?? null }
-    })
+    }
+    const fieldMeta: RequirementFieldMeta[] = requiredFields.map(toMeta)
+    const displayFieldMeta: RequirementFieldMeta[] = displayFields.map(toMeta)
 
     let displayTemplate: string | null = null
     try {
@@ -151,7 +167,9 @@ export async function evaluateTransitionRequirements(
     }
 
     const templateFields = extractTemplateFields(displayTemplate)
-    const selectFields = [...new Set(['id', ...requiredFields, ...templateFields])]
+    const selectFields = [
+      ...new Set(['id', ...requiredFields, ...displayFields, ...templateFields])
+    ]
 
     let childRows: Array<Record<string, unknown>> = []
     try {
@@ -178,9 +196,11 @@ export async function evaluateTransitionRequirements(
     const rows: RequirementRow[] = childRows.map((row) => {
       const values: Record<string, unknown> = {}
       for (const f of requiredFields) values[f] = row[f] ?? null
+      const display: Record<string, unknown> = {}
+      for (const f of displayFields) display[f] = row[f] ?? null
       let label = displayTemplate ? resolveDisplayValue(row, displayTemplate) : ''
       if (!label) label = `#${String(row.id)}`
-      return { id: row.id, label, complete: !incompleteIds.has(row.id), values }
+      return { id: row.id, label, complete: !incompleteIds.has(row.id), values, display }
     })
 
     blocking.push({
@@ -189,6 +209,7 @@ export async function evaluateTransitionRequirements(
       fk_field: fkField,
       title,
       fields: fieldMeta,
+      display_fields: displayFieldMeta,
       rows
     })
   }

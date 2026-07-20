@@ -347,6 +347,8 @@ export type TransitionRequirement = {
   collection: string
   fk_field: string
   fields: string[]
+  /** Context columns shown read-only per row in the transition dialog. */
+  display_fields?: string[]
   labels?: Record<string, string>
   title?: string
 }

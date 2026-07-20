@@ -296,10 +296,11 @@ describe('POST /pipelines/instance/:collection/:item/transition — requirements
         fk_field: 'workflow',
         title: 'Enter REQ IDs',
         fields: [{ field: 'req_id', label: 'REQ ID', type: null }],
+        display_fields: [],
         rows: [
-          { id: 1, label: '#1', complete: false, values: { req_id: null } },
-          { id: 2, label: '#2', complete: false, values: { req_id: '   ' } },
-          { id: 3, label: 'REQ-3', complete: true, values: { req_id: 'REQ-3' } }
+          { id: 1, label: '#1', complete: false, values: { req_id: null }, display: {} },
+          { id: 2, label: '#2', complete: false, values: { req_id: '   ' }, display: {} },
+          { id: 3, label: 'REQ-3', complete: true, values: { req_id: 'REQ-3' }, display: {} }
         ]
       }
     ])
@@ -471,5 +472,88 @@ describe('POST /pipelines/instance/:collection/:item/transition — requirements
     })
 
     expect(res.statusCode).toBe(200)
+  })
+})
+
+describe('transition requirements — display_fields', () => {
+  it('includes context values and meta; filters invalid names', async () => {
+    vi.mocked(getCollection).mockResolvedValueOnce(
+      undefined as unknown as Awaited<ReturnType<typeof getCollection>>
+    )
+    vi.mocked(db).mockImplementation(
+      makeExecuteDbMock({
+        instance: baseInstance,
+        transition: baseTransition([
+          {
+            type: 'child_fields',
+            collection: 'workflow_line_items',
+            fk_field: 'workflow',
+            fields: ['req_id'],
+            display_fields: ['item_description', 'bad name!'],
+            title: 'Enter REQ IDs'
+          }
+        ]),
+        targetState: terminalTargetState,
+        fieldRows: [{ field: 'item_description', label: 'Description', type: 'string' }],
+        childRows: [
+          { id: 1, req_id: null, item_description: 'Node hardware' },
+          { id: 2, req_id: 'REQ-2', item_description: 'Splice labor' }
+        ]
+      }) as unknown as typeof db
+    )
+
+    const app = buildApp()
+    await app.ready()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/pipelines/instance/workflows/wf-1/transition',
+      payload: { transition_id: 'tx-1' }
+    })
+    expect(res.statusCode).toBe(422)
+    const body = JSON.parse(res.body) as {
+      requirements: Array<{
+        display_fields: Array<{ field: string; label: string; type: string | null }>
+        rows: Array<{ id: number; display: Record<string, unknown> }>
+      }>
+    }
+    expect(body.requirements[0].display_fields).toEqual([
+      { field: 'item_description', label: 'Description', type: 'string' }
+    ])
+    expect(body.requirements[0].rows.map((r) => r.display)).toEqual([
+      { item_description: 'Node hardware' },
+      { item_description: 'Splice labor' }
+    ])
+  })
+
+  it('400s on invalid display_fields at write time', async () => {
+    vi.mocked(db).mockImplementation(
+      vi.fn((table: string) => {
+        if (table === 'nivaro_workflow_templates') {
+          return { where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve({ id: 'tpl-1' })) })) }
+        }
+        throw new Error(`unexpected table: ${table}`)
+      }) as unknown as typeof db
+    )
+    const app = buildApp()
+    await app.ready()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/pipelines/tpl-1/transitions',
+      payload: {
+        to_state: 'st-2',
+        label: 'Go',
+        requirements: [
+          {
+            type: 'child_fields',
+            collection: 'workflow_line_items',
+            fk_field: 'workflow',
+            fields: ['req_id'],
+            display_fields: ['ok_field', 'not ok']
+          }
+        ]
+      }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body).error).toContain('display_fields')
   })
 })

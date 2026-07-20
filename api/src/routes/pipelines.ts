@@ -323,6 +323,13 @@ function validateRequirements(value: unknown): string | null {
     ) {
       return `requirements[${i}].fields must be a non-empty array of valid identifiers`
     }
+    if (
+      e.display_fields !== undefined &&
+      (!Array.isArray(e.display_fields) ||
+        !e.display_fields.every((f) => typeof f === 'string' && IDENTIFIER_RE.test(f)))
+    ) {
+      return `requirements[${i}].display_fields must be an array of valid identifiers`
+    }
   }
   return null
 }
