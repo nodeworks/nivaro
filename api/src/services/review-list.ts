@@ -199,6 +199,9 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
       if (ff.op !== 'eq' && ff.op !== 'neq' && ff.op !== 'nnull') {
         return `static_filter[${i}].op must be eq, neq, or nnull`
       }
+      if (ff.op !== 'nnull' && ff.value === undefined) {
+        return `static_filter[${i}].value is required for op "${ff.op}"`
+      }
     }
   }
 

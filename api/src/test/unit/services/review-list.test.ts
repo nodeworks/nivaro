@@ -558,3 +558,30 @@ describe('validateReviewListConfig', () => {
     expect(validateReviewListConfig('nope', RELATIONS)).toMatch(/object/)
   })
 })
+
+describe('static_filter value requirement', () => {
+  it('rejects eq/neq filters missing a value; nnull needs none', () => {
+    const base = {
+      host_collection: 'workflows',
+      collection: 'invoices',
+      path: [
+        { kind: 'm2o', field: 'purchase_order' },
+        { kind: 'm2m', field: 'workflows' }
+      ],
+      group_by: 'invoice_id',
+      status: { field: 's', options: [{ value: 'a', label: 'A', color: 'green' }] }
+    }
+    expect(
+      validateReviewListConfig(
+        { ...base, static_filter: [{ field: 'is_on_hold', op: 'eq' }] },
+        RELATIONS
+      )
+    ).toMatch(/value is required/)
+    expect(
+      validateReviewListConfig(
+        { ...base, static_filter: [{ field: 'is_on_hold', op: 'nnull' }] },
+        RELATIONS
+      )
+    ).toBeNull()
+  })
+})
