@@ -347,6 +347,81 @@ export function mergeRuleResults(
   return { ...draft, ...results }
 }
 
+// M2M alias fields (e.g. `divisions`) never live in the draft — they commit
+// through M2MStagingContext instead — so field rules that trigger on or
+// target one need to resolve the field name to its M2M relation. Mirrors
+// FieldRow's m2mRelForField resolution: a relation row can carry
+// junction_field directly, or need its companion relation (same junction
+// table) to supply it.
+export interface M2MAliasInfo {
+  manyCollection: string
+  manyField: string
+  junctionField: string
+  stagingKey: string
+}
+
+export function resolveM2MAlias(
+  relations: CMSRelation[] | null | undefined,
+  collection: string,
+  field: string
+): M2MAliasInfo | null {
+  const rels = relations ?? []
+  const r = rels.find((rel) => rel.one_collection === collection && rel.one_field === field)
+  if (!r?.many_collection || !r.many_field) return null
+  let junctionField = r.junction_field
+  if (!junctionField) {
+    const companion = rels.find((c) => c.many_collection === r.many_collection && c.id !== r.id)
+    junctionField = companion?.many_field ?? null
+  }
+  if (!junctionField) return null
+  return {
+    manyCollection: r.many_collection,
+    manyField: r.many_field,
+    junctionField,
+    stagingKey: r.one_field ?? `${r.many_collection}.${junctionField}`
+  }
+}
+
+// Effective (post-staging) related-id set for an M2M alias field — committed
+// junction rows minus staged unlinks, plus staged links. Matches
+// M2MCombobox's allSelectedIds derivation exactly, so trigger values and
+// only-when-empty target snapshots agree with what's rendered.
+export function computeM2MEffectiveIds(
+  junctionItems: Record<string, unknown>[] | null | undefined,
+  junctionField: string,
+  stagedLinks: unknown[] | null | undefined,
+  stagedUnlinks: Set<unknown> | null | undefined
+): string[] {
+  const unlinks = stagedUnlinks ?? new Set()
+  const committed = (junctionItems ?? [])
+    .filter((ji) => !unlinks.has(ji.id))
+    .map((ji) => String(ji[junctionField]))
+  const staged = (stagedLinks ?? []).map(String)
+  return [...new Set([...committed, ...staged])]
+}
+
+// Splits /field-rules/evaluate results into scalar targets (merged into the
+// draft, unchanged path) and M2M-alias targets (staged as links instead —
+// alias fields don't exist in the draft). `aliasFields` is the set of target
+// field names that resolveM2MAlias identified as M2M aliases.
+export function partitionRuleResults(
+  results: Record<string, unknown> | null | undefined,
+  aliasFields: Set<string> | null | undefined
+): { scalar: Record<string, unknown>; alias: Record<string, unknown[]> } {
+  const scalar: Record<string, unknown> = {}
+  const alias: Record<string, unknown[]> = {}
+  if (!results) return { scalar, alias }
+  const aliasSet = aliasFields ?? new Set<string>()
+  for (const [field, value] of Object.entries(results)) {
+    if (aliasSet.has(field)) {
+      alias[field] = Array.isArray(value) ? value : value != null ? [value] : []
+    } else {
+      scalar[field] = value
+    }
+  }
+  return { scalar, alias }
+}
+
 // ─── ItemEditForm ──────────────────────────────────────────────────────────────
 
 export function ItemEditForm({
@@ -1298,6 +1373,92 @@ export function ItemEditForm({
     setDraft((prev) => ({ ...prev, ...merged }))
   }, [resolvedPaths])
 
+  // M2M alias fields referenced by any active rule (trigger or target side) —
+  // resolved once so both the trigger-side staging watcher and the
+  // target-side result dispatcher share the same relation lookups.
+  const m2mAliasFieldsForRules = useMemo(() => {
+    const activeRules = fieldRules.filter((r) => r.is_active === true || r.is_active === 1)
+    const fields = new Set<string>()
+    for (const r of activeRules) {
+      fields.add(r.trigger_field)
+      fields.add(r.target_field)
+    }
+    const map = new Map<string, M2MAliasInfo>()
+    for (const f of fields) {
+      const info = resolveM2MAlias(relations, collection, f)
+      if (info) map.set(f, info)
+    }
+    return map
+  }, [fieldRules, relations, collection])
+
+  // Committed junction rows for those alias relations, fetched with the exact
+  // same queryKey/queryFn M2MCombobox uses — react-query dedupes against
+  // whatever the mounted combobox has already fetched rather than issuing a
+  // second request.
+  const m2mAliasRelationList = [...m2mAliasFieldsForRules.values()]
+  const m2mAliasCommittedResults = useQueries({
+    queries: m2mAliasRelationList.map((info) => ({
+      queryKey: ['m2m-items', info.manyCollection, info.manyField, itemId],
+      queryFn: () =>
+        client
+          .request<{ data: Record<string, unknown>[] }>(
+            get(`/items/${info.manyCollection}`, {
+              filter: JSON.stringify({ [info.manyField]: { _eq: itemId } }),
+              limit: 200,
+              fields: `id,${info.junctionField}`
+            })
+          )
+          .then((r) => r.data ?? []),
+      enabled: !!itemId && !isNew,
+      staleTime: 30_000
+    }))
+  })
+  const m2mAliasCommittedByField = useMemo(() => {
+    const out: Record<string, Record<string, unknown>[]> = {}
+    ;[...m2mAliasFieldsForRules.keys()].forEach((field, i) => {
+      out[field] = m2mAliasCommittedResults[i]?.data ?? []
+    })
+    return out
+  }, [m2mAliasFieldsForRules, m2mAliasCommittedResults])
+
+  const getM2MEffectiveIds = useCallback(
+    (field: string): string[] | undefined => {
+      const info = m2mAliasFieldsForRules.get(field)
+      if (!info) return undefined
+      return computeM2MEffectiveIds(
+        m2mAliasCommittedByField[field],
+        info.junctionField,
+        m2mLinks.get(info.stagingKey),
+        m2mUnlinks.get(info.stagingKey)
+      )
+    },
+    [m2mAliasFieldsForRules, m2mAliasCommittedByField, m2mLinks, m2mUnlinks]
+  )
+
+  // Dispatches /field-rules/evaluate results: scalar targets merge into the
+  // draft as before; M2M-alias targets (which don't exist in the draft) are
+  // staged as links instead, skipping ids that are already effectively
+  // selected so re-triggering a satisfied rule is a no-op.
+  const applyFieldRuleResults = useCallback(
+    (results: Record<string, unknown> | null | undefined) => {
+      const { scalar, alias } = partitionRuleResults(results, new Set(m2mAliasFieldsForRules.keys()))
+      for (const [field, ids] of Object.entries(alias)) {
+        const info = m2mAliasFieldsForRules.get(field)
+        if (!info) continue
+        const currentIds = new Set((getM2MEffectiveIds(field) ?? []).map(String))
+        for (const id of ids) {
+          if (!currentIds.has(String(id))) m2mStagingCtx.stageLink(info.stagingKey, id)
+        }
+      }
+      if (Object.keys(scalar).length > 0) {
+        const merged = mergeRuleResults(draftRef.current, scalar)
+        draftRef.current = merged
+        setDraft(merged)
+      }
+    },
+    [m2mAliasFieldsForRules, getM2MEffectiveIds, m2mStagingCtx]
+  )
+
   const fieldRuleTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   useEffect(() => {
     const timers = fieldRuleTimersRef.current
@@ -1307,39 +1468,80 @@ export function ItemEditForm({
   }, [])
 
   // Debounced (300ms per trigger field) in-form evaluation of dynamic field
-  // rules: POSTs /field-rules/evaluate and merges returned targets into the
-  // draft. No-ops entirely (no timer, no request) when the collection has no
-  // active rules for the changed field. Only ever called from user-driven
-  // edits (handleFieldChange) — never on initial load/hydrate.
+  // rules: POSTs /field-rules/evaluate and dispatches returned targets via
+  // applyFieldRuleResults. No-ops entirely (no timer, no request) when the
+  // collection has no active rules for the changed field. Only ever called
+  // from user-driven edits — never on initial load/hydrate. `explicitValue`
+  // lets M2M alias triggers (which have no draft entry) supply their current
+  // effective id set; scalar callers omit it and the live draft value is read
+  // fresh at fire time.
   const evaluateFieldRulesForChange = useCallback(
-    (field: string) => {
+    (field: string, explicitValue?: unknown) => {
       const rules = rulesForTriggerField(fieldRules, field)
       if (rules.length === 0) return
       const existingTimer = fieldRuleTimersRef.current[field]
       if (existingTimer) clearTimeout(existingTimer)
       fieldRuleTimersRef.current[field] = setTimeout(() => {
         delete fieldRuleTimersRef.current[field]
+        const triggerValue = explicitValue !== undefined ? explicitValue : draftRef.current[field]
         const targetDraft: Record<string, unknown> = {}
-        for (const rule of rules) targetDraft[rule.target_field] = draftRef.current[rule.target_field]
+        for (const rule of rules) {
+          const aliasIds = getM2MEffectiveIds(rule.target_field)
+          targetDraft[rule.target_field] =
+            aliasIds !== undefined ? aliasIds : draftRef.current[rule.target_field]
+        }
         client
           .request<{ data: Record<string, unknown> }>(
             post('/field-rules/evaluate', {
               collection,
               trigger_field: field,
-              trigger_value: draftRef.current[field],
+              trigger_value: triggerValue,
               draft: targetDraft
             })
           )
-          .then((res) => {
-            const merged = mergeRuleResults(draftRef.current, res.data)
-            draftRef.current = merged
-            setDraft(merged)
-          })
+          .then((res) => applyFieldRuleResults(res.data))
           .catch(() => {})
       }, 300)
     },
-    [fieldRules, collection, client]
+    [fieldRules, collection, client, getM2MEffectiveIds, applyFieldRuleResults]
   )
+
+  // M2M alias triggers never flow through handleFieldChange (they commit via
+  // M2MStagingContext, not draft onChange), so watch the staging maps
+  // directly for the alias fields that have active rules. m2mLinks/m2mUnlinks
+  // only ever change via genuine stageLink/stageUnlink/unstageLink/
+  // unstageUnlink calls (all user-driven), and untouched keys keep their
+  // prior array/Set reference — so a reference change for a tracked key is
+  // exactly a real staging edit, never mount noise or an unrelated field.
+  const m2mStagingTrackerRef = useRef<Record<string, { links?: unknown[]; unlinks?: Set<unknown> }>>({})
+  const m2mStagingMountedRef = useRef(false)
+  const m2mTriggerAliasFields = useMemo(
+    () =>
+      [...m2mAliasFieldsForRules.entries()].filter(
+        ([field]) => rulesForTriggerField(fieldRules, field).length > 0
+      ),
+    [m2mAliasFieldsForRules, fieldRules]
+  )
+  useEffect(() => {
+    if (!m2mStagingMountedRef.current) {
+      m2mStagingMountedRef.current = true
+      for (const [field, info] of m2mTriggerAliasFields) {
+        m2mStagingTrackerRef.current[field] = {
+          links: m2mLinks.get(info.stagingKey),
+          unlinks: m2mUnlinks.get(info.stagingKey)
+        }
+      }
+      return
+    }
+    for (const [field, info] of m2mTriggerAliasFields) {
+      const links = m2mLinks.get(info.stagingKey)
+      const unlinks = m2mUnlinks.get(info.stagingKey)
+      const prev = m2mStagingTrackerRef.current[field]
+      if (prev && prev.links === links && prev.unlinks === unlinks) continue
+      m2mStagingTrackerRef.current[field] = { links, unlinks }
+      evaluateFieldRulesForChange(field, getM2MEffectiveIds(field) ?? [])
+    }
+  }, [m2mLinks, m2mUnlinks, m2mTriggerAliasFields, getM2MEffectiveIds, evaluateFieldRulesForChange])
 
   const handleFieldChange = useCallback(
     (field: string, value: unknown) => {

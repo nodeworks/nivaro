@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { applyLayoutDefaults, type FieldRule, mergeRuleResults, rulesForTriggerField } from './ItemEditForm'
+import {
+  applyLayoutDefaults,
+  computeM2MEffectiveIds,
+  type FieldRule,
+  mergeRuleResults,
+  partitionRuleResults,
+  resolveM2MAlias,
+  rulesForTriggerField
+} from './ItemEditForm'
+import type { CMSRelation } from './item-edit/types'
 
 describe('applyLayoutDefaults', () => {
   it('fills keys absent from the draft', () => {
@@ -91,5 +100,149 @@ describe('mergeRuleResults', () => {
     const draft = { name: 'Acme' }
     mergeRuleResults(draft, { name: 'Updated' })
     expect(draft).toEqual({ name: 'Acme' })
+  })
+})
+
+describe('resolveM2MAlias', () => {
+  it('resolves a relation row that carries junction_field directly', () => {
+    const relations: CMSRelation[] = [
+      {
+        id: 1,
+        one_collection: 'workflows',
+        one_field: 'divisions',
+        many_collection: 'workflows_divisions',
+        many_field: 'workflow_id',
+        junction_field: 'division_id'
+      }
+    ]
+    expect(resolveM2MAlias(relations, 'workflows', 'divisions')).toEqual({
+      manyCollection: 'workflows_divisions',
+      manyField: 'workflow_id',
+      junctionField: 'division_id',
+      stagingKey: 'divisions'
+    })
+  })
+
+  it('falls back to a companion relation on the same junction table when junction_field is null', () => {
+    const relations: CMSRelation[] = [
+      {
+        id: 1,
+        one_collection: 'workflows',
+        one_field: 'divisions',
+        many_collection: 'workflows_divisions',
+        many_field: 'workflow_id',
+        junction_field: null
+      },
+      {
+        id: 2,
+        one_collection: 'divisions',
+        one_field: 'workflows',
+        many_collection: 'workflows_divisions',
+        many_field: 'division_id',
+        junction_field: null
+      }
+    ]
+    expect(resolveM2MAlias(relations, 'workflows', 'divisions')).toEqual({
+      manyCollection: 'workflows_divisions',
+      manyField: 'workflow_id',
+      junctionField: 'division_id',
+      stagingKey: 'divisions'
+    })
+  })
+
+  it('returns null for a field with no matching relation (scalar/M2O field)', () => {
+    const relations: CMSRelation[] = [
+      {
+        id: 1,
+        one_collection: 'workflows',
+        one_field: 'divisions',
+        many_collection: 'workflows_divisions',
+        many_field: 'workflow_id',
+        junction_field: 'division_id'
+      }
+    ]
+    expect(resolveM2MAlias(relations, 'workflows', 'name')).toBeNull()
+  })
+
+  it('returns null when no companion relation exists to supply junction_field', () => {
+    const relations: CMSRelation[] = [
+      {
+        id: 1,
+        one_collection: 'workflows',
+        one_field: 'divisions',
+        many_collection: 'workflows_divisions',
+        many_field: 'workflow_id',
+        junction_field: null
+      }
+    ]
+    expect(resolveM2MAlias(relations, 'workflows', 'divisions')).toBeNull()
+  })
+
+  it('tolerates a null or undefined relations list', () => {
+    expect(resolveM2MAlias(null, 'workflows', 'divisions')).toBeNull()
+    expect(resolveM2MAlias(undefined, 'workflows', 'divisions')).toBeNull()
+  })
+})
+
+describe('computeM2MEffectiveIds', () => {
+  it('combines committed ids (minus staged unlinks) with staged links', () => {
+    const junctionItems = [
+      { id: 'j1', division_id: 'd1' },
+      { id: 'j2', division_id: 'd2' }
+    ]
+    const stagedUnlinks = new Set<unknown>(['j2'])
+    const result = computeM2MEffectiveIds(junctionItems, 'division_id', ['d3'], stagedUnlinks)
+    expect(result).toEqual(['d1', 'd3'])
+  })
+
+  it('dedupes when a staged link matches an already-committed id', () => {
+    const junctionItems = [{ id: 'j1', division_id: 'd1' }]
+    const result = computeM2MEffectiveIds(junctionItems, 'division_id', ['d1'], new Set())
+    expect(result).toEqual(['d1'])
+  })
+
+  it('returns an empty array with no junction items and no staged links', () => {
+    expect(computeM2MEffectiveIds([], 'division_id', [], new Set())).toEqual([])
+  })
+
+  it('tolerates null/undefined junctionItems, stagedLinks, and stagedUnlinks', () => {
+    expect(computeM2MEffectiveIds(null, 'division_id', null, null)).toEqual([])
+    expect(computeM2MEffectiveIds(undefined, 'division_id', undefined, undefined)).toEqual([])
+  })
+
+  it('coerces ids to strings', () => {
+    const junctionItems = [{ id: 1, division_id: 5 }]
+    const result = computeM2MEffectiveIds(junctionItems, 'division_id', [6], new Set())
+    expect(result).toEqual(['5', '6'])
+  })
+})
+
+describe('partitionRuleResults', () => {
+  it('routes alias-field targets to alias and everything else to scalar', () => {
+    const results = { regions: ['r1', 'r2'], name: 'Updated' }
+    const { scalar, alias } = partitionRuleResults(results, new Set(['regions']))
+    expect(scalar).toEqual({ name: 'Updated' })
+    expect(alias).toEqual({ regions: ['r1', 'r2'] })
+  })
+
+  it('wraps a non-array alias value in an array', () => {
+    const { alias } = partitionRuleResults({ regions: 'r5' }, new Set(['regions']))
+    expect(alias).toEqual({ regions: ['r5'] })
+  })
+
+  it('normalizes a null alias value to an empty array', () => {
+    const { alias } = partitionRuleResults({ regions: null }, new Set(['regions']))
+    expect(alias).toEqual({ regions: [] })
+  })
+
+  it('tolerates a null/undefined aliasFields set (everything is scalar)', () => {
+    const { scalar, alias } = partitionRuleResults({ name: 'Updated' }, null)
+    expect(scalar).toEqual({ name: 'Updated' })
+    expect(alias).toEqual({})
+  })
+
+  it('tolerates a null/undefined results object', () => {
+    expect(partitionRuleResults(null, new Set(['regions']))).toEqual({ scalar: {}, alias: {} })
+    expect(partitionRuleResults(undefined, new Set(['regions']))).toEqual({ scalar: {}, alias: {} })
   })
 })
