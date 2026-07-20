@@ -185,7 +185,12 @@ export function TransitionRequirementsDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && !submitting && onClose()}>
-      <DialogContent className='max-w-2xl'>
+      <DialogContent
+        className={cn(
+          'max-w-2xl',
+          payload.some((e) => (e.display_fields ?? []).length + e.fields.length > 3) && 'max-w-5xl'
+        )}
+      >
         <DialogHeader>
           <DialogTitle className='text-[15px]'>{title}</DialogTitle>
         </DialogHeader>
