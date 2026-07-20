@@ -498,7 +498,7 @@ export function ItemEditPage() {
   })
 
   const { data: activeLayoutData } = useQuery({
-    queryKey: ['active-layout', collection, layoutSlug ?? null],
+    queryKey: ['active-layout', collection, layoutSlug ?? null, id],
     queryFn: () =>
       api
         .get<{
@@ -510,7 +510,10 @@ export function ItemEditPage() {
             }
           }
         }>('/collection-layouts/active', {
-          params: { collection, ...(layoutSlug ? { slug: layoutSlug } : {}) }
+          params: {
+            collection,
+            ...(layoutSlug ? { slug: layoutSlug } : !isNew ? { item: id } : {})
+          }
         })
         .then((r) => r.data.data)
         .catch(() => null),

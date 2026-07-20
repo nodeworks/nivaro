@@ -11948,6 +11948,8 @@ interface CollectionLayout {
   pdf_page_size?: string | null
   pdf_orientation?: string | null
   pdf_button_label?: string | null
+  record_conditions?: Array<{ field: string; op: 'eq' | 'neq' | 'nnull'; value?: unknown }> | null
+  default_values?: Record<string, unknown> | null
 }
 
 function WorkflowCombobox({
@@ -12101,6 +12103,14 @@ function LayoutVisibilitySection({
       </p>
     </div>
   )
+}
+
+function safeJsonParse(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
 }
 
 function LayoutsTab({
@@ -12260,6 +12270,8 @@ function LayoutsTab({
           | 'workflow_template_id'
           | 'single_active_addendum'
           | 'addendum_default_view'
+          | 'record_conditions'
+          | 'default_values'
         >
       >
     ) => {
@@ -12279,6 +12291,72 @@ function LayoutsTab({
     setSlugDraft(selected?.slug ?? '')
     setSlugEditing(false)
   }, [selected?.id])
+
+  const [conditionRows, setConditionRows] = useState<
+    Array<{ field: string; op: 'eq' | 'neq' | 'nnull'; value: string }>
+  >([])
+  const [defaultValueRows, setDefaultValueRows] = useState<Array<{ field: string; value: string }>>(
+    []
+  )
+
+  // Sync condition / default-value rows when selection changes
+  useEffect(() => {
+    const rawConditions = selected?.record_conditions
+    const parsedConditions =
+      typeof rawConditions === 'string' ? safeJsonParse(rawConditions) : rawConditions
+    setConditionRows(
+      Array.isArray(parsedConditions)
+        ? parsedConditions.map((r) => ({
+            field: r?.field ?? '',
+            op: (r?.op === 'neq' || r?.op === 'nnull' ? r.op : 'eq') as 'eq' | 'neq' | 'nnull',
+            value: r?.value != null ? String(r.value) : ''
+          }))
+        : []
+    )
+    const rawDefaults = selected?.default_values
+    const parsedDefaults = typeof rawDefaults === 'string' ? safeJsonParse(rawDefaults) : rawDefaults
+    setDefaultValueRows(
+      parsedDefaults && typeof parsedDefaults === 'object' && !Array.isArray(parsedDefaults)
+        ? Object.entries(parsedDefaults as Record<string, unknown>).map(([field, value]) => ({
+            field,
+            value: value != null ? String(value) : ''
+          }))
+        : []
+    )
+  }, [selected?.id])
+
+  const updateConditionRow = (
+    idx: number,
+    patch: Partial<{ field: string; op: 'eq' | 'neq' | 'nnull'; value: string }>
+  ) => setConditionRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
+  const addConditionRow = () =>
+    setConditionRows((rows) => [...rows, { field: dbColumns[0]?.name ?? '', op: 'eq', value: '' }])
+  const removeConditionRow = (idx: number) =>
+    setConditionRows((rows) => rows.filter((_, i) => i !== idx))
+  const saveConditionRows = () => {
+    if (!selected) return
+    const rules = conditionRows
+      .filter((r) => r.field)
+      .map((r) => ({ field: r.field, op: r.op, value: r.value }))
+    patchLayoutMut.mutate({ id: selected.id, record_conditions: rules.length ? rules : null })
+  }
+
+  const updateDefaultValueRow = (idx: number, patch: Partial<{ field: string; value: string }>) =>
+    setDefaultValueRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
+  const addDefaultValueRow = () =>
+    setDefaultValueRows((rows) => [...rows, { field: dbColumns[0]?.name ?? '', value: '' }])
+  const removeDefaultValueRow = (idx: number) =>
+    setDefaultValueRows((rows) => rows.filter((_, i) => i !== idx))
+  const saveDefaultValueRows = () => {
+    if (!selected) return
+    const entries = defaultValueRows.filter((r) => r.field)
+    patchLayoutMut.mutate({
+      id: selected.id,
+      default_values: entries.length
+        ? Object.fromEntries(entries.map((r) => [r.field, r.value]))
+        : null
+    })
+  }
 
   return (
     <div className='flex min-h-0 gap-4'>
@@ -12678,6 +12756,151 @@ function LayoutsTab({
                         className='h-3.5 w-3.5 rounded accent-nvr-cyan'
                       />
                     </label>
+                  </>
+                )}
+                {(selected.layout_type == null || selected.layout_type === 'grouped') && (
+                  <>
+                    <div className='space-y-2 border-t border-slate-200 pt-2 dark:border-border'>
+                      <div>
+                        <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                          Show for matching records
+                        </span>
+                        <p className='text-[10px] text-slate-400 dark:text-slate-500'>
+                          Records matching every rule open with this layout instead of the default.
+                        </p>
+                      </div>
+                      <div className='space-y-1.5'>
+                        {conditionRows.map((row, idx) => (
+                          // biome-ignore lint/suspicious/noArrayIndexKey: order-stable rule list
+                          <div key={idx} className='flex items-center gap-1.5'>
+                            <select
+                              value={row.field}
+                              onChange={(e) => updateConditionRow(idx, { field: e.target.value })}
+                              className='h-7 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+                            >
+                              <option value=''>Field…</option>
+                              {dbColumns.map((c) => (
+                                <option key={c.name} value={c.name}>
+                                  {c.name}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={row.op}
+                              onChange={(e) =>
+                                updateConditionRow(idx, {
+                                  op: e.target.value as 'eq' | 'neq' | 'nnull'
+                                })
+                              }
+                              className='h-7 w-24 shrink-0 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+                            >
+                              <option value='eq'>=</option>
+                              <option value='neq'>≠</option>
+                              <option value='nnull'>is not empty</option>
+                            </select>
+                            {row.op !== 'nnull' && (
+                              <Input
+                                value={row.value}
+                                onChange={(e) => updateConditionRow(idx, { value: e.target.value })}
+                                placeholder='value'
+                                className='h-7 min-w-0 flex-1 text-[11px]'
+                              />
+                            )}
+                            <button
+                              type='button'
+                              onClick={() => removeConditionRow(idx)}
+                              className='shrink-0 text-slate-400 hover:text-red-500'
+                            >
+                              <Trash2 className='h-3.5 w-3.5' />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className='flex items-center justify-between'>
+                        <button
+                          type='button'
+                          onClick={addConditionRow}
+                          className='flex items-center gap-1 text-[11px] text-slate-400 hover:text-nvr-cyan'
+                        >
+                          <Plus className='h-3.5 w-3.5' />
+                          Add rule
+                        </button>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          className='h-7 text-[11px]'
+                          onClick={saveConditionRows}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                    </div>
+                    <div className='space-y-2 border-t border-slate-200 pt-2 dark:border-border'>
+                      <div>
+                        <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                          Defaults for new records
+                        </span>
+                        <p className='text-[10px] text-slate-400 dark:text-slate-500'>
+                          Stamped onto the draft when creating via{' '}
+                          <code className='rounded bg-slate-100 px-1 dark:bg-muted'>
+                            /collections/{tableName}/new?layout={selected.slug || '<slug>'}
+                          </code>
+                          .
+                        </p>
+                      </div>
+                      <div className='space-y-1.5'>
+                        {defaultValueRows.map((row, idx) => (
+                          // biome-ignore lint/suspicious/noArrayIndexKey: order-stable rule list
+                          <div key={idx} className='flex items-center gap-1.5'>
+                            <select
+                              value={row.field}
+                              onChange={(e) => updateDefaultValueRow(idx, { field: e.target.value })}
+                              className='h-7 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+                            >
+                              <option value=''>Field…</option>
+                              {dbColumns.map((c) => (
+                                <option key={c.name} value={c.name}>
+                                  {c.name}
+                                </option>
+                              ))}
+                            </select>
+                            <Input
+                              value={row.value}
+                              onChange={(e) => updateDefaultValueRow(idx, { value: e.target.value })}
+                              placeholder='value'
+                              className='h-7 min-w-0 flex-1 text-[11px]'
+                            />
+                            <button
+                              type='button'
+                              onClick={() => removeDefaultValueRow(idx)}
+                              className='shrink-0 text-slate-400 hover:text-red-500'
+                            >
+                              <Trash2 className='h-3.5 w-3.5' />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className='flex items-center justify-between'>
+                        <button
+                          type='button'
+                          onClick={addDefaultValueRow}
+                          className='flex items-center gap-1 text-[11px] text-slate-400 hover:text-nvr-cyan'
+                        >
+                          <Plus className='h-3.5 w-3.5' />
+                          Add field
+                        </button>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          className='h-7 text-[11px]'
+                          onClick={saveDefaultValueRows}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                    </div>
                   </>
                 )}
                 {selected.layout_type !== 'addendum' && (
