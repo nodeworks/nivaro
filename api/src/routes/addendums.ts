@@ -152,8 +152,8 @@ export async function addendumsRoutes(app: FastifyInstance) {
 
     const col = (await db('nivaro_collections')
       .where({ collection: body.parent_collection })
-      .select('addendums_enabled', 'addendum_allowed_roles', 'addendum_allowed_states')
-      .first()) as { addendums_enabled: number | boolean; addendum_allowed_roles: string | null; addendum_allowed_states: string | null } | undefined
+      .select('addendums_enabled', 'addendum_allowed_roles', 'addendum_allowed_states', 'addendum_start_states')
+      .first()) as { addendums_enabled: number | boolean; addendum_allowed_roles: string | null; addendum_allowed_states: string | null; addendum_start_states: string | null } | undefined
 
     const enabled = col?.addendums_enabled === 1 || col?.addendums_enabled === true
     if (!enabled) {
@@ -258,15 +258,31 @@ export async function addendumsRoutes(app: FastifyInstance) {
           .where({ id: body.workflow_template_id })
           .first()
         if (template) {
-          const initialState = await db('nivaro_workflow_states')
-            .where({ template: body.workflow_template_id, is_initial: 1 })
-            .first()
-          if (initialState) {
+          // Configured start state (Settings → Addendums) wins over the
+          // template's is_initial state; a stale key falls back to is_initial.
+          let startState: { id: string } | undefined
+          const startRules = parseJsonSafe(col?.addendum_start_states ?? null) as
+            | Array<{ pipeline_id: string; state_key: string }>
+            | null
+          const startRule = Array.isArray(startRules)
+            ? startRules.find((r) => r.pipeline_id === body.workflow_template_id)
+            : null
+          if (startRule?.state_key) {
+            startState = await db('nivaro_workflow_states')
+              .where({ template: body.workflow_template_id, key: startRule.state_key })
+              .first() as { id: string } | undefined
+          }
+          if (!startState) {
+            startState = await db('nivaro_workflow_states')
+              .where({ template: body.workflow_template_id, is_initial: 1 })
+              .first() as { id: string } | undefined
+          }
+          if (startState) {
             await db('nivaro_workflow_instances').insert({
               template: body.workflow_template_id,
               collection: 'nivaro_addendums',
               item: String(insertedId),
-              current_state: initialState.id,
+              current_state: startState.id,
               started_at: now
             })
           }

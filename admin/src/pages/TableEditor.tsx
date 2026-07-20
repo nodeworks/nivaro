@@ -3953,6 +3953,45 @@ function AddendumPipelineRow({
   )
 }
 
+function AddendumStartStateRow({
+  pipeline,
+  stateKey,
+  onStateKeyChange
+}: {
+  pipeline: { id: string; name: string }
+  stateKey: string | null
+  onStateKeyChange: (key: string | null) => void
+}) {
+  const { data: detail } = useQuery<{
+    states: Array<{ id: string; key: string; label: string; color?: string; is_initial?: boolean }>
+  }>({
+    queryKey: ['pipeline-detail-lock', pipeline.id],
+    queryFn: () => api.get(`/pipelines/${pipeline.id}`).then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const states = detail?.states ?? []
+
+  return (
+    <div className='mt-3 flex items-center justify-between gap-4'>
+      <p className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+        {pipeline.name}
+      </p>
+      <select
+        className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
+        value={stateKey ?? ''}
+        onChange={(e) => onStateKeyChange(e.target.value || null)}
+      >
+        <option value=''>Initial state (default)</option>
+        {states.map((s) => (
+          <option key={s.key} value={s.key}>
+            {s.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 function AddendumsSection({ tableName }: { tableName: string }) {
   const qc = useQueryClient()
 
@@ -3965,6 +4004,7 @@ function AddendumsSection({ tableName }: { tableName: string }) {
             addendums_enabled: boolean
             addendum_allowed_states?: string | null
             addendum_allowed_roles?: string | null
+            addendum_start_states?: string | null
           }
         }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
@@ -4028,6 +4068,66 @@ function AddendumsSection({ tableName }: { tableName: string }) {
     setStateRules((prev) => {
       const next = prev.filter((r) => r.pipeline_id !== pipelineId)
       if (stateKeys.length > 0) next.push({ pipeline_id: pipelineId, state_keys: stateKeys })
+      return next
+    })
+  }
+
+  // Start states — which state a new addendum's workflow instance begins in,
+  // per pipeline connected through this collection's addendum-form layouts.
+  const [startRules, setStartRules] = useState<Array<{ pipeline_id: string; state_key: string }>>(
+    []
+  )
+  const [startInit, setStartInit] = useState(false)
+
+  useEffect(() => {
+    if (col !== undefined && !startInit) {
+      try {
+        const parsed = col.addendum_start_states ? JSON.parse(col.addendum_start_states) : []
+        setStartRules(Array.isArray(parsed) ? parsed : [])
+      } catch {
+        setStartRules([])
+      }
+      setStartInit(true)
+    }
+  }, [col, startInit])
+
+  const saveStartMut = useMutation({
+    mutationFn: (rules: typeof startRules) =>
+      api.patch(`/collections/${tableName}`, {
+        addendum_start_states: rules.length ? JSON.stringify(rules) : null
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+      toast.success('Start states saved')
+    },
+    onError: () => toast.error('Failed to save start states')
+  })
+
+  // Pipelines connected to addendums via this collection's addendum-form
+  // layouts (their workflow_template_id) — the instances whose start state
+  // this setting overrides.
+  const { data: addendumLayouts } = useQuery<
+    Array<{ id: number; workflow_template_id: string | null }>
+  >({
+    queryKey: ['addendum-layouts-start', tableName],
+    queryFn: () =>
+      api
+        .get('/collection-layouts', { params: { collection: tableName, layout_type: 'addendum' } })
+        .then((r) => r.data.data ?? []),
+    staleTime: 60_000,
+    enabled: enabled && !!tableName
+  })
+  const connectedPipelineIds = [
+    ...new Set((addendumLayouts ?? []).map((l) => l.workflow_template_id).filter(Boolean))
+  ] as string[]
+  const connectedPipelines = (pipelinesData ?? []).filter((p) =>
+    connectedPipelineIds.includes(p.id)
+  )
+
+  const updateStartRule = (pipelineId: string, stateKey: string | null) => {
+    setStartRules((prev) => {
+      const next = prev.filter((r) => r.pipeline_id !== pipelineId)
+      if (stateKey) next.push({ pipeline_id: pipelineId, state_key: stateKey })
       return next
     })
   }
@@ -4121,6 +4221,45 @@ function AddendumsSection({ tableName }: { tableName: string }) {
               />
             ))
           )}
+
+          <div className='mt-4 border-t border-slate-100 dark:border-border pt-3'>
+            <div className='flex items-center justify-between mb-1'>
+              <div>
+                <p className='text-[12px] font-medium text-slate-700 dark:text-slate-300'>
+                  Start state
+                </p>
+                <p className='text-[11px] text-slate-500 dark:text-slate-400 mt-0.5'>
+                  Which state a new addendum's pipeline starts in, per pipeline connected through
+                  an addendum form layout. Default is the pipeline's initial state.
+                </p>
+              </div>
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-7 text-[11px] shrink-0 ml-4'
+                onClick={() => saveStartMut.mutate(startRules)}
+                disabled={saveStartMut.isPending}
+              >
+                Save
+              </Button>
+            </div>
+            {connectedPipelines.length === 0 ? (
+              <p className='mt-2 text-[11px] text-slate-400 italic'>
+                No addendum form layout is connected to a pipeline.
+              </p>
+            ) : (
+              connectedPipelines.map((pipeline) => (
+                <AddendumStartStateRow
+                  key={pipeline.id}
+                  pipeline={pipeline}
+                  stateKey={
+                    startRules.find((r) => r.pipeline_id === pipeline.id)?.state_key ?? null
+                  }
+                  onStateKeyChange={(key) => updateStartRule(pipeline.id, key)}
+                />
+              ))
+            )}
+          </div>
 
           <div className='mt-4 border-t border-slate-100 dark:border-border pt-3'>
             <div className='flex items-center justify-between mb-1'>
