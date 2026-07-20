@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { WidgetSlot } from '../WidgetSlot'
+import { type InputBinding, WidgetSlot } from '../WidgetSlot'
 import { FieldRow } from './FieldRow'
 import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpers'
 import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps, SlotAssignment, SummaryAggConfig, SummaryEntry } from './types'
@@ -21,6 +21,17 @@ import type { CMSField, CMSRelation, FieldGroup, RenderFieldProps, SlotAssignmen
 // ── Inline display ────────────────────────────────────────────────────────────
 
 export type InlineDisplayEntry = { field: string; label: string | null; format: string | null; line_break?: boolean }
+
+// input_bindings arrives as a JSON string from the layout API — parse like the
+// header widget path does, or inputs resolve empty.
+function parseBindings(raw: unknown): InputBinding[] {
+  if (typeof raw !== 'string') return (raw ?? []) as InputBinding[]
+  try {
+    return JSON.parse(raw) as InputBinding[]
+  } catch {
+    return []
+  }
+}
 
 export function InlineDisplay({
   relCollection,
@@ -1001,6 +1012,29 @@ export function GroupSection({
           hideEmpty={!!group.summary_hide_empty || !!hideEmptySummary}
         />
       )}
+      {/* Collapsed body never mounts its widgets, so a default-collapsed
+          hide_when_empty section could never report content and stayed hidden
+          forever. Probe-mount the widgets invisibly while collapsed so the
+          content reports still arrive; the expanded body takes over on open. */}
+      {collapsed && group.hide_when_empty && groupWidgets.length > 0 && (
+        <div className='hidden'>
+          {groupWidgets.filter((ws) => ws.widget_id != null).map((ws) => (
+            <WidgetSlot
+              key={ws.field}
+              widgetId={ws.widget_id as number}
+              inputBindings={parseBindings(ws.input_bindings)}
+              itemDraft={draft}
+              frameless
+              apiBase={widgetApiBase}
+              onContentChange={(has) =>
+                setWidgetContent((prev) =>
+                  prev[ws.field] === has ? prev : { ...prev, [ws.field]: has }
+                )
+              }
+            />
+          ))}
+        </div>
+      )}
       {!collapsed && (
         <div className='border-t border-slate-100 px-5 py-4'>
           {(() => {
@@ -1092,20 +1126,7 @@ export function GroupSection({
                   if (item._t === 'widget') {
                     if (!item.slot.widget_id) return null
                     const span = item.slot.col_span ?? 12
-                    // input_bindings arrives as a JSON string from the layout API —
-                    // parse like the header widget path does, or inputs resolve empty.
-                    const rawBindings = item.slot.input_bindings
-                    const bindings = (
-                      typeof rawBindings === 'string'
-                        ? (() => {
-                            try {
-                              return JSON.parse(rawBindings)
-                            } catch {
-                              return []
-                            }
-                          })()
-                        : (rawBindings ?? [])
-                    ) as import('../WidgetSlot').InputBinding[]
+                    const bindings = parseBindings(item.slot.input_bindings)
                     return (
                       <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
                         <WidgetSlot
