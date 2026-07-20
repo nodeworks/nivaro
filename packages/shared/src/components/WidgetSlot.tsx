@@ -73,6 +73,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from './ui/dropdown-menu'
+import {
+  type ReviewListConfig,
+  type ReviewListResult,
+  ReviewListWidget
+} from './widgets/ReviewListWidget'
 
 const ICON_MAP: Record<string, LucideIcon> = {
   ArrowRight,
@@ -1003,6 +1008,9 @@ export function WidgetSlot({
   const [renderLoading, setRenderLoading] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Bumped by review_list's onRefetch after a group PATCH settles — included
+  // (undebounced) in the render effect's deps to force an immediate refetch.
+  const [refetchTick, setRefetchTick] = useState(0)
   // First-load marker: input-driven render refetches keep stale values on
   // screen instead of flashing the skeleton.
   const hasRenderDataRef = useRef(false)
@@ -1101,9 +1109,21 @@ export function WidgetSlot({
     return () => {
       cancelled = true
     }
-  }, [widgetId, apiBase, debouncedInputsKey, ready])
+  }, [widgetId, apiBase, debouncedInputsKey, ready, refetchTick])
 
   const title = label || widget?.name || `Widget ${widgetId}`
+
+  // review_list has no meaning for a record that doesn't exist yet (no rows
+  // to reach via the relation path) — render nothing rather than surfacing
+  // the render endpoint's 400 for a missing record_id. Mirrors the server's
+  // own emptiness check (renderWidget's review_list branch) so a falsy-but-
+  // valid id (e.g. 0) isn't misread as "new".
+  const reviewListRecordId = inputs.record_id
+  if (
+    widget?.widget_type === 'review_list' &&
+    (reviewListRecordId == null || reviewListRecordId === '')
+  )
+    return null
 
   if (compact) {
     const compactStyle = (widget?.config?.compact_style as string | undefined) ?? 'default'
@@ -1250,6 +1270,13 @@ export function WidgetSlot({
                 (widget.widget_type === 'custom-query' && 'rows' in renderData)) && (
                 <ListDisplay data={renderData} />
               )}
+              {widget.widget_type === 'review_list' && (
+                <ReviewListWidget
+                  data={renderData as unknown as ReviewListResult}
+                  config={(widget.config ?? {}) as unknown as ReviewListConfig}
+                  onRefetch={() => setRefetchTick((t) => t + 1)}
+                />
+              )}
               {widget.widget_type === 'action-buttons' && (
                 <ActionButtonsDisplay
                   data={renderData}
@@ -1268,9 +1295,14 @@ export function WidgetSlot({
                   onClientAction={onClientAction}
                 />
               )}
-              {!['stat', 'list', 'action-buttons', 'custom-query', 'button-group'].includes(
-                widget.widget_type
-              ) && (
+              {![
+                'stat',
+                'list',
+                'action-buttons',
+                'custom-query',
+                'button-group',
+                'review_list'
+              ].includes(widget.widget_type) && (
                 <pre className='whitespace-pre-wrap text-[11px] text-slate-500'>
                   {JSON.stringify(renderData, null, 2)}
                 </pre>

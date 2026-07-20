@@ -21,6 +21,14 @@ export type { ReportViewProps } from './components/ReportView'
 export { ReportView } from './components/ReportView'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'
+export type {
+  ReviewListConfig,
+  ReviewListResult,
+  ReviewListRow,
+  ReviewListStatusOption,
+  ReviewListWidgetProps
+} from './components/widgets/ReviewListWidget'
+export { ReviewListWidget } from './components/widgets/ReviewListWidget'
 export * from './context'
 export * from './hooks/useDebounced'
 export * from './hooks/useFormSchema'
