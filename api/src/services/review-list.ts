@@ -60,8 +60,11 @@ export type ColumnSpec =
 
 /** ColumnSpec after normalizeColumnSpecs assigns a key: always has `field`.
  * For a lookup entry, `field` is the synthesized
- * `$lookup.<collection>.<field>.<entryIndex>` key (the `$` prefix can never
- * collide with a real column name) and `lookup` carries the match spec for
+ * `$lookup.<collection>.<field>.<local1>~<remote1>.<local2>~<remote2>...` key
+ * (the `$` prefix can never collide with a real column name; encoding the
+ * match pairs — not an array index — keeps the key collision-proof across
+ * group_meta/line_columns and stable/shared when the identical lookup
+ * appears more than once) and `lookup` carries the match spec for
  * resolution. */
 export interface NormalizedColumnSpec {
   field: string
@@ -134,18 +137,30 @@ export interface ReviewListResult {
   truncated: boolean
 }
 
+// Encodes the match pairs (not an array index) into the key so that two
+// lookup entries with the same collection+field but DIFFERENT match pairs
+// never collide (they'd otherwise both land on the same synthesized field
+// and silently share one value), while the identical lookup appearing more
+// than once (same array or across group_meta/line_columns) still produces
+// the same key — correct value-sharing, since each entry still renders its
+// own column with its own label/format. `~` joins local/remote within a
+// pair, `.` joins pairs — both are safe because isPlainIdentifier forbids
+// them in local/remote/collection/field.
+function lookupColumnKey(lookup: LookupSpec): string {
+  const pairs = lookup.match.map((p) => `${p.local}~${p.remote}`).join('.')
+  return `$lookup.${lookup.collection}.${lookup.field}.${pairs}`
+}
+
 /** Collapse the string | ColumnSpec union to NormalizedColumnSpec (validated
- * by this point), assigning the `$lookup...` key to lookup entries. The
- * entryIndex is positional within THIS entries array — group_meta and
- * line_columns are normalized separately, each with their own indexing. */
+ * by this point), assigning the `$lookup...` key to lookup entries. */
 export function normalizeColumnSpecs(
   entries: Array<string | ColumnSpec> | undefined
 ): NormalizedColumnSpec[] {
-  return (entries ?? []).map((e, i) => {
+  return (entries ?? []).map((e) => {
     if (typeof e === 'string') return { field: e }
     if ('lookup' in e) {
       return {
-        field: `$lookup.${e.lookup.collection}.${e.lookup.field}.${i}`,
+        field: lookupColumnKey(e.lookup),
         label: e.label,
         format: e.format,
         color: e.color,

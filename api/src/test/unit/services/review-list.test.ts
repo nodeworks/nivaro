@@ -1008,7 +1008,8 @@ describe('resolveReviewListRows — lookup columns (composite match)', () => {
       'po-1'
     )
 
-    const lookupField = '$lookup.line_items.quantity_billed.0'
+    const lookupField =
+      '$lookup.line_items.quantity_billed.purchase_order~purchase_order.line_item_number~line_number'
 
     expect(result.columns.line_columns).toEqual([
       { field: lookupField, label: 'Quantity Billed', format: 'number', color: null }
@@ -1092,7 +1093,8 @@ describe('resolveReviewListRows — lookup columns (composite match)', () => {
       logger
     )
 
-    const lookupField = '$lookup.line_items.quantity_billed.0'
+    const lookupField =
+      '$lookup.line_items.quantity_billed.purchase_order~purchase_order.line_item_number~line_number'
     expect(result.rows.map((r) => r.values[lookupField])).toEqual([null, null, null])
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ collection: 'line_items', field: 'quantity_billed' }),
