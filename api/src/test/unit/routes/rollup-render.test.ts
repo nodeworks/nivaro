@@ -163,7 +163,7 @@ describe('POST /widgets-internal/:id/render — rollup dispatch', () => {
       }) as unknown as typeof db
     )
     vi.mocked(resolveRollupRows).mockRejectedValueOnce(
-      Object.assign(new Error('rollup: levels must be a non-empty array of at most 3 entries'), {
+      Object.assign(new Error('rollup: levels must be a non-empty array of at most 2 entries'), {
         statusCode: 400
       })
     )
@@ -211,7 +211,7 @@ describe('POST /widgets-internal — rollup config validation', () => {
   it('400s with the validator message when config is invalid', async () => {
     vi.mocked(db).mockImplementation(makeWidgetsDbMock({}) as unknown as typeof db)
     vi.mocked(validateRollupConfig).mockReturnValueOnce(
-      'levels must be a non-empty array of at most 3 entries'
+      'levels must be a non-empty array of at most 2 entries'
     )
 
     const app = buildApp()
@@ -224,7 +224,7 @@ describe('POST /widgets-internal — rollup config validation', () => {
     })
 
     expect(res.statusCode).toBe(400)
-    expect(JSON.parse(res.body).error).toBe('levels must be a non-empty array of at most 3 entries')
+    expect(JSON.parse(res.body).error).toBe('levels must be a non-empty array of at most 2 entries')
   })
 
   it('201s and creates the widget when config is valid', async () => {

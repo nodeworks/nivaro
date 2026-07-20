@@ -150,8 +150,9 @@ function slugifyMeasureKey(label: string, index: number): string {
 }
 
 // Guided level picker — same field-or-one-hop-related shape as
-// ColumnListEditor's adders, capped at 3 ordered levels, each with an
-// optional column-header label override.
+// ColumnListEditor's adders, capped at 2 ordered levels (amended
+// 2026-07-20: the client only renders two band depths — 3-deep nesting is
+// future scope), each with an optional column-header label override.
 function LevelsEditor({
   collection,
   fieldOptions,
@@ -177,7 +178,7 @@ function LevelsEditor({
 
   const has = (field: string) => value.some((l) => l.field === field)
   function add(field: string) {
-    if (field && !has(field) && value.length < 3) onChange([...value, { field, label: '' }])
+    if (field && !has(field) && value.length < 2) onChange([...value, { field, label: '' }])
   }
   function upd(i: number, patch: Partial<RollupLevel>) {
     onChange(value.map((l, j) => (j === i ? { ...l, ...patch } : l)))
@@ -225,8 +226,8 @@ function LevelsEditor({
           ))}
         </div>
       )}
-      {value.length >= 3 ? (
-        <p className='text-[11px] text-slate-400'>Maximum 3 levels.</p>
+      {value.length >= 2 ? (
+        <p className='text-[11px] text-slate-400'>Maximum 2 levels.</p>
       ) : fieldOptions.length === 0 ? (
         <p className='text-[11px] text-slate-400'>Select a target collection first.</p>
       ) : (
@@ -579,7 +580,7 @@ export function RollupConfigForm({
 
       <Section
         title='Levels'
-        hint='1-3 ordered group levels, outermost first. Each level nests inside the one before it.'
+        hint='1-2 ordered group levels, outermost first. Each level nests inside the one before it.'
       >
         <LevelsEditor
           collection={cfg.collection}

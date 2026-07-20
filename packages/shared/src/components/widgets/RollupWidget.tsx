@@ -180,7 +180,13 @@ function buildLeaves(
   }
   const groups = new Map<string, RollupRow[]>()
   for (const row of rows) {
-    const key = mergeBy.map((f) => String(mergeFieldValue(row, f, levelFields) ?? '')).join('|')
+    // JSON.stringify a tuple rather than joining with a delimiter — a raw
+    // field value containing the delimiter (e.g. '|') could otherwise alias
+    // two distinct tuples (['x|', 'y'] vs ['x', '|y']) and silently merge
+    // unrelated leaves.
+    const key = JSON.stringify(
+      mergeBy.map((f) => String(mergeFieldValue(row, f, levelFields) ?? ''))
+    )
     const existing = groups.get(key)
     if (existing) existing.push(row)
     else groups.set(key, [row])
@@ -457,7 +463,7 @@ export function RollupWidget({ data, config, loading, error }: RollupWidgetProps
                   {isOpen1 &&
                     (band.bands
                       ? band.bands.map((b2) => {
-                          const l2Key = `${band.key}|${b2.key}`
+                          const l2Key = JSON.stringify([band.key, b2.key])
                           const isOpen2 = expandedL2.has(l2Key)
                           return (
                             <Fragment key={l2Key}>

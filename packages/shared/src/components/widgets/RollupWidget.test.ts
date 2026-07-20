@@ -113,6 +113,28 @@ describe('buildRollupTree', () => {
     expect(pumpB.measures).toEqual({ labor: 5, material: 0, total: 5 })
   })
 
+  it('does not alias distinct merge_leaf_by tuples that share a "|"-joined string', () => {
+    const config: RollupConfig = { ...twoLevelConfig, merge_leaf_by: ['field_a', 'field_b'] }
+    const rows: RollupRow[] = [
+      row({
+        id: 1,
+        levels: ['dt1', 'ut1'],
+        values: { field_a: 'x|', field_b: 'y' },
+        measures: { labor: 10, material: 0 }
+      }),
+      row({
+        id: 2,
+        levels: ['dt1', 'ut1'],
+        values: { field_a: 'x', field_b: '|y' },
+        measures: { labor: 0, material: 5 }
+      })
+    ]
+    const tree = buildRollupTree(rows, config)
+    const leaves = tree.bands[0].bands![0].leaves!
+    expect(leaves).toHaveLength(2)
+    expect(leaves.map((l) => l.ids)).toEqual(expect.arrayContaining([[1], [2]]))
+  })
+
   it('leaves rows unmerged (one leaf per row) when merge_leaf_by is omitted', () => {
     const rows: RollupRow[] = [
       row({

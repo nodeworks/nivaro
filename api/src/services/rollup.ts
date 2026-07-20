@@ -34,7 +34,7 @@ import {
 // docs/superpowers/specs/2026-07-20-rollup-widget-lookup-columns-design.md §1.
 
 const MAX_PATH_HOPS = 4
-const MAX_LEVELS = 3
+const MAX_LEVELS = 2
 const MAX_MEASURES = 4
 
 export const MEASURE_FORMATS = ['currency', 'number'] as const

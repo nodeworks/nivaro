@@ -357,10 +357,10 @@ describe('validateRollupConfig', () => {
     expect(validateRollupConfig(cfg, RELATIONS)).toMatch(/levels must be a non-empty array/)
   })
 
-  it('rejects more than 3 levels', () => {
+  it('rejects more than 2 levels', () => {
     const cfg = baseValidConfig() as Record<string, unknown>
-    cfg.levels = [{ field: 'a' }, { field: 'b' }, { field: 'c' }, { field: 'd' }]
-    expect(validateRollupConfig(cfg, RELATIONS)).toMatch(/at most 3 entries/)
+    cfg.levels = [{ field: 'a' }, { field: 'b' }, { field: 'c' }]
+    expect(validateRollupConfig(cfg, RELATIONS)).toMatch(/at most 2 entries/)
   })
 
   it('rejects a bad measure sum identifier', () => {
