@@ -8,7 +8,7 @@ import { FieldRenderer } from '../item-edit/FieldRenderer'
 import { O2MStagingContext } from '../item-edit/O2MStagingContext'
 import type { O2MStagingCtx } from '../item-edit/O2MStagingContext'
 import type { CMSField, CMSRelation } from '../item-edit/types'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, FileDiff } from 'lucide-react'
 import { Button } from '../ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { Input } from '../ui/input'
@@ -827,6 +827,7 @@ export function AddendumPanel({
           onClick={() => setCollapsed(c => !c)}
         >
           <div className='flex items-center gap-2'>
+            <FileDiff className='h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500' />
             <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Addendums</h3>
             {activeCount > 0 && (
               <span className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
