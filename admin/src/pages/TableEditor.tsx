@@ -15153,7 +15153,7 @@ function FieldGroupsTab({
           // record_id — surface it here so it's visible/editable like any
           // other widget's bindings (TableEditor.tsx Add Widget already
           // defaults its binding_value to 'id').
-          if (wDef?.widget_type === 'review_list') {
+          if (['review_list', 'rollup'].includes(wDef?.widget_type ?? '')) {
             return [{ key: 'record_id', label: 'Record ID', type: 'string' }]
           }
           const cfg =
@@ -15350,7 +15350,7 @@ function FieldGroupsTab({
           // record_id — surface it here so it's visible/editable like any
           // other widget's bindings (TableEditor.tsx Add Widget already
           // defaults its binding_value to 'id').
-          if (wDef?.widget_type === 'review_list') {
+          if (['review_list', 'rollup'].includes(wDef?.widget_type ?? '')) {
             return [{ key: 'record_id', label: 'Record ID', type: 'string' }]
           }
           const cfg =
@@ -16008,7 +16008,7 @@ function FieldGroupsTab({
                                   // record's id to resolve rows — default it so the
                                   // widget works without an extra manual binding step.
                                   input_bindings:
-                                    w.widget_type === 'review_list'
+                                    ['review_list', 'rollup'].includes(w.widget_type)
                                       ? [{ key: 'record_id', binding_type: 'item_field', binding_value: 'id' }]
                                       : []
                                 }

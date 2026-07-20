@@ -97,6 +97,12 @@ import {
   rawToReviewList,
   reviewListToRaw
 } from './widgets/ReviewListConfigForm'
+import {
+  type RollupCfg,
+  RollupConfigForm,
+  rawToRollup,
+  rollupToRaw
+} from './widgets/RollupConfigForm'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -842,6 +848,7 @@ interface InternalWidget {
     | 'list'
     | 'button-group'
     | 'review_list'
+    | 'rollup'
   inputs: unknown[] | null
   config: unknown | null
   is_active: boolean
@@ -855,7 +862,8 @@ const WIDGET_TYPE_OPTIONS = [
   { value: 'action-buttons', label: 'Action Buttons (server)' },
   { value: 'button-group', label: 'Button Group (client)' },
   { value: 'external-api', label: 'External API' },
-  { value: 'review_list', label: 'Review List' }
+  { value: 'review_list', label: 'Review List' },
+  { value: 'rollup', label: 'Rollup' }
 ] as const
 
 interface InternalWidgetFormData {
@@ -2967,15 +2975,17 @@ function WidgetConfigEditor({
   const [btnsCfg, setBtnsCfg] = useState<BtnsCfg>(() => rawToBtns(parsed))
   const [btnGroupCfg, setBtnGroupCfg] = useState<BtnGroupCfg>(() => rawToBtnGroup(parsed))
   const [rlCfg, setRlCfg] = useState<ReviewListCfg>(() => rawToReviewList(parsed))
+  const [rollupCfg, setRollupCfg] = useState<RollupCfg>(() => rawToRollup(parsed))
   const [compactStyle, setCompactStyle] = useState<string>(() =>
     String(parsed.compact_style ?? 'default')
   )
 
-  // Non-review_list types have no client-side completeness gate today — only
-  // review_list reports its own validity (via ReviewListConfigForm below).
+  // Non-review_list/rollup types have no client-side completeness gate today
+  // — only review_list and rollup report their own validity (via
+  // ReviewListConfigForm/RollupConfigForm below).
   // biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when the active type changes
   useEffect(() => {
-    if (type !== 'review_list') onValidityChange?.(true)
+    if (type !== 'review_list' && type !== 'rollup') onValidityChange?.(true)
   }, [type])
 
   function currentJson(overrideStyle?: string): string {
@@ -2988,6 +2998,7 @@ function WidgetConfigEditor({
       else if (type === 'action-buttons') raw = btnsToRaw(btnsCfg)
       else if (type === 'button-group') raw = btnGroupToRaw(btnGroupCfg)
       else if (type === 'review_list') raw = reviewListToRaw(rlCfg)
+      else if (type === 'rollup') raw = rollupToRaw(rollupCfg)
       const style = overrideStyle ?? compactStyle
       if (style && style !== 'default') raw.compact_style = style
       return JSON.stringify(raw, null, 2)
@@ -3012,6 +3023,7 @@ function WidgetConfigEditor({
       setBtnsCfg(rawToBtns(raw))
       setBtnGroupCfg(rawToBtnGroup(raw))
       setRlCfg(rawToReviewList(raw))
+      setRollupCfg(rawToRollup(raw))
       setCompactStyle(String(raw.compact_style ?? 'default'))
       onChange(rawText)
       setParseError(null)
@@ -3086,6 +3098,10 @@ function WidgetConfigEditor({
   function onReviewListChange(c: ReviewListCfg) {
     setRlCfg(c)
     onChange(JSON.stringify(reviewListToRaw(c), null, 2))
+  }
+  function onRollupChange(c: RollupCfg) {
+    setRollupCfg(c)
+    onChange(JSON.stringify(rollupToRaw(c), null, 2))
   }
 
   return (
@@ -3190,6 +3206,13 @@ function WidgetConfigEditor({
               <ReviewListConfigForm
                 cfg={rlCfg}
                 onChange={onReviewListChange}
+                onValidityChange={onValidityChange}
+              />
+            )}
+            {type === 'rollup' && (
+              <RollupConfigForm
+                cfg={rollupCfg}
+                onChange={onRollupChange}
                 onValidityChange={onValidityChange}
               />
             )}

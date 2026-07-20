@@ -31,12 +31,23 @@ export interface RLStatusOption {
   label: string
   color: string
 }
-/** Column entry — label/format '' means unset (serialized back to plain string). */
+/** Column entry — label/format '' means unset (serialized back to plain string).
+ * `raw` is set only for lookup columns: the original config object (label/
+ * format/color/lookup), round-tripped untouched except for label/format/color
+ * edits made in the editor. The server assigns the lookup's `field` key
+ * (`$lookup.<collection>.<field>.<local~remote>…`) — the editor never
+ * computes or displays it (spec §2). */
 export interface RLColumn {
   field: string
   label: string
   format: string
   color: string
+  raw?: Record<string, unknown>
+}
+/** Lookup adder draft state — not part of any serialized shape. */
+interface RLLookupMatchDraft {
+  local: string
+  remote: string
 }
 export interface ReviewListCfg {
   host_collection: string
@@ -56,11 +67,20 @@ export interface ReviewListCfg {
   stamp_date_field: string
 }
 
-function rawColumns(v: unknown): RLColumn[] {
+export function rawColumns(v: unknown): RLColumn[] {
   if (!Array.isArray(v)) return []
   return (v as unknown[]).map((e) => {
     if (typeof e === 'object' && e !== null) {
       const o = e as Record<string, unknown>
+      if (o.lookup && typeof o.lookup === 'object') {
+        return {
+          field: '',
+          label: o.label != null ? String(o.label) : '',
+          format: o.format != null ? String(o.format) : '',
+          color: o.color != null ? String(o.color) : '',
+          raw: o
+        }
+      }
       return {
         field: String(o.field ?? ''),
         label: o.label != null ? String(o.label) : '',
@@ -72,8 +92,16 @@ function rawColumns(v: unknown): RLColumn[] {
   })
 }
 
-function columnsToRaw(cols: RLColumn[]): Array<string | Record<string, unknown>> {
+export function columnsToRaw(cols: RLColumn[]): Array<string | Record<string, unknown>> {
   return cols.map((c) => {
+    if (c.raw) {
+      const out: Record<string, unknown> = { ...c.raw, label: c.label }
+      delete out.format
+      delete out.color
+      if (c.format) out.format = c.format
+      if (c.format === 'flag' && c.color) out.color = c.color
+      return out
+    }
     if (!c.label && !c.format) return c.field
     const out: Record<string, unknown> = { field: c.field }
     if (c.label) out.label = c.label
@@ -177,7 +205,7 @@ interface HopOption {
   label: string
 }
 
-function useRelationsFor(collection: string) {
+export function useRelationsFor(collection: string) {
   return useQuery({
     queryKey: ['review-list-relations', collection],
     queryFn: () =>
@@ -193,7 +221,7 @@ function useRelationsFor(collection: string) {
 // but solving "all hop options FROM this collection" rather than resolving a
 // single named field — the editor needs to list choices, the server needs to
 // validate one.
-function hopOptionsForCollection(cur: string, relations: RLRelRow[]): HopOption[] {
+export function hopOptionsForCollection(cur: string, relations: RLRelRow[]): HopOption[] {
   const opts: HopOption[] = []
   for (const r of relations) {
     if (r.many_collection === cur && !r.junction_field && r.one_collection) {
@@ -224,7 +252,7 @@ function hopOptionsForCollection(cur: string, relations: RLRelRow[]): HopOption[
   return opts
 }
 
-const STATUS_COLOR_OPTS = [
+export const STATUS_COLOR_OPTS = [
   { value: 'green', label: 'Green' },
   { value: 'red', label: 'Red' },
   { value: 'amber', label: 'Amber' },
@@ -239,7 +267,7 @@ const FILTER_OP_OPTS = [
   { value: 'nnull', label: 'is not empty' }
 ]
 
-function ReviewListFilterRows({
+export function ReviewListFilterRows({
   rows,
   fieldOptions,
   onChange
@@ -304,7 +332,7 @@ function ReviewListFilterRows({
   )
 }
 
-const FORMAT_OPTS = [
+export const FORMAT_OPTS = [
   { value: '', label: 'Raw' },
   { value: 'number', label: 'Number' },
   { value: 'currency', label: 'Currency' },
@@ -314,7 +342,7 @@ const FORMAT_OPTS = [
 ]
 
 /** "Vendor Name (vendor_name)" → "Vendor Name"; falls back to the raw field. */
-function fieldLabelOf(options: { value: string; label: string }[], field: string): string {
+export function fieldLabelOf(options: { value: string; label: string }[], field: string): string {
   const opt = options.find((o) => o.value === field)
   if (!opt) return field
   const suffix = ` (${field})`
@@ -324,16 +352,22 @@ function fieldLabelOf(options: { value: string; label: string }[], field: string
 // Guided column editor — columns are added through pickers (target fields, or
 // one M2O hop into a related record), never typed as raw dot-paths. Each
 // selected column row carries its own label override and display format.
-function ColumnListEditor({
+export function ColumnListEditor({
   collection,
   fieldOptions,
   value,
-  onChange
+  onChange,
+  allowLookup = true
 }: {
   collection: string
   fieldOptions: { value: string; label: string }[]
   value: RLColumn[]
   onChange: (v: RLColumn[]) => void
+  /** Lookup entries validate only on review_list's group_meta/line_columns
+   * (api/src/services/review-list.ts) — rollup's leaf_columns validator has
+   * no lookup branch (api/src/services/rollup.ts), so RollupConfigForm opts
+   * out to avoid building a config the server always rejects on save. */
+  allowLookup?: boolean
 }) {
   const relQ = useRelationsFor(collection)
   const m2oOpts = (relQ.data ?? [])
@@ -347,27 +381,77 @@ function ColumnListEditor({
   const activeRel = m2oOpts.find((o) => o.field === relField) ?? null
   const relatedFieldOpts = useFieldOptions(activeRel?.related ?? '')
 
-  const has = (field: string) => value.some((c) => c.field === field)
+  // Lookup adder — collapsed by default (calm default per spec §2 editor
+  // paragraph). Reuses useCollectionOptions/useFieldOptions like the rest of
+  // this editor; the resulting entry carries the raw lookup object untouched
+  // (see RLColumn.raw) — the server assigns the `$lookup...` field key.
+  const [lookupOpen, setLookupOpen] = useState(false)
+  const [lookupCollection, setLookupCollection] = useState('')
+  const [lookupField, setLookupField] = useState('')
+  const [lookupPairs, setLookupPairs] = useState<RLLookupMatchDraft[]>([{ local: '', remote: '' }])
+  const [lookupLabel, setLookupLabel] = useState('')
+  const allCollectionOpts = useCollectionOptions()
+  const lookupFieldOpts = useFieldOptions(lookupCollection)
+
+  const has = (field: string) => value.some((c) => !c.raw && c.field === field)
   function add(field: string) {
     if (field && !has(field)) onChange([...value, { field, label: '', format: '', color: '' }])
   }
-  function upd(field: string, patch: Partial<RLColumn>) {
-    onChange(value.map((c) => (c.field === field ? { ...c, ...patch } : c)))
+  function updAt(i: number, patch: Partial<RLColumn>) {
+    onChange(value.map((c, j) => (j === i ? { ...c, ...patch } : c)))
+  }
+  function removeAt(i: number) {
+    onChange(value.filter((_, j) => j !== i))
   }
   function displayName(c: RLColumn): string {
     if (c.label) return c.label
+    if (c.raw) return 'Lookup column'
     const [head, sub] = c.field.split('.')
     if (sub) return `${fieldLabelOf(fieldOptions, head)} → ${sub.replace(/_/g, ' ')}`
     return fieldLabelOf(fieldOptions, c.field)
+  }
+  function lookupSummary(c: RLColumn): string {
+    const lookup = c.raw?.lookup as
+      | { collection?: string; field?: string; match?: Array<{ local?: string }> }
+      | undefined
+    if (!lookup) return ''
+    const locals = (lookup.match ?? [])
+      .map((m) => m.local)
+      .filter(Boolean)
+      .join('+')
+    return `${lookup.collection ?? '?'}.${lookup.field ?? '?'} via ${locals}`
+  }
+
+  const completePairs = lookupPairs.filter((p) => p.local && p.remote)
+  const canAddLookup =
+    !!lookupCollection && !!lookupField && completePairs.length >= 1 && !!lookupLabel.trim()
+
+  function addLookup() {
+    if (!canAddLookup) return
+    const raw: Record<string, unknown> = {
+      label: lookupLabel.trim(),
+      lookup: {
+        collection: lookupCollection,
+        field: lookupField,
+        match: completePairs.map((p) => ({ local: p.local, remote: p.remote }))
+      }
+    }
+    onChange([...value, { field: '', label: lookupLabel.trim(), format: '', color: '', raw }])
+    setLookupOpen(false)
+    setLookupCollection('')
+    setLookupField('')
+    setLookupPairs([{ local: '', remote: '' }])
+    setLookupLabel('')
   }
 
   return (
     <div className='space-y-2'>
       {value.length > 0 && (
         <div className='space-y-1.5'>
-          {value.map((c) => (
+          {value.map((c, i) => (
             <div
-              key={c.field}
+              // biome-ignore lint/suspicious/noArrayIndexKey: stable list — removal only truncates from the end
+              key={i}
               className='flex items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 dark:border-border'
             >
               <div className='min-w-0 flex-1'>
@@ -375,19 +459,19 @@ function ColumnListEditor({
                   {displayName(c)}
                 </p>
                 <p className='truncate font-mono text-[10px] text-slate-400 dark:text-slate-500'>
-                  {c.field}
+                  {c.raw ? lookupSummary(c) : c.field}
                 </p>
               </div>
               <Input
                 className='h-7 w-[150px] text-[11px]'
                 value={c.label}
-                onChange={(e) => upd(c.field, { label: e.target.value })}
+                onChange={(e) => updAt(i, { label: e.target.value })}
                 placeholder='Custom label'
               />
               <div className='w-[104px]'>
                 <PickCombobox
                   value={c.format}
-                  onChange={(v) => upd(c.field, { format: v })}
+                  onChange={(v) => updAt(i, { format: v })}
                   options={FORMAT_OPTS}
                   widthClass='w-[130px]'
                 />
@@ -396,7 +480,7 @@ function ColumnListEditor({
                 <div className='w-[92px]'>
                   <PickCombobox
                     value={c.color || 'amber'}
-                    onChange={(v) => upd(c.field, { color: v })}
+                    onChange={(v) => updAt(i, { color: v })}
                     options={STATUS_COLOR_OPTS}
                     widthClass='w-[120px]'
                   />
@@ -407,7 +491,7 @@ function ColumnListEditor({
                 variant='ghost'
                 className='h-7 w-7 shrink-0'
                 aria-label={`Remove ${displayName(c)}`}
-                onClick={() => onChange(value.filter((x) => x.field !== c.field))}
+                onClick={() => removeAt(i)}
               >
                 <X className='h-3.5 w-3.5' />
               </Button>
@@ -453,12 +537,128 @@ function ColumnListEditor({
           )}
         </div>
       )}
+      {allowLookup && (
+        <div>
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-6 gap-1 px-2 text-[11px] text-muted-foreground'
+            onClick={() => setLookupOpen((o) => !o)}
+          >
+            <Plus className='h-3 w-3' />
+            Lookup column…
+          </Button>
+          {lookupOpen && (
+            <div className='mt-2 space-y-1.5 rounded-md border border-dashed border-slate-300 p-2.5 dark:border-border'>
+              <div className='flex flex-wrap items-center gap-1.5'>
+                <div className='w-[200px]'>
+                  <PickCombobox
+                    value={lookupCollection}
+                    onChange={(v) => {
+                      setLookupCollection(v)
+                      setLookupField('')
+                      setLookupPairs([{ local: '', remote: '' }])
+                    }}
+                    options={allCollectionOpts}
+                    placeholder='Lookup collection…'
+                  />
+                </div>
+                <div className='w-[200px]'>
+                  <PickCombobox
+                    value={lookupField}
+                    onChange={setLookupField}
+                    options={lookupFieldOpts}
+                    placeholder='Field to display…'
+                    disabled={!lookupCollection}
+                  />
+                </div>
+              </div>
+              <div className='space-y-1'>
+                <Label className='text-[10px] text-muted-foreground'>
+                  Match on ({collection || 'target'} = {lookupCollection || '…'})
+                </Label>
+                {lookupPairs.map((p, i) => (
+                  <div
+                    // biome-ignore lint/suspicious/noArrayIndexKey: stable list
+                    key={i}
+                    className='flex items-center gap-1.5'
+                  >
+                    <div className='w-[170px]'>
+                      <PickCombobox
+                        value={p.local}
+                        onChange={(v) =>
+                          setLookupPairs((pairs) =>
+                            pairs.map((x, j) => (j === i ? { ...x, local: v } : x))
+                          )
+                        }
+                        options={fieldOptions}
+                        placeholder='target field…'
+                      />
+                    </div>
+                    <span className='text-[11px] text-slate-400'>=</span>
+                    <div className='w-[170px]'>
+                      <PickCombobox
+                        value={p.remote}
+                        onChange={(v) =>
+                          setLookupPairs((pairs) =>
+                            pairs.map((x, j) => (j === i ? { ...x, remote: v } : x))
+                          )
+                        }
+                        options={lookupFieldOpts}
+                        placeholder='lookup field…'
+                        disabled={!lookupCollection}
+                      />
+                    </div>
+                    {lookupPairs.length > 1 && (
+                      <Button
+                        size='icon'
+                        variant='ghost'
+                        className='h-7 w-7 shrink-0'
+                        aria-label='Remove match pair'
+                        onClick={() => setLookupPairs((pairs) => pairs.filter((_, j) => j !== i))}
+                      >
+                        <X className='h-3.5 w-3.5' />
+                      </Button>
+                    )}
+                  </div>
+                ))}
+                {lookupPairs.length < 3 && (
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 text-[12px]'
+                    onClick={() => setLookupPairs((pairs) => [...pairs, { local: '', remote: '' }])}
+                  >
+                    <Plus className='mr-1 h-3 w-3' />
+                    Add match pair
+                  </Button>
+                )}
+              </div>
+              <Input
+                className='h-7 text-[12px]'
+                value={lookupLabel}
+                onChange={(e) => setLookupLabel(e.target.value)}
+                placeholder='Label (required)'
+              />
+              <Button
+                size='sm'
+                className='h-7 text-[12px]'
+                disabled={!canAddLookup}
+                onClick={addLookup}
+              >
+                <Plus className='mr-1 h-3 w-3' />
+                Add
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
 
 /** Titled form region — carries the semantic grouping of the config editor. */
-function Section({
+export function Section({
   title,
   hint,
   children
