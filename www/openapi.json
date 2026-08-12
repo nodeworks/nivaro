@@ -54599,6 +54599,9 @@
           "tax_amount": {
             "type": "number",
             "description": "Tax / Other"
+          },
+          "discount_amount": {
+            "type": "number"
           }
         },
         "required": []
