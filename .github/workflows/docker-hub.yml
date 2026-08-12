@@ -7,15 +7,69 @@ on:
 
   workflow_dispatch:
 
+# Each architecture builds NATIVELY in parallel (GitHub's arm64 runners are
+# free for public repos) — QEMU-emulating the arm64 half took 20-40 minutes
+# for what a native runner does in ~3. The merge job stitches the per-arch
+# digests into one multi-arch manifest.
 jobs:
-  build-push:
-    name: Build & Push
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write
-
+      contents: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3 # TODO: pin SHA
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3 # TODO: pin SHA
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6 # TODO: pin SHA
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=nodeworks/nivaro,push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge manifest & tag
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
 
       - name: Extract version from tag
         id: meta
@@ -23,59 +77,19 @@ jobs:
           VERSION="${GITHUB_REF_NAME#@app-}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3 # TODO: pin SHA
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3 # TODO: pin SHA — gh api repos/docker/setup-buildx-action/git/ref/tags/v3 --jq '.object.sha'
-
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3 # TODO: pin SHA — gh api repos/docker/login-action/git/ref/tags/v3 --jq '.object.sha'
+        uses: docker/login-action@v3 # TODO: pin SHA
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6 # TODO: pin SHA — gh api repos/docker/build-push-action/git/ref/tags/v6 --jq '.object.sha'
-        with:
-          context: .
-          file: Dockerfile.release
-          # arm64 too — Apple-silicon dev machines and Graviton/ARM hosts
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            nodeworks/nivaro:${{ steps.meta.outputs.version }}
-            nodeworks/nivaro:latest
-          cache-from: type=registry,ref=nodeworks/nivaro:latest
-          cache-to: type=inline
-          sbom: true
-          provenance: mode=max
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Generate changelog
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Create multi-arch manifest
+        working-directory: /tmp/digests
         run: |
-          CURRENT_TAG="${GITHUB_REF_NAME}"
-          PREV_TAG=$(git tag --sort=-version:refname | grep "^@app-" | sed -n '2p' || true)
-          node scripts/gen-changelog.mjs "${PREV_TAG}" "${CURRENT_TAG}" "Nivaro" > CHANGELOG_DRAFT.md
+          docker buildx imagetools create \
+            -t nodeworks/nivaro:${{ steps.meta.outputs.version }} \
+            -t nodeworks/nivaro:latest \
+            $(printf 'nodeworks/nivaro@sha256:%s ' *)
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.meta.outputs.version }}
-        run: |
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
-            --notes-file CHANGELOG_DRAFT.md
+      - name: Inspect
+        run: docker buildx imagetools inspect nodeworks/nivaro:${{ steps.meta.outputs.version }}
