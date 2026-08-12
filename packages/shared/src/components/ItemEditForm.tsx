@@ -42,7 +42,7 @@ import type {
   SummaryAggConfig,
   SummaryEntry
 } from './item-edit/types'
-import { AccessDeniedPanel, AddendumPanel, CommentPanel, ErpFailureBanner, ExternalRequestsChip, ItemActionButtons, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
+import { AccessDeniedPanel, AddendumPanel, CommentPanel, ExternalRequestsChip, ItemActionButtons, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
 import { WidgetSlot, type InputBinding } from './WidgetSlot'
 import type { PendingTask } from './panels/TaskPanel'
 import { Button } from './ui/button'
@@ -4421,9 +4421,6 @@ export function ItemEditForm({
                 takingOver={takingOver}
                 isAdmin={isAdmin}
               />
-            )}
-            {!isNew && itemId && (
-              <ErpFailureBanner collection={collection} itemId={String(itemId)} />
             )}
             {!isNew && addendumEnabled && activeAddendums.length > 0 && (
               <div className='relative mb-3 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5'>

@@ -11,6 +11,7 @@ import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from '..
 interface ErpSubmission {
   id: number
   external_api: number | null
+  external_api_name?: string | null
   external_ref: string | null
   status: string
   attempts: number
@@ -78,7 +79,12 @@ function RequestRow({
         className='flex w-full items-center gap-3 px-3 py-2 text-left'
       >
         <StatusPill status={sub.status} />
-        <span className='min-w-0 flex-1 truncate font-mono text-[11.5px] text-slate-600 dark:text-slate-300'>
+        {sub.external_api_name && (
+          <span className='shrink-0 text-[11.5px] font-semibold text-slate-700 dark:text-slate-200'>
+            {sub.external_api_name}
+          </span>
+        )}
+        <span className='min-w-0 flex-1 truncate font-mono text-[11.5px] text-slate-500 dark:text-slate-400'>
           {sub.endpoint_path ?? '—'}
         </span>
         {sub.external_ref && (
@@ -102,7 +108,7 @@ function RequestRow({
             <span>Sent: {new Date(sub.created_at).toLocaleString()}</span>
             <span>Last update: {new Date(sub.updated_at).toLocaleString()}</span>
             <span>Attempts: {sub.attempts}</span>
-            {sub.external_api != null && <span>External API #{sub.external_api}</span>}
+            <span>API: {sub.external_api_name ?? (sub.external_api != null ? `#${sub.external_api}` : '—')}</span>
           </div>
           {sub.last_error && (
             <p className='rounded bg-red-50 px-2 py-1.5 text-[11.5px] text-red-700 dark:bg-red-500/10 dark:text-red-400'>
@@ -205,7 +211,7 @@ export function ExternalRequestsChip({
       </button>
       {open && (
         <Dialog open onOpenChange={(o) => !o && setOpen(false)}>
-          <DialogContent className='max-w-3xl p-5'>
+          <DialogContent className='p-5' style={{ width: '75%', maxWidth: '75%' }}>
             <DialogHeader>
               <DialogTitle className='flex items-center gap-2 text-[15px]'>
                 <Satellite className='h-4 w-4 text-nvr-cyan' />

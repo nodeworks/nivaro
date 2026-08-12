@@ -219,7 +219,22 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         .where({ collection, item })
         .orderBy('created_at', 'desc')
         .orderBy('id', 'desc')) as ErpSubmissionRow[]
-      return { data: rows.map(serialize) }
+      // Resolve external API display names — ids alone mean nothing to users,
+      // and /external-apis is admin-only so the client can't look them up.
+      const apiIds = [...new Set(rows.map((r) => r.external_api).filter((v) => v != null))]
+      const names = apiIds.length
+        ? new Map(
+            ((await db('nivaro_external_apis')
+              .whereIn('id', apiIds as number[])
+              .select('id', 'name')) as Array<{ id: number; name: string }>).map((a) => [a.id, a.name])
+          )
+        : new Map<number, string>()
+      return {
+        data: rows.map((r) => ({
+          ...serialize(r),
+          external_api_name: r.external_api != null ? (names.get(r.external_api) ?? null) : null
+        }))
+      }
     }
   )
 
