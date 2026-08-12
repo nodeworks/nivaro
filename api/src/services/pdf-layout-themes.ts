@@ -245,7 +245,7 @@ export function classicTheme(data: PdfLayoutData): string {
     page-break-after: avoid;
     display: flex; align-items: baseline; gap: 12px;
   }
-  .section-break { break-before: page; }
+  .section-break { break-before: page; padding-top: 22px; }
   .section-title {
     font-family: Georgia, 'Times New Roman', serif;
     font-size: 15pt; font-weight: 400; color: #0c1829;
@@ -494,7 +494,7 @@ export function minimalTheme(data: PdfLayoutData): string {
     width: 10px; height: 10px; background: #00ceff;
     border-radius: 2px; flex-shrink: 0;
   }
-  .section-break { break-before: page; }
+  .section-break { break-before: page; padding-top: 22px; }
   .section-title {
     font-size: 13pt; font-weight: 800; color: #111111;
     letter-spacing: -0.025em; line-height: 1;
@@ -762,7 +762,7 @@ export function executiveTheme(data: PdfLayoutData): string {
     margin-bottom: 5mm;
     page-break-after: avoid;
   }
-  .section-break { break-before: page; }
+  .section-break { break-before: page; padding-top: 22px; }
   .section-title {
     font-family: Georgia, 'Times New Roman', serif;
     font-size: 14pt; font-weight: 400; color: #00ceff;
