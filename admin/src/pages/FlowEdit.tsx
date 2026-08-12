@@ -3190,9 +3190,8 @@ export function FlowEditPage() {
                       <>
                         <div className='my-1 border-t border-slate-100 dark:border-border' />
                         {(registeredTriggers ?? []).map((t) => (
-                          <SelectItem key={t.type} value={t.type}>
+                          <SelectItem key={t.type} value={t.type} title={t.description || undefined}>
                             {t.label}
-                            {t.description ? ` — ${t.description}` : ''}
                           </SelectItem>
                         ))}
                       </>
@@ -3251,9 +3250,12 @@ export function FlowEditPage() {
               if (!extTrigger) return null
               if (!extTrigger.fields?.length)
                 return (
-                  <div className='rounded-lg border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/30 px-3 py-2 text-[11px] text-slate-500'>
-                    Extension trigger: <span className='font-semibold'>{extTrigger.label}</span>. No
-                    configuration required.
+                  <div className='space-y-1 rounded-lg border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/30 px-3 py-2 text-[11px] text-slate-500'>
+                    <p>
+                      Extension trigger: <span className='font-semibold'>{extTrigger.label}</span>. No
+                      configuration required.
+                    </p>
+                    {extTrigger.description && <p className='text-slate-400'>{extTrigger.description}</p>}
                   </div>
                 )
               return (
