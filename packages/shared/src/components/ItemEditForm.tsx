@@ -601,10 +601,12 @@ export function ItemEditForm({
     queryKey: ['file-layouts', collection],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: number; name: string }> }>(
+        .request<{ data: Array<{ id: number; name: string; layout_type?: string; pdf_button_label?: string | null }> }>(
           get('/collection-layouts', { collection, type: 'file' })
         )
-        .then((r) => r.data ?? []),
+        // The list route ignores the type param — filter here or every layout
+        // on the collection would grow a PDF button.
+        .then((r) => (r.data ?? []).filter((l) => l.layout_type === 'file')),
     enabled: !!collection && !isNew,
     staleTime: 60_000,
   })
@@ -4128,6 +4130,24 @@ export function ItemEditForm({
               {showItemActions && !isNew && (
                 <ItemActionButtons collection={collection} itemId={String(itemId)} />
               )}
+              {!isNew && itemId && fileLayouts.map((fl) => (
+                <Button
+                  key={fl.id}
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  disabled={pdfLoading === fl.id}
+                  onClick={() => void downloadPdf(fl.id)}
+                  className='gap-1.5'
+                >
+                  {pdfLoading === fl.id ? (
+                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                  ) : (
+                    <FileDown className='h-3.5 w-3.5' />
+                  )}
+                  {fl.pdf_button_label || 'Export PDF'}
+                </Button>
+              ))}
               {(effectiveShowRevisions && !isNew) || (effectiveShowClone && !isNew && isAdmin) || canDelete ? (
                 <>
                   {effectiveShowRevisions && !isNew && (

@@ -103,7 +103,13 @@ function validateDefaultValues(values: unknown): string | null {
 // Fetch the DB-ordered layout candidates for a collection (is_active desc,
 // sort asc — the idiom both role- and record-condition tie-breaking rely on).
 async function fetchLayoutsForCollection(collection: string) {
-  return db('nivaro_collection_layouts').where({ collection }).orderByRaw('is_active desc, sort asc')
+  // Record-form resolution only — file/table/detail/addendum layouts must
+  // never win the active-layout race for the editing form (an is_active
+  // file layout used to hijack the whole record page).
+  return db('nivaro_collection_layouts')
+    .where({ collection })
+    .where((b) => b.where({ layout_type: 'grouped' }).orWhereNull('layout_type'))
+    .orderByRaw('is_active desc, sort asc')
 }
 
 // Union of field names referenced by any candidate layout's record_conditions.
