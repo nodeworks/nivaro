@@ -1,4 +1,5 @@
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
+import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './ChangeReasonDialog'
 import { AlertTriangle, ChevronRight, GripVertical, History, Loader2, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -1152,6 +1153,7 @@ export function InlineTableField({
   useEffect(() => { editStateRef.current = editState }, [editState])
   const [saving, setSaving] = useState(false)
   const [uniqueError, setUniqueError] = useState<string | null>(null)
+  const [crChallenge, setCrChallenge] = useState<{ challenge: ChangeReasonChallenge; retry: (reason: string) => Promise<void> } | null>(null)
   const activeView = useAddendumView()
   // Column view preset selection — session-only. Always initializes to the
   // configured default view (then first preset); a clicked preset must NOT
@@ -2208,7 +2210,25 @@ export function InlineTableField({
           setEditState(null)
           return
         }
-        await client.request(patch(`/items/${relatedCollection}/${editState.rowId}${pCtx}`, rowPayload))
+        try {
+          await client.request(patch(`/items/${relatedCollection}/${editState.rowId}${pCtx}`, rowPayload))
+        } catch (err) {
+          const challenge = changeReasonChallenge(err)
+          if (challenge) {
+            const url = `/items/${relatedCollection}/${editState.rowId}${pCtx}`
+            setCrChallenge({
+              challenge,
+              retry: async (reason: string) => {
+                await client.request(patch(url, { ...rowPayload, _change_reason: reason }))
+                qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+                setEditState(null)
+              }
+            })
+            setSaving(false)
+            return
+          }
+          throw err
+        }
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       }
       setEditState(null)
@@ -2598,6 +2618,15 @@ export function InlineTableField({
 
   return (
     <div className='space-y-1.5'>
+      <ChangeReasonDialog
+        challenge={crChallenge?.challenge ?? null}
+        onCancel={() => setCrChallenge(null)}
+        onSubmit={(reason) => {
+          const pending = crChallenge
+          setCrChallenge(null)
+          void pending?.retry(reason)
+        }}
+      />
       {!readOnly && <div className='flex items-center gap-2 text-[11px]'>
         <span className='text-slate-400'>Add</span>
         <input

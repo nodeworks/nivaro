@@ -148,7 +148,19 @@ export async function collectionsRoutes(app: FastifyInstance) {
         browserConfig = null
       }
     }
-    return reply.send({ data: { ...col, fields, relations, browser_config: browserConfig } })
+    // change_reason_config is JSON text too — same parse-for-consumers treatment
+    const rawCr = (col as { change_reason_config?: string | null }).change_reason_config
+    let changeReasonConfig: unknown = null
+    if (rawCr) {
+      try {
+        changeReasonConfig = JSON.parse(rawCr)
+      } catch {
+        changeReasonConfig = null
+      }
+    }
+    return reply.send({
+      data: { ...col, fields, relations, browser_config: browserConfig, change_reason_config: changeReasonConfig }
+    })
   })
 
   app.post('/', async (req, reply) => {
@@ -182,14 +194,23 @@ export async function collectionsRoutes(app: FastifyInstance) {
     const body = req.body as Partial<CMSCollection> & {
       picker_filter?: unknown
       browser_config?: unknown
+      change_reason_config?: unknown
     }
-    const { picker_filter: rawPickerFilter, browser_config: rawBrowserConfig, ...restBody } = body
+    const {
+      picker_filter: rawPickerFilter,
+      browser_config: rawBrowserConfig,
+      change_reason_config: rawChangeReason,
+      ...restBody
+    } = body
     const patch: Record<string, unknown> = { ...restBody }
     if ('picker_filter' in body) {
       patch.picker_filter = rawPickerFilter != null ? JSON.stringify(rawPickerFilter) : null
     }
     if ('browser_config' in body) {
       patch.browser_config = rawBrowserConfig != null ? JSON.stringify(rawBrowserConfig) : null
+    }
+    if ('change_reason_config' in body) {
+      patch.change_reason_config = rawChangeReason != null ? JSON.stringify(rawChangeReason) : null
     }
     const data = await svc.updateCollection(collection, patch)
     // Audit level is cached per collection in the activity hook — bust it so an

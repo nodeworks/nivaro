@@ -12,6 +12,9 @@ export interface HookContext {
   payload?: Record<string, unknown>
   result?: unknown
   previousData?: Record<string, unknown>
+  /** Caller-supplied justification for this write (change-reason config) —
+   *  stored on the activity row, never written to a column. */
+  changeReason?: string
   user?: User
   database: Database
   req?: FastifyRequest

@@ -3841,6 +3841,7 @@ function SettingsTab({
       <AddendumsSection tableName={tableName} />
       <PickerFilterSection tableName={tableName} />
       <BrowserSettingsSection tableName={tableName} />
+      <ChangeReasonSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
     </div>
   )
@@ -4314,6 +4315,88 @@ function AddendumsSection({ tableName }: { tableName: string }) {
 }
 
 // ─── Browser Settings card (Settings tab) ─────────────────────────────────────
+
+// nivaro_collections.change_reason_config — require a justification when the
+// listed fields change; the reason lands on the activity row + revision trail.
+function ChangeReasonSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const { data: col } = useQuery({
+    queryKey: ['collection-meta-cr', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { change_reason_config: { fields?: string[]; reasons?: string[]; allow_free_text?: boolean } | null; fields?: { field: string; label?: string | null; hidden?: boolean }[] } }>(`/collections/${tableName}`)
+        .then((r) => r.data.data),
+    enabled: !!tableName,
+    staleTime: 60 * 1000
+  })
+  const cfg = col?.change_reason_config ?? null
+  const [fieldsDraft, setFieldsDraft] = useState('')
+  const [reasonsDraft, setReasonsDraft] = useState('')
+  const [freeText, setFreeText] = useState(true)
+  const [init, setInit] = useState(false)
+  useEffect(() => {
+    if (col !== undefined && !init) {
+      setFieldsDraft((cfg?.fields ?? []).join(', '))
+      setReasonsDraft((cfg?.reasons ?? []).join('\n'))
+      setFreeText(cfg?.allow_free_text !== false)
+      setInit(true)
+    }
+  }, [col, init, cfg])
+
+  const save = async () => {
+    const fields = fieldsDraft.split(',').map((f) => f.trim()).filter(Boolean)
+    const reasons = reasonsDraft.split('\n').map((r) => r.trim()).filter(Boolean)
+    const body = fields.length > 0 ? { fields, reasons, allow_free_text: freeText } : null
+    await api.patch(`/collections/${tableName}`, { change_reason_config: body })
+    qc.invalidateQueries({ queryKey: ['collection-meta-cr', tableName] })
+    toast.success(fields.length > 0 ? 'Change-reason requirement saved' : 'Change-reason requirement removed')
+  }
+
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='px-4 py-3 space-y-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Change reason</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            When any of the listed fields is edited, the user must supply a justification before the
+            save goes through. The reason is stored on the activity entry and shows in the revision
+            history. Leave the field list empty to disable.
+          </p>
+        </div>
+        <div>
+          <p className='mb-1 text-[12.5px] font-medium text-slate-700'>Fields (comma-separated)</p>
+          <Input
+            value={fieldsDraft}
+            onChange={(e) => setFieldsDraft(e.target.value)}
+            placeholder='january, february, march, total'
+            className='h-8 text-[12px] font-mono'
+          />
+        </div>
+        <div>
+          <p className='mb-1 text-[12.5px] font-medium text-slate-700'>Preset reasons (one per line)</p>
+          <textarea
+            value={reasonsDraft}
+            onChange={(e) => setReasonsDraft(e.target.value)}
+            rows={4}
+            placeholder={'Material lead time shifted\nProject resequenced\nVendor delay'}
+            className='w-full rounded-md border border-slate-200 px-3 py-2 text-[12px] focus:outline-none focus:ring-1 focus:ring-[#00ceff]'
+          />
+        </div>
+        <div className='flex items-center justify-between gap-4'>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>Allow free text</p>
+            <p className='text-[11.5px] text-slate-500'>Let users type their own justification</p>
+          </div>
+          <Switch checked={freeText} onCheckedChange={setFreeText} />
+        </div>
+        <div className='flex justify-end'>
+          <Button size='sm' onClick={() => void save()}>Save</Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // nivaro_collections.browser_config — CollectionBrowserView behavior:
 // checkbox selection, row actions, create button, page size, quick filters.
 

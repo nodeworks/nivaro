@@ -89,6 +89,7 @@ export function registerActivityHooks() {
       user: ctx.user?.id,
       collection: ctx.collection,
       item: ctx.keys?.[0] != null ? String(ctx.keys[0]) : undefined,
+      comment: ctx.changeReason,
       req: ctx.req
     })
     if (level === 'all' && activityId && ctx.result && ctx.keys?.[0] != null) {

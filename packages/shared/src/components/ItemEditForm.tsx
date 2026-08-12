@@ -2,6 +2,7 @@ import type { ImportParseResponse, ImportTemplateSummary } from '@nivaro/sdk'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileDown, Loader2, Save, Trash2 } from 'lucide-react'
 import { CloneDialog } from './item-edit/CloneDialog'
+import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './item-edit/ChangeReasonDialog'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
 import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
@@ -713,6 +714,10 @@ export function ItemEditForm({
     []
   )
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
+  // Change-reason challenge: a 422 from the items service pauses the save
+  // until the user supplies a justification, then retries with _change_reason
+  const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
+  const changeReasonRef = useRef<string | null>(null)
   const [isDirty, setIsDirty] = useState(false)
 
   // ── Save progress dialog ───────────────────────────────────────────────────
@@ -2749,6 +2754,7 @@ export function ItemEditForm({
           payload[f.field] = cur
         }
       }
+      if (changeReasonRef.current) payload._change_reason = changeReasonRef.current
       let savedId: string
       try {
         if (isNew) {
@@ -2762,7 +2768,14 @@ export function ItemEditForm({
           savedId = itemId
         }
         updateStep('main', { status: 'done' })
+        changeReasonRef.current = null
       } catch (err) {
+        const challenge = changeReasonChallenge(err)
+        if (challenge) {
+          updateStep('main', { status: 'error', error: 'Waiting for a change reason' })
+          setCrChallenge(challenge)
+          throw err
+        }
         const msg = errMsg(err)
         updateStep('main', { status: 'error', error: msg })
         const resp = (err as { response?: { data?: { error?: string; field?: string } } })?.response
@@ -4068,6 +4081,19 @@ export function ItemEditForm({
                       }
                     />
                   )}
+                  <ChangeReasonDialog
+                    challenge={crChallenge}
+                    fieldLabel={(f) => {
+                      const fc = allFields.find((af) => af.field === f)
+                      return fc?.label || titleCase(f)
+                    }}
+                    onCancel={() => setCrChallenge(null)}
+                    onSubmit={(reason) => {
+                      changeReasonRef.current = reason
+                      setCrChallenge(null)
+                      saveMut.mutate()
+                    }}
+                  />
                   {effectiveShowClone && !isNew && isAdmin && (
                     <CloneDialog
                       collection={collection}

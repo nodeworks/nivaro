@@ -105,6 +105,46 @@ function assertNotRouteOnly(collection: string): void {
   if (route) throw new RouteOnlyCollectionError(collection, route)
 }
 
+// ─── Change-reason requirement ───────────────────────────────────────────────
+// nivaro_collections.change_reason_config: { fields, reasons?, allow_free_text? }
+// When a listed field actually changes in an update, the caller must supply
+// `_change_reason` (stripped from the payload; stored on the activity row).
+export interface ChangeReasonConfig {
+  fields: string[]
+  reasons?: string[]
+  allow_free_text?: boolean
+}
+
+export function parseChangeReasonConfig(raw: unknown): ChangeReasonConfig | null {
+  if (!raw) return null
+  try {
+    const cfg = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (!cfg || !Array.isArray(cfg.fields) || cfg.fields.length === 0) return null
+    return {
+      fields: cfg.fields.map(String),
+      reasons: Array.isArray(cfg.reasons) ? cfg.reasons.map(String).filter(Boolean) : [],
+      allow_free_text: cfg.allow_free_text !== false
+    }
+  } catch {
+    return null
+  }
+}
+
+export class ChangeReasonRequiredError extends Error {
+  statusCode = 422
+  code = 'CHANGE_REASON_REQUIRED'
+  violations: { fields_changed: string[]; reasons: string[]; allow_free_text: boolean }
+  constructor(fieldsChanged: string[], cfg: ChangeReasonConfig) {
+    super(`A reason is required when changing: ${fieldsChanged.join(', ')}`)
+    this.name = 'ChangeReasonRequiredError'
+    this.violations = {
+      fields_changed: fieldsChanged,
+      reasons: cfg.reasons ?? [],
+      allow_free_text: cfg.allow_free_text !== false
+    }
+  }
+}
+
 export class ForbiddenError extends Error {
   constructor() {
     super('Forbidden')
@@ -1766,6 +1806,14 @@ export async function updateOne(
   const allowed = await can(user, 'update', collection)
   if (!allowed) throw new ForbiddenError()
 
+  // Change reason rides the payload as a virtual `_change_reason` key — strip
+  // it before anything downstream sees it (it must never reach a column write)
+  const changeReason =
+    typeof (data as Record<string, unknown>)._change_reason === 'string'
+      ? String((data as Record<string, unknown>)._change_reason).trim()
+      : ''
+  delete (data as Record<string, unknown>)._change_reason
+
   // Tree permissions — restriction only: an explicit deny on the item or its
   // nearest matching ancestor blocks the update; null/true changes nothing.
   const treeAllow = await getTreePermission(user, 'update', collection, id)
@@ -1796,6 +1844,21 @@ export async function updateOne(
     if (workspaceId && (await workspaceColumnExists(collection))) {
       throw new ItemNotFoundError()
     }
+  }
+
+  // Change-reason enforcement — judged on the CALLER's payload before rules or
+  // computed fields mutate it, so machine-derived writes to flagged fields
+  // never demand a justification, only fields the caller explicitly changed.
+  const crConfig = parseChangeReasonConfig(
+    (col as unknown as { change_reason_config?: string | null }).change_reason_config
+  )
+  if (crConfig && !changeReason && previousData) {
+    const flaggedChanged = crConfig.fields.filter(
+      (f) =>
+        f in (data as Record<string, unknown>) &&
+        String((data as Record<string, unknown>)[f] ?? '') !== String(previousData[f] ?? '')
+    )
+    if (flaggedChanged.length > 0) throw new ChangeReasonRequiredError(flaggedChanged, crConfig)
   }
 
   // before_update rules — may mutate the payload (e.g. set_field)
@@ -1863,7 +1926,7 @@ export async function updateOne(
     previousData
   )
 
-  await hooks.trigger('after', { ...ctx, result, previousData })
+  await hooks.trigger('after', { ...ctx, result, previousData, changeReason: changeReason || undefined })
 
   broadcastCollectionUpdate(req?.server?.io, collection, id)
 

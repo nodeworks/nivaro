@@ -1,3 +1,4 @@
+import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './item-edit/ChangeReasonDialog'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -96,6 +97,7 @@ export function RecordGridEditor({ config }: { config: RecordGridEditorConfig })
   const [added, setAdded] = useState<string[]>([])
   const [removed, setRemoved] = useState<Set<string>>(new Set())
   const [saving, setSaving] = useState(false)
+  const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [openEditor, setOpenEditor] = useState<number | null>(null)
 
@@ -193,7 +195,7 @@ export function RecordGridEditor({ config }: { config: RecordGridEditorConfig })
   const dirty =
     Object.values(draft).some((r) => Object.keys(r).length > 0) || added.length > 0 || removed.size > 0
 
-  async function save() {
+  async function save(changeReason?: string) {
     setSaving(true)
     setStatus(null)
     let createdN = 0
@@ -220,6 +222,7 @@ export function RecordGridEditor({ config }: { config: RecordGridEditorConfig })
         }
         if (row.record) {
           if (Object.keys(payload).length === 0) continue
+          if (changeReason) payload._change_reason = changeReason
           await client.request(patch(`/items/${config.collection}/${row.record.id}`, payload))
           updatedN++
         } else {
@@ -246,7 +249,13 @@ export function RecordGridEditor({ config }: { config: RecordGridEditorConfig })
       await qc.invalidateQueries({ queryKey: ['record-grid-rows', config.collection] })
       setStatus(`Saved — ${updatedN} updated, ${createdN} created${deletedN ? `, ${deletedN} deleted` : ''}`)
     } catch (err) {
-      setStatus(`Save failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+      const challenge = changeReasonChallenge(err)
+      if (challenge) {
+        setCrChallenge(challenge)
+        setStatus(null)
+      } else {
+        setStatus(`Save failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+      }
     } finally {
       setSaving(false)
     }
@@ -259,6 +268,14 @@ export function RecordGridEditor({ config }: { config: RecordGridEditorConfig })
 
   return (
     <div className='flex h-full flex-col gap-3 overflow-auto p-3'>
+      <ChangeReasonDialog
+        challenge={crChallenge}
+        onCancel={() => setCrChallenge(null)}
+        onSubmit={(reason) => {
+          setCrChallenge(null)
+          void save(reason)
+        }}
+      />
       <div className='flex flex-wrap items-end gap-3'>
         {(config.scope ?? []).map((s) => {
           const resolved = resolveScopeTokens(s.filter, scope)
