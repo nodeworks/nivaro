@@ -39,3 +39,4 @@ api/extensions/*
 # IDE + internal planning docs
 .idea/
 nivaro-cloud-plan.html
+*.tsbuildinfo
