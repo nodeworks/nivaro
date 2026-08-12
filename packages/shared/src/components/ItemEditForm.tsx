@@ -2675,6 +2675,9 @@ export function ItemEditForm({
         const resp = (err as { response?: { data?: { error?: string } } })?.response
         return resp?.data?.error ?? (err instanceof Error ? err.message : 'Failed')
       }
+      // A change-reason 422 from any queued row PATCH pauses the save; the
+      // dialog retries the whole mutation with the reason applied to every row.
+      let flushChallenge: ChangeReasonChallenge | null = null
 
       // Build step list from pending state
       const hasM2M = [...m2mLinks.entries()].some(([, ids]) => ids.length > 0) ||
@@ -2768,7 +2771,6 @@ export function ItemEditForm({
           savedId = itemId
         }
         updateStep('main', { status: 'done' })
-        changeReasonRef.current = null
       } catch (err) {
         const challenge = changeReasonChallenge(err)
         if (challenge) {
@@ -2906,10 +2908,17 @@ export function ItemEditForm({
           const cleanChanges = Object.fromEntries(Object.entries(changes).filter(([k]) => !k.startsWith('__nested_ops_')))
           let rowPatchFailed = false
           if (Object.keys(cleanChanges).length > 0) {
+            if (changeReasonRef.current) cleanChanges._change_reason = changeReasonRef.current
             await client.request(patch(`/items/${rc}/${rowId}`, cleanChanges)).catch(err => {
               hasErr = true
               rowPatchFailed = true
-              updateStep(stepId, { status: 'error', error: errMsg(err) })
+              const challenge = changeReasonChallenge(err)
+              if (challenge) {
+                flushChallenge = challenge
+                updateStep(stepId, { status: 'error', error: 'Waiting for a change reason' })
+              } else {
+                updateStep(stepId, { status: 'error', error: errMsg(err) })
+              }
             })
           }
           if (rowPatchFailed) {
@@ -2963,6 +2972,7 @@ export function ItemEditForm({
         }
       }
       setPendingO2MEdits(nextEdits)
+      if (flushChallenge) setCrChallenge(flushChallenge)
 
       // ── O2M deletes ───────────────────────────────────────────────────────
       const nextDels = new Map(pendingO2MDeletes)
@@ -2990,6 +3000,7 @@ export function ItemEditForm({
       return savedId
     },
     onSuccess: (id) => {
+      changeReasonRef.current = null
       setIsDirty(false)
       setM2mLinks(new Map())
       setM2mUnlinks(new Map())
