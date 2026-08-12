@@ -20,6 +20,12 @@ export default defineConfig({
     })
   ],
   build: {
+    // Watch mode must not wipe dist on every rebuild — full.css (built
+    // separately by build:css) and consumers reading dist live would break.
+    // Polling because macOS fsevents delivers no events on some setups,
+    // which silently breaks chokidar-based watching.
+    emptyOutDir: !process.env.VITE_WATCH,
+    watch: process.env.VITE_WATCH ? { chokidar: { usePolling: true, interval: 300 } } : undefined,
     lib: {
       entry: resolve(__dirname, 'src/index.ts'),
       formats: ['es'],
