@@ -47,8 +47,15 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#@react-}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          # Idempotency: a delayed push-event run may already have published
+          # this version — skip instead of failing the re-run.
+          if npm view @nivaro/react@$VERSION version >/dev/null 2>&1; then
+            echo "already=true" >> $GITHUB_OUTPUT
+            echo "@nivaro/react@$VERSION already on npm — skipping publish"
+          fi
 
       - name: Publish to npm
+        if: steps.meta.outputs.already != 'true'
         run: npm publish --access public --provenance
         working-directory: packages/react
         env:

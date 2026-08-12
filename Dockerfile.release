@@ -31,6 +31,9 @@ COPY --from=deps /app/admin/node_modules ./admin/node_modules
 COPY --from=deps /app/packages/sdk/node_modules ./packages/sdk/node_modules
 COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY . .
+# Stale incremental state makes tsc SKIP declaration emit in a fresh tree —
+# a checked-in tsbuildinfo once shipped shared/dist without its .d.ts files.
+RUN rm -f packages/*/tsconfig.tsbuildinfo api/tsconfig.tsbuildinfo
 # Build order matters: shared type-imports @nivaro/sdk's dist, admin imports
 # shared's dist — without sdk built first, inference collapses to implicit-any.
 RUN pnpm --filter @nivaro/sdk build
