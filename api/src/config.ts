@@ -57,6 +57,13 @@ const schema = z.object({
     .string()
     .transform((v) => v === 'true')
     .default('false'),
+  // Behind a TLS-terminating proxy (traefik, nginx, Cloudflare) the app sees
+  // plain HTTP; without this, secure session cookies are never set and the
+  // OIDC callback fails with "Invalid session state".
+  TRUST_PROXY: z
+    .string()
+    .transform((v) => v === 'true')
+    .default('false'),
 
   OIDC_ISSUER: requiredUrl(),
   OIDC_CLIENT_ID: requiredStr(),

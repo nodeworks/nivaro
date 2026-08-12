@@ -37,6 +37,7 @@ import { callExternalApi } from './services/external-apis.js'
 
 export async function buildServer() {
   const app = fastify({
+    trustProxy: config.TRUST_PROXY,
     logger: {
       level: config.LOG_LEVEL,
       ...(config.NODE_ENV === 'development'
