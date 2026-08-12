@@ -1,9 +1,31 @@
 {
+  // Type coverage for api/extensions/** — the main api/tsconfig.json is scoped
+  // to src/**/* (rootDir src, emits to dist), so extension source belongs to no
+  // project without this. Two consequences, both of which this file fixes:
+  //
+  //   1. `tsc --noEmit` never checked extensions at all, so a signature drift
+  //      against ExtensionContext failed at runtime, inside a cron, unwatched.
+  //   2. An IDE resolving a file that no tsconfig includes falls back to bare
+  //      compiler defaults (target ES3) and reports errors that do not exist in
+  //      any real build — a wall of TS2802 "can only be iterated with
+  //      --downlevelIteration" on every `for…of` over a Set or Map.
+  //
+  // It lives HERE, named tsconfig.json, rather than as api/tsconfig.extensions
+  // .json, because editors discover a project by walking up from the open file
+  // and only recognise that filename.
+  //
+  //   pnpm --filter @nivaro/api run typecheck:extensions
+  //
+  // Inert for the build: `tsc && tsc-alias` runs the root project, whose
+  // include never reaches this directory.
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "rootDir": ".",
-    "noEmit": true
+    "noEmit": true,
+    "rootDir": "."
   },
-  "include": ["./**/*.ts"],
-  "exclude": ["**/node_modules", "**/dist"]
+  "include": ["./**/*"],
+  // Operational one-off scripts (legacy sync/migration tooling) import from
+  // ../../src, which violates rootDir — they run via tsx from the api cwd and
+  // are checked by the main api project when their imports drift.
+  "exclude": ["**/scripts/**"]
 }

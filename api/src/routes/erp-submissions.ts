@@ -4,6 +4,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { can } from '../services/permissions.js'
+import { serializeResponseBody } from '../services/workflow-actions.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ interface ErpSubmissionRow {
   attempts: number
   last_error: string | null
   payload: string | null
+  response: string | null
   created_at: Date
   updated_at: Date
 }
@@ -53,6 +55,7 @@ function serialize(row: ErpSubmissionRow) {
     last_error: row.last_error,
     endpoint_path: stored?.endpoint_path ?? null,
     payload: stored?.body ?? null,
+    response: parseJson(row.response) ?? row.response ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -64,6 +67,7 @@ interface SendOutcome {
   status: ErpStatus
   external_ref: string | null
   error: string | null
+  response: unknown
 }
 
 /**
@@ -87,13 +91,14 @@ function interpretResponse(httpStatus: number, body: unknown): SendOutcome {
         ref = String(refCandidate)
       }
     }
-    return { status, external_ref: ref, error: null }
+    return { status, external_ref: ref, error: null, response: body }
   }
   const bodyStr = typeof body === 'string' ? body : JSON.stringify(body ?? null)
   return {
     status: 'failed',
     external_ref: null,
-    error: `HTTP ${httpStatus}${bodyStr ? `: ${bodyStr.slice(0, 500)}` : ''}`
+    error: `HTTP ${httpStatus}${bodyStr ? `: ${bodyStr.slice(0, 500)}` : ''}`,
+    response: body
   }
 }
 
@@ -115,7 +120,8 @@ async function sendPayload(
     return {
       status: 'failed',
       external_ref: null,
-      error: err instanceof Error ? err.message : 'Request failed'
+      error: err instanceof Error ? err.message : 'Request failed',
+      response: null
     }
   }
 }
@@ -172,6 +178,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         external_api,
         external_ref: outcome.external_ref,
         status: outcome.status,
+        response: serializeResponseBody(outcome.response),
         attempts: 1,
         last_error: outcome.error,
         payload: JSON.stringify(stored),
@@ -241,6 +248,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         .where({ id })
         .update({
           status: outcome.status,
+        response: serializeResponseBody(outcome.response),
           external_ref: outcome.external_ref ?? row.external_ref,
           attempts: row.attempts + 1,
           last_error: outcome.error,

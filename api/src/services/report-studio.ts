@@ -1,6 +1,8 @@
 import { db } from '../db/index.js'
+import { runCustomQueryBySlug } from './custom-query-exec.js'
 import type { User } from '../types.js'
 import { can } from './permissions.js'
+import { applyScopeEnforcement, getUserScopeEnforcement } from './user-scopes.js'
 
 /**
  * Report Studio — generic widget engine.
@@ -36,18 +38,30 @@ export interface WidgetQueryConfig {
   filters?: WidgetFilter[]
   date_field?: string | null
   limit?: number
-  columns?: string[] // table type
+  columns?: Array<string | { field: string; label?: string; format?: string }> // table type
   sort?: string // table type; '-field' = desc
   format?: { prefix?: string; suffix?: string; decimals?: number }
   /** compare against the immediately-previous window or the same window last year */
   compare?: 'previous_period' | 'previous_year' | null
   orientation?: 'horizontal' | 'vertical' // bar type, client-side
   metrics?: KpiMetricConfig[] // kpi_group type
+  /** type='query': custom-query-backed widget (client renders; server resolves for alerts/digests). */
+  query?: {
+    slug: string
+    params?: Record<string, string>
+    x_field?: string
+    series?: Array<{ field: string }>
+    group_rows?: boolean
+    sort?: string
+    limit?: number
+  }
 }
 
 export interface EntityFilter {
   field: string
   values: Array<string | number>
+  /** Chip option labels parallel to values — query-widget params prefer these. */
+  labels?: string[]
 }
 
 export interface DateRange {
@@ -188,21 +202,21 @@ function applyFilters(
 }
 
 /** Resolve FK dimension values to display labels via the related collection. */
-async function labelizeDimension(
+async function labelizeDimension<T extends { dim: unknown; value: number }>(
   collection: string,
   field: string,
-  rows: Array<{ dim: unknown; value: number }>
-): Promise<Array<{ dim: string; value: number }>> {
+  rows: T[]
+): Promise<Array<Omit<T, 'dim'> & { dim: string }>> {
   const rel = (await db('nivaro_relations')
     .where({ many_collection: collection, many_field: field })
     .whereNull('junction_field')
     .first()) as { one_collection: string | null } | undefined
   const target = rel?.one_collection
   if (!target || target.startsWith('nivaro_')) {
-    return rows.map((r) => ({ dim: r.dim == null ? '(none)' : String(r.dim), value: r.value }))
+    return rows.map((r) => ({ ...r, dim: r.dim == null ? '(none)' : String(r.dim) }))
   }
   const ids = rows.map((r) => r.dim).filter((v) => v != null)
-  if (ids.length === 0) return rows.map((r) => ({ dim: '(none)', value: r.value }))
+  if (ids.length === 0) return rows.map((r) => ({ ...r, dim: '(none)' }))
   let related: Array<Record<string, unknown>> = []
   try {
     related = (await db(target).whereIn('id', ids as Array<string | number>)) as Array<
@@ -218,8 +232,8 @@ async function labelizeDimension(
     ])
   )
   return rows.map((r) => ({
-    dim: r.dim == null ? '(none)' : (label.get(String(r.dim)) ?? String(r.dim)),
-    value: r.value
+    ...r,
+    dim: r.dim == null ? '(none)' : (label.get(String(r.dim)) ?? String(r.dim))
   }))
 }
 
@@ -354,6 +368,81 @@ export async function resolveWidgetData(
     return { tiles }
   }
 
+  // 'query' widgets execute client-side in viewers; the server resolves them
+  // here for alerts + digest emails. $filters tokens draw from entity-filter
+  // labels (procs take names); unresolved tokens are omitted (NULL params).
+  if (widget.type === 'query') {
+    const qc = widget.config?.query
+    if (!qc?.slug) return { rows: [], row_count: 0 }
+    const range = resolveDateRange(dateRange)
+    const iso = (d: Date) => d.toISOString().slice(0, 10)
+    const params: Record<string, unknown> = {}
+    for (const [k, raw] of Object.entries(qc.params ?? {})) {
+      if (raw === '$date.start') {
+        if (range) params[k] = iso(range.start)
+        continue
+      }
+      if (raw === '$date.end') {
+        if (range) params[k] = iso(range.end)
+        continue
+      }
+      const m = /^\$filters\.([\w.]+?)(:values)?$/.exec(raw)
+      if (m) {
+        const f = entityFilters.find((e) => e.field === m[1])
+        const vals = m[2] ? f?.values : f?.labels && f.labels.length > 0 ? f.labels : f?.values
+        if (vals && vals.length > 0) params[k] = vals.join(',')
+        continue
+      }
+      params[k] = raw
+    }
+    let rows = await runCustomQueryBySlug(qc.slug, params)
+    if (qc.group_rows && qc.x_field) {
+      const xf = qc.x_field
+      const numFields =
+        qc.series && qc.series.length > 0
+          ? qc.series.map((sd) => sd.field)
+          : Object.keys(rows[0] ?? {}).filter((k) => typeof rows[0]?.[k] === 'number')
+      const acc = new Map<string, Record<string, unknown>>()
+      for (const r of rows) {
+        const key = String(r[xf] ?? 'Unknown')
+        const cur = acc.get(key) ?? { [xf]: key }
+        for (const f of numFields) cur[f] = (Number(cur[f]) || 0) + (Number(r[f]) || 0)
+        acc.set(key, cur)
+      }
+      rows = [...acc.values()]
+    }
+    if (qc.sort) {
+      const desc = qc.sort.startsWith('-')
+      const f = desc ? qc.sort.slice(1) : qc.sort
+      rows = [...rows].sort((a, b) => {
+        const av = a[f]
+        const bv = b[f]
+        const cmp =
+          typeof av === 'number' && typeof bv === 'number'
+            ? av - bv
+            : String(av ?? '').localeCompare(String(bv ?? ''))
+        return desc ? -cmp : cmp
+      })
+    }
+    if (qc.limit && qc.limit > 0) rows = rows.slice(0, qc.limit)
+    rows = rows.slice(0, 500)
+    // Alert metric: sum across every series field (else the first numeric column).
+    const metricFields =
+      qc.series && qc.series.length > 0
+        ? qc.series.map((sd) => sd.field)
+        : Object.keys(rows[0] ?? {})
+            .filter((k) => typeof rows[0]?.[k] === 'number')
+            .slice(0, 1)
+    const value =
+      metricFields.length > 0
+        ? rows.reduce(
+            (a, r) => a + metricFields.reduce((b, f) => b + (Number(r[f]) || 0), 0),
+            0
+          )
+        : null
+    return { rows, row_count: rows.length, value }
+  }
+
   const collection = widget.collection ?? ''
   if (!(await isRegisteredBusinessCollection(collection))) {
     throw Object.assign(new Error('Unknown collection'), { statusCode: 400 })
@@ -376,8 +465,12 @@ export async function resolveWidgetData(
     .filter((f) => valid.has(f.field) && f.values.length > 0)
     .map((f) => ({ field: f.field, op: 'in', value: f.values.join(',') }))
 
+  // User Scopes: restricted dimensions row-filter native widgets like readItems
+  const scopeEnforcement = await getUserScopeEnforcement(user, collection)
+
   const base = (rangeOverride?: { start: Date; end: Date } | null) => {
     const q = db(collection)
+    applyScopeEnforcement(q, collection, scopeEnforcement)
     applyFilters(q, cfg.filters, valid)
     applyFilters(q, entityAsFilters, valid)
     const range = rangeOverride !== undefined ? rangeOverride : resolveDateRange(dateRange)
@@ -413,7 +506,9 @@ export async function resolveWidgetData(
   }
 
   if (widget.type === 'table') {
-    const columns = (cfg.columns ?? []).filter((c) => valid.has(c))
+    const columns = (cfg.columns ?? [])
+      .map((c) => (typeof c === 'string' ? c : (c as { field?: string })?.field ?? ''))
+      .filter((c) => valid.has(c))
     const select = columns.length > 0 ? ['id', ...columns] : ['*']
     const q = base().select(select as string[])
     const sortRaw = cfg.sort ?? ''
@@ -497,10 +592,31 @@ export async function resolveWidgetData(
           .orderBy('dim', 'asc')
       )) as never
     }
-    const series: Array<{ dim: string; value: number; prev?: number }> = rows
+    let series: Array<{ dim: string; value: number; prev?: number }> = rows
       .filter((r) => r.dim != null)
       .map((r) => ({ dim: String(r.dim), value: Number(r.value) }))
     const range = resolveDateRange(dateRange)
+    // Dense bucket axis over the selected range — gaps render as 0 and, more
+    // importantly, keep compare series aligned by BUCKET KEY, not position.
+    if (range && dim.bucket !== 'week') {
+      const axis: string[] = []
+      const cur = new Date(range.start)
+      const end = new Date(range.end)
+      let guard = 0
+      while (cur <= end && guard++ < 400) {
+        if (dim.bucket === 'day') {
+          axis.push(cur.toISOString().slice(0, 10))
+          cur.setDate(cur.getDate() + 1)
+        } else {
+          axis.push(cur.toISOString().slice(0, 7))
+          cur.setMonth(cur.getMonth() + 1, 1)
+        }
+      }
+      if (axis.length > 0 && axis.length <= 400) {
+        const byDim = new Map(series.map((r) => [r.dim, r.value]))
+        series = axis.map((d) => ({ dim: d, value: byDim.get(d) ?? 0 }))
+      }
+    }
     if (cfg.compare && range && cfg.date_field && valid.has(cfg.date_field)) {
       const prevQ = base(previousRange(range, cfg.compare))
       let prevRows: Array<{ dim: unknown; value: number | string }>
@@ -529,12 +645,50 @@ export async function resolveWidgetData(
             .orderBy('dim', 'asc')
         )) as never
       }
-      // align by position — same bucket count, shifted window
-      prevRows
-        .filter((r) => r.dim != null)
-        .forEach((r, i) => {
+      // Key-based alignment: shift each current bucket back by the compare
+      // offset and look the value up — no positional drift on gapped data.
+      const prevMap = new Map(
+        prevRows.filter((r) => r.dim != null).map((r) => [String(r.dim), Number(r.value)])
+      )
+      const shiftDim = (d: string): string | null => {
+        try {
+          if (cfg.compare === 'previous_year') {
+            const y = Number(d.slice(0, 4))
+            return `${y - 1}${d.slice(4)}`
+          }
+          // previous_period — shift by the window length
+          const spanMs = new Date(range.end).getTime() - new Date(range.start).getTime()
+          if (dim.bucket === 'day') {
+            const dt = new Date(d)
+            dt.setTime(dt.getTime() - spanMs - 86_400_000)
+            return dt.toISOString().slice(0, 10)
+          }
+          if (dim.bucket === 'month') {
+            const months = Math.max(1, Math.round(spanMs / (30.44 * 86_400_000)))
+            const dt = new Date(`${d}-01T00:00:00Z`)
+            dt.setUTCMonth(dt.getUTCMonth() - months)
+            return dt.toISOString().slice(0, 7)
+          }
+          return null
+        } catch {
+          return null
+        }
+      }
+      let anyKeyed = false
+      for (const pt of series) {
+        const prevDim = shiftDim(pt.dim)
+        if (prevDim != null && prevMap.has(prevDim)) {
+          pt.prev = prevMap.get(prevDim)
+          anyKeyed = true
+        }
+      }
+      if (!anyKeyed) {
+        // week buckets / unshiftable keys — positional fallback (legacy)
+        const prevArr = prevRows.filter((r) => r.dim != null)
+        prevArr.forEach((r, i) => {
           if (series[i]) series[i].prev = Number(r.value)
         })
+      }
     }
     return { series }
   }
@@ -543,11 +697,18 @@ export async function resolveWidgetData(
   const rows = (await aggSelect(base().select({ dim: dim.field }).groupBy(dim.field))
     .orderBy('value', 'desc')
     .limit(limit)) as Array<{ dim: unknown; value: number | string }>
-  const series = await labelizeDimension(
-    collection,
-    dim.field,
-    rows.map((r) => ({ dim: r.dim, value: Number(r.value) }))
-  )
+  let raw = rows.map((r) => ({ dim: r.dim, value: Number(r.value), prev: undefined as number | undefined }))
+  // Compare on value dimensions too — previous window grouped by the same
+  // dimension, matched by raw key before labels are applied.
+  const vRange = resolveDateRange(dateRange)
+  if (cfg.compare && vRange && cfg.date_field && valid.has(cfg.date_field)) {
+    const prevRows = (await aggSelect(
+      base(previousRange(vRange, cfg.compare)).select({ dim: dim.field }).groupBy(dim.field)
+    )) as Array<{ dim: unknown; value: number | string }>
+    const prevMap = new Map(prevRows.map((r) => [String(r.dim), Number(r.value)]))
+    raw = raw.map((r) => ({ ...r, prev: prevMap.get(String(r.dim)) }))
+  }
+  const series = await labelizeDimension(collection, dim.field, raw)
   return { series }
 }
 
@@ -591,6 +752,19 @@ export function renderReportEmailHtml(
       blocks.push(
         `${head}<p style="margin:0;font-size:28px;font-weight:600;color:#111827">${fmtNum(data.value, cfg.format)}</p>`
       )
+    } else if (widget.type === 'kpi_group' && (data as { tiles?: unknown[] }).tiles) {
+      const tiles = (
+        data as {
+          tiles: Array<{ label?: string; value?: number | null; format?: WidgetQueryConfig['format'] }>
+        }
+      ).tiles
+      const cells = tiles
+        .map(
+          (t) =>
+            `<td style="padding:8px 14px 8px 0;vertical-align:top"><p style="margin:0;font-size:11px;color:#6b7280;text-transform:uppercase">${esc(t.label ?? '')}</p><p style="margin:2px 0 0;font-size:20px;font-weight:600;color:#111827">${fmtNum(t.value ?? null, t.format)}</p></td>`
+        )
+        .join('')
+      blocks.push(`${head}<table style="border-collapse:collapse"><tr>${cells}</tr></table>`)
     } else if (widget.type === 'table' && data.rows) {
       const cols = data.rows.length > 0 ? Object.keys(data.rows[0]) : []
       const th = cols

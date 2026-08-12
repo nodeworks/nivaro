@@ -305,7 +305,7 @@ export function FilePickerField({
               size='sm'
             />
           ) : isLoading ? (
-            <div className='h-10 w-10 rounded bg-slate-200 animate-pulse' />
+            <div className='h-10 w-10 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
           ) : (
             <FileThumb
               url={getUrl(fileId!)}

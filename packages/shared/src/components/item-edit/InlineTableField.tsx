@@ -1,6 +1,7 @@
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, GripVertical, History, Loader2, X } from 'lucide-react'
+import { AlertTriangle, ChevronRight, GripVertical, History, Loader2, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export interface RowRule {
   trigger_field?: string | null
@@ -16,10 +17,45 @@ export interface ColumnPreset {
   name: string
   columns: string[]
 }
+export type MatchedDrawerConfig = {
+  /** Rows selected by filter instead of an FK to the child row — values may be
+   *  '$parent.id', '$parent.<field>', '$row.<field>', or literals; dotted keys
+   *  become nested relation filters. Creates are seeded with `defaults`
+   *  (same token resolution, plain columns only). */
+  collection: string
+  filters: Record<string, unknown>
+  defaults?: Record<string, unknown>
+}
+
 export type DrawerRelationConfig =
   | string
-  | { field: string; hint?: { sum_field: string; cap_field: string } }
-import { useNivaroClient, useParentDraft, useDrilldown, fieldDrilldownConfig } from '../../context'
+  | { field: string; hint?: { sum_field: string; cap_field: string }; match?: MatchedDrawerConfig }
+
+export type AutoAllocateConfig = {
+  /** Button label; defaults to 'Auto allocate'. */
+  label?: string
+  /** drawer_relations entry (by field name) whose `match` supplies the
+   *  existing-allocation query + create defaults for this grid's rows. */
+  relation: string
+  /** Grid row column holding the required quantity. */
+  row_qty_field: string
+  /** Quantity column on the allocation rows. */
+  alloc_qty_field: string
+  /** FK column on allocation rows pointing at a candidate record. */
+  fk_field: string
+  candidates: {
+    collection: string
+    /** Same '$parent.*' / '$row.*' token semantics as matched drawer filters. */
+    filters: Record<string, unknown>
+    /** Server sort, e.g. 'date' for FIFO. */
+    sort?: string
+    /** Gross capacity per candidate row, e.g. '0 - {{quantity}}'. */
+    capacity_formula: string
+    /** Candidates with net capacity below this are skipped (default 1). */
+    min_capacity?: number
+  }
+}
+import { useNivaroClient, useParentDraft, useDrilldown, useReimportHandler, fieldDrilldownConfig } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import {
@@ -30,11 +66,79 @@ import {
 } from '../ui/sheet'
 import { useO2MStaging } from './O2MStagingContext'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
-import { FieldRenderer } from './FieldRenderer'
+import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
+import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { NestedRelationEditor } from './NestedRelationEditor'
 import { RelationCombobox } from './RelationCombobox'
 import { applyDisplayTemplate, EMPTY_NESTED_OPS, parseJson, SENTINEL_FIELDS } from './helpers'
 import type { CMSField, CMSRelation, NestedOps } from './types'
+
+// ── ERP error-blob mining (submission_errors) ────────────────────────────────
+// Oracle/Fusion wrap a JSON fragment ("o:errorDetails": [{ detail: … }]) in an
+// XML element whose content is HTML-entity-escaped — decode and pull every
+// "detail" value; fall back to a tag-stripped copy of the message. Mirrors
+// extractErpErrorDetails on the server.
+const ERP_XML_ENTITIES: Record<string, string> = {
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  amp: '&',
+  '#39': "'"
+}
+/** Amber outline + triangle around a display value the cascade sweep flagged
+ *  stale, with an INSTANT hover tooltip (pointer-events-none body portal —
+ *  native `title` waits on the OS timer, inline text squishes in cells). */
+function StaleValueFlag({ children }: { children: React.ReactNode }) {
+  const [tip, setTip] = useState<{ x: number; y: number } | null>(null)
+  return (
+    <span
+      className='inline-flex max-w-full items-center gap-1 rounded border border-amber-300 bg-amber-50/70 px-1.5 py-0.5 dark:border-amber-500/50 dark:bg-amber-500/10'
+      onMouseEnter={(e) => {
+        const r = e.currentTarget.getBoundingClientRect()
+        const flipUp = window.innerHeight - r.bottom < 80
+        setTip({ x: r.left, y: flipUp ? r.top - 54 : r.bottom + 4 })
+      }}
+      onMouseLeave={() => setTip(null)}
+    >
+      <AlertTriangle className='h-3 w-3 shrink-0 text-amber-500' />
+      <span className='min-w-0 truncate'>{children}</span>
+      {tip &&
+        createPortal(
+          <div
+            style={{ position: 'fixed', left: tip.x, top: tip.y, zIndex: 130 }}
+            className='pointer-events-none max-w-[300px] rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11.5px] leading-snug text-amber-800 shadow-md dark:border-amber-500/40 dark:bg-[#2a2113] dark:text-amber-300'
+          >
+            Not an available option for the current form values — edit the row to pick another
+          </div>,
+          document.body
+        )}
+    </span>
+  )
+}
+
+function mineErpDetails(raw: unknown): string[] {
+  if (typeof raw !== 'string' || !raw.trim()) return []
+  const decoded = raw.replace(/&(lt|gt|quot|amp|#39);/g, (_, e: string) => ERP_XML_ENTITIES[e] ?? '')
+  const out: string[] = []
+  const re = /"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/g
+  let m: RegExpExecArray | null = re.exec(decoded)
+  while (m) {
+    try {
+      out.push(JSON.parse(`"${m[1]}"`) as string)
+    } catch {
+      out.push(m[1])
+    }
+    m = re.exec(decoded)
+  }
+  if (out.length === 0) {
+    const flat = decoded
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (flat) out.push(flat.slice(0, 400))
+  }
+  return out
+}
 
 interface RowRevision {
   id: number
@@ -62,7 +166,7 @@ const NON_DISPLAY_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation',
 // Not a real ColumnPreset — never appears in columnPresets, only in activePreset/default_preset.
 const ALL_PRESET_SENTINEL = '__all__'
 
-function evalClientFormula(formula: string, row: Record<string, unknown>): number | null {
+export function evalClientFormula(formula: string, row: Record<string, unknown>): number | null {
   // Handles both `item.fieldname` and `{{fieldname}}` token syntax
   let expr = formula.replace(/item\.(\w+)/g, (_, field) => {
     const val = Number(row[field])
@@ -133,6 +237,669 @@ function DeletedRowsSection({
   )
 }
 
+function resolveMatchToken(
+  token: unknown,
+  rowData: Record<string, unknown>,
+  parentId: string | null,
+  parentDraft: Record<string, unknown> | undefined
+): unknown {
+  if (typeof token !== 'string') return token
+  if (token === '$parent.id') return parentId
+  if (token.startsWith('$parent.')) return parentDraft?.[token.slice('$parent.'.length)]
+  if (token.startsWith('$row.')) return rowData[token.slice('$row.'.length)]
+  return token
+}
+
+/** Build {filter, seed} for a matched drawer relation; null when any filter
+ *  token is unresolved (editor renders its saved-row hint instead). */
+function buildMatchedDrawer(
+  match: MatchedDrawerConfig,
+  rowData: Record<string, unknown>,
+  parentId: string | null,
+  parentDraft: Record<string, unknown> | undefined
+): { query: Record<string, unknown>; seed: Record<string, unknown> } | null {
+  const query: Record<string, unknown> = {}
+  for (const [path, token] of Object.entries(match.filters ?? {})) {
+    const v = resolveMatchToken(token, rowData, parentId, parentDraft)
+    if (v === null || v === undefined || v === '') return null
+    // Logical-operator keys (_or/_and) pass their resolved value through raw
+    if (path.startsWith('_')) {
+      query[path] = v
+      continue
+    }
+    // Operator objects ({_neq: true}) pass through as the clause itself
+    const clause =
+      typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : { _eq: v }
+    if (path.includes('.')) {
+      const segs = path.split('.')
+      let nested: Record<string, unknown> = clause
+      for (let i = segs.length - 1; i >= 1; i--) nested = { [segs[i]]: nested }
+      query[segs[0]] = nested
+    } else {
+      query[path] = clause
+    }
+  }
+  const seed: Record<string, unknown> = {}
+  for (const [col, token] of Object.entries(match.defaults ?? {})) {
+    const v = resolveMatchToken(token, rowData, parentId, parentDraft)
+    if (v !== null && v !== undefined && v !== '') seed[col] = v
+  }
+  return { query, seed }
+}
+
+export type AllocateDrawerConfig = {
+  /** Option collection browsed in the drawer (e.g. workflow_line_items). */
+  collection: string
+  /** Grid FK column that receives the picked option's id. */
+  target_field: string
+  /** Grid column that receives the entered amount. */
+  value_field: string
+  title?: string
+  value_label?: string
+  /** Option filter — same '$parent.<field>' token semantics as option_filter. */
+  filter?: Record<string, unknown>
+  /** Display columns over the option rows: dotted paths resolve via nested
+   *  field expansion; formula entries compute from the option row's values. */
+  columns?: Array<string | { path?: string; label?: string; format?: string; formula?: string; width?: number }>
+  /** Group option rows under collapsible headers by this (dotted) path —
+   *  EFP grouped allocation lines by workflow. Groups start collapsed;
+   *  groups containing an existing allocation start expanded. */
+  group_by?: string
+  /** Per-row allocation ceiling formula (same tokens as column formulas incl.
+   *  {{__saved__}} = this row's saved amount): inputs clamp to it on commit
+   *  and show invalid state while exceeding it. */
+  value_max?: string
+}
+
+function walkPath(obj: unknown, path: string): unknown {
+  return path.split('.').reduce<unknown>(
+    (cur, seg) => (cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined),
+    obj
+  )
+}
+
+function fmtDrawerVal(v: unknown, format?: string): string {
+  if (format === 'presence') return v !== null && v !== undefined && String(v).trim() !== '' ? 'Yes' : 'No'
+  if (v === null || v === undefined || v === '') return '—'
+  if (format === 'currency' && Number.isFinite(Number(v)))
+    return Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+  return String(v)
+}
+
+/** EFP AllocateCost-style drawer: browse every eligible option row with
+ *  context columns, type an amount per row → grid rows are created/updated/
+ *  removed live. Generic over any O2M grid via options.allocate_drawer. */
+function AllocateDrawer({
+  config,
+  relatedCollection,
+  manyField,
+  parentId,
+  rows,
+  rowDefaults,
+  parentDraft,
+  invalidate,
+  staging,
+  stagingActive,
+  pendingRows,
+  pendingEdits,
+  pendingDeletes
+}: {
+  config: AllocateDrawerConfig
+  relatedCollection: string
+  manyField: string
+  parentId: string
+  rows: Record<string, unknown>[]
+  rowDefaults: Record<string, unknown>
+  parentDraft: Record<string, unknown> | undefined
+  invalidate: () => void
+  /** When stagingActive, drawer edits queue into O2M staging and land with the
+   *  outer form's Save — nothing writes immediately. */
+  staging?: ReturnType<typeof useO2MStaging>
+  stagingActive?: boolean
+  pendingRows?: Record<string, unknown>[]
+  pendingEdits?: Map<string, Record<string, unknown>>
+  pendingDeletes?: Set<string>
+}) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [expandedGroups, setExpandedGroups] = useState<Set<string> | null>(null)
+
+  const columns = useMemo(
+    () =>
+      (config.columns ?? []).map((c) =>
+        typeof c === 'string'
+          ? { path: c, label: undefined as string | undefined, format: undefined as string | undefined, formula: undefined as string | undefined, width: undefined as number | undefined }
+          : c
+      ),
+    [config.columns]
+  )
+  const resolvedFilter = useMemo(
+    () => resolveOptionFilterTokens(config.filter, parentDraft, parentId),
+    [config.filter, parentDraft, parentId]
+  )
+  const fetchFields = useMemo(() => {
+    const set = new Set<string>(['id'])
+    if (config.group_by) set.add(config.group_by)
+    const addRef = (ref: string) => {
+      // Live tokens ({{__input__}}/{{__saved__}}) are computed client-side,
+      // never fetched as columns.
+      if (!/^__\w+__$/.test(ref)) set.add(ref)
+    }
+    for (const c of columns) {
+      if (c.path) addRef(c.path)
+      for (const m of (c.formula ?? '').matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) addRef(m[1])
+    }
+    return [...set].join(',')
+  }, [columns, config.group_by])
+
+  const { data: options = [], isFetching } = useQuery<Record<string, unknown>[]>({
+    queryKey: ['allocate-options', config.collection, JSON.stringify(resolvedFilter ?? null), fetchFields],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${config.collection}`, {
+            ...(resolvedFilter ? { filter: JSON.stringify(resolvedFilter) } : {}),
+            fields: fetchFields,
+            limit: 500
+          })
+        )
+        .then((r) => r.data ?? []),
+    enabled: open,
+    staleTime: 0
+  })
+
+  const rowByOption = useMemo(() => {
+    const map = new Map<string, Record<string, unknown>>()
+    for (const r of rows) {
+      const t = r[config.target_field]
+      if (t != null) map.set(String(t), r)
+    }
+    return map
+  }, [rows, config.target_field])
+
+  /** Effective allocation for an option, staging-aware: pending edits win over
+   *  saved values, queued deletes read as no allocation, queued new rows count. */
+  function effectiveFor(optId: string): {
+    savedRow: Record<string, unknown> | undefined
+    pendingIdx: number
+    amount: number
+    deleted: boolean
+  } {
+    const savedRow = rowByOption.get(optId)
+    const savedId = savedRow?.id != null ? String(savedRow.id) : null
+    const deleted = !!(savedId && pendingDeletes?.has(savedId))
+    const pendingIdx = (pendingRows ?? []).findIndex(
+      (r) => String(r[config.target_field]) === optId
+    )
+    let amount = 0
+    if (pendingIdx >= 0) amount = Number((pendingRows ?? [])[pendingIdx][config.value_field]) || 0
+    else if (savedRow && !deleted) {
+      const edit = savedId ? pendingEdits?.get(savedId) : undefined
+      amount =
+        Number(edit && config.value_field in edit ? edit[config.value_field] : savedRow[config.value_field]) || 0
+    }
+    return { savedRow, pendingIdx, amount, deleted }
+  }
+
+  async function commit(optionId: string, raw: string, option?: Record<string, unknown>) {
+    let amount = raw.trim() === '' ? null : Number(raw)
+    if (amount !== null && !Number.isFinite(amount)) return
+    if (amount !== null && option) {
+      const max = rowMax(option)
+      if (max !== null && amount > max) {
+        amount = Math.max(0, Math.round(max * 100) / 100)
+        setDrafts((d) => ({ ...d, [optionId]: String(amount) }))
+      }
+    }
+
+    // Staged mode: queue into O2M staging — lands with the outer form's Save
+    if (stagingActive && staging) {
+      const { savedRow, pendingIdx, deleted } = effectiveFor(optionId)
+      const savedId = savedRow?.id != null ? String(savedRow.id) : null
+      if (amount === null || amount === 0) {
+        if (pendingIdx >= 0) staging.removeRow(relatedCollection, manyField, pendingIdx)
+        else if (savedId && !deleted) {
+          staging.cancelPendingEdit(relatedCollection, manyField, savedId)
+          staging.queueDelete(relatedCollection, manyField, savedId)
+        }
+      } else if (pendingIdx >= 0) {
+        staging.updateRow(relatedCollection, manyField, pendingIdx, {
+          ...(pendingRows ?? [])[pendingIdx],
+          [config.value_field]: amount
+        })
+      } else if (savedId) {
+        if (deleted) staging.cancelPendingDelete(relatedCollection, manyField, savedId)
+        staging.queueEdit(relatedCollection, manyField, savedId, { [config.value_field]: amount })
+      } else {
+        staging.queueRow(relatedCollection, manyField, {
+          ...rowDefaults,
+          [config.target_field]: optionId,
+          [config.value_field]: amount
+        })
+      }
+      return
+    }
+
+    const existing = rowByOption.get(optionId)
+    setSavingId(optionId)
+    try {
+      if (amount === null || amount === 0) {
+        if (existing?.id != null) await client.request(del(`/items/${relatedCollection}/${existing.id}`))
+      } else if (existing?.id != null) {
+        if (Number(existing[config.value_field]) !== amount)
+          await client.request(patch(`/items/${relatedCollection}/${existing.id}`, { [config.value_field]: amount }))
+      } else {
+        await client.request(
+          post(`/items/${relatedCollection}`, {
+            ...rowDefaults,
+            [config.target_field]: optionId,
+            [config.value_field]: amount,
+            [manyField]: parentId
+          })
+        )
+      }
+      invalidate()
+    } catch { /* row save errors surface via grid refresh */ }
+    finally { setSavingId(null) }
+  }
+
+  function evalFormulaNumeric(
+    formula: string,
+    option: Record<string, unknown>,
+    extras: Record<string, number>
+  ): number | null {
+    const expr = formula.replace(/\{\{\s*([\w.]+|__\w+__)\s*\}\}/g, (_, ref: string) => {
+      if (ref in extras) return String(extras[ref])
+      const n = Number(walkPath(option, ref))
+      return String(Number.isFinite(n) ? n : 0)
+    })
+    if (!/^[-+*/(). 0-9eE]+$/.test(expr)) return null
+    try {
+      const v = new Function(`"use strict"; return (${expr})`)() as unknown
+      return typeof v === 'number' && Number.isFinite(v) ? v : null
+    } catch { return null }
+  }
+
+  // {{__input__}} = the row's live input (draft, else saved); {{__saved__}} =
+  // the row's saved amount — lets Available-style columns react as you type.
+  function rowExtras(optId: string): Record<string, number> {
+    const existing = rowByOption.get(optId)
+    const saved = Number(existing?.[config.value_field] ?? 0) || 0
+    const draftRaw = drafts[optId]
+    const effective = stagingActive ? effectiveFor(optId).amount : saved
+    const input = draftRaw !== undefined && draftRaw !== '' ? Number(draftRaw) || 0 : effective
+    return { __input__: input, __saved__: saved }
+  }
+
+  function evalFormula(formula: string, option: Record<string, unknown>): string {
+    const v = evalFormulaNumeric(formula, option, rowExtras(String(option.id)))
+    return v === null ? '—' : v.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+  }
+
+  function rowMax(option: Record<string, unknown>): number | null {
+    if (!config.value_max) return null
+    // Ceiling excludes the live input itself — use saved-only extras
+    const existing = rowByOption.get(String(option.id))
+    const saved = Number(existing?.[config.value_field] ?? 0) || 0
+    return evalFormulaNumeric(config.value_max, option, { __input__: saved, __saved__: saved })
+  }
+
+  return (
+    <>
+      <button
+        type='button'
+        onClick={() => setOpen(true)}
+        className='h-6 px-2.5 rounded border border-[#00ceff]/50 bg-[#00ceff]/5 text-[#0891b2] hover:border-[#00ceff] hover:bg-[#00ceff]/10 transition-colors'
+      >
+        Allocate…
+      </button>
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent side='right' className='w-[92vw] sm:max-w-[1200px] overflow-y-auto p-0'>
+          <SheetHeader className='border-b border-slate-200 px-5 py-3'>
+            <SheetTitle className='text-[14px]'>{config.title ?? 'Allocate'}</SheetTitle>
+          </SheetHeader>
+          <div className='p-4'>
+            <p className='mb-2 text-[11px] text-slate-400'>
+              Enter an amount to allocate a line — clearing it removes the allocation.
+            </p>
+            {isFetching ? (
+              <div className='py-10 text-center'><Loader2 className='inline h-4 w-4 animate-spin text-slate-400' /></div>
+            ) : options.length === 0 ? (
+              <p className='py-10 text-center text-[12px] text-slate-400'>
+                No eligible rows for the current record's filters.
+              </p>
+            ) : (
+              <div className='overflow-x-auto rounded-lg border border-slate-200'>
+                <table className='w-full text-left text-[12px]'>
+                  <thead>
+                    <tr className='border-b border-slate-200 bg-slate-50'>
+                      {columns.map((c, i) => (
+                        <th key={i} className='whitespace-nowrap px-2.5 py-1.5 text-[11px] font-medium text-slate-500'>
+                          {c.label ?? titleCase((c.path ?? '').split('.').pop() ?? '')}
+                        </th>
+                      ))}
+                      <th className='whitespace-nowrap px-2.5 py-1.5 text-[11px] font-medium text-slate-500'>
+                        {config.value_label ?? 'Allocate'}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className='divide-y divide-slate-100'>
+                    {(() => {
+                      // Grouping: ordered unique group values; expanded set defaults
+                      // to groups holding an existing allocation.
+                      const groupOf = (o: Record<string, unknown>) =>
+                        config.group_by ? String(walkPath(o, config.group_by) ?? '—') : ''
+                      let orderedOptions = options
+                      let groupsInOrder: string[] = []
+                      if (config.group_by) {
+                        groupsInOrder = [...new Set(options.map(groupOf))]
+                        orderedOptions = groupsInOrder.flatMap((g) => options.filter((o) => groupOf(o) === g))
+                      }
+                      const expanded =
+                        expandedGroups ??
+                        new Set(
+                          options
+                            .filter((o) => effectiveFor(String(o.id)).amount > 0)
+                            .map(groupOf)
+                        )
+                      const toggle = (g: string) =>
+                        setExpandedGroups((prev) => {
+                          const next = new Set(prev ?? expanded)
+                          if (next.has(g)) next.delete(g)
+                          else next.add(g)
+                          return next
+                        })
+                      const out: React.ReactNode[] = []
+                      let lastGroup: string | null = null
+                      for (const opt of orderedOptions) {
+                        const optId = String(opt.id)
+                        const g = groupOf(opt)
+                        if (config.group_by && g !== lastGroup) {
+                          lastGroup = g
+                          const members = options.filter((o) => groupOf(o) === g)
+                          const allocatedIn = members.filter((o) => effectiveFor(String(o.id)).amount > 0).length
+                          // Per-column numeric sums in the header row: currency
+                          // path columns and formula columns sum across members;
+                          // the input column sums live drafts/saved amounts.
+                          const summable = columns.map((c) => !!c.formula || c.format === 'currency')
+                          const firstSum = summable.indexOf(true)
+                          const labelSpan = firstSum === -1 ? columns.length : Math.max(1, firstSum)
+                          const sumFor = (ci: number): string => {
+                            const c = columns[ci]
+                            let total = 0
+                            for (const m of members) {
+                              const v = c.formula
+                                ? evalFormulaNumeric(c.formula, m, rowExtras(String(m.id)))
+                                : Number(walkPath(m, c.path ?? ''))
+                              if (v !== null && Number.isFinite(v)) total += v
+                            }
+                            return total.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+                          }
+                          const inputSum = members.reduce((t, m) => t + rowExtras(String(m.id)).__input__, 0)
+                          out.push(
+                            <tr key={`__group_${g}`} className='border-b border-slate-200 bg-slate-100/80'>
+                              <td colSpan={labelSpan} className='px-2 py-1'>
+                                <button
+                                  type='button'
+                                  onClick={() => toggle(g)}
+                                  className='flex w-full items-center gap-1.5 text-left'
+                                >
+                                  <ChevronRight
+                                    className={cn(
+                                      'h-3 w-3 shrink-0 text-slate-400 transition-transform',
+                                      expanded.has(g) && 'rotate-90'
+                                    )}
+                                  />
+                                  <span className='text-[11.5px] font-semibold text-slate-600'>{g}</span>
+                                  <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>
+                                    {members.length} line{members.length !== 1 ? 's' : ''}
+                                  </span>
+                                  {allocatedIn > 0 && (
+                                    <span className='rounded-full bg-[#00ceff]/15 px-1.5 py-0.5 text-[10px] font-medium text-[#0891b2]'>
+                                      {allocatedIn} allocated
+                                    </span>
+                                  )}
+                                </button>
+                              </td>
+                              {columns.slice(labelSpan).map((c, i) => (
+                                <td key={i} className='whitespace-nowrap px-2.5 py-1 text-[11px] font-semibold tabular-nums text-slate-600'>
+                                  {summable[labelSpan + i] ? sumFor(labelSpan + i) : ''}
+                                </td>
+                              ))}
+                              <td className='whitespace-nowrap px-2.5 py-1 text-[11px] font-semibold tabular-nums text-[#0891b2]'>
+                                {inputSum > 0 ? inputSum.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : ''}
+                              </td>
+                            </tr>
+                          )
+                        }
+                        if (config.group_by && !expanded.has(g)) continue
+                        const eff = effectiveFor(optId)
+                        const existing = eff.amount > 0 ? (eff.savedRow ?? {}) : undefined
+                        const current =
+                          drafts[optId] ?? (eff.amount > 0 ? String(eff.amount) : '')
+                        out.push(
+                          <tr key={optId} className={cn(existing && 'bg-[#00ceff]/5')}>
+                          {columns.map((c, i) => {
+                            const text = c.formula
+                              ? evalFormula(c.formula, opt)
+                              : fmtDrawerVal(walkPath(opt, c.path ?? ''), c.format)
+                            return (
+                              <td
+                                key={i}
+                                title={c.width ? text : undefined}
+                                style={c.width ? { maxWidth: c.width } : undefined}
+                                className={cn('px-2.5 py-1.5 text-slate-700', c.width ? 'truncate' : 'whitespace-nowrap')}
+                              >
+                                {text}
+                              </td>
+                            )
+                          })}
+                          <td className='px-2.5 py-1'>
+                            <div className='flex items-center gap-1.5'>
+                              {(() => {
+                                const max = rowMax(opt)
+                                const exceeds =
+                                  max !== null && current !== '' && Number(current) > max
+                                return (
+                                  <input
+                                    type='number'
+                                    min={0}
+                                    value={current}
+                                    title={max !== null ? `Max ${max.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}` : undefined}
+                                    onChange={(e) => setDrafts((d) => ({ ...d, [optId]: e.target.value }))}
+                                    onBlur={() => { if (drafts[optId] !== undefined) commit(optId, drafts[optId], opt) }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' && drafts[optId] !== undefined) commit(optId, drafts[optId], opt)
+                                    }}
+                                    placeholder='0'
+                                    className={cn(
+                                      'h-7 w-28 rounded border px-2 text-[12px] tabular-nums focus:outline-none focus:ring-1',
+                                      exceeds
+                                        ? 'border-red-400 bg-red-50 text-red-700 focus:ring-red-400'
+                                        : 'border-slate-200 focus:ring-[#00ceff]'
+                                    )}
+                                  />
+                                )
+                              })()}
+                              {savingId === optId && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
+                            </div>
+                          </td>
+                        </tr>
+                        )
+                      }
+                      return out
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+    </>
+  )
+}
+
+
+/** Greedy FIFO auto-allocation: for each grid row still short of its required
+ *  quantity, walk candidate records in sort order and create/increment
+ *  allocation rows until the requirement is met or candidates run dry.
+ *  Live writes only (same posture as matched drawer relations). */
+function AutoAllocateButton({
+  config,
+  matchCfg,
+  rows,
+  parentId,
+  parentDraft,
+  relatedCollection,
+  manyField
+}: {
+  config: AutoAllocateConfig
+  matchCfg: MatchedDrawerConfig
+  rows: Record<string, unknown>[]
+  parentId: string | null
+  parentDraft: Record<string, unknown> | undefined
+  relatedCollection: string
+  manyField: string
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [running, setRunning] = useState(false)
+  const [summary, setSummary] = useState<string | null>(null)
+
+  const run = async () => {
+    if (running) return
+    setRunning(true)
+    setSummary(null)
+    const fk = config.fk_field
+    const qtyF = config.alloc_qty_field
+    const minCap = config.candidates.min_capacity ?? 1
+    const formulaRefs = [
+      ...config.candidates.capacity_formula.matchAll(/\{\{\s*(\w+)\s*\}\}/g)
+    ].map((m) => m[1])
+    // Allocations made THIS run also consume candidate capacity — two grid rows
+    // drawing from the same candidate must not both take its full remainder.
+    const runningByCandidate: Record<string, number> = {}
+    let totalAllocated = 0
+    let rowsTouched = 0
+    const short: number[] = []
+    try {
+      for (let ri = 0; ri < rows.length; ri++) {
+        const row = rows[ri]
+        const rowQty = Number(row[config.row_qty_field])
+        if (!Number.isFinite(rowQty) || rowQty <= 0) continue
+        const built = buildMatchedDrawer(matchCfg, row, parentId, parentDraft)
+        if (!built) continue
+        const existing = await client
+          .request<{ data: Record<string, unknown>[] }>(
+            get(`/items/${matchCfg.collection}`, {
+              filter: JSON.stringify(built.query),
+              fields: `id,${fk},${qtyF}`,
+              limit: 500
+            })
+          )
+          .then((r) => r.data ?? [])
+        const already = existing.reduce((sum, e) => sum + (Number(e[qtyF]) || 0), 0)
+        let left = rowQty - already
+        if (left <= 0) continue
+        const candQ = buildMatchedDrawer(
+          { collection: config.candidates.collection, filters: config.candidates.filters, defaults: {} },
+          row,
+          parentId,
+          parentDraft
+        )
+        if (!candQ) continue
+        const cands = await client
+          .request<{ data: Record<string, unknown>[] }>(
+            get(`/items/${config.candidates.collection}`, {
+              filter: JSON.stringify(candQ.query),
+              fields: ['id', ...formulaRefs].join(','),
+              ...(config.candidates.sort ? { sort: config.candidates.sort } : {}),
+              limit: 500
+            })
+          )
+          .then((r) => r.data ?? [])
+        if (cands.length === 0) {
+          short.push(ri + 1)
+          continue
+        }
+        // Capacity already consumed by allocations across ALL parents.
+        const candIds = cands.map((c) => String(c.id))
+        const allocRows = await client
+          .request<{ data: Record<string, unknown>[] }>(
+            get(`/items/${matchCfg.collection}`, {
+              filter: JSON.stringify({ [fk]: { _in: candIds } }),
+              fields: `${fk},${qtyF}`,
+              limit: 2000
+            })
+          )
+          .then((r) => r.data ?? [])
+        const allocByCand: Record<string, number> = {}
+        for (const a of allocRows) {
+          const k = String(a[fk])
+          allocByCand[k] = (allocByCand[k] ?? 0) + (Number(a[qtyF]) || 0)
+        }
+        const before = left
+        for (const c of cands) {
+          if (left <= 0) break
+          const cid = String(c.id)
+          const gross = evalClientFormula(config.candidates.capacity_formula, c) ?? 0
+          const capacity = gross - (allocByCand[cid] ?? 0) - (runningByCandidate[cid] ?? 0)
+          if (capacity < minCap) continue
+          const take = Math.min(left, capacity)
+          const mine = existing.find((e) => String(e[fk]) === cid)
+          if (mine) {
+            await client.request(
+              patch(`/items/${matchCfg.collection}/${mine.id}`, {
+                [qtyF]: (Number(mine[qtyF]) || 0) + take
+              })
+            )
+          } else {
+            await client.request(
+              post(`/items/${matchCfg.collection}`, { ...built.seed, [fk]: c.id, [qtyF]: take })
+            )
+          }
+          runningByCandidate[cid] = (runningByCandidate[cid] ?? 0) + take
+          left -= take
+          totalAllocated += take
+        }
+        if (left < before) rowsTouched++
+        if (left > 0) short.push(ri + 1)
+      }
+      const parts: string[] = []
+      parts.push(
+        totalAllocated > 0
+          ? `Allocated ${totalAllocated.toLocaleString('en-US', { maximumFractionDigits: 2 })} across ${rowsTouched} row${rowsTouched === 1 ? '' : 's'}`
+          : 'Nothing to allocate'
+      )
+      if (short.length > 0) parts.push(`short on row${short.length === 1 ? '' : 's'} ${short.join(', ')}`)
+      setSummary(parts.join(' — '))
+      qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+      qc.invalidateQueries({ queryKey: ['match-agg'] })
+    } catch (err) {
+      setSummary(`Auto-allocate failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <span className="inline-flex items-center gap-2">
+      <button
+        type="button"
+        disabled={running}
+        onClick={() => void run()}
+        className="h-6 px-2.5 rounded border border-[#00ceff] text-[#00ceff] hover:bg-[#00ceff]/10 transition-colors disabled:opacity-50"
+      >
+        {running ? 'Allocating…' : (config.label ?? 'Auto allocate')}
+      </button>
+      {summary && <span className="text-[11px] text-slate-500">{summary}</span>}
+    </span>
+  )
+}
+
 export function InlineTableField({
   relatedCollection,
   manyField,
@@ -153,6 +920,13 @@ export function InlineTableField({
   uniqueBy,
   sortField,
   sortDir = 'asc',
+  sectionGroupBy,
+  rowFilter,
+  rowDefaults,
+  allocateDrawer,
+  autoAllocate,
+  uploadTemplate,
+  submissionErrors,
   prefillParentId,
   parentFieldKey,
   readOnly = false
@@ -180,6 +954,28 @@ export function InlineTableField({
   uniqueBy?: string[]
   sortField?: string
   sortDir?: 'asc' | 'desc'
+  /** Dotted relation path on the child collection (e.g. 'item.category.name'):
+   *  saved rows render grouped into collapsible sections by the resolved value. */
+  sectionGroupBy?: string
+  /** Static filter narrowing which child rows this grid shows — flat {col: value}
+   *  entries become _eq, object values pass through as filter operators. Lets two
+   *  grids on the same relation show disjoint views (e.g. is_osp split). */
+  rowFilter?: Record<string, unknown>
+  /** Values seeded onto every NEW row created from this grid (e.g. {is_osp: true}). */
+  rowDefaults?: Record<string, unknown>
+  /** EFP-style allocate drawer: browse all eligible options, type amounts. */
+  allocateDrawer?: AllocateDrawerConfig
+  autoAllocate?: AutoAllocateConfig
+  /** Import template NAME — renders that template's upload button in this
+   *  grid's toolbar (existing records; wired to ItemEditForm's reimport flow). */
+  uploadTemplate?: string
+  /** Flag rows a failed ERP push rejected (options.submission_errors) — the
+   *  latest failed nivaro_erp_submissions row for the PARENT record is parsed
+   *  for "LineNumber N: reason" entries and matching rows tint red with the
+   *  reason beneath. `line_field` = the row column holding the pushed line
+   *  number (default 'line_number'). Mirrors CatalogPickerField's
+   *  submission_errors for catalog grids. */
+  submissionErrors?: { line_field?: string }
   prefillParentId?: string
   parentFieldKey?: string
 }) {
@@ -190,6 +986,59 @@ export function InlineTableField({
   const addendumO2MEntries = useAddendumO2M()[parentFieldKey ?? ''] ?? []
   const isNew = parentId === 'new'
   const parentDraftCtx = useParentDraft()
+  const reimportHandler = useReimportHandler()
+
+  // Per-line submission errors — shares the failure banner's query key/cache.
+  const subErrLineField = submissionErrors ? (submissionErrors.line_field ?? 'line_number') : null
+  const { data: subErrData } = useQuery<
+    Array<{ status: string; last_error: string | null; response?: unknown }>
+  >({
+    queryKey: ['erp-submissions', parentCollection ?? '', String(parentId)],
+    queryFn: () =>
+      client
+        .request<{
+          data: Array<{ status: string; last_error: string | null; response?: unknown }>
+        }>(get(`/erp-submissions/${parentCollection}/${encodeURIComponent(String(parentId))}`))
+        .then((r) => r.data ?? []),
+    enabled: !!submissionErrors && !!parentCollection && !isNew && !!parentId,
+    staleTime: 15_000
+  })
+  const submissionErrorByLine = useMemo(() => {
+    const map = new Map<string, string>()
+    const latest = subErrData?.[0]
+    if (!latest || latest.status !== 'failed') return map
+    // PRIMARY source: the stored full response body — last_error is a capped
+    // summary and truncates on many-line failures. Oracle repeats the whole
+    // detail set in every line's message; the "LineNumber N:" prefix picks
+    // each line's own entry.
+    const body = latest.response as Record<string, unknown> | null
+    const odr =
+      body && typeof body === 'object' && Array.isArray(body.orderDetailResponse)
+        ? (body.orderDetailResponse as Array<Record<string, unknown>>)
+        : []
+    for (const d of odr) {
+      if (!Array.isArray(d?.orderLineDetails)) continue
+      for (const l of d.orderLineDetails as Array<Record<string, unknown>>) {
+        const status = typeof l?.lineStatus === 'string' ? l.lineStatus.trim().toUpperCase() : ''
+        if (!['ERROR', 'FAILED'].includes(status)) continue
+        const n = String(l?.lineNumber ?? '')
+        if (!n || map.has(n)) continue
+        const mined = mineErpDetails(l?.lineDetailedMessage)
+        const own = mined.find((x) =>
+          new RegExp(`^Line(?:Number)?\\s*${n}\\s*:`, 'i').test(x.trim())
+        )
+        const msg = own ?? mined[0]
+        if (msg) map.set(n, msg.replace(/^Line(?:Number)?\s*\d+\s*:\s*/i, ''))
+      }
+    }
+    if (map.size > 0 || !latest.last_error) return map
+    // Fallback: parse the summary text ("LineNumber N: …" segments joined ' · ').
+    for (const seg of latest.last_error.split(' · ')) {
+      const m = seg.trim().match(/^Line(?:Number)?\s+(\d+)\s*:\s*(.*)$/i)
+      if (m && !map.has(m[1])) map.set(m[1], m[2] || seg.trim())
+    }
+    return map
+  }, [subErrData])
 
   // Prefill: when rendering inside addendum create form (isNew + prefillParentId),
   // seed staging with the parent record's existing rows once on mount.
@@ -372,13 +1221,36 @@ export function InlineTableField({
 
   const rowOrderField = layoutMeta?.row_order_field ?? null
 
+  const rowFilterClause = useMemo(() => {
+    if (!rowFilter || Object.keys(rowFilter).length === 0) return null
+    const clauses: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(rowFilter)) {
+      clauses[k] = v !== null && typeof v === 'object' ? v : { _eq: v }
+    }
+    return clauses
+  }, [rowFilter])
+
+  const rowDefaultSeed = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(rowDefaults ?? {}).filter(
+          ([, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v)
+        )
+      ),
+    [rowDefaults]
+  )
+
   const { data: rawRows = [], isLoading: rowsLoading } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['o2m-rows', relatedCollection, manyField, parentId],
+    queryKey: ['o2m-rows', relatedCollection, manyField, parentId, rowFilterClause ? JSON.stringify(rowFilterClause) : ''],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
           get(`/items/${relatedCollection}`, {
-            filter: JSON.stringify({ [manyField]: { _eq: parentId } }),
+            filter: JSON.stringify(
+              rowFilterClause
+                ? { _and: [{ [manyField]: { _eq: parentId } }, rowFilterClause] }
+                : { [manyField]: { _eq: parentId } }
+            ),
             limit: 200
           })
         )
@@ -428,7 +1300,7 @@ export function InlineTableField({
   }, [cascadeRules, cascadeResolutions, parentDraftCtx])
 
   const isPendingMode = saveMode === 'pending'
-  const pendingRows = (isNew || isPendingMode) && staging ? staging.getPendingRows(relatedCollection, manyField) : []
+  const pendingRows = staging ? staging.getPendingRows(relatedCollection, manyField) : []
   const pendingEdits = isPendingMode && staging ? staging.getPendingEdits(relatedCollection, manyField) : new Map<string, Record<string, unknown>>()
   const pendingDeletes = isPendingMode && staging ? staging.getPendingDeletes(relatedCollection, manyField) : new Set<string>()
 
@@ -439,11 +1311,126 @@ export function InlineTableField({
     () => cols.filter((c) => c.interface === 'relation-path' && c.field.includes('.')).map((c) => c.field),
     [cols]
   )
+  // Matched-aggregate columns ('match-agg-column'): aggregate rows of another
+  // collection matched to each grid row by filters ($parent tokens fetch-scope
+  // the query once; $row tokens group the fetched rows client-side — EFP
+  // "Allocated qty per material by cifa" pattern). options:
+  // { match: {collection, filters}, aggregate?: 'sum'|'count', value_field,
+  //   formula?: '{{quantity}} - {{__agg__}}', format?: 'currency' }
+  const matchAggCols = useMemo(
+    () => cols.filter((c) => c.interface === 'match-agg-column'),
+    [cols]
+  )
+  const matchAggConfigs = useMemo(
+    () =>
+      matchAggCols.map((c) => {
+        const opts = c.options
+          ? ((typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown>)
+          : {}
+        const match = (opts.match ?? {}) as { collection?: string; filters?: Record<string, unknown> }
+        const parentClauses: Record<string, unknown> = {}
+        const rowKeys: Array<[string, string]> = []
+        let unresolved = false
+        for (const [path, token] of Object.entries(match.filters ?? {})) {
+          if (typeof token === 'string' && token.startsWith('$row.')) {
+            rowKeys.push([path, token.slice('$row.'.length)])
+            continue
+          }
+          const v = resolveMatchToken(token, {}, parentId, parentDraftCtx?.draft)
+          if (v === null || v === undefined || v === '') { unresolved = true; continue }
+          if (path.startsWith('_')) {
+            parentClauses[path] = v
+            continue
+          }
+          const clause = typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : { _eq: v }
+          if (path.includes('.')) {
+            const segs = path.split('.')
+            let nested: Record<string, unknown> = clause
+            for (let i = segs.length - 1; i >= 1; i--) nested = { [segs[i]]: nested }
+            parentClauses[segs[0]] = nested
+          } else {
+            parentClauses[path] = clause
+          }
+        }
+        return {
+          field: c.field,
+          collection: match.collection ?? '',
+          parentClauses,
+          rowKeys,
+          unresolved,
+          aggregate: (opts.aggregate as string) ?? 'sum',
+          valueField: (opts.value_field as string) ?? '',
+          formula: typeof opts.formula === 'string' ? opts.formula : null,
+          format: (opts.format as string) ?? null
+        }
+      }),
+    [matchAggCols, parentId, parentDraftCtx?.draft]
+  )
+  const matchAggResults = useQueries({
+    queries: matchAggConfigs.map((cfg) => ({
+      queryKey: [
+        'match-agg', cfg.collection, JSON.stringify(cfg.parentClauses),
+        cfg.valueField, cfg.rowKeys.map(([p]) => p).join('|')
+      ],
+      queryFn: () =>
+        client
+          .request<{ data: Record<string, unknown>[] }>(
+            get(`/items/${cfg.collection}`, {
+              filter: JSON.stringify(cfg.parentClauses),
+              fields: ['id', ...(cfg.valueField ? [cfg.valueField] : []), ...cfg.rowKeys.map(([p]) => p)].join(','),
+              limit: 1000
+            })
+          )
+          .then((r) => r.data ?? []),
+      enabled: !cfg.unresolved && !!cfg.collection && !isNew,
+      staleTime: 30_000
+    }))
+  })
+  const matchAggData = useMemo(() => {
+    const map = new Map<string, { cfg: (typeof matchAggConfigs)[number]; rows: Record<string, unknown>[] }>()
+    matchAggConfigs.forEach((cfg, i) => {
+      map.set(cfg.field, { cfg, rows: (matchAggResults[i]?.data as Record<string, unknown>[] | undefined) ?? [] })
+    })
+    return map
+  }, [matchAggConfigs, matchAggResults])
+
+  // Formula columns ({{a.b.c}} refs) piggyback the same bulk resolve-paths call
+  const formulaCols = useMemo(
+    () => cols.filter((c) => c.interface === 'formula-column'),
+    [cols]
+  )
+  const formulaPathRefs = useMemo(() => {
+    const out = new Set<string>()
+    for (const c of formulaCols) {
+      const opts = c.options
+        ? ((typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown>)
+        : {}
+      const formula = typeof opts.column_formula === 'string' ? opts.column_formula : ''
+      for (const m of formula.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) {
+        if (m[1].includes('.')) out.add(m[1])
+      }
+    }
+    return [...out]
+  }, [formulaCols])
+  // Section grouping resolves its dotted path in the same bulk resolve-paths call
+  const resolvePathList = useMemo(() => {
+    const base = new Set(relationPathCols)
+    for (const p of formulaPathRefs) base.add(p)
+    if (sectionGroupBy?.includes('.')) base.add(sectionGroupBy)
+    return [...base]
+  }, [relationPathCols, formulaPathRefs, sectionGroupBy])
   const { data: resolvedPathData } = useQuery<{
     rows: Record<string, Record<string, { value: string; ids: string[] }>>
     targets: Record<string, string | null>
   }>({
-    queryKey: ['o2m-resolve-paths', relatedCollection, manyField, parentId, relationPathCols.join(',')],
+    queryKey: [
+      'o2m-resolve-paths',
+      relatedCollection,
+      manyField,
+      parentId,
+      resolvePathList.join(','),
+      rawRows.map((r) => String(r.id)).join(',')
+    ],
     queryFn: () =>
       client
         .request<{
@@ -454,11 +1441,11 @@ export function InlineTableField({
         }>(
           get(`/items/${relatedCollection}/resolve-paths`, {
             ids: rawRows.map((r) => String(r.id)).join(','),
-            paths: relationPathCols.join(',')
+            paths: resolvePathList.join(',')
           })
         )
         .then((r) => r.data ?? { rows: {}, targets: {} }),
-    enabled: !isNew && relationPathCols.length > 0 && rawRows.length > 0,
+    enabled: !isNew && resolvePathList.length > 0 && rawRows.length > 0,
     staleTime: 30_000
   })
   const resolvedPathRows = useMemo(() => {
@@ -498,8 +1485,36 @@ export function InlineTableField({
         return sortDir === 'desc' ? -cmp : cmp
       })
     }
+    if (sectionGroupBy && resolvedPathRows) {
+      // Stable group sort applied last: keeps inner ordering, clusters rows by
+      // section label (alpha), empty values last
+      const sec = (r: Record<string, unknown>) => String(r[sectionGroupBy] ?? '').trim()
+      sorted = [...sorted].sort((a, b) => {
+        const sa = sec(a)
+        const sb = sec(b)
+        if (sa === sb) return 0
+        if (!sa) return 1
+        if (!sb) return -1
+        return sa.localeCompare(sb, undefined, { sensitivity: 'base' })
+      })
+    }
     return sorted
-  }, [rawRows, resolvedPathRows, rowOrderField, isPendingMode, pendingEdits, sortField, sortDir])
+  }, [rawRows, resolvedPathRows, rowOrderField, isPendingMode, pendingEdits, sortField, sortDir, sectionGroupBy])
+
+  // Section grouping (sectionGroupBy): active once resolved values are in
+  const sectionsActive = !!sectionGroupBy && !!resolvedPathRows
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+  const sectionOf = (r: Record<string, unknown>): string => {
+    const v = String(r[sectionGroupBy ?? ''] ?? '').trim()
+    return v || 'Uncategorized'
+  }
+  const toggleSection = (name: string) =>
+    setCollapsedSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
 
   const computedWriteCols = useMemo(
     () => cols.filter(c => c.computed_type === 'write' && typeof c.computed_formula === 'string' && c.computed_formula.trim()),
@@ -780,8 +1795,10 @@ export function InlineTableField({
     }
   }), [activePresetDotTokens, summaryGrandRels, summaryFieldsByCollection])
 
+  // Synthetic preset summary columns only (type 'presentation') — relation-path
+  // layout columns also carry dotted fields but render through renderCell.
   function isSummaryCol(c: CMSField): boolean {
-    return c.field.includes('.')
+    return c.type === 'presentation' && c.field.includes('.')
   }
 
   // Joined ', ' display for a summary column against one row. Saved rows read the batched
@@ -806,6 +1823,47 @@ export function InlineTableField({
       })
       .filter((v): v is string => !!v)
     return parts.length > 0 ? parts.join(', ') : '—'
+  }
+
+  /** Saved-row summary cell with drill-down: members whose field is a grandchild
+   *  M2O render as links opening the target record's detail sheet (e.g. the
+   *  Deployment view's Unit column → the unit form). Falls back to plain text
+   *  when no drilldown host or the member isn't an M2O. */
+  function summaryCellContent(c: CMSField, sourceRow: Record<string, unknown>): React.ReactNode {
+    const dot = c.field.indexOf('.')
+    if (dot < 0) return '—'
+    const relationField = c.field.slice(0, dot)
+    const memberField = c.field.slice(dot + 1)
+    const members = summaryMembersByRelation.get(relationField)?.get(String(sourceRow.id)) ?? []
+    if (members.length === 0) return '—'
+    const rel = grandM2oRelMaps.get(relationField)?.get(memberField)
+    if (!rel?.one_collection || !drill) return summaryCellValue(c, sourceRow, false)
+    const target = rel.one_collection
+    const items = members
+      .map((m) => {
+        const v = m[memberField]
+        if (v == null || v === '') return null
+        return { id: String(v), label: summaryM2oDisplays[target]?.[String(v)] ?? String(v) }
+      })
+      .filter((x): x is { id: string; label: string } => !!x)
+    if (items.length === 0) return '—'
+    return (
+      <span className='inline-flex flex-wrap gap-x-1.5'>
+        {items.map((it, i) => (
+          <button
+            key={`${it.id}:${i}`}
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              drill.open({ collection: target, itemId: it.id, title: it.label, width: '80%' })
+            }}
+            className='truncate text-left underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-[#00ceff] dark:hover:text-[#00ceff]'
+          >
+            {it.label}
+          </button>
+        ))}
+      </span>
+    )
   }
 
   // Empty-result guard: a preset whose stored columns have ALL gone stale (fields
@@ -841,6 +1899,68 @@ export function InlineTableField({
     }
     return map
   }, [displayCols, childRelations, relatedCollection])
+
+  // ── Stale-value sweep ───────────────────────────────────────────────────────
+  // Parent cascades narrow each M2O column's valid options by the PARENT's
+  // current values, but the amber "not an available option" flag only showed
+  // once a row entered EDIT mode (the cell picker's own probe). Sweep every
+  // row's value against the resolved cascade filter — ONE query per cascaded
+  // column ({_and: [cascadeFilter, {id: {_in: distinct values}}]}) — so
+  // out-of-range values highlight at a glance across the whole grid.
+  const staleSweepInput = useMemo(() => {
+    const entries: Array<{
+      field: string
+      target: string
+      filter: Record<string, unknown>
+      ids: string[]
+    }> = []
+    for (const [field, filter] of Object.entries(fieldCascadeFilters)) {
+      const rel = m2oRelMap.get(field)
+      if (!rel?.one_collection) continue
+      const ids = [
+        ...new Set(
+          [...rows, ...pendingRows]
+            .map((r) => r[field])
+            .filter((v) => v != null && v !== '')
+            .map(String)
+        )
+      ].sort()
+      if (ids.length) entries.push({ field, target: rel.one_collection, filter, ids })
+    }
+    return entries
+  }, [fieldCascadeFilters, m2oRelMap, rows, pendingRows])
+  const staleSweepResults = useQueries({
+    queries: staleSweepInput.map((e) => ({
+      queryKey: [
+        'cascade-stale-sweep',
+        relatedCollection,
+        e.field,
+        JSON.stringify(e.filter),
+        e.ids.join(',')
+      ],
+      queryFn: () =>
+        client
+          .request<{ data: Array<{ id: unknown }> }>(
+            get(`/items/${e.target}`, {
+              filter: JSON.stringify({ _and: [e.filter, { id: { _in: e.ids } }] }),
+              fields: 'id',
+              limit: e.ids.length
+            })
+          )
+          .then((r) => new Set((r.data ?? []).map((x) => String(x.id)))),
+      staleTime: 30_000
+    }))
+  })
+  const staleCellValues = useMemo(() => {
+    const map = new Map<string, Set<string>>()
+    staleSweepInput.forEach((e, i) => {
+      const available = staleSweepResults[i]?.data
+      if (!available) return // still loading / errored — no flags
+      const bad = e.ids.filter((id) => !available.has(id))
+      if (bad.length) map.set(e.field, new Set(bad))
+    })
+    return map
+  }, [staleSweepInput, staleSweepResults])
 
   // Collect unique FK ids per one_collection from all rows (incl. pending edits + addendum rows)
   const m2oLookupIds = useMemo(() => {
@@ -902,10 +2022,12 @@ export function InlineTableField({
             fieldsParam = `id,${grouped.groupField}.*,${grouped.optionField}.*`
           } else {
             const tmpl = colMeta?.display_template ?? undefined
-            const dottedFields = tmpl
-              ? [...tmpl.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1]).filter((f) => f.includes('.'))
-              : []
-            fieldsParam = dottedFields.length > 0 ? ['id', ...dottedFields].join(',') : undefined
+            const tmplFields = tmpl ? [...tmpl.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1]) : []
+            // Explicit fields only needed when the template traverses a relation; must
+            // include the template's PLAIN columns too or they render empty.
+            fieldsParam = tmplFields.some((f) => f.includes('.'))
+              ? ['id', ...tmplFields].join(',')
+              : undefined
           }
           const data = await client
             .request<{ data: Record<string, unknown>[] }>(
@@ -953,7 +2075,7 @@ export function InlineTableField({
 
   function startNew() {
     if (readOnly) return
-    setEditState({ rowId: 'new', draft: {} })
+    setEditState({ rowId: 'new', draft: { ...rowDefaultSeed } })
   }
 
   function cancelEdit() {
@@ -1145,7 +2267,7 @@ export function InlineTableField({
 
   async function addBulkRows(useDefaults: boolean) {
     const n = Math.max(1, Math.min(100, bulkCount))
-    const rowData = useDefaults ? { ...defaultValues } : {}
+    const rowData = useDefaults ? { ...rowDefaultSeed, ...defaultValues } : { ...rowDefaultSeed }
     if ((isNew || isPendingMode) && staging) {
       for (let i = 0; i < n; i++) staging.queueRow(relatedCollection, manyField, { ...rowData })
       return
@@ -1229,6 +2351,116 @@ export function InlineTableField({
   }
 
   function renderCell(col: CMSField, val: unknown, rowId?: string) {
+    const colOpts = col.options
+      ? ((typeof col.options === 'string' ? (() => { try { return JSON.parse(col.options as string) } catch { return {} } })() : col.options) as Record<string, unknown>)
+      : {}
+
+    // Formula column: arithmetic over {{col}} (row values) + {{dotted.path}}
+    // (bulk-resolved path values) — display-only, computed at render.
+    if (col.interface === 'formula-column') {
+      const formula = typeof colOpts.column_formula === 'string' ? colOpts.column_formula : ''
+      if (!formula || !rowId) return <span className='text-slate-300'>—</span>
+      const row = rows.find((r) => String(r.id) === rowId) ?? {}
+      const expr = formula.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, ref: string) => {
+        const raw = ref.includes('.')
+          ? resolvedPathData?.rows[rowId]?.[ref]?.value
+          : (row as Record<string, unknown>)[ref]
+        const n = Number(raw)
+        return String(Number.isFinite(n) ? n : 0)
+      })
+      if (!/^[-+*/(). 0-9eE]+$/.test(expr)) return <span className='text-slate-300'>—</span>
+      let result: number | null = null
+      try {
+        const v = new Function(`"use strict"; return (${expr})`)() as unknown
+        if (typeof v === 'number' && Number.isFinite(v)) result = v
+      } catch { /* unrenderable */ }
+      if (result === null) return <span className='text-slate-300'>—</span>
+      const formatted =
+        colOpts.format === 'currency'
+          ? result.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+          : result.toLocaleString('en-US', { maximumFractionDigits: 2 })
+      return <span className='tabular-nums'>{formatted}</span>
+    }
+
+    // Matched-aggregate column
+    if (col.interface === 'match-agg-column') {
+      const entry = matchAggData.get(col.field)
+      if (!entry || !rowId) return <span className='text-slate-300'>—</span>
+      const gridRow = rows.find((r) => String(r.id) === rowId) ?? {}
+      const walk = (obj: unknown, path: string): unknown =>
+        path.split('.').reduce<unknown>(
+          (cur, seg) => (cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined),
+          obj
+        )
+      const matched = entry.rows.filter((r) =>
+        entry.cfg.rowKeys.every(([path, rowField]) => {
+          const a = walk(r, path)
+          const b = (gridRow as Record<string, unknown>)[rowField]
+          if (a === null || a === undefined || b === null || b === undefined) return false
+          return String(a) === String(b)
+        })
+      )
+      let agg =
+        entry.cfg.aggregate === 'count'
+          ? matched.length
+          : matched.reduce((sum, r) => sum + (Number(r[entry.cfg.valueField]) || 0), 0)
+      if (entry.cfg.formula) {
+        const expr = entry.cfg.formula.replace(/\{\{\s*([\w.]+|__agg__)\s*\}\}/g, (_, ref: string) => {
+          if (ref === '__agg__') return String(agg)
+          const n = Number((gridRow as Record<string, unknown>)[ref])
+          return String(Number.isFinite(n) ? n : 0)
+        })
+        if (!/^[-+*/(). 0-9eE]+$/.test(expr)) return <span className='text-slate-300'>—</span>
+        try {
+          const v = new Function(`"use strict"; return (${expr})`)() as unknown
+          if (typeof v === 'number' && Number.isFinite(v)) agg = v
+          else return <span className='text-slate-300'>—</span>
+        } catch {
+          return <span className='text-slate-300'>—</span>
+        }
+      }
+      const formatted =
+        entry.cfg.format === 'currency'
+          ? agg.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+          : agg.toLocaleString('en-US', { maximumFractionDigits: 2 })
+      return <span className='tabular-nums'>{formatted}</span>
+    }
+
+    // Type-agnostic currency formatting (options.format: 'currency') — covers
+    // relation-path columns whose resolved values arrive as strings, and any
+    // other column regardless of declared type. Numeric-typed columns keep
+    // their existing int/decimal/currency handling further down.
+    if (
+      colOpts.format === 'currency' &&
+      val !== null &&
+      val !== undefined &&
+      val !== '' &&
+      Number.isFinite(Number(val))
+    ) {
+      val = Number(val).toLocaleString('en-US', {
+        style: 'currency',
+        currency: (colOpts.currency as string) || 'USD'
+      })
+    }
+
+    // Presence display: relation-path column configured display:'presence'
+    // renders linked/none instead of the joined values (e.g. "PO Linked").
+    if (col.interface === 'relation-path' && colOpts.display === 'presence') {
+      const has = val !== null && val !== undefined && String(val).trim() !== ''
+      return (
+        <span
+          className={cn(
+            'inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-medium',
+            has
+              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+              : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'
+          )}
+        >
+          {has ? 'Yes' : 'No'}
+        </span>
+      )
+    }
+
     if (val === null || val === undefined) return <span className='text-slate-300'>—</span>
     // Relation-path cells configured for drill-down open the final entity.
     if (col.interface === 'relation-path' && drill && rowId) {
@@ -1261,8 +2493,10 @@ export function InlineTableField({
       const display = m2oDisplays[m2oRel.one_collection]?.[String(val)]
       if (!display && m2oFetching) return <Loader2 className='h-3 w-3 animate-spin text-slate-300' />
       const cfg = drill ? fieldDrilldownConfig(col) : null
+      const isStaleVal = val != null && staleCellValues.get(col.field)?.has(String(val)) === true
+      let inner: React.ReactNode
       if (cfg && drill) {
-        return (
+        inner = (
           <button
             type='button'
             onClick={(e) => {
@@ -1280,8 +2514,10 @@ export function InlineTableField({
             {display ?? String(val)}
           </button>
         )
+      } else {
+        inner = <span className='block truncate'>{display ?? String(val)}</span>
       }
-      return <span className='block truncate'>{display ?? String(val)}</span>
+      return isStaleVal ? <StaleValueFlag>{inner}</StaleValueFlag> : inner
     }
     if (col.type === 'boolean')
       return <span className={val ? 'text-emerald-600' : 'text-slate-400'}>{val ? 'Yes' : 'No'}</span>
@@ -1380,6 +2616,50 @@ export function InlineTableField({
         >
           blank {bulkCount === 1 ? 'row' : 'rows'}
         </button>
+        {allocateDrawer && (!isNew || staging) && (
+          <AllocateDrawer
+            config={allocateDrawer}
+            relatedCollection={relatedCollection}
+            manyField={manyField}
+            parentId={parentId}
+            rows={isNew ? [] : rows}
+            rowDefaults={rowDefaultSeed}
+            parentDraft={parentDraftCtx?.draft}
+            invalidate={() => qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })}
+            staging={staging}
+            stagingActive={(isNew || isPendingMode) && !!staging}
+            pendingRows={pendingRows}
+            pendingEdits={pendingEdits}
+            pendingDeletes={pendingDeletes}
+          />
+        )}
+        {autoAllocate && !isNew && !readOnly && (() => {
+          const entry = (drawerRelations ?? []).find(
+            (d): d is { field: string; match?: MatchedDrawerConfig } =>
+              typeof d === 'object' && d.field === autoAllocate.relation && !!d.match
+          )
+          if (!entry?.match) return null
+          return (
+            <AutoAllocateButton
+              config={autoAllocate}
+              matchCfg={entry.match}
+              rows={rows}
+              parentId={parentId}
+              parentDraft={parentDraftCtx?.draft}
+              relatedCollection={relatedCollection}
+              manyField={manyField}
+            />
+          )
+        })()}
+        {uploadTemplate && !isNew && !readOnly && reimportHandler && parentCollection && (
+          <ImportFromFileButton
+            collection={parentCollection}
+            templateFilter={(t) => t.name === uploadTemplate && t.reimport?.enabled === true}
+            getLabel={(t) => t.reimport?.button_label ?? t.button_label}
+            onParsed={(result, template) => reimportHandler(result, template)}
+            compact
+          />
+        )}
         {defaultsCols.length > 0 && (
           <button
             type='button'
@@ -1453,9 +2733,9 @@ export function InlineTableField({
 
     {isPrefilling && (
       <div className='rounded-lg border border-slate-200 p-3 space-y-1.5'>
-        <div className='h-8 rounded bg-slate-100 animate-pulse' />
-        <div className='h-8 rounded bg-slate-100 animate-pulse' />
-        <div className='h-8 rounded bg-slate-100 animate-pulse' />
+        <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
+        <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
+        <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
       </div>
     )}
     {/* readOnly grids skip the !readOnly toolbar above, so the preset switcher gets its own strip */}
@@ -1518,7 +2798,7 @@ export function InlineTableField({
           )}
 
           {/* Pending rows (new parent OR pending-save mode) */}
-          {(isNew || isPendingMode) && pendingRows.map((row, ri) => {
+          {pendingRows.length > 0 && pendingRows.map((row, ri) => {
             const pendingRowId = `pending:${ri}`
             const isEditing = editState?.rowId === pendingRowId
             const isPDragging = dragIdx === ri
@@ -1679,6 +2959,27 @@ export function InlineTableField({
           {/* Saved rows */}
           {!isNew && activeView === 'original' && rows.map((row, ri) => {
             const id = String(row.id)
+            const section = sectionsActive ? sectionOf(row) : null
+            const isSectionStart = section !== null && (ri === 0 || sectionOf(rows[ri - 1]) !== section)
+            const sectionCollapsed = section !== null && collapsedSections.has(section)
+            const sectionHeader = isSectionStart && section !== null ? (
+              <tr className='border-b border-slate-200 bg-slate-100/80 dark:border-border dark:bg-muted'>
+                <td colSpan={effectiveCols.length + 1 + ((isNew || isPendingMode) ? 1 : 0) + (showLineNumbers ? 1 : 0) + (enableReorder && (rowOrderField || isNew || isPendingMode) ? 1 : 0)} className='px-2 py-1'>
+                  <button
+                    type='button'
+                    onClick={(e) => { e.stopPropagation(); toggleSection(section) }}
+                    className='flex w-full items-center gap-1.5 text-left'
+                  >
+                    <ChevronRight className={cn('h-3 w-3 shrink-0 text-slate-400 transition-transform', !sectionCollapsed && 'rotate-90')} />
+                    <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>{section}</span>
+                    <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
+                      {rows.reduce((n, r) => n + (sectionOf(r) === section ? 1 : 0), 0)}
+                    </span>
+                  </button>
+                </td>
+              </tr>
+            ) : null
+            if (sectionCollapsed) return <Fragment key={id}>{sectionHeader}</Fragment>
             const isEditing = editState?.rowId === id
             const isDragging = dragIdx === ri
             const isDropTarget = dropIdx === ri && dragIdx !== ri
@@ -1686,8 +2987,13 @@ export function InlineTableField({
             const isPendingDelete = pendingDeletes.has(id)
             // Merge pending edit changes into display values
             const displayRow = isPendingEdit ? { ...row, ...pendingEdits.get(id) } : row
+            const lineError =
+              subErrLineField && !isPendingDelete
+                ? (submissionErrorByLine.get(String(displayRow[subErrLineField] ?? '')) ?? null)
+                : null
             return (
               <Fragment key={id}>
+              {sectionHeader}
               <tr
                 draggable={enableReorder && !!rowOrderField && !isEditing && !isPendingDelete}
                 onDragStart={() => handleDragStart(ri)}
@@ -1709,9 +3015,11 @@ export function InlineTableField({
                   isPendingDelete ? 'opacity-50 bg-red-50/40 cursor-default line-through' : '',
                   !isPendingDelete && isEditing ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default' : '',
                   !isPendingDelete && !isEditing
-                    ? ri % 2 === 0
-                      ? 'bg-white hover:bg-slate-50/80 cursor-pointer'
-                      : 'bg-slate-50/50 hover:bg-slate-100/60 cursor-pointer'
+                    ? lineError
+                      ? 'bg-red-50/70 hover:bg-red-50 cursor-pointer dark:bg-red-900/15'
+                      : ri % 2 === 0
+                        ? 'bg-white hover:bg-slate-50/80 cursor-pointer'
+                        : 'bg-slate-50/50 hover:bg-slate-100/60 cursor-pointer'
                     : ''
                 )}>
                 {enableReorder && (rowOrderField || isPendingMode) && (
@@ -1734,7 +3042,7 @@ export function InlineTableField({
                   if (isSummaryCol(c)) {
                     return (
                       <td key={c.field} className='px-2 py-1 align-top'>
-                        <div className='py-0.5 overflow-hidden text-slate-500'>{summaryCellValue(c, displayRow, false)}</div>
+                        <div className='py-0.5 overflow-hidden text-slate-500'>{summaryCellContent(c, displayRow)}</div>
                       </td>
                     )
                   }
@@ -1813,6 +3121,16 @@ export function InlineTableField({
                   )}
                 </td>
               </tr>
+              {lineError && (
+                <tr>
+                  <td
+                    colSpan={nestedColSpan}
+                    className='border-b border-red-100 bg-red-50/60 px-3 py-1 text-[11px] leading-snug text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-400'
+                  >
+                    ⚠ {lineError}
+                  </td>
+                </tr>
+              )}
               {isEditing && !isPendingDelete && drawerRelations && drawerRelations.length > 0 && (
                 <tr className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
                   <td colSpan={nestedColSpan} className='px-3 py-2'>
@@ -1820,6 +3138,11 @@ export function InlineTableField({
                       {drawerRelations.map((dr) => {
                         const relField = typeof dr === 'string' ? dr : dr.field
                         const relHint = typeof dr === 'string' ? undefined : dr.hint
+                        const relMatch = typeof dr === 'string' ? undefined : dr.match
+                        const rowData = (editState?.draft ?? displayRow) as Record<string, unknown>
+                        const matched = relMatch
+                          ? buildMatchedDrawer(relMatch, rowData, parentId, parentDraftCtx?.draft)
+                          : null
                         return (
                           <NestedRelationEditor
                             key={relField}
@@ -1829,11 +3152,17 @@ export function InlineTableField({
                             parentDraft={editState?.draft ?? displayRow}
                             hint={relHint}
                             outerGridInvalidateKey={['o2m-rows', relatedCollection, manyField, parentId]}
-                            {...(isPendingMode ? {
-                              deferred: true,
-                              stagedOps: (editState?.draft[`__nested_ops_${relField}`] as NestedOps | undefined) ?? EMPTY_NESTED_OPS,
-                              onStagedOpsChange: (ops: NestedOps) => setDraftField(`__nested_ops_${relField}`, ops)
-                            } : {})}
+                            {...(relMatch
+                              ? {
+                                  matchCollection: relMatch.collection,
+                                  matchQuery: matched?.query ?? null,
+                                  matchSeed: matched?.seed ?? {}
+                                }
+                              : isPendingMode ? {
+                                  deferred: true,
+                                  stagedOps: (editState?.draft[`__nested_ops_${relField}`] as NestedOps | undefined) ?? EMPTY_NESTED_OPS,
+                                  onStagedOpsChange: (ops: NestedOps) => setDraftField(`__nested_ops_${relField}`, ops)
+                                } : {})}
                           />
                         )
                       })}
@@ -1908,7 +3237,7 @@ export function InlineTableField({
             </tr>
           )}
 
-          {(isNew || isPendingMode ? pendingRows : rows).length === 0 && (!isPendingMode || rows.length === 0) && !isEditingNew && (
+          {rows.length === 0 && pendingRows.length === 0 && !isEditingNew && (
             <tr>
               <td colSpan={effectiveCols.length + ((isNew || isPendingMode) ? 2 : 1) + (rowOrderField || isNew || isPendingMode ? 1 : 0)} className='px-3 py-14 text-center text-slate-400'>
                 {isNew ? 'No pending rows' : 'No rows yet'}
@@ -1946,7 +3275,7 @@ export function InlineTableField({
                   {isPendingMode && <td className='w-20' />}
                   {effectiveCols.map((c) => (
                     <td key={c.field} className={`px-2 py-1.5 text-[11px] ${changedFields.has(c.field) ? 'bg-amber-50 text-amber-900' : 'text-slate-700'}`}>
-                      {isSummaryCol(c) ? summaryCellValue(c, row, false) : renderCell(c, row[c.field], row.id != null ? String(row.id) : undefined)}
+                      {isSummaryCol(c) ? summaryCellContent(c, row) : renderCell(c, row[c.field], row.id != null ? String(row.id) : undefined)}
                     </td>
                   ))}
                   <td className='w-20 px-2 py-1.5 text-right'>

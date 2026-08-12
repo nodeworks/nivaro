@@ -81,7 +81,119 @@ async function loadReport(id: string): Promise<ReportRow | undefined> {
   return (await db('nivaro_report_defs').where({ id }).first()) as ReportRow | undefined
 }
 
+function sanitizeAlertFilters(
+  raw: unknown
+): string | null {
+  if (!Array.isArray(raw)) return null
+  const out = raw
+    .filter(
+      (f) =>
+        f &&
+        typeof (f as { field?: unknown }).field === 'string' &&
+        Array.isArray((f as { values?: unknown }).values)
+    )
+    .slice(0, 10)
+    .map((f) => {
+      const e = f as { field: string; values: Array<string | number>; labels?: string[] }
+      return {
+        field: e.field.slice(0, 80),
+        values: e.values.slice(0, 50).map((v) => (typeof v === 'number' ? v : String(v).slice(0, 200))),
+        labels: Array.isArray(e.labels)
+          ? e.labels.slice(0, 50).map((l) => String(l).slice(0, 200))
+          : undefined
+      }
+    })
+    .filter((f) => f.values.length > 0)
+  return out.length > 0 ? JSON.stringify(out) : null
+}
+
 export async function reportStudioRoutes(app: FastifyInstance) {
+  // ─── Prebuilt widget catalog ────────────────────────────────────────────────
+  // Named, categorized widget configs users drop into a report instead of
+  // building a metric by hand. Data-driven — admins manage rows, deployments
+  // (EFP) seed their own library.
+  app.get('/widget-presets', { preHandler: requireAuth }, async (_req, reply) => {
+    const rows = await db('nivaro_report_widget_presets')
+      .where('is_active', true)
+      .orderBy(['category', 'sort', 'name'])
+    return reply.send({
+      data: rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        category: r.category,
+        description: r.description,
+        widget_type: r.widget_type,
+        config: (() => {
+          try {
+            return r.config ? JSON.parse(r.config) : null
+          } catch {
+            return null
+          }
+        })(),
+        w: r.w,
+        h: r.h
+      }))
+    })
+  })
+
+  app.post('/widget-presets', { preHandler: requireAuth }, async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    const b = (req.body ?? {}) as Record<string, unknown>
+    if (!b.name || !b.widget_type) return reply.code(400).send({ error: 'name and widget_type required' })
+    const now = new Date()
+    await db('nivaro_report_widget_presets').insert({
+      name: String(b.name).slice(0, 255),
+      category: String(b.category ?? 'general').slice(0, 50),
+      description: b.description ? String(b.description).slice(0, 1000) : null,
+      widget_type: String(b.widget_type).slice(0, 50),
+      config: b.config ? JSON.stringify(b.config) : null,
+      w: Number(b.w) || 6,
+      h: Number(b.h) || 4,
+      sort: Number(b.sort) || 0,
+      is_active: b.is_active !== false,
+      created_at: now,
+      updated_at: now
+    })
+    void logActivity({
+      action: 'report-widget-preset-create',
+      user: req.user?.id ?? null,
+      comment: `preset "${String(b.name).slice(0, 80)}" (${String(b.widget_type)})`
+    })
+    return reply.send({ data: { ok: true } })
+  })
+
+  app.patch('/widget-presets/:presetId', { preHandler: requireAuth }, async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    const id = Number((req.params as { presetId: string }).presetId)
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const patch: Record<string, unknown> = { updated_at: new Date() }
+    for (const k of ['name', 'category', 'description', 'widget_type'] as const) {
+      if (k in b) patch[k] = b[k] == null ? null : String(b[k])
+    }
+    if ('config' in b) patch.config = b.config ? JSON.stringify(b.config) : null
+    for (const k of ['w', 'h', 'sort'] as const) if (k in b) patch[k] = Number(b[k]) || 0
+    if ('is_active' in b) patch.is_active = b.is_active !== false
+    await db('nivaro_report_widget_presets').where('id', id).update(patch)
+    void logActivity({
+      action: 'report-widget-preset-update',
+      user: req.user?.id ?? null,
+      comment: `preset ${id}: ${Object.keys(patch).filter((k) => k !== 'updated_at').join(', ')}`
+    })
+    return reply.send({ data: { ok: true } })
+  })
+
+  app.delete('/widget-presets/:presetId', { preHandler: requireAuth }, async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    const id = Number((req.params as { presetId: string }).presetId)
+    await db('nivaro_report_widget_presets').where('id', id).del()
+    void logActivity({
+      action: 'report-widget-preset-delete',
+      user: req.user?.id ?? null,
+      comment: `preset ${id}`
+    })
+    return reply.send({ data: { ok: true } })
+  })
+
   // ── Report CRUD ─────────────────────────────────────────────────────────────
 
   app.get('/', { preHandler: requireAuth }, async (req, reply) => {
@@ -164,6 +276,16 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     if (b.global_filters !== undefined)
       patch.global_filters = b.global_filters ? JSON.stringify(b.global_filters) : null
     await db('nivaro_report_defs').where({ id: report.id }).update(patch)
+    await logActivity({
+      action: 'report-update',
+      collection: 'nivaro_report_defs',
+      item: report.id,
+      user: req.user!.id,
+      req,
+      comment: Object.keys(patch)
+        .filter((k) => k !== 'updated_at')
+        .join(', ')
+    })
     const row = await loadReport(report.id)
     return reply.send({ data: formatReport(row as ReportRow) })
   })
@@ -211,7 +333,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const incoming = Array.isArray(req.body?.widgets) ? req.body.widgets : []
     if (incoming.length > 40) return reply.code(400).send({ error: 'Max 40 widgets per report' })
 
-    const VALID_TYPES = new Set(['kpi', 'kpi_group', 'bar', 'line', 'donut', 'table', 'divider'])
+    const VALID_TYPES = new Set(['kpi', 'kpi_group', 'bar', 'line', 'donut', 'table', 'divider', 'query'])
     const rows = incoming.map((w, i) => ({
       id: w.id && /^[0-9a-f-]{36}$/i.test(w.id) ? w.id : randomUUID(),
       report: report.id,
@@ -230,6 +352,14 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       await trx('nivaro_report_widgets').where({ report: report.id }).del()
       if (rows.length > 0) await trx('nivaro_report_widgets').insert(rows)
       await trx('nivaro_report_defs').where({ id: report.id }).update({ updated_at: new Date() })
+    })
+    await logActivity({
+      action: 'report-widgets-save',
+      collection: 'nivaro_report_defs',
+      item: report.id,
+      user: req.user!.id,
+      req,
+      comment: `${rows.length} widget(s)`
     })
     return reply.send({ data: { saved: rows.length, ids: rows.map((r) => r.id) } })
   })
@@ -335,6 +465,14 @@ export async function reportStudioRoutes(app: FastifyInstance) {
           }))
         )
       }
+      await logActivity({
+        action: 'report-clone',
+        collection: 'nivaro_report_defs',
+        item: newId,
+        user: req.user!.id,
+        req,
+        comment: `cloned from ${report.name} (${report.id})`
+      })
       return reply.send({ data: { id: newId } })
     }
   )
@@ -363,6 +501,13 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       await db('nivaro_report_subscriptions')
         .where({ report: report.id, user: req.user!.id })
         .del()
+      await logActivity({
+        action: 'report-unsubscribe',
+        collection: 'nivaro_report_defs',
+        item: report.id,
+        user: req.user!.id,
+        req
+      })
       return reply.send({ data: null })
     }
     const cadence = req.body.cadence === 'weekly' ? 'weekly' : 'daily'
@@ -384,6 +529,14 @@ export async function reportStudioRoutes(app: FastifyInstance) {
         created_at: new Date()
       })
     }
+    await logActivity({
+      action: 'report-subscribe',
+      collection: 'nivaro_report_defs',
+      item: report.id,
+      user: req.user!.id,
+      req,
+      comment: `${cadence}${values.delivery_email ? ' email' : ''}${values.delivery_inapp ? ' in-app' : ''}`
+    })
     const sub = await db('nivaro_report_subscriptions')
       .where({ report: report.id, user: req.user!.id })
       .first()
@@ -410,11 +563,22 @@ export async function reportStudioRoutes(app: FastifyInstance) {
         .where({ status: 'firing' })
         .select('alert')) as Array<{ alert: string }>
       const firingSet = new Set(firing.map((f) => f.alert))
+      const lastFired = (await db('nivaro_report_alert_log')
+        .whereIn(
+          'alert',
+          alerts.map((a) => a.id)
+        )
+        .groupBy('alert')
+        .select('alert')
+        .max({ fired_at: 'fired_at' })) as Array<{ alert: string; fired_at: Date | null }>
+      const lastMap = new Map(lastFired.map((f) => [f.alert, f.fired_at]))
       return reply.send({
         data: alerts.map((a) => ({
           ...a,
           conditions: parseJson(a.conditions),
-          firing: firingSet.has(a.id)
+          filters: parseJson((a as { filters?: string | null }).filters ?? null),
+          firing: firingSet.has(a.id),
+          last_fired: lastMap.get(a.id) ?? null
         }))
       })
     }
@@ -428,6 +592,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       conditions?: Array<{ field: string; op: string; value: number }>
       delivery_email?: boolean
       delivery_inapp?: boolean
+      filters?: Array<{ field: string; values: Array<string | number>; labels?: string[] }>
     }
   }>('/:id/alerts', { preHandler: requireAuth }, async (req, reply) => {
     const report = await loadReport(req.params.id)
@@ -437,11 +602,13 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const conditions = (Array.isArray(b.conditions) ? b.conditions : [])
       .filter(
         (c) =>
-          ['value', 'row_count'].includes(String(c.field)) &&
+          typeof c.field === 'string' &&
+          c.field.length > 0 &&
+          c.field.length <= 120 &&
           ['gt', 'gte', 'lt', 'lte', 'eq'].includes(String(c.op)) &&
           Number.isFinite(Number(c.value))
       )
-      .map((c) => ({ field: c.field, op: c.op, value: Number(c.value) }))
+      .map((c) => ({ field: String(c.field), op: c.op, value: Number(c.value) }))
     if (!b.widget || conditions.length === 0) {
       return reply.code(400).send({ error: 'widget and at least one valid condition required' })
     }
@@ -456,17 +623,235 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       widget: b.widget,
       name: String(b.name ?? `Alert on ${widget.title}`).slice(0, 255),
       conditions: JSON.stringify(conditions),
+      filters: sanitizeAlertFilters(b.filters),
       delivery_email: b.delivery_email !== false,
       delivery_inapp: b.delivery_inapp !== false,
       is_active: true,
       created_by: req.user!.id,
       created_at: new Date()
     })
+    await logActivity({
+      action: 'report-alert-create',
+      collection: 'nivaro_report_alerts',
+      item: id,
+      user: req.user!.id,
+      req,
+      comment: `${widget.title}: ${conditions.map((c) => `${c.field} ${c.op} ${c.value}`).join(', ')}`
+    })
     return reply.send({ data: { id } })
   })
 
-  app.patch<{ Params: { id: string; alertId: string }; Body: { is_active?: boolean } }>(
-    '/:id/alerts/:alertId',
+  app.patch<{
+    Params: { id: string; alertId: string }
+    Body: {
+      is_active?: boolean
+      name?: string
+      conditions?: Array<{ field: string; op: string; value: number }>
+      delivery_email?: boolean
+      delivery_inapp?: boolean
+      filters?: Array<{ field: string; values: Array<string | number>; labels?: string[] }> | null
+    }
+  }>('/:id/alerts/:alertId', { preHandler: requireAuth }, async (req, reply) => {
+    const alert = await db('nivaro_report_alerts')
+      .where({ id: req.params.alertId, report: req.params.id })
+      .first()
+    if (!alert) return reply.code(404).send({ error: 'Alert not found' })
+    if (!req.isAdmin && alert.created_by !== req.user!.id) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const b = req.body ?? {}
+    const patch: Record<string, unknown> = {}
+    if (b.is_active !== undefined) patch.is_active = !!b.is_active
+    if (b.name !== undefined) patch.name = String(b.name).slice(0, 255)
+    if (b.delivery_email !== undefined) patch.delivery_email = !!b.delivery_email
+    if (b.delivery_inapp !== undefined) patch.delivery_inapp = !!b.delivery_inapp
+    if (b.filters !== undefined) patch.filters = sanitizeAlertFilters(b.filters)
+    if (b.conditions !== undefined) {
+      const conditions = (Array.isArray(b.conditions) ? b.conditions : [])
+        .filter(
+          (c) =>
+            ['value', 'row_count'].includes(String(c.field)) &&
+            ['gt', 'gte', 'lt', 'lte', 'eq'].includes(String(c.op)) &&
+            Number.isFinite(Number(c.value))
+        )
+        .map((c) => ({ field: c.field, op: c.op, value: Number(c.value) }))
+      if (conditions.length === 0)
+        return reply.code(400).send({ error: 'At least one valid condition required' })
+      patch.conditions = JSON.stringify(conditions)
+    }
+    if (Object.keys(patch).length === 0)
+      return reply.code(400).send({ error: 'No fields to update' })
+    await db('nivaro_report_alerts').where({ id: alert.id }).update(patch)
+    await logActivity({
+      action: 'report-alert-update',
+      collection: 'nivaro_report_alerts',
+      item: alert.id,
+      user: req.user!.id,
+      req,
+      comment: Object.keys(patch).join(', ')
+    })
+    return reply.send({ data: { updated: true } })
+  })
+
+  // Alert history — the firing/resolved log rows for one alert (or the whole
+  // report when alertId is omitted via /alerts-log).
+  app.get<{ Params: { id: string; alertId: string } }>(
+    '/:id/alerts/:alertId/log',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      // Scope check — the alert must belong to THIS report, or any readable
+      // report id could be used to read another report's alert history.
+      const owned = await db('nivaro_report_alerts')
+        .where({ id: req.params.alertId, report: report.id })
+        .first()
+      if (!owned) return reply.code(404).send({ error: 'Alert not found' })
+      const rows = await db('nivaro_report_alert_log')
+        .where({ alert: req.params.alertId })
+        .orderBy('fired_at', 'desc')
+        .limit(50)
+      return reply.send({
+        data: rows.map((r) => ({ ...r, metric_snapshot: parseJson(r.metric_snapshot) }))
+      })
+    }
+  )
+  // Reset every cached custom-query result this report's query widgets use
+  // (staging 'Reset Cache' parity). Safe: caches repopulate on next view.
+  app.post<{ Params: { id: string } }>(
+    '/:id/reset-cache',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const widgets = (await db('nivaro_report_widgets')
+        .where({ report: report.id })
+        .select('config', 'type')) as Array<{ config: string | null; type: string }>
+      const slugs = new Set<string>()
+      for (const w of widgets) {
+        if (w.type !== 'query') continue
+        const slug = parseJson<{ query?: { slug?: string } }>(w.config)?.query?.slug
+        if (slug) slugs.add(slug)
+      }
+      const { bustCustomQueryCache } = await import('./custom-queries.js')
+      let cleared = 0
+      for (const slug of slugs) {
+        cleared += await bustCustomQueryCache(app.redis, slug).catch(() => 0)
+      }
+      await logActivity({
+        action: 'report-reset-cache',
+        collection: 'nivaro_report_defs',
+        item: report.id,
+        user: req.user!.id,
+        req,
+        comment: `${slugs.size} quer(y|ies), ${cleared} cache key(s) cleared`
+      })
+      return reply.send({ data: { queries: slugs.size, cleared } })
+    }
+  )
+
+  // ── Per-user filter presets ─────────────────────────────────────────────────
+
+  app.get<{ Params: { id: string } }>(
+    '/:id/filter-presets',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const rows = await db('nivaro_report_filter_presets')
+        .where({ report: report.id, user: req.user!.id })
+        .orderBy('name')
+      return reply.send({
+        data: rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          date_range: parseJson(r.date_range),
+          entity_filters: parseJson(r.entity_filters) ?? []
+        }))
+      })
+    }
+  )
+
+  // Upsert by name (same-name save overwrites the caller's own preset)
+  app.post<{
+    Params: { id: string }
+    Body: { name?: string; date_range?: unknown; entity_filters?: unknown }
+  }>('/:id/filter-presets', { preHandler: requireAuth }, async (req, reply) => {
+    const report = await loadReport(req.params.id)
+    if (!report) return reply.code(404).send({ error: 'Report not found' })
+    if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+    const name = String(req.body?.name ?? '').trim().slice(0, 120)
+    if (!name) return reply.code(400).send({ error: 'name is required' })
+    const row = {
+      date_range: req.body?.date_range ? JSON.stringify(req.body.date_range) : null,
+      entity_filters: sanitizeAlertFilters(req.body?.entity_filters) ?? '[]'
+    }
+    const existing = await db('nivaro_report_filter_presets')
+      .where({ report: report.id, user: req.user!.id, name })
+      .first()
+    if (existing) {
+      await db('nivaro_report_filter_presets').where({ id: existing.id }).update(row)
+      await logActivity({
+        action: 'report-filter-preset-update',
+        collection: 'nivaro_report_filter_presets',
+        item: String(existing.id),
+        user: req.user!.id,
+        req,
+        comment: name
+      })
+      return reply.send({ data: { id: existing.id, updated: true } })
+    }
+    await db('nivaro_report_filter_presets').insert({
+      ...row,
+      report: report.id,
+      user: req.user!.id,
+      name,
+      created_at: new Date()
+    })
+    const created = await db('nivaro_report_filter_presets')
+      .where({ report: report.id, user: req.user!.id, name })
+      .first()
+    await logActivity({
+      action: 'report-filter-preset-create',
+      collection: 'nivaro_report_filter_presets',
+      item: created?.id != null ? String(created.id) : undefined,
+      user: req.user!.id,
+      req,
+      comment: name
+    })
+    return reply.send({ data: { id: created?.id, updated: false } })
+  })
+
+  app.delete<{ Params: { id: string; presetId: string } }>(
+    '/:id/filter-presets/:presetId',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const preset = await db('nivaro_report_filter_presets')
+        .where({ id: Number(req.params.presetId), report: req.params.id })
+        .first()
+      if (!preset) return reply.code(404).send({ error: 'Preset not found' })
+      if (!req.isAdmin && preset.user !== req.user!.id) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      await db('nivaro_report_filter_presets').where({ id: preset.id }).del()
+      await logActivity({
+        action: 'report-filter-preset-delete',
+        collection: 'nivaro_report_filter_presets',
+        item: String(preset.id),
+        user: req.user!.id,
+        req,
+        comment: preset.name
+      })
+      return reply.send({ data: { deleted: true } })
+    }
+  )
+
+  // Mark an open firing log entry resolved (owner or admin)
+  app.post<{ Params: { id: string; alertId: string } }>(
+    '/:id/alerts/:alertId/resolve',
     { preHandler: requireAuth },
     async (req, reply) => {
       const alert = await db('nivaro_report_alerts')
@@ -476,12 +861,39 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       if (!req.isAdmin && alert.created_by !== req.user!.id) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
-      if (req.body?.is_active !== undefined) {
-        await db('nivaro_report_alerts')
-          .where({ id: alert.id })
-          .update({ is_active: !!req.body.is_active })
-      }
-      return reply.send({ data: { updated: true } })
+      const n = await db('nivaro_report_alert_log')
+        .where({ alert: alert.id, status: 'firing' })
+        .update({ status: 'resolved', resolved_at: new Date() })
+      await logActivity({
+        action: 'report-alert-resolve',
+        collection: 'nivaro_report_alerts',
+        item: alert.id,
+        user: req.user!.id,
+        req,
+        comment: `${n} firing entr(y|ies) resolved`
+      })
+      return reply.send({ data: { resolved: n } })
+    }
+  )
+
+  app.get<{ Params: { id: string } }>(
+    '/:id/alerts-log',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const alertIds = (
+        await db('nivaro_report_alerts').where({ report: report.id }).select('id')
+      ).map((a) => a.id as string)
+      if (alertIds.length === 0) return reply.send({ data: [] })
+      const rows = await db('nivaro_report_alert_log')
+        .whereIn('alert', alertIds)
+        .orderBy('fired_at', 'desc')
+        .limit(100)
+      return reply.send({
+        data: rows.map((r) => ({ ...r, metric_snapshot: parseJson(r.metric_snapshot) }))
+      })
     }
   )
 
@@ -497,6 +909,14 @@ export async function reportStudioRoutes(app: FastifyInstance) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
       await db('nivaro_report_alerts').where({ id: alert.id }).del()
+      await logActivity({
+        action: 'report-alert-delete',
+        collection: 'nivaro_report_alerts',
+        item: alert.id,
+        user: req.user!.id,
+        req,
+        comment: alert.name
+      })
       return reply.send({ data: { deleted: true } })
     }
   )
@@ -673,11 +1093,24 @@ Respond ONLY with JSON: {"widgets":[{"type":"...","title":"...","collection":"..
       const client = await getAiClient()
       if (!client) return reply.code(503).send({ error: 'AI is not configured' })
       const { model } = await getAiModelSettings()
-      const fieldList = (req.body?.fields ?? []).filter((f) => /^[a-zA-Z0-9_]+$/.test(f))
+      // fields may be plain names or {field, label} pairs — labels give the
+      // model the human meaning ('division' is labeled 'Zone').
+      const rawFields = Array.isArray(req.body?.fields) ? req.body.fields : []
+      const fieldDefs = rawFields
+        .map((f: unknown) =>
+          typeof f === 'string'
+            ? { field: f, label: f }
+            : { field: String((f as { field?: unknown })?.field ?? ''), label: String((f as { label?: unknown })?.label ?? '') }
+        )
+        .filter((f: { field: string }) => /^[a-zA-Z0-9_]+$/.test(f.field))
+      const fieldList = fieldDefs.map(
+        (f: { field: string; label: string }) =>
+          `${f.field}${f.label && f.label !== f.field ? ` (shown to users as "${f.label}")` : ''}`
+      )
 
       const system = `Turn the user's prose into report filters. Respond ONLY with JSON:
 {"date_range": {"preset": one of this_month|last_30_days|last_3_months|last_6_months|last_12_months|ytd|custom, "start"?: "YYYY-MM-DD", "end"?: "YYYY-MM-DD"} | null, "entity_filters": [{"field": string, "values": [string]}]}
-Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available — return empty entity_filters)'}. Today is ${new Date().toISOString().slice(0, 10)}.`
+Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available — return empty entity_filters)'}. Match the user's words against the user-facing labels (e.g. "Zone 1" belongs to the field labeled "Zone"). Only set date_range when the prose mentions a TIME period — a funding year is a filter field, not a date range. Today is ${new Date().toISOString().slice(0, 10)}.`
 
       try {
         const msg = await client.messages.create({

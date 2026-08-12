@@ -71,7 +71,7 @@ export const userExternalApisGuide: DocSection = {
     { type: 'h1', id: 'external-apis-guide', text: 'External APIs' },
     {
       type: 'p',
-      text: 'External APIs lets you configure connections to third-party services (Oracle EBS, MWF, MDSi, Azure, etc.) with stored authentication credentials. Configured APIs can be tested from the admin UI and called programmatically from extensions.'
+      text: 'External APIs lets you configure connections to third-party services (Oracle EBS, SAP, Azure, etc.) with stored authentication credentials. Configured APIs can be tested from the admin UI and called programmatically from extensions.'
     },
     { type: 'h3', text: 'Admin UI — /external-apis' },
     {
@@ -119,7 +119,7 @@ export const userExternalApisGuide: DocSection = {
     },
     {
       type: 'note',
-      text: 'External APIs intentionally skip SSRF protection — they are admin-only and designed to reach internal corporate services (Oracle EBS, MWF, MDSi, etc.) that would otherwise be blocked. SSRF protection applies to webhooks, not external APIs.'
+      text: 'External APIs intentionally skip SSRF protection — they are admin-only and designed to reach internal corporate services (Oracle EBS, SAP, etc.) that would otherwise be blocked. SSRF protection applies to webhooks, not external APIs.'
     }
   ]
 }
@@ -989,6 +989,69 @@ ANTHROPIC_API_KEY=sk-ant-...`
     {
       type: 'warn',
       text: 'The server starts normally without `ANTHROPIC_API_KEY` — the field is optional. AI endpoints return 503 until the key is provided.'
+    }
+  ]
+}
+
+export const aiReviewBrief: DocSection = {
+  id: 'ai-review-brief',
+  label: 'Review & Brief',
+  content: [
+    { type: 'h1', id: 'ai-review-brief', text: 'AI Review & Brief' },
+    {
+      type: 'p',
+      text: 'Two authenticated (not admin-only) AI endpoints for headless frontends: `POST /api/ai/review` runs a pre-submission review of a record and returns a findings list, and `POST /api/ai/brief` renders a short plain-text briefing from context the caller supplies.'
+    },
+    { type: 'h2', id: 'ai-review', text: 'Record review' },
+    {
+      type: 'p',
+      text: 'Reviews a record plus up to three of its one-to-many child sets (line items ride along automatically). If the collection has plain-text AI validation rules configured (AI Collection Settings), they are folded into the review guidance. The caller must have read permission on the collection; `nivaro_*` collections are rejected.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/ai/review
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{ "collection": "workflows", "item": "123" }
+
+→ 200 { "data": { "findings": [
+    { "severity": "error",      "field": "lines",       "message": "Line 3 has a quantity of 0." },
+    { "severity": "warning",    "field": "date_required", "message": "Required date is in the past." },
+    { "severity": "suggestion", "field": "description", "message": "Description looks like placeholder text." }
+  ] } }
+→ 400 { "error": "collection and item are required" }   // or "Invalid collection"
+→ 403 { "error": "Forbidden" }                          // no read permission
+→ 404 { "error": "Item not found" }
+→ 503 { "error": "AI features require ANTHROPIC_API_KEY to be configured" }`
+    },
+    {
+      type: 'p',
+      text: 'Severity is always one of `error` / `warning` / `suggestion`; an empty findings array means the record looks ready to submit. Each call is activity-logged as `ai-review`.'
+    },
+    { type: 'h2', id: 'ai-brief', text: 'Briefing' },
+    {
+      type: 'p',
+      text: 'The caller gathers the data (custom queries, aggregates, anything) and sends it as one text block — the endpoint only writes the words. Default style: one-sentence opener, 3-5 concrete insights citing real numbers, immediate-attention callouts, one or two positives, plain text, 150-220 words. Pass `instructions` to override the style entirely.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/ai/brief
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "context": "User: Jane (admin). Today: Mon Aug 3.\\n\\nActive workflows (25 rows): [...]\\nBudget health: [...]",
+  "instructions": "Optional replacement system prompt (max 1000 chars)"
+}
+
+→ 200 { "data": { "brief": "Good morning — three workflows need attention today..." } }
+→ 400 { "error": "context is required" }
+→ 503 { "error": "AI features require ANTHROPIC_API_KEY to be configured" }`
+    },
+    {
+      type: 'note',
+      text: 'Context is capped at 16,000 characters and the response at 512 tokens. Responses are not cached server-side — callers that want a once-per-day briefing should cache client-side.'
     }
   ]
 }

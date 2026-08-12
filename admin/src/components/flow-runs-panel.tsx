@@ -67,7 +67,7 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
   const runs: FlowRun[] = data?.data ?? []
 
   return (
-    <div className='rounded-xl border border-slate-200 bg-white'>
+    <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'>
       <button
         type='button'
         onClick={() => setOpen((v) => !v)}
@@ -106,89 +106,67 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
           ) : runs.length === 0 ? (
             <p className='py-8 text-center text-[12px] text-slate-400'>No runs yet.</p>
           ) : (
-            <table className='w-full text-left'>
-              <thead>
-                <tr className='border-b border-slate-100 bg-slate-50'>
-                  <th className='w-8 px-3 py-2' />
-                  <th className='px-4 py-2 text-[11px] font-medium text-slate-500'>Trigger</th>
-                  <th className='px-4 py-2 text-[11px] font-medium text-slate-500'>Status</th>
-                  <th className='px-4 py-2 text-[11px] font-medium text-slate-500'>Started</th>
-                  <th className='px-4 py-2 text-[11px] font-medium text-slate-500'>Duration</th>
-                </tr>
-              </thead>
-              <tbody className='divide-y divide-slate-100'>
-                {runs.map((run) => {
-                  const isExpanded = expanded === run.id
-                  return (
-                    <Fragment key={run.id}>
-                      <tr
-                        className='cursor-pointer hover:bg-slate-50'
-                        onClick={() => setExpanded(isExpanded ? null : run.id)}
-                      >
-                        <td className='px-3 py-2.5'>
-                          {isExpanded ? (
-                            <ChevronDown className='h-3.5 w-3.5 text-slate-400' />
-                          ) : (
-                            <ChevronRight className='h-3.5 w-3.5 text-slate-400' />
-                          )}
-                        </td>
-                        <td className='px-4 py-2.5'>
-                          <span className='font-mono text-[11px] text-slate-500'>
-                            {run.trigger}
-                          </span>
-                        </td>
-                        <td className='px-4 py-2.5'>
-                          <StatusBadge status={run.status} />
-                        </td>
-                        <td className='px-4 py-2.5 text-[12px] text-slate-500'>
-                          {formatTimestamp(run.started_at)}
-                        </td>
-                        <td className='px-4 py-2.5 text-[12px] tabular-nums text-slate-500'>
-                          {formatDuration(run.duration_ms)}
-                        </td>
-                      </tr>
-                      {isExpanded && (
-                        <tr className='bg-slate-50/70'>
-                          <td colSpan={5} className='px-6 py-3'>
-                            {run.error_message && (
-                              <div className='mb-3'>
-                                <p className='mb-1 text-[11px] font-semibold text-red-600'>Error</p>
-                                <pre className='overflow-auto rounded-lg bg-red-50 p-3 font-mono text-[11px] text-red-700'>
-                                  {run.error_message}
-                                </pre>
-                              </div>
-                            )}
-                            {run.input && (
-                              <div className='mb-3'>
-                                <p className='mb-1 text-[11px] font-semibold text-slate-500'>
-                                  Input
-                                </p>
-                                <pre className='max-h-48 overflow-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-slate-100'>
-                                  {JSON.stringify(run.input, null, 2)}
-                                </pre>
-                              </div>
-                            )}
-                            {run.output && (
-                              <div>
-                                <p className='mb-1 text-[11px] font-semibold text-slate-500'>
-                                  Output
-                                </p>
-                                <pre className='max-h-48 overflow-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-slate-100'>
-                                  {JSON.stringify(run.output, null, 2)}
-                                </pre>
-                              </div>
-                            )}
-                            {!run.error_message && !run.input && !run.output && (
-                              <p className='text-[12px] text-slate-400'>No details available.</p>
-                            )}
-                          </td>
-                        </tr>
+            <div className='divide-y divide-slate-100 dark:divide-border'>
+              {runs.map((run) => {
+                const isExpanded = expanded === run.id
+                return (
+                  <Fragment key={run.id}>
+                    <button
+                      type='button'
+                      onClick={() => setExpanded(isExpanded ? null : run.id)}
+                      className='flex w-full items-center gap-2 px-4 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+                      ) : (
+                        <ChevronRight className='h-3.5 w-3.5 shrink-0 text-slate-400' />
                       )}
-                    </Fragment>
-                  )
-                })}
-              </tbody>
-            </table>
+                      <span className='min-w-0 flex-1 truncate font-mono text-[11px] text-slate-500'>
+                        {run.trigger}
+                      </span>
+                      <span className='shrink-0 text-[10.5px] tabular-nums text-slate-400'>
+                        {formatDuration(run.duration_ms)}
+                      </span>
+                      <StatusBadge status={run.status} />
+                    </button>
+                    {isExpanded && (
+                      <div className='min-w-0 space-y-3 bg-slate-50/70 px-4 py-3 dark:bg-slate-800/40'>
+                        <p className='text-[10.5px] text-slate-400'>
+                          {formatTimestamp(run.started_at)}
+                        </p>
+                        {run.error_message && (
+                          <div>
+                            <p className='mb-1 text-[11px] font-semibold text-red-600'>Error</p>
+                            <pre className='max-w-full overflow-auto rounded-lg bg-red-50 p-2.5 font-mono text-[10.5px] text-red-700'>
+                              {run.error_message}
+                            </pre>
+                          </div>
+                        )}
+                        {run.input && (
+                          <div>
+                            <p className='mb-1 text-[11px] font-semibold text-slate-500'>Input</p>
+                            <pre className='max-h-48 max-w-full overflow-auto rounded-lg bg-slate-900 p-2.5 font-mono text-[10.5px] text-slate-100'>
+                              {JSON.stringify(run.input, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                        {run.output && (
+                          <div>
+                            <p className='mb-1 text-[11px] font-semibold text-slate-500'>Output</p>
+                            <pre className='max-h-48 max-w-full overflow-auto rounded-lg bg-slate-900 p-2.5 font-mono text-[10.5px] text-slate-100'>
+                              {JSON.stringify(run.output, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                        {!run.error_message && !run.input && !run.output && (
+                          <p className='text-[12px] text-slate-400'>No details available.</p>
+                        )}
+                      </div>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </div>
           )}
         </div>
       )}

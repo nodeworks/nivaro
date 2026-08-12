@@ -55,6 +55,7 @@ import {
 import { attributesGuide } from './sections/attributes.js'
 import {
   collabApprovals,
+  collabChat,
   collabItemLocking,
   collabKeyboardShortcuts,
   collabMessageActions,
@@ -95,6 +96,7 @@ import {
   pickerFilterGuide
 } from './sections/content-ops.js'
 import {
+  auditLevelDocs,
   bugReporterDocs,
   dashboardLinkDocs,
   journeyTrailDocs,
@@ -146,6 +148,7 @@ import {
 import {
   aiGenerate,
   aiOverview,
+  aiReviewBrief,
   aiSummarize,
   analyticsGuide,
   columnPresets,
@@ -201,6 +204,7 @@ import {
   lowCodePageBuilder,
   lowCodeRuleBuilder
 } from './sections/low-code.js'
+import { metricAlertsGuide } from './sections/metric-alerts.js'
 import {
   alertEngineGuide,
   alertsApiDoc,
@@ -319,6 +323,7 @@ import {
 import {
   securityApiKeys,
   securityFieldEncryption,
+  securityMasquerade,
   securityMultiDb,
   securityQuotas,
   securityReadReplica,
@@ -326,6 +331,7 @@ import {
   securityRowIsolation,
   securitySaml,
   securityScim,
+  securityUserScopes,
   securityTwoFactor,
   securityWorkspaceTemplates
 } from './sections/security.js'
@@ -534,6 +540,7 @@ export const navSections: NavGroup[] = [
       aiOverview,
       aiGenerate,
       aiSummarize,
+      aiReviewBrief,
       aiContentValidation,
       aiDuplicateDetection
     ]
@@ -553,6 +560,7 @@ export const navSections: NavGroup[] = [
       slaTrackingGuide,
       queueSlaTimers,
       alertEngineGuide,
+      metricAlertsGuide,
       atRiskFlagging,
       teamThroughputGuide,
       anomalyDetection,
@@ -581,6 +589,7 @@ export const navSections: NavGroup[] = [
     items: [
       trashDocs,
       timeTravelDocs,
+      auditLevelDocs,
       mergeDocs,
       spreadsheetDocs,
       formsV2Docs,
@@ -626,6 +635,8 @@ export const navSections: NavGroup[] = [
       securityTwoFactor,
       securitySaml,
       securityApiKeys,
+      securityMasquerade,
+      securityUserScopes,
       securityScim,
       securityFieldEncryption,
       securityRowIsolation,
@@ -683,6 +694,7 @@ export const navSections: NavGroup[] = [
     items: [
       collabTasks,
       collabApprovals,
+      collabChat,
       collabItemLocking,
       collabNotificationsCenter,
       collabUserActivityFeed,

@@ -27,10 +27,14 @@ interface BasicConfig {
   password: string
 }
 interface OAuth2CCConfig {
-  client_id: string
-  client_secret: string
+  client_id?: string
+  client_secret?: string
   token_url: string
   scope?: string
+  /** Optional OAuth audience parameter (Auth0-style token endpoints). */
+  audience?: string
+  /** Extra static headers on the TOKEN request (e.g. x-functions-key). */
+  token_headers?: Record<string, string>
 }
 interface HmacConfig {
   secret: string
@@ -176,15 +180,21 @@ async function resolveAuth(
     }
     case 'oauth2_cc': {
       const c = cfg as unknown as OAuth2CCConfig | null
-      if (c?.token_url && c.client_id) {
+      // client_id may live in token_headers instead (header-credential token
+      // endpoints) — token_url alone is enough to attempt the exchange.
+      if (c?.token_url) {
         const res = await fetch(c.token_url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            ...(c.token_headers ?? {})
+          },
           body: new URLSearchParams({
             grant_type: 'client_credentials',
-            client_id: c.client_id,
-            client_secret: c.client_secret ?? '',
-            ...(c.scope ? { scope: c.scope } : {})
+            ...(c.client_id ? { client_id: c.client_id } : {}),
+            ...(c.client_secret ? { client_secret: c.client_secret } : {}),
+            ...(c.scope ? { scope: c.scope } : {}),
+            ...(c.audience ? { audience: c.audience } : {})
           })
         })
         const body = (await res.json()) as { access_token?: string }

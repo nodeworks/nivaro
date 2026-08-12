@@ -1044,6 +1044,13 @@ export async function dataModelRoutes(app: FastifyInstance) {
         recalculated += chunk.length
       }
 
+      await logActivity({
+        action: 'rollup-recalc',
+        collection: table,
+        user: req.user?.id,
+        req,
+        comment: `${field}: ${recalculated} row(s) recalculated`
+      })
       return reply.send({ recalculated })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -1065,67 +1072,6 @@ export async function dataModelRoutes(app: FastifyInstance) {
   app.get('/relations', async (_req, reply) => {
     try {
       const relations = await db<CMSRelation>('nivaro_relations').select('*').orderBy('id')
-      return reply.send({ data: relations })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return reply.code(500).send({ error: msg })
-    }
-  })
-
-  // ─── GET /relations/for/:collection — relations involving a collection ────
-
-  app.get('/relations/for/:collection', async (req, reply) => {
-    const { collection } = req.params as { collection: string }
-    try {
-      const relations = await db<CMSRelation>('nivaro_relations')
-        .where({ many_collection: collection })
-        .orWhere({ one_collection: collection })
-        .orderBy('id')
-
-      // For matched M2M rows, also fetch companion rows from the same junction
-      // table (the other side's FK row, junction_field NOT NULL) so the admin UI
-      // can resolve the full M2M pair. Merge + dedupe by id.
-      const junctionTables = [
-        ...new Set(relations.filter((r) => r.junction_field).map((r) => r.many_collection))
-      ]
-      if (junctionTables.length > 0) {
-        const companions = await db<CMSRelation>('nivaro_relations')
-          .whereIn('many_collection', junctionTables)
-        const seen = new Set(relations.map((r) => r.id))
-        for (const c of companions) {
-          if (!seen.has(c.id)) {
-            relations.push(c)
-            seen.add(c.id)
-          }
-        }
-        relations.sort((a, b) => Number(a.id) - Number(b.id))
-      }
-
-      // One more hop: relations OWNED by this collection's O2M children, so nested
-      // editors (line items → unit allocations) can resolve grandchild relations
-      // from the parent form's relation list.
-      const childCollections = [
-        ...new Set(
-          relations
-            .filter((r) => r.one_collection === collection && !r.junction_field)
-            .map((r) => r.many_collection)
-        )
-      ]
-      if (childCollections.length > 0) {
-        const grandRels = await db<CMSRelation>('nivaro_relations').whereIn(
-          'one_collection',
-          childCollections
-        )
-        const seen = new Set(relations.map((r) => r.id))
-        for (const g of grandRels) {
-          if (!seen.has(g.id)) {
-            relations.push(g)
-            seen.add(g.id)
-          }
-        }
-        relations.sort((a, b) => Number(a.id) - Number(b.id))
-      }
-
       return reply.send({ data: relations })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -1529,4 +1475,78 @@ export async function dataModelRoutes(app: FastifyInstance) {
       return reply.code(500).send({ error: msg })
     }
   })
+}
+
+/**
+ * Read-only relation metadata, registered at the SAME /data-model prefix but
+ * OUTSIDE the admin-gated plugin above. Every ItemEditForm needs this to
+ * resolve M2M/M2A aliases and nested grandchild relations, so gating it behind
+ * requireAdmin broke record pages for every non-admin (403 on
+ * /data-model/relations/for/:collection). It exposes only nivaro_relations
+ * shape — no data rows — and still requires authentication.
+ */
+export async function dataModelReadRoutes(app: FastifyInstance) {
+  app.addHook('preHandler', authenticate)
+
+  // ─── GET /relations/for/:collection — relations involving a collection ────
+
+  app.get('/relations/for/:collection', async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    try {
+      const relations = await db<CMSRelation>('nivaro_relations')
+        .where({ many_collection: collection })
+        .orWhere({ one_collection: collection })
+        .orderBy('id')
+
+      // For matched M2M rows, also fetch companion rows from the same junction
+      // table (the other side's FK row, junction_field NOT NULL) so the admin UI
+      // can resolve the full M2M pair. Merge + dedupe by id.
+      const junctionTables = [
+        ...new Set(relations.filter((r) => r.junction_field).map((r) => r.many_collection))
+      ]
+      if (junctionTables.length > 0) {
+        const companions = await db<CMSRelation>('nivaro_relations')
+          .whereIn('many_collection', junctionTables)
+        const seen = new Set(relations.map((r) => r.id))
+        for (const c of companions) {
+          if (!seen.has(c.id)) {
+            relations.push(c)
+            seen.add(c.id)
+          }
+        }
+        relations.sort((a, b) => Number(a.id) - Number(b.id))
+      }
+
+      // One more hop: relations OWNED by this collection's O2M children, so nested
+      // editors (line items → unit allocations) can resolve grandchild relations
+      // from the parent form's relation list.
+      const childCollections = [
+        ...new Set(
+          relations
+            .filter((r) => r.one_collection === collection && !r.junction_field)
+            .map((r) => r.many_collection)
+        )
+      ]
+      if (childCollections.length > 0) {
+        const grandRels = await db<CMSRelation>('nivaro_relations').whereIn(
+          'one_collection',
+          childCollections
+        )
+        const seen = new Set(relations.map((r) => r.id))
+        for (const g of grandRels) {
+          if (!seen.has(g.id)) {
+            relations.push(g)
+            seen.add(g.id)
+          }
+        }
+        relations.sort((a, b) => Number(a.id) - Number(b.id))
+      }
+
+      return reply.send({ data: relations })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return reply.code(500).send({ error: msg })
+    }
+  })
+
 }

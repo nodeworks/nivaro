@@ -1,0 +1,14 @@
+{% layout 'base' %}
+{% block content %}
+{%- comment -%}
+  Generic branded wrapper. sendRawMail() routes every ad-hoc HTML fragment
+  through this template (and sendMail() falls back to it when a named
+  template is missing), so no email ever leaves without the brand chrome.
+  Data: `title` (optional heading) + `html` (trusted fragment, pre-escaped
+  by the caller where it carries user content).
+{%- endcomment -%}
+{% if title and title != '' %}
+<h1 style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;font-weight:700;color:#172940;line-height:1.35;">{{ title }}</h1>
+{% endif %}
+{{ html }}
+{% endblock %}

@@ -12,6 +12,7 @@ interface SavedViewRow {
   columns: string | null
   user: string
   is_shared: boolean | number
+  is_default: boolean | number
   role: string | null
   created_at: Date
 }
@@ -37,7 +38,8 @@ function formatView(row: SavedViewRow) {
     filters: parseJson(row.filters),
     sort: parseJson(row.sort),
     columns: parseJson(row.columns),
-    is_shared: !!row.is_shared
+    is_shared: !!row.is_shared,
+    is_default: !!row.is_default
   }
 }
 
@@ -76,12 +78,21 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       sort?: unknown
       columns?: unknown
       is_shared?: boolean
+      is_default?: boolean
       role?: string | null
     }
 
     const { collection, name } = body
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
     if (!name?.trim()) return reply.code(400).send({ error: 'name is required' })
+    // The collection default is a shared, admin-controlled concept.
+    const wantsDefault = !!body.is_default
+    if (wantsDefault && !req.isAdmin) {
+      return reply.code(403).send({ error: 'Only admins can set the default view' })
+    }
+    if (wantsDefault) {
+      await db('nivaro_saved_views').where({ collection }).update({ is_default: false })
+    }
 
     const [row] = (await db('nivaro_saved_views')
       .insert({
@@ -91,7 +102,8 @@ export async function savedViewsRoutes(app: FastifyInstance) {
         sort: toJsonStr(body.sort),
         columns: toJsonStr(body.columns),
         user: req.user!.id,
-        is_shared: !!body.is_shared,
+        is_shared: wantsDefault ? true : !!body.is_shared,
+        is_default: wantsDefault,
         role: body.role ?? null,
         created_at: new Date()
       })
@@ -127,10 +139,25 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       sort?: unknown
       columns?: unknown
       is_shared?: boolean
+      is_default?: boolean
       role?: string | null
     }
 
     const update: Record<string, unknown> = {}
+    if (body.is_default !== undefined) {
+      if (!req.isAdmin) {
+        return reply.code(403).send({ error: 'Only admins can set the default view' })
+      }
+      if (body.is_default) {
+        await db('nivaro_saved_views')
+          .where({ collection: view.collection })
+          .update({ is_default: false })
+        update.is_default = true
+        update.is_shared = true
+      } else {
+        update.is_default = false
+      }
+    }
     if (body.name !== undefined) {
       if (!body.name.trim()) return reply.code(400).send({ error: 'name cannot be empty' })
       update.name = body.name.trim()

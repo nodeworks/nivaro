@@ -139,7 +139,7 @@ const invoicesConfig: ReviewListConfig = {
   group_meta: ['number', 'hold_reason'],
   line_columns: ['line_item_number', 'amount'],
   status: {
-    field: 'efp_review_status',
+    field: 'review_status',
     options: [
       { value: 'approved', label: 'Approve', color: 'green' },
       { value: 'rejected', label: 'Reject', color: 'red' },
@@ -166,7 +166,7 @@ const invoiceFullRows = [
     number: 'INV-1',
     hold_reason: 'pending',
     line_item_number: 'LI-1',
-    efp_review_status: 'under_review',
+    review_status: 'under_review',
     approved_by: null,
     approved_on: null
   },
@@ -177,7 +177,7 @@ const invoiceFullRows = [
     number: 'INV-2',
     hold_reason: 'pending',
     line_item_number: 'LI-2',
-    efp_review_status: 'approved',
+    review_status: 'approved',
     approved_by: 'user-1',
     approved_on: '2026-07-01T00:00:00.000Z'
   },
@@ -188,7 +188,7 @@ const invoiceFullRows = [
     number: 'INV-3',
     hold_reason: 'review',
     line_item_number: 'LI-3',
-    efp_review_status: 'rejected',
+    review_status: 'rejected',
     approved_by: 'user-2',
     approved_on: '2026-07-02T00:00:00.000Z'
   }
@@ -302,7 +302,7 @@ describe('resolveReviewListRows — m2o-only single hop', () => {
     path: [{ kind: 'm2o', field: 'purchase_order' }],
     group_by: 'invoice_id',
     aggregate_sum: 'amount',
-    status: { field: 'efp_review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
+    status: { field: 'review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
   }
 
   it('resolves invoices whose purchase_order matches the host record id', async () => {
@@ -316,7 +316,7 @@ describe('resolveReviewListRows — m2o-only single hop', () => {
               id: 'inv-9',
               invoice_id: 'GRP-9',
               amount: 42,
-              efp_review_status: 'under_review'
+              review_status: 'under_review'
             }
           ]
         }
@@ -354,7 +354,7 @@ describe('resolveReviewListRows — cap truncation', () => {
     collection: 'invoices',
     path: [{ kind: 'm2o', field: 'purchase_order' }],
     group_by: 'invoice_id',
-    status: { field: 'efp_review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
+    status: { field: 'review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
   }
 
   it('sets truncated: true and warns when a hop query hits the 2000 cap', async () => {
@@ -392,7 +392,7 @@ describe('resolveReviewListRows — dead relation', () => {
     collection: 'invoices',
     path: [{ kind: 'm2o', field: 'nonexistent_fk' }],
     group_by: 'invoice_id',
-    status: { field: 'efp_review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
+    status: { field: 'review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
   }
 
   it('throws statusCode 400 naming the hop field when no relation resolves the hop', async () => {
@@ -422,7 +422,7 @@ describe('resolveReviewListRows — static_filter ops', () => {
       { field: 'closed_at', op: 'nnull' }
     ],
     group_by: 'invoice_id',
-    status: { field: 'efp_review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
+    status: { field: 'review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
   }
 
   it('applies eq → where, neq → whereNot, nnull → whereNotNull on the target query', async () => {
@@ -459,7 +459,7 @@ describe('resolveReviewListRows — dot-path label resolution (one M2O hop)', ()
     path: [{ kind: 'm2o', field: 'purchase_order' }],
     group_by: 'invoice_id',
     group_meta: ['purchase_order.number'],
-    status: { field: 'efp_review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
+    status: { field: 'review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
   }
 
   it('resolves the related record field named after the dot, not a display template', async () => {
@@ -473,7 +473,7 @@ describe('resolveReviewListRows — dot-path label resolution (one M2O hop)', ()
               id: 'inv-1',
               invoice_id: 'GRP-1',
               purchase_order: 'po-1',
-              efp_review_status: 'under_review'
+              review_status: 'under_review'
             }
           ]
         }
@@ -548,7 +548,7 @@ function baseValidConfig(): unknown {
     ],
     group_by: 'invoice_id',
     status: {
-      field: 'efp_review_status',
+      field: 'review_status',
       options: [{ value: 'approved', label: 'Approve', color: 'green' }]
     }
   }
@@ -602,7 +602,7 @@ describe('validateReviewListConfig', () => {
   it('rejects duplicate status option values', () => {
     const cfg = baseValidConfig() as Record<string, unknown>
     cfg.status = {
-      field: 'efp_review_status',
+      field: 'review_status',
       options: [
         { value: 'approved', label: 'Approve', color: 'green' },
         { value: 'approved', label: 'Approve Again', color: 'blue' }
@@ -613,7 +613,7 @@ describe('validateReviewListConfig', () => {
 
   it('rejects empty status.options', () => {
     const cfg = baseValidConfig() as Record<string, unknown>
-    cfg.status = { field: 'efp_review_status', options: [] }
+    cfg.status = { field: 'review_status', options: [] }
     expect(validateReviewListConfig(cfg, RELATIONS)).toMatch(/non-empty/)
   })
 
@@ -952,7 +952,7 @@ describe('resolveReviewListRows — lookup columns (composite match)', () => {
         }
       }
     ],
-    status: { field: 'efp_review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
+    status: { field: 'review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
   }
 
   const invoiceRowsForLookup = [
@@ -961,7 +961,7 @@ describe('resolveReviewListRows — lookup columns (composite match)', () => {
       invoice_id: 'GRP-1',
       purchase_order: 'po-1',
       line_item_number: 'LI-1',
-      efp_review_status: 'under_review'
+      review_status: 'under_review'
     },
     {
       // null local match value → value null, no query contribution for this tuple.
@@ -969,7 +969,7 @@ describe('resolveReviewListRows — lookup columns (composite match)', () => {
       invoice_id: 'GRP-2',
       purchase_order: null,
       line_item_number: 'LI-2',
-      efp_review_status: 'under_review'
+      review_status: 'under_review'
     },
     {
       // Same (purchase_order, line_item_number) tuple matches two line_items
@@ -978,7 +978,7 @@ describe('resolveReviewListRows — lookup columns (composite match)', () => {
       invoice_id: 'GRP-3',
       purchase_order: 'po-1',
       line_item_number: 'LI-2',
-      efp_review_status: 'under_review'
+      review_status: 'under_review'
     }
   ]
 

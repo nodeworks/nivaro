@@ -56,6 +56,12 @@ export async function settingsRoutes(app: FastifyInstance) {
       'smtp_pass',
       'smtp_from',
       'smtp_secure',
+      'mail_test_mode',
+      'mail_test_recipient',
+      'mail_test_allowlist',
+      'sms_test_mode',
+      'sms_test_recipient',
+      'sms_test_allowlist',
       // SMS
       'sms_provider',
       'sms_account_sid',
@@ -82,6 +88,12 @@ export async function settingsRoutes(app: FastifyInstance) {
     // Coerce smtp_secure to bit
     if ('smtp_secure' in patch) {
       patch.smtp_secure = patch.smtp_secure ? 1 : 0
+    }
+    if ('mail_test_mode' in patch) {
+      patch.mail_test_mode = patch.mail_test_mode ? 1 : 0
+    }
+    if ('sms_test_mode' in patch) {
+      patch.sms_test_mode = patch.sms_test_mode ? 1 : 0
     }
 
     const settings = await db('nivaro_settings').orderBy('id', 'asc').first()

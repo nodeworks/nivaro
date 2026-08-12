@@ -22,6 +22,14 @@ export interface RollupSource {
   aggregate: 'sum' | 'count' | 'avg' | 'min' | 'max'
   value_field: string // column to aggregate (ignored for count)
   recursive?: boolean // if true: aggregate all descendants in same-collection tree
+  /** Per-row arithmetic instead of a plain column: `{{col}}` and one-hop
+   *  `{{m2o_fk.col}}` refs, +-*\/() only. Rows are fetched and reduced in JS
+   *  (allocation-aware totals, price*qty, etc.). Not combinable with recursive. */
+  value_formula?: string
+  /** Optional row filter: {col: literal | {_eq/_neq/_gt/_gte/_lt/_lte/_null/_nnull/_in}}.
+   *  `_neq` is NULL-SAFE (col != v OR col IS NULL — MSSQL would otherwise drop
+   *  null rows, the is_osp trap). Ignored for recursive rollups. */
+  filter?: Record<string, unknown>
 }
 
 export interface NormalizedRollup {
@@ -30,16 +38,133 @@ export interface NormalizedRollup {
 
 const ROLLUP_AGGREGATES = new Set(['sum', 'count', 'avg', 'min', 'max'])
 
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** Apply a RollupSource.filter to a query. Unknown ops and bad identifiers are
+ *  skipped (filter is admin-authored config; a typo must not break the write
+ *  path that triggers recalcs). */
+function applyRollupFilter(q: Knex.QueryBuilder, filter: Record<string, unknown> | undefined): void {
+  if (!filter || typeof filter !== 'object') return
+  for (const [col, spec] of Object.entries(filter)) {
+    if (!IDENT_RE.test(col)) continue
+    if (spec !== null && typeof spec === 'object' && !Array.isArray(spec)) {
+      for (const [op, v] of Object.entries(spec as Record<string, unknown>)) {
+        switch (op) {
+          case '_eq': q.where(col, v as Knex.Value); break
+          case '_neq':
+            // Null-safe: MSSQL `col != v` silently excludes NULL rows.
+            q.where((b) => b.whereNot(col, v as Knex.Value).orWhereNull(col))
+            break
+          case '_gt': q.where(col, '>', v as Knex.Value); break
+          case '_gte': q.where(col, '>=', v as Knex.Value); break
+          case '_lt': q.where(col, '<', v as Knex.Value); break
+          case '_lte': q.where(col, '<=', v as Knex.Value); break
+          case '_null': q.whereNull(col); break
+          case '_nnull': q.whereNotNull(col); break
+          case '_in': if (Array.isArray(v)) q.whereIn(col, v as Knex.Value[]); break
+          default: break
+        }
+      }
+    } else {
+      q.where(col, spec as Knex.Value)
+    }
+  }
+}
+
 function isValidRollupSource(v: unknown): v is RollupSource {
   if (!v || typeof v !== 'object') return false
   const s = v as Record<string, unknown>
   if (typeof s.related_collection !== 'string' || !s.related_collection) return false
   if (typeof s.fk_field !== 'string' || !s.fk_field) return false
   if (typeof s.aggregate !== 'string' || !ROLLUP_AGGREGATES.has(s.aggregate)) return false
-  if (typeof s.value_field !== 'string') return false
-  if (s.aggregate !== 'count' && !s.value_field) return false
+  if (s.value_field !== undefined && typeof s.value_field !== 'string') return false
+  if (s.value_formula !== undefined && typeof s.value_formula !== 'string') return false
+  if (s.aggregate !== 'count' && !s.value_field && !s.value_formula) return false
   if (s.recursive !== undefined && typeof s.recursive !== 'boolean') return false
+  if (s.recursive && s.value_formula) return false
   return true
+}
+
+// ─── value_formula evaluation ────────────────────────────────────────────────
+
+const FORMULA_REF_RE = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\s*\}\}/g
+
+function evalNumericFormula(template: string, values: Record<string, number>): number | null {
+  const expr = template.replace(FORMULA_REF_RE, (_, ref: string) => String(values[ref] ?? 0))
+  if (!/^[-+*/(). 0-9eE]+$/.test(expr)) return null
+  try {
+    // biome-ignore lint/security/noGlobalEval: input sanitized to arithmetic chars above
+    const v = new Function(`"use strict"; return (${expr})`)() as unknown
+    return typeof v === 'number' && Number.isFinite(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Formula-mode rollup: fetch the related rows (plus any one-hop M2O columns the
+ * formula references, batch-resolved via nivaro_relations), evaluate the
+ * arithmetic per row, then reduce by the configured aggregate.
+ */
+async function computeFormulaRollup(cfg: RollupSource, id: unknown): Promise<number | null> {
+  const refs = [...cfg.value_formula!.matchAll(FORMULA_REF_RE)].map((m) => m[1])
+  if (refs.length === 0) return null
+  const direct = [...new Set(refs.filter((r) => !r.includes('.')))]
+  const dotted = [...new Set(refs.filter((r) => r.includes('.')))]
+  const hopFks = [...new Set(dotted.map((d) => d.split('.')[0]))]
+
+  const rows = (await db(cfg.related_collection)
+    .where(cfg.fk_field, id as Knex.Value)
+    .modify((q) => applyRollupFilter(q, cfg.filter))
+    .select(['id', ...direct, ...hopFks])) as Array<Record<string, unknown>>
+  if (rows.length === 0) return cfg.aggregate === 'count' ? 0 : null
+
+  // Batch-resolve one-hop M2O refs: hop fk → related table → needed columns
+  const hopValues = new Map<string, Map<string, Record<string, unknown>>>()
+  for (const fk of hopFks) {
+    // No junction_field guard: an M2M junction's M2O legs legitimately carry
+    // junction_field (the pairing marker) — one_collection is the real test.
+    const rel = (await db('nivaro_relations')
+      .where({ many_collection: cfg.related_collection, many_field: fk })
+      .first()) as { one_collection: string | null } | undefined
+    if (!rel?.one_collection) continue
+    const cols = [
+      ...new Set(dotted.filter((d) => d.startsWith(`${fk}.`)).map((d) => d.split('.')[1]))
+    ]
+    const ids = [...new Set(rows.map((r) => r[fk]).filter((v) => v != null))]
+    if (ids.length === 0) continue
+    const related = (await db(rel.one_collection)
+      .whereIn('id', ids as Knex.Value[])
+      .select(['id', ...cols])) as Array<Record<string, unknown>>
+    hopValues.set(fk, new Map(related.map((r) => [String(r.id), r])))
+  }
+
+  const perRow: number[] = []
+  for (const row of rows) {
+    const values: Record<string, number> = {}
+    for (const d of direct) values[d] = Number(row[d] ?? 0) || 0
+    for (const path of dotted) {
+      const [fk, col] = path.split('.')
+      const hit = row[fk] != null ? hopValues.get(fk)?.get(String(row[fk])) : undefined
+      values[path] = Number(hit?.[col] ?? 0) || 0
+    }
+    const v = evalNumericFormula(cfg.value_formula!, values)
+    if (v != null) perRow.push(v)
+  }
+  if (perRow.length === 0) return cfg.aggregate === 'count' ? 0 : null
+
+  switch (cfg.aggregate) {
+    case 'count':
+      return perRow.length
+    case 'avg':
+      return perRow.reduce((a, b) => a + b, 0) / perRow.length
+    case 'min':
+      return Math.min(...perRow)
+    case 'max':
+      return Math.max(...perRow)
+    default:
+      return perRow.reduce((a, b) => a + b, 0)
+  }
 }
 
 /**
@@ -75,10 +200,12 @@ async function computeRollupValue(
   if (!cfg.related_collection || !cfg.fk_field || !ROLLUP_AGGREGATES.has(cfg.aggregate)) {
     return null
   }
-  if (cfg.aggregate !== 'count' && !cfg.value_field) return null
+  if (cfg.aggregate !== 'count' && !cfg.value_field && !cfg.value_formula) return null
   if (id == null) return null
 
   try {
+    if (cfg.value_formula) return await computeFormulaRollup(cfg, id)
+
     // Recursive rollups only make sense over a same-collection tree — the CTE
     // self-joins related_collection on fk_field, which is defined as pointing at
     // the HOST collection's ids. A mismatched recursive config (only reachable via
@@ -138,6 +265,7 @@ OPTION (MAXRECURSION 100)`
     if (cfg.aggregate === 'count') {
       const r = (await db(cfg.related_collection)
         .where(cfg.fk_field, id as Knex.Value)
+        .modify((q) => applyRollupFilter(q, cfg.filter))
         .count('* as v')
         .first()) as { v: number } | undefined
       return Number(r?.v ?? 0)
@@ -145,6 +273,7 @@ OPTION (MAXRECURSION 100)`
 
     const r = (await db(cfg.related_collection)
       .where(cfg.fk_field, id as Knex.Value)
+      .modify((q) => applyRollupFilter(q, cfg.filter))
       [cfg.aggregate](`${cfg.value_field} as v`)
       .first()) as { v: number | null } | undefined
     return r?.v != null ? Number(r.v) : null

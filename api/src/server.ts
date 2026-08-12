@@ -31,6 +31,7 @@ import { sharePublicRoutes } from './routes/share-links.js'
 import { registerRoutes } from './routes/index.js'
 import { presencePublicRoutes } from './routes/presence.js'
 import { registerDigestCrons } from './services/digest.js'
+import { registerStagedImportWorker } from './services/staged-import-worker.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { callExternalApi } from './services/external-apis.js'
 
@@ -118,6 +119,7 @@ export async function buildServer() {
     registerFileCleanup(app.cron)
     registerDigestCrons(app.cron)
     registerQueueSnapshotCron(app.cron)
+    registerStagedImportWorker(app)
   }
 
   // ─── Workspace context ────────────────────────────────────────────────────
@@ -309,6 +311,30 @@ export async function buildServer() {
     scheduleReports()
 
     // ── Report Studio — hourly alert checks + daily/weekly subscription mail ──
+    // Auto-transition sweep: date-based transition conditions (within_days etc.)
+    // can become true purely by time passing — re-evaluate hourly.
+    app.cron.schedule('daily-action-digest', '45 7 * * *', async () => {
+      const { runDailyActionDigest } = await import('./services/daily-digest.js')
+      await runDailyActionDigest()
+    })
+
+    app.cron.schedule('workflow-auto-sweep', '30 * * * *', async () => {
+      const { sweepAutoTransitions } = await import('./services/workflow-transitions.js')
+      await sweepAutoTransitions()
+    })
+
+    // Alert definitions sweep — anomaly detections and threshold rules whose
+    // data changes outside record writes only fire from a periodic pass.
+    app.cron.schedule('alert-definitions-sweep', '15 * * * *', async () => {
+      try {
+        const { evaluateAlerts } = await import('./hooks/alerts.js')
+        const fired = await evaluateAlerts()
+        if (fired) app.log.info({ fired }, '[alerts] sweep pass')
+      } catch (err) {
+        app.log.warn({ err }, '[alerts] sweep failed')
+      }
+    })
+
     app.cron.schedule('report-studio-alerts', '0 * * * *', async () => {
       try {
         const { runReportAlertChecks } = await import('./services/report-studio-jobs.js')
@@ -334,6 +360,50 @@ export async function buildServer() {
         app.log.warn({ err }, '[report-studio] weekly digest failed')
       }
     })
+
+    // ── Metric alert engine (EFP Alert Manager parity) ────────────────────────
+    // Rule checks by check_frequency, immediate notifications inside the check;
+    // daily/weekly digests bundle firing alerts per subscriber; anomaly
+    // detection runs its own daily/weekly passes.
+    const metricAlertPass = async (freq: 'hourly' | 'daily' | 'weekly') => {
+      try {
+        const { runMetricAlertChecks } = await import('./services/metric-alerts.js')
+        const r = await runMetricAlertChecks(app, freq)
+        if (r.fired || r.resolved) app.log.info({ ...r, freq }, '[metric-alerts] check pass')
+      } catch (err) {
+        app.log.warn({ err, freq }, '[metric-alerts] check failed')
+      }
+    }
+    app.cron.schedule('metric-alerts-hourly', '5 * * * *', () => metricAlertPass('hourly'))
+    app.cron.schedule('metric-alerts-daily', '35 6 * * *', () => metricAlertPass('daily'))
+    app.cron.schedule('metric-alerts-weekly', '35 6 * * 1', () => metricAlertPass('weekly'))
+    app.cron.schedule('metric-alerts-digest-daily', '0 8 * * *', async () => {
+      try {
+        const { runMetricAlertDigest } = await import('./services/metric-alerts.js')
+        await runMetricAlertDigest(app, 'daily')
+      } catch (err) {
+        app.log.warn({ err }, '[metric-alerts] daily digest failed')
+      }
+    })
+    app.cron.schedule('metric-alerts-digest-weekly', '0 8 * * 1', async () => {
+      try {
+        const { runMetricAlertDigest } = await import('./services/metric-alerts.js')
+        await runMetricAlertDigest(app, 'weekly')
+      } catch (err) {
+        app.log.warn({ err }, '[metric-alerts] weekly digest failed')
+      }
+    })
+    const anomalyPass = async (freq: 'daily' | 'weekly') => {
+      try {
+        const { runAnomalyChecks } = await import('./services/anomaly-detect.js')
+        const r = await runAnomalyChecks(app, freq)
+        if (r.detected) app.log.info({ ...r, freq }, '[anomaly] detection pass')
+      } catch (err) {
+        app.log.warn({ err, freq }, '[anomaly] detection failed')
+      }
+    }
+    app.cron.schedule('anomaly-checks-daily', '0 3 * * *', () => anomalyPass('daily'))
+    app.cron.schedule('anomaly-checks-weekly', '20 3 * * 1', () => anomalyPass('weekly'))
   })
 
   return app

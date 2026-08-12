@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto'
+import { selectInChunks } from '../services/db-batch.js'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  restoreTemplateVersion,
+  snapshotTemplateVersion
+} from '../services/workflow-template-versions.js'
 import { can } from '../services/permissions.js'
 import { resolveStateOwners, resolveStateOwnersBatch } from '../services/pipeline-engine.js'
 import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
@@ -10,6 +15,21 @@ import {
   evaluateTransitionRequirements,
   IDENTIFIER_RE
 } from '../services/transition-requirements.js'
+import {
+  type ConditionRule,
+  evalConditionRule,
+  evaluateConditionRules,
+  fetchRecordForConditions,
+  parseConditionRules
+} from '../services/workflow-conditions.js'
+import { TransitionBlockedError } from '../services/workflow-actions.js'
+import {
+  applyTransition,
+  evaluateSkipCriteriaDetailed,
+  resolveTransitionTarget,
+  runAutoTransitions,
+  syncStateField
+} from '../services/workflow-transitions.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +67,7 @@ interface WorkflowTransition {
   color: string | null
   required_roles: string | null
   actions: string | null
+  auto_trigger: boolean | number
   sort: number
   group_label: string | null
   condition_rules: string | null
@@ -58,6 +79,7 @@ interface WorkflowBinding {
   template: string
   collection: string
   state_field: string | null
+  state_field_map: string | null
   auto_start: boolean
   auto_start_state: string | null
 }
@@ -136,14 +158,6 @@ interface RecordFilter {
   id_value?: number | null
 }
 
-type ConditionOp = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'contains' | 'null' | 'nnull'
-
-interface ConditionRule {
-  field: string
-  op: ConditionOp
-  value?: unknown
-}
-
 // Loosely-typed — `type` is the only key enforcement cares about at read time;
 // unrecognized types are stored and echoed back untouched (see
 // evaluateTransitionRequirements for the forward-compat handling).
@@ -196,97 +210,12 @@ function formatTransition(t: WorkflowTransition) {
     ...t,
     required_roles: parseJson(t.required_roles) as string[] | null,
     actions: parseJson(t.actions) as unknown[] | null,
+    auto_trigger: coerceBool(t.auto_trigger),
     condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null,
     requirements: parseJson(t.requirements) as ParsedRequirement[] | null
   }
 }
 
-// ─── Transition condition rules (conditional branching) ───────────────────────
-
-function isNumericish(v: unknown): boolean {
-  if (typeof v === 'number') return Number.isFinite(v)
-  if (typeof v === 'boolean') return false
-  if (typeof v === 'string' && v.trim() !== '') return Number.isFinite(Number(v))
-  return false
-}
-
-function evalConditionRule(rule: ConditionRule, record: Record<string, unknown>): boolean {
-  const recordVal = record[rule.field]
-  switch (rule.op) {
-    case 'null':
-      return recordVal == null || recordVal === ''
-    case 'nnull':
-      return recordVal != null && recordVal !== ''
-    case 'contains':
-      return (
-        recordVal != null &&
-        String(recordVal)
-          .toLowerCase()
-          .includes(
-            String(rule.value ?? '')
-              .toLowerCase()
-              .trim()
-          )
-      )
-    case 'eq':
-      if (isNumericish(recordVal) && isNumericish(rule.value))
-        return Number(recordVal) === Number(rule.value)
-      return String(recordVal ?? '') === String(rule.value ?? '')
-    case 'neq':
-      if (isNumericish(recordVal) && isNumericish(rule.value))
-        return Number(recordVal) !== Number(rule.value)
-      return String(recordVal ?? '') !== String(rule.value ?? '')
-    case 'gt':
-    case 'gte':
-    case 'lt':
-    case 'lte': {
-      if (isNumericish(recordVal) && isNumericish(rule.value)) {
-        const a = Number(recordVal)
-        const b = Number(rule.value)
-        if (rule.op === 'gt') return a > b
-        if (rule.op === 'gte') return a >= b
-        if (rule.op === 'lt') return a < b
-        return a <= b
-      }
-      // Lexicographic fallback (e.g. ISO date strings); null never matches ordering ops.
-      if (recordVal == null || rule.value == null) return false
-      const a = String(recordVal)
-      const b = String(rule.value)
-      if (rule.op === 'gt') return a > b
-      if (rule.op === 'gte') return a >= b
-      if (rule.op === 'lt') return a < b
-      return a <= b
-    }
-    default:
-      return false
-  }
-}
-
-// AND semantics over all rules. Null / empty / malformed rules → always true
-// (unconditioned transitions behave exactly as before).
-function evaluateConditionRules(raw: string | null, record: Record<string, unknown>): boolean {
-  const rules = parseJson(raw) as ConditionRule[] | null
-  if (!rules || !Array.isArray(rules) || rules.length === 0) return true
-  return rules.every((r) => {
-    if (!r || typeof r !== 'object' || typeof r.field !== 'string' || !r.field) return true
-    return evalConditionRule(r, record)
-  })
-}
-
-async function fetchRecordForConditions(
-  collection: string,
-  itemId: string
-): Promise<Record<string, unknown>> {
-  try {
-    const row = (await db(collection).where({ id: itemId }).first()) as
-      | Record<string, unknown>
-      | undefined
-    return row ?? {}
-  } catch {
-    // Table may not exist in dev; condition rules treat missing fields as null.
-    return {}
-  }
-}
 
 // ─── Transition requirements (child-field gates) ───────────────────────────
 //
@@ -309,6 +238,16 @@ function validateRequirements(value: unknown): string | null {
       return `requirements[${i}] must be an object`
     }
     const e = entry as Record<string, unknown>
+    if (e.type === 'record_fields') {
+      if (
+        !Array.isArray(e.fields) ||
+        e.fields.length === 0 ||
+        !e.fields.every((f) => typeof f === 'string' && IDENTIFIER_RE.test(f))
+      ) {
+        return `requirements[${i}].fields must be a non-empty array of valid identifiers`
+      }
+      continue
+    }
     if (e.type !== 'child_fields') continue
     if (typeof e.collection !== 'string' || !IDENTIFIER_RE.test(e.collection)) {
       return `requirements[${i}].collection must be a valid identifier`
@@ -334,140 +273,6 @@ function validateRequirements(value: unknown): string | null {
   return null
 }
 
-function evalFilterOp(op: SkipOp, recordVal: unknown, value: unknown): boolean {
-  switch (op) {
-    case 'eq':
-      return recordVal === value
-    case 'neq':
-      return recordVal !== value
-    case 'lt':
-      return Number(recordVal) < Number(value)
-    case 'lte':
-      return Number(recordVal) <= Number(value)
-    case 'gt':
-      return Number(recordVal) > Number(value)
-    case 'gte':
-      return Number(recordVal) >= Number(value)
-    case 'in':
-      return Array.isArray(value) && value.includes(recordVal)
-    case 'notin':
-      return Array.isArray(value) && !value.includes(recordVal)
-    default:
-      return false
-  }
-}
-
-async function evaluateSkipCriteria(
-  stateId: string,
-  record: Record<string, unknown>,
-  instanceId: string | null,
-  collection: string,
-  itemId: string,
-  database: typeof db
-): Promise<boolean> {
-  try {
-    const state = await database<WorkflowState>('nivaro_workflow_states')
-      .where({ id: stateId })
-      .first()
-    if (!state) return false
-
-    // Standalone skip-if-no-owners flag: skip the state when no owner groups are
-    // configured for it (mirrors the no_owners skip-criteria condition).
-    if (coerceBool(state.skip_if_no_owners)) {
-      const ownerGroupCount = (await database('nivaro_pipeline_owner_groups')
-        .where({ state: stateId })
-        .count('id as n')
-        .first()) as { n: number | string } | undefined
-      if (Number(ownerGroupCount?.n ?? 0) === 0) {
-        // Also verify there are no manually-assigned instance owners for this state.
-        const owners = await resolveStateOwners(stateId, instanceId, collection, itemId, database)
-        if (owners.length === 0) return true
-      }
-    }
-
-    const criteria = parseJson(state.skip_criteria) as SkipCriteria | null
-    if (!criteria || !Array.isArray(criteria.conditions) || criteria.conditions.length === 0) {
-      return false
-    }
-
-    const results: boolean[] = []
-    for (const cond of criteria.conditions) {
-      if (cond.type === 'no_owners') {
-        const owners = await resolveStateOwners(stateId, instanceId, collection, itemId, database)
-        results.push(owners.length === 0)
-      } else if (cond.type === 'field_compare') {
-        results.push(evalFilterOp(cond.op, record[cond.field], cond.value))
-      } else if (cond.type === 'field_empty') {
-        const v = record[cond.field]
-        results.push(v == null || v === '')
-      } else if (cond.type === 'field_nonempty') {
-        const v = record[cond.field]
-        results.push(v != null && v !== '')
-      }
-    }
-
-    if (criteria.mode === 'any') return results.some(Boolean)
-    return results.every(Boolean)
-  } catch {
-    return false
-  }
-}
-
-async function resolveTransitionTarget(
-  toStateId: string,
-  templateId: string,
-  collection: string,
-  itemId: string,
-  instanceId: string | null,
-  database: typeof db,
-  depth = 0
-): Promise<WorkflowState | null> {
-  if (depth > 10) return null
-
-  const state = await database<WorkflowState>('nivaro_workflow_states')
-    .where({ id: toStateId })
-    .first()
-  if (!state) return null
-
-  if (coerceBool(state.is_terminal) || coerceBool(state.is_initial)) return state
-
-  let record: Record<string, unknown> = {}
-  try {
-    const r = await database(collection).where({ id: itemId }).first()
-    if (r) record = r as Record<string, unknown>
-  } catch {
-    record = {}
-  }
-
-  const shouldSkip = await evaluateSkipCriteria(
-    toStateId,
-    record,
-    instanceId,
-    collection,
-    itemId,
-    database
-  )
-
-  if (!shouldSkip) return state
-
-  const nextTransition = await database<WorkflowTransition>('nivaro_workflow_transitions')
-    .where({ template: templateId, from_state: toStateId })
-    .whereNot({ to_state: toStateId })
-    .orderBy('sort')
-    .first()
-
-  if (!nextTransition) return state
-
-  return resolveTransitionTarget(
-    nextTransition.to_state,
-    templateId,
-    collection,
-    itemId,
-    instanceId,
-    database,
-    depth + 1
-  )
-}
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
@@ -587,6 +392,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const body = req.body as Partial<WorkflowTemplate>
     const existing = await db<WorkflowTemplate>('nivaro_workflow_templates').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    await snapshotTemplateVersion(id, req.user?.id, 'before template update')
 
     await db('nivaro_workflow_templates')
       .where({ id })
@@ -611,6 +417,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // Delete template (cascade removes states, transitions, bindings)
   app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    // Versions FK the template with NO ACTION — clear them before the delete.
+    await db('nivaro_workflow_template_versions').where({ template: id }).delete()
     const deleted = await db('nivaro_workflow_templates').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     await logActivity({
@@ -629,6 +437,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const template = await db<WorkflowTemplate>('nivaro_workflow_templates').where({ id }).first()
     if (!template) return reply.code(404).send({ error: 'Template not found' })
+    await snapshotTemplateVersion(id, req.user?.id, 'before state create')
 
     const body = req.body as Pick<
       WorkflowState,
@@ -675,6 +484,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const { stateId } = req.params as { stateId: string }
     const state = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()
     if (!state) return reply.code(404).send({ error: 'Not found' })
+    await snapshotTemplateVersion(state.template, req.user?.id, 'before state update')
 
     const body = req.body as Partial<WorkflowState>
     await db('nivaro_workflow_states')
@@ -710,6 +520,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   app.delete('/states/:stateId', { preHandler: requireAdmin }, async (req, reply) => {
     const { stateId } = req.params as { stateId: string }
+    const existingState = await db<WorkflowState>('nivaro_workflow_states')
+      .where({ id: stateId })
+      .first('template')
+    if (!existingState) return reply.code(404).send({ error: 'Not found' })
+    await snapshotTemplateVersion(existingState.template, req.user?.id, 'before state delete')
     const deleted = await db('nivaro_workflow_states').where({ id: stateId }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     await logActivity({
@@ -727,6 +542,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   app.post('/:id/transitions', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const template = await db<WorkflowTemplate>('nivaro_workflow_templates').where({ id }).first()
+    if (template) await snapshotTemplateVersion(id, req.user?.id, 'before transition create')
     if (!template) return reply.code(404).send({ error: 'Template not found' })
 
     const body = req.body as Pick<
@@ -737,6 +553,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'color'
       | 'required_roles'
       | 'actions'
+      | 'auto_trigger'
       | 'sort'
       | 'group_label'
       | 'condition_rules'
@@ -757,6 +574,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       color: body.color ?? null,
       required_roles: toJsonStr(body.required_roles),
       actions: toJsonStr(body.actions),
+      auto_trigger: body.auto_trigger ? 1 : 0,
       sort: body.sort ?? 0,
       group_label: body.group_label?.trim() || null,
       condition_rules: toJsonStr(body.condition_rules),
@@ -782,6 +600,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .where({ id: txId })
       .first()
     if (!tx) return reply.code(404).send({ error: 'Not found' })
+    await snapshotTemplateVersion(tx.template, req.user?.id, 'before transition update')
 
     const body = req.body as Partial<WorkflowTransition>
     const requirementsError = validateRequirements(body.requirements)
@@ -797,6 +616,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         required_roles:
           body.required_roles !== undefined ? toJsonStr(body.required_roles) : tx.required_roles,
         actions: body.actions !== undefined ? toJsonStr(body.actions) : tx.actions,
+        auto_trigger:
+          body.auto_trigger !== undefined ? (body.auto_trigger ? 1 : 0) : tx.auto_trigger,
         sort: body.sort ?? tx.sort,
         group_label:
           body.group_label !== undefined ? body.group_label?.trim() || null : tx.group_label,
@@ -820,6 +641,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   app.delete('/transitions/:txId', { preHandler: requireAdmin }, async (req, reply) => {
     const { txId } = req.params as { txId: string }
+    const existingTx = await db<WorkflowTransition>('nivaro_workflow_transitions')
+      .where({ id: txId })
+      .first('template')
+    if (existingTx) {
+      await snapshotTemplateVersion(existingTx.template, req.user?.id, 'before transition delete')
+    }
     let deleted: number
     try {
       deleted = await db('nivaro_workflow_transitions').where({ id: txId }).delete()
@@ -846,10 +673,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const template = await db<WorkflowTemplate>('nivaro_workflow_templates').where({ id }).first()
     if (!template) return reply.code(404).send({ error: 'Template not found' })
+    await snapshotTemplateVersion(id, req.user?.id, 'before binding change')
 
     const body = req.body as {
       collection: string
       state_field?: string
+      state_field_map?: Record<string, unknown> | string | null
       auto_start?: boolean | number
       auto_start_state?: string | null
     }
@@ -866,6 +695,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         .update({
           template: id,
           state_field: body.state_field ?? existing.state_field,
+          state_field_map:
+            body.state_field_map !== undefined
+              ? toJsonStr(body.state_field_map)
+              : existing.state_field_map,
           auto_start:
             body.auto_start !== undefined ? (body.auto_start ? 1 : 0) : existing.auto_start,
           auto_start_state:
@@ -878,6 +711,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         template: id,
         collection: body.collection.trim(),
         state_field: body.state_field ?? null,
+        state_field_map: toJsonStr(body.state_field_map ?? null),
         auto_start: body.auto_start ? 1 : 0,
         auto_start_state: body.auto_start_state ?? null
       })
@@ -898,6 +732,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   app.delete('/bindings/:bindingId', { preHandler: requireAdmin }, async (req, reply) => {
     const { bindingId } = req.params as { bindingId: string }
+    const existingBinding = await db<WorkflowBinding>('nivaro_workflow_bindings')
+      .where({ id: bindingId })
+      .first('template')
+    if (existingBinding) {
+      await snapshotTemplateVersion(existingBinding.template, req.user?.id, 'before binding delete')
+    }
     const deleted = await db('nivaro_workflow_bindings').where({ id: bindingId }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     await logActivity({
@@ -913,17 +753,22 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   app.patch('/bindings/:bindingId', { preHandler: requireAdmin }, async (req, reply) => {
     const { bindingId } = req.params as { bindingId: string }
     const body = req.body as Partial<
-      Pick<WorkflowBinding, 'state_field' | 'auto_start' | 'auto_start_state'>
+      Pick<WorkflowBinding, 'state_field' | 'state_field_map' | 'auto_start' | 'auto_start_state'>
     >
     const existing = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ id: bindingId })
       .first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    await snapshotTemplateVersion(existing.template, req.user?.id, 'before binding update')
     await db('nivaro_workflow_bindings')
       .where({ id: bindingId })
       .update({
         state_field:
           body.state_field !== undefined ? body.state_field || null : existing.state_field,
+        state_field_map:
+          body.state_field_map !== undefined
+            ? toJsonStr(body.state_field_map)
+            : existing.state_field_map,
         auto_start: body.auto_start !== undefined ? (body.auto_start ? 1 : 0) : existing.auto_start,
         auto_start_state:
           body.auto_start_state !== undefined
@@ -1227,11 +1072,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // so conditional branching can filter the offered transitions.
     const hasConditionRules = transitions.some((tx) => tx.condition_rules)
     const conditionRecord = hasConditionRules
-      ? await fetchRecordForConditions(collection, item)
+      ? await fetchRecordForConditions(collection, item, transitions.map((tx) => tx.condition_rules))
       : {}
 
     const availableTransitions = transitions
       .filter((tx) => {
+        // Auto transitions fire from the engine, never from users
+        if (coerceBool(tx.auto_trigger)) return false
         // Transition applies if from_state is null (any) or matches current state
         const fromOk = tx.from_state === null || tx.from_state === currentState
         if (!fromOk) return false
@@ -1331,7 +1178,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       )
       const finalStateId = resolvedState?.id ?? initialState.id
       if (finalStateId !== initialState.id) {
-        finalState = resolvedState ?? initialState
+        finalState = (resolvedState as unknown as WorkflowState | null) ?? initialState
         await db('nivaro_workflow_instances')
           .where({ id: instanceId })
           .update({
@@ -1406,6 +1253,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'Transition is not valid from the current state' })
       }
 
+      // Automatic transitions belong to the engine — never user-executable
+      if (coerceBool(transition.auto_trigger)) {
+        return reply.code(400).send({ error: 'Automatic transitions cannot be executed manually' })
+      }
+
       // Check role permission
       const isAdmin = req.isAdmin ?? false
       if (!isAdmin && transition.required_roles) {
@@ -1426,7 +1278,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           db,
           transition.requirements,
           item,
-          req.log
+          req.log,
+          collection
         )
         if (blocking) {
           return reply.code(422).send({ error: 'TRANSITION_REQUIREMENTS', requirements: blocking })
@@ -1436,77 +1289,44 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       // Conditional branching guard: re-fetch the item and revalidate condition
       // rules server-side — the client's view may be stale.
       if (transition.condition_rules) {
-        const conditionRecord = await fetchRecordForConditions(collection, item)
+        const conditionRecord = await fetchRecordForConditions(collection, item, [
+          transition.condition_rules
+        ])
         if (!evaluateConditionRules(transition.condition_rules, conditionRecord)) {
           return reply.code(409).send({ error: 'Transition conditions not met' })
         }
       }
 
-      const previousState = instance.current_state
-
-      // Resolve skip criteria — may advance past the nominal target state
-      const resolvedTarget = await resolveTransitionTarget(
-        transition.to_state,
-        instance.template,
-        collection,
-        item,
-        instance.id,
-        db
-      )
-      const newState = resolvedTarget?.id ?? transition.to_state
-
-      // Find new state object
-      const newStateObj =
-        resolvedTarget ??
-        (await db<WorkflowState>('nivaro_workflow_states').where({ id: newState }).first())
-
-      // Update instance
-      await db('nivaro_workflow_instances')
-        .where({ id: instance.id })
-        .update({
-          current_state: newState,
-          completed_at: newStateObj && coerceBool(newStateObj.is_terminal) ? new Date() : null
+      // Shared mutation chain (instance update, history, materialized queue
+      // sync, state_field mirror incl. state_field_map, transition actions).
+      // A blocking action failure (e.g. MDSi submission) aborts BEFORE any
+      // mutation — the record stays in its current state and the client gets
+      // the error to display.
+      let applied: Awaited<ReturnType<typeof applyTransition>>
+      try {
+        applied = await applyTransition({
+          instance,
+          transition: transition as unknown as Parameters<typeof applyTransition>[0]['transition'],
+          userId: req.user?.id ?? null,
+          comment: body.comment ?? null,
+          source: 'manual'
         })
-
-      // Write history
-      await db('nivaro_workflow_history').insert({
-        instance: instance.id,
-        transition: transition.id,
-        from_state: previousState,
-        to_state: newState,
-        user: req.user?.id ?? null,
-        comment: body.comment ?? null,
-        timestamp: new Date()
-      })
-
-      // Keep materialized queue caches current — transitions never pass through
-      // the generic collection-write hook since they update workflow tables, not
-      // the bound business record itself.
-      await syncMaterializedQueueItem(collection, item)
-
-      // Sync state_field on the record if configured
-      const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
-        .where({ collection })
-        .first()
-      if (binding?.state_field && newStateObj) {
-        try {
-          await db(collection)
-            .where({ id: item })
-            .update({ [binding.state_field]: newStateObj.key })
-        } catch {
-          // Non-fatal: field may not exist on this collection
+      } catch (err) {
+        if (err instanceof TransitionBlockedError) {
+          return reply.code(422).send({ error: err.message })
         }
+        throw err
       }
+      const { updatedInstance, newStateObj, previousState } = applied
 
-      const updatedInstance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ id: instance.id })
-        .first()
+      // Chained automation: fire any auto transitions now valid from the new state
+      await runAutoTransitions(collection, item)
 
       const prevStateObj = previousState
         ? await db<WorkflowState>('nivaro_workflow_states').where({ id: previousState }).first()
         : null
       const fromLabel = prevStateObj?.label ?? previousState ?? 'Start'
-      const toLabel = newStateObj?.label ?? newState
+      const toLabel = newStateObj?.label ?? 'Unknown'
       const transitionLabel = transition.label
       const userComment = body.comment ? ` — "${body.comment}"` : ''
 
@@ -1521,23 +1341,38 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       return reply.send({
         data: {
           instance: updatedInstance,
-          new_state: newStateObj ? formatState(newStateObj) : null
+          new_state: newStateObj ? formatState(newStateObj as unknown as WorkflowState) : null
         }
       })
     }
   )
 
   // Batch state lookup — all instances for a collection (for collection browser table)
+  // `ids` (comma list) scopes the response to just those records — the
+  // collection browser only needs state badges for the page it is rendering.
+  // Without it this returns EVERY instance for the collection: on workflows
+  // (88k) that was a 13s response and the single biggest cost of a browse.
+  // The unscoped form is kept for callers that genuinely need the whole map.
   app.get('/instances/:collection', { preHandler: requireAuth }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
+    const rawIds = (req.query as { ids?: string })?.ids
+    const ids = rawIds
+      ? rawIds.split(',').map((v) => v.trim()).filter(Boolean).slice(0, 500)
+      : null
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
       .first()
     if (!binding) return reply.send({ data: null })
+    if (ids && ids.length === 0) {
+      return reply.send({ data: { binding, instances: {} } })
+    }
 
     const rows = await db('nivaro_workflow_instances as i')
       .leftJoin('nivaro_workflow_states as s', 'i.current_state', 's.id')
       .where('i.collection', collection)
+      .modify((qb) => {
+        if (ids) qb.whereIn('i.item', ids)
+      })
       .select(
         'i.item',
         's.key as state_key',
@@ -1639,19 +1474,22 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .select('og.*')
 
     const groupIds = groups.map((g) => g.id)
-    const groupUsers = groupIds.length
-      ? await db('nivaro_pipeline_owner_group_users as ogu')
-          .join('nivaro_users as u', 'ogu.user', 'u.id')
-          .whereIn('ogu.group', groupIds)
-          .select(
-            'ogu.id as link_id',
-            'ogu.group',
-            'u.id',
-            'u.email',
-            'u.first_name',
-            'u.last_name'
-          )
-      : []
+    // The workflows template carries ~3.9k owner groups (legacy owner sync) —
+    // a single whereIn blows MSSQL's ~2100 bound-parameter cap and 500s the
+    // whole matrix. Chunked like every other id-scaling whereIn.
+    const groupUsers = await selectInChunks(groupIds, 2000, (chunk) =>
+      db('nivaro_pipeline_owner_group_users as ogu')
+        .join('nivaro_users as u', 'ogu.user', 'u.id')
+        .whereIn('ogu.group', chunk)
+        .select(
+          'ogu.id as link_id',
+          'ogu.group',
+          'u.id',
+          'u.email',
+          'u.first_name',
+          'u.last_name'
+        )
+    )
 
     const usersByGroup = new Map<string, typeof groupUsers>()
     for (const u of groupUsers) {
@@ -1968,6 +1806,40 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   // ─── Instance owners (authenticated) ──────────────────────────────────────
 
+  // POST /instance/:collection/owners/batch {ids} → resolved owner display
+  // names per record, one batched engine pass (browser Owners columns).
+  app.post('/instance/:collection/owners/batch', { preHandler: requireAuth }, async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    const { ids } = (req.body ?? {}) as { ids?: Array<string | number> }
+    const idList = (ids ?? []).map(String).filter(Boolean).slice(0, 500)
+    if (!idList.length) return reply.send({ data: {} })
+    const instances = (await db('nivaro_workflow_instances')
+      .where({ collection })
+      .whereIn('item', idList)
+      .select('id', 'item', 'current_state')) as Array<{
+      id: string
+      item: string
+      current_state: string | null
+    }>
+    const requests = instances
+      .filter((i) => i.current_state)
+      .map((i) => ({
+        key: String(i.item),
+        stateId: i.current_state as string,
+        instanceId: i.id,
+        collection,
+        itemId: String(i.item)
+      }))
+    const byKey = await resolveStateOwnersBatch(requests)
+    const out: Record<string, Array<{ id: string; name: string }>> = {}
+    for (const [k, owners] of byKey)
+      out[k] = owners.map((o) => ({
+        id: o.id,
+        name: `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email
+      }))
+    return reply.send({ data: out })
+  })
+
   app.get('/instance/:collection/:item/owners', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
 
@@ -2124,6 +1996,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const { stateId } = req.params as { stateId: string }
     const state = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()
     if (!state) return reply.code(404).send({ error: 'Not found' })
+    await snapshotTemplateVersion(state.template, req.user?.id, 'before skip-criteria update')
 
     const body = req.body as { criteria: SkipCriteria | null }
     await db('nivaro_workflow_states')
@@ -2245,15 +2118,149 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         .where({ template: binding.template })
         .orderBy('sort')
 
+      // Skip prediction needs the record row (field_compare/lookup_compare
+      // criteria) — one fetch shared across states. Best-effort: an unreadable
+      // record just means no skip flags, never a failed response.
+      let record: Record<string, unknown> = {}
+      try {
+        const r = await db(collection).where({ id: item }).first()
+        if (r) record = r as Record<string, unknown>
+      } catch {
+        record = {}
+      }
+
+      // ── Path relevance ──────────────────────────────────────────────────
+      // A template can hold branch states (Oracle vs Beeline submission, CAR
+      // vs REQ endings) that this record will never visit. BFS the explicit
+      // transition graph from the initial state and mark reachable states.
+      // Edges survive when they are FORWARD (send-backs never extend a path)
+      // and either (a) their DISCRIMINATOR conditions pass — eq/neq/in/notin
+      // against the record (workflow_type eq 3 → Beeline) — or (b) the record
+      // actually took them (history), which covers skip-jump edges that exist
+      // only in history (Manager → VP when L2/Peer were skipped). Progress-
+      // style conditions (related_some lines, requisition nnull, within_days…)
+      // are treated as "will pass eventually" — they gate WHEN a transition
+      // fires, not WHICH branch the record belongs to. NOTE a departed state
+      // deliberately keeps its condition-passing template edges too: after a
+      // send-back the record re-walks from an earlier state, and restricting a
+      // left state to only its taken edges dead-ended the path at any state
+      // that was only ever left backward (PO/Completed vanished).
+      const onPath = new Set<string>()
+      try {
+        const transitions = (await db<WorkflowTransition>('nivaro_workflow_transitions')
+          .where({ template: binding.template })
+          .whereNotNull('from_state')
+          .select('from_state', 'to_state', 'condition_rules')) as Array<{
+          from_state: string
+          to_state: string
+          condition_rules: string | null
+        }>
+        const historyRows = instance
+          ? ((await db('nivaro_workflow_history')
+              .where({ instance: instance.id })
+              .select('from_state', 'to_state')) as Array<{
+              from_state: string | null
+              to_state: string
+            }>)
+          : []
+        const takenEdges = new Set(
+          historyRows.filter((h) => h.from_state).map((h) => `${h.from_state}:${h.to_state}`)
+        )
+
+        const conditioned = transitions.filter((t) => t.condition_rules)
+        const conditionRecord =
+          conditioned.length > 0
+            ? await fetchRecordForConditions(collection, item, conditioned.map((t) => t.condition_rules))
+            : record
+        const DISCRIMINATOR_OPS = new Set(['eq', 'neq', 'in', 'notin'])
+        const passes = (t: { condition_rules: string | null }) => {
+          const rules = parseConditionRules(t.condition_rules)
+          if (!rules) return true
+          return rules.every((r) => {
+            if (!r || typeof r !== 'object' || typeof r.field !== 'string' || !r.field) return true
+            if (!DISCRIMINATOR_OPS.has(String(r.op))) return true
+            return evalConditionRule(r, conditionRecord)
+          })
+        }
+
+        // Send-backs are backward edges (to a lower-sort state); following them
+        // in the BFS resurrects pruned branches (Beeline → Oracle Approval →
+        // send-back → Oracle Submission puts the Oracle branch back on a
+        // Beeline record's path). Forward flow only.
+        const sortOf = new Map(states.map((s) => [s.id, s.sort ?? 0]))
+        const fwd = new Map<string, string[]>()
+        for (const t of transitions) {
+          if ((sortOf.get(t.to_state) ?? 0) < (sortOf.get(t.from_state) ?? 0)) continue
+          if (!passes(t) && !takenEdges.has(`${t.from_state}:${t.to_state}`)) continue
+          const arr = fwd.get(t.from_state) ?? []
+          arr.push(t.to_state)
+          fwd.set(t.from_state, arr)
+        }
+        // Skip-jumps write history edges that exist in NO template transition
+        // (Manager → VP when the states between were skipped) — feed them into
+        // the graph so a historically-taken shortcut keeps the path connected.
+        for (const key of takenEdges) {
+          const [fromId, toId] = key.split(':')
+          if ((sortOf.get(toId) ?? 0) < (sortOf.get(fromId) ?? 0)) continue
+          const arr = fwd.get(fromId) ?? []
+          if (!arr.includes(toId)) {
+            arr.push(toId)
+            fwd.set(fromId, arr)
+          }
+        }
+
+        const queue = states.filter((s) => coerceBool(s.is_initial)).map((s) => s.id)
+        while (queue.length) {
+          const id = queue.shift() as string
+          if (onPath.has(id)) continue
+          onPath.add(id)
+          for (const next of fwd.get(id) ?? []) if (!onPath.has(next)) queue.push(next)
+        }
+        // History + current state are always relevant, whatever the graph says.
+        for (const h of historyRows) onPath.add(h.to_state)
+        if (instance?.current_state) onPath.add(instance.current_state)
+        // A template with no initial state (or a broken graph) yields nothing —
+        // degrade to showing everything rather than an empty chain.
+        if (onPath.size === 0) for (const s of states) onPath.add(s.id)
+      } catch {
+        // Relevance is a display refinement — on any failure fall back to
+        // "everything is on the path" rather than an empty chain.
+        for (const s of states) onPath.add(s.id)
+      }
+
       const result: Record<
         string,
-        { state: ReturnType<typeof formatState>; owners: ResolvedOwner[] }
+        {
+          state: ReturnType<typeof formatState>
+          owners: ResolvedOwner[]
+          skipped: boolean
+          skip_reasons: string[]
+          on_path: boolean
+        }
       > = {}
       await Promise.all(
         states.map(async (s) => {
+          const [owners, skip] = await Promise.all([
+            resolveStateOwners(s.id, instance?.id ?? null, collection, item, db),
+            // The current state was already entered — a skip flag on it would
+            // read as a contradiction.
+            s.id === instance?.current_state
+              ? Promise.resolve({ skipped: false, reasons: [] as string[] })
+              : evaluateSkipCriteriaDetailed(
+                  s.id,
+                  record,
+                  instance?.id ?? null,
+                  collection,
+                  item,
+                  db
+                )
+          ])
           result[s.id] = {
             state: formatState(s),
-            owners: await resolveStateOwners(s.id, instance?.id ?? null, collection, item, db)
+            owners,
+            skipped: skip.skipped,
+            skip_reasons: skip.reasons,
+            on_path: onPath.has(s.id)
           }
         })
       )
@@ -2263,6 +2270,63 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   )
 
   // ─── Export a pipeline template as a portable nivaro/pipeline document ────────
+  // ─── Template versions (config snapshots + restore) ───────────────────────
+
+  app.get('/:id/versions', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const rows = await db('nivaro_workflow_template_versions as v')
+      .leftJoin('nivaro_users as u', 'v.created_by', 'u.id')
+      .where({ 'v.template': id })
+      .orderBy('v.version', 'desc')
+      .limit(100)
+      .select(
+        'v.id',
+        'v.version',
+        'v.note',
+        'v.created_at',
+        db.raw("CONCAT(u.first_name, ' ', u.last_name) as created_by_name")
+      )
+    return reply.send({ data: rows })
+  })
+
+  app.get('/:id/versions/:versionId', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id, versionId } = req.params as { id: string; versionId: string }
+    const row = await db('nivaro_workflow_template_versions')
+      .where({ template: id, id: Number(versionId) })
+      .first()
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({
+      data: { ...row, snapshot: JSON.parse((row as { snapshot: string }).snapshot) }
+    })
+  })
+
+  app.post(
+    '/:id/versions/:versionId/restore',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { id, versionId } = req.params as { id: string; versionId: string }
+      // Snapshot the CURRENT config first so the restore itself is reversible.
+      await snapshotTemplateVersion(id, req.user?.id, 'before restore')
+      let result: Awaited<ReturnType<typeof restoreTemplateVersion>>
+      try {
+        result = await restoreTemplateVersion(id, Number(versionId))
+      } catch (err) {
+        return reply
+          .code(400)
+          .send({ error: err instanceof Error ? err.message : 'Restore failed' })
+      }
+      await logActivity({
+        action: 'update',
+        collection: 'nivaro_workflow_templates',
+        item: id,
+        user: req.user?.id,
+        req,
+        comment: `restore-version:${versionId}`
+      })
+      return reply.send({ data: result })
+    }
+  )
+
   app.get('/:id/export', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const template = await db<WorkflowTemplate>('nivaro_workflow_templates').where({ id }).first()

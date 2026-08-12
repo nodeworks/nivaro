@@ -26,7 +26,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { ApprovalPanel } from '@/components/approval-panel'
-import { ErpStatusBadge } from '@/components/erp-status-badge'
 import { RecordDrilldownSheet } from '@/components/record-drilldown-sheet'
 import { RecordGraphSheet } from '@/components/record-graph-sheet'
 import { ShareLinkPopover } from '@/components/share-link-popover'
@@ -356,7 +355,10 @@ export function ItemEditPage() {
   // location.key === 'default' means this was a fresh load / direct URL with no
   // in-app history to pop — then fall back to the collection listing.
   const goBack = () => {
-    if (location.key !== 'default') navigate(-1)
+    // idx > 0 = a real previous entry exists, even after a full reload
+    // (location.key resets to 'default' on reload and misfires there).
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+    if (idx > 0) navigate(-1)
     else navigate(`/collections/${collection}`)
   }
   const client = useMemo(() => createNivaro(window.location.origin), [])
@@ -570,7 +572,8 @@ export function ItemEditPage() {
   // ── Extra panels injected into ItemEditForm's scroll area ─────────────────
   const extraTopContent = (
     <>
-      {id && !isNew && <ErpStatusBadge collection={collection!} item={id} />}
+      {/* ErpStatusBadge removed — ItemEditForm's ErpFailureBanner is the
+          persistent submission-status surface now; the pill was redundant. */}
       {id && !isNew && <ApprovalPanel collection={collection!} item={id} />}
       {id && !isNew && relevantHierarchies.length > 0 && (
         <Card>
@@ -789,8 +792,11 @@ export function ItemEditPage() {
                             { collection, itemId: id }
                           )
                           toast.success(res.data.data.message)
-                        } catch {
-                          toast.error(`${action.label} failed`)
+                        } catch (err) {
+                          const detail = (
+                            err as { response?: { data?: { error?: string } } }
+                          )?.response?.data?.error
+                          toast.error(detail ?? `${action.label} failed`, { duration: 12000 })
                         } finally {
                           setRunningItemAction(null)
                         }
@@ -941,7 +947,14 @@ export function ItemEditPage() {
                 showHeader={true}
                 onBack={undefined}
                 onSaved={(newId) => {
-                  if (isNew) navigate(`/collections/${collection}/${newId}`)
+                  if (isNew)
+                    // replace: the blank /new form must not stay in history —
+                    // back from the created record returns to WHERE THE USER
+                    // WAS before creating, not to an empty form.
+                    navigate(
+                      `/collections/${collection}/${newId}${layoutSlug ? `?layout=${layoutSlug}` : ''}`,
+                      { replace: true }
+                    )
                 }}
                 onDeleted={() => navigate(`/collections/${collection}`)}
                 extraTopContent={extraTopContent}

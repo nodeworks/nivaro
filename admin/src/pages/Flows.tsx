@@ -36,7 +36,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { api, exportFlow, importFlow } from '@/lib/api'
-import { cn, formatDate, formatRelative } from '@/lib/utils'
+import { cn, formatRelative } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -101,226 +101,111 @@ function TriggerBadge({ trigger }: { trigger: string }) {
   )
 }
 
-// ─── List item ────────────────────────────────────────────────────────────────
+// ─── List row ─────────────────────────────────────────────────────────────────
+// Clicking a row opens the flow editor directly — export/delete ride the row
+// as hover actions (they used to live on a detail panel behind an extra click).
 
-function FlowListItem({
+function FlowRow({
   flow,
-  selected,
-  onClick
+  pendingDelete,
+  isDeleting,
+  onOpen,
+  onExport,
+  onRequestDelete,
+  onCancelDelete,
+  onConfirmDelete
 }: {
   flow: Flow
-  selected: boolean
-  onClick: () => void
+  pendingDelete: boolean
+  isDeleting: boolean
+  onOpen: () => void
+  onExport: () => void
+  onRequestDelete: () => void
+  onCancelDelete: () => void
+  onConfirmDelete: () => void
 }) {
   return (
-    <li>
+    <li className='group/row relative'>
       <button
         type='button'
-        onClick={onClick}
-        className={cn(
-          'w-full px-4 py-3 text-left transition-colors',
-          selected
-            ? 'bg-[#00ceff]/10 dark:bg-[#00ceff]/[0.07]'
-            : 'hover:bg-slate-50 dark:hover:bg-muted/50'
-        )}
+        onClick={onOpen}
+        className='w-full px-6 py-3 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
       >
-        <div className='mb-1.5 flex items-center gap-2'>
+        <div className='mb-1 flex items-center gap-2'>
           <span
             className={cn(
               'h-1.5 w-1.5 shrink-0 rounded-full',
               flow.status === 'active' ? 'bg-emerald-400' : 'bg-slate-300 dark:bg-slate-600'
             )}
           />
-          <span
-            className={cn(
-              'flex-1 truncate text-[13px] font-medium',
-              selected
-                ? 'text-slate-900 dark:text-foreground'
-                : 'text-slate-700 dark:text-slate-300'
-            )}
-          >
+          <span className='truncate text-[13px] font-medium text-slate-800 dark:text-slate-200'>
             {flow.name}
           </span>
+          <TriggerBadge trigger={flow.trigger} />
         </div>
         <div className='flex items-center gap-2 pl-3.5'>
-          <TriggerBadge trigger={flow.trigger} />
           <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
             {flow.operation_count ?? 0} ops
           </span>
+          {flow.description && (
+            <span className='truncate text-[11px] text-slate-400 dark:text-muted-foreground'>
+              · {flow.description}
+            </span>
+          )}
           {flow.updated_at && (
-            <span className='ml-auto text-[11px] text-slate-400 dark:text-muted-foreground'>
+            <span className='ml-auto shrink-0 pr-24 text-[11px] text-slate-400 dark:text-muted-foreground'>
               {formatRelative(flow.updated_at)}
             </span>
           )}
         </div>
       </button>
-    </li>
-  )
-}
 
-// ─── No-selection state ───────────────────────────────────────────────────────
-
-function NoFlowSelected() {
-  return (
-    <div className='flex h-full flex-col items-center justify-center p-8 text-center'>
-      <div className='flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 dark:bg-muted'>
-        <GitBranch className='h-5 w-5 text-slate-400' />
-      </div>
-      <p className='mt-3 text-[13px] font-medium text-slate-600 dark:text-foreground'>
-        Select a flow
-      </p>
-      <p className='mt-0.5 text-[12px] text-slate-400 dark:text-muted-foreground'>
-        Choose a flow from the list to view details and actions
-      </p>
-    </div>
-  )
-}
-
-// ─── Detail panel ─────────────────────────────────────────────────────────────
-
-function FlowDetail({
-  flow,
-  pendingDelete,
-  onEdit,
-  onExport,
-  onRequestDelete,
-  onCancelDelete,
-  onConfirmDelete,
-  isDeleting
-}: {
-  flow: Flow
-  pendingDelete: boolean
-  onEdit: () => void
-  onExport: () => void
-  onRequestDelete: () => void
-  onCancelDelete: () => void
-  onConfirmDelete: () => void
-  isDeleting: boolean
-}) {
-  const metaItems: { label: string; value: React.ReactNode }[] = [
-    {
-      label: 'Trigger',
-      value: <TriggerBadge trigger={flow.trigger} />
-    },
-    {
-      label: 'Operations',
-      value: (
-        <span className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
-          {flow.operation_count ?? 0}
-          <span className='ml-1 text-[12px] font-normal text-slate-400 dark:text-muted-foreground'>
-            steps
-          </span>
-        </span>
-      )
-    },
-    {
-      label: 'Last updated',
-      value: (
-        <span className='text-[13px] text-slate-700 dark:text-foreground'>
-          {flow.updated_at ? formatDate(flow.updated_at) : '—'}
-        </span>
-      )
-    },
-    flow.next_run
-      ? {
-          label: 'Next run',
-          value: (
-            <span className='font-mono text-[12px] text-slate-700 dark:text-foreground'>
-              {formatDate(flow.next_run)}
-            </span>
-          )
-        }
-      : {
-          label: 'Flow ID',
-          value: (
-            <code className='font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
-              {flow.id.slice(0, 20)}…
-            </code>
-          )
-        }
-  ]
-
-  return (
-    <div className='p-8'>
-      <div className='max-w-xl'>
-        {/* ── Title block ─────────────────────────────────────────── */}
-        <div className='mb-7'>
-          <div className='mb-2 flex items-center gap-2'>
-            <TriggerBadge trigger={flow.trigger} />
-            <span
-              className={cn(
-                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold',
-                flow.status === 'active'
-                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                  : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
-              )}
+      {/* Row actions — hover-revealed, or the inline delete confirm strip */}
+      <span
+        className='absolute right-4 top-1/2 flex -translate-y-1/2 items-center gap-1'
+        onClick={(e) => e.stopPropagation()}
+      >
+        {pendingDelete ? (
+          <span className='flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1 dark:border-red-900/40 dark:bg-red-900/15'>
+            <span className='text-[11px] font-medium text-red-600 dark:text-red-400'>Delete?</span>
+            <button
+              type='button'
+              disabled={isDeleting}
+              onClick={onConfirmDelete}
+              className='rounded bg-red-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-red-700 disabled:opacity-50'
             >
-              <span
-                className={cn(
-                  'h-1.5 w-1.5 rounded-full',
-                  flow.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'
-                )}
-              />
-              {flow.status === 'active' ? 'Active' : 'Inactive'}
-            </span>
-          </div>
-          <h2 className='text-[20px] font-semibold tracking-[-0.015em] text-slate-900 dark:text-foreground'>
-            {flow.name}
-          </h2>
-          {flow.description && (
-            <p className='mt-1.5 text-[13px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
-              {flow.description}
-            </p>
-          )}
-        </div>
-
-        {/* ── Meta grid ───────────────────────────────────────────── */}
-        <div className='mb-7 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
-          {metaItems.map(({ label, value }) => (
-            <div key={label} className='bg-white px-4 py-3.5 dark:bg-card'>
-              <p className='mb-1 text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>
-                {label}
-              </p>
-              {value}
-            </div>
-          ))}
-        </div>
-
-        {/* ── Actions ─────────────────────────────────────────────── */}
-        <div className='flex items-center gap-2'>
-          <Button onClick={onEdit}>Edit flow</Button>
-          <Button variant='outline' onClick={onExport}>
-            <Download className='mr-1.5 h-3.5 w-3.5' /> Export
-          </Button>
-          <div className='ml-auto'>
-            {pendingDelete ? (
-              <div className='flex items-center gap-1.5'>
-                <Button
-                  variant='destructive'
-                  size='sm'
-                  onClick={onConfirmDelete}
-                  disabled={isDeleting}
-                >
-                  {isDeleting ? 'Deleting…' : 'Confirm delete'}
-                </Button>
-                <Button variant='ghost' size='sm' onClick={onCancelDelete}>
-                  Cancel
-                </Button>
-              </div>
-            ) : (
-              <Button
-                variant='ghost'
-                size='sm'
-                className='text-red-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30'
-                onClick={onRequestDelete}
-              >
-                <Trash2 className='mr-1.5 h-3.5 w-3.5' /> Delete flow
-              </Button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
+              {isDeleting ? 'Deleting…' : 'Confirm'}
+            </button>
+            <button
+              type='button'
+              onClick={onCancelDelete}
+              className='rounded px-1.5 py-0.5 text-[11px] font-medium text-red-700 hover:bg-white dark:text-red-300 dark:hover:bg-muted'
+            >
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <span className='hidden items-center gap-0.5 group-hover/row:flex'>
+            <button
+              type='button'
+              title='Export flow'
+              onClick={onExport}
+              className='rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-muted'
+            >
+              <Download className='h-3.5 w-3.5' />
+            </button>
+            <button
+              type='button'
+              title='Delete flow'
+              onClick={onRequestDelete}
+              className='rounded-md p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20'
+            >
+              <Trash2 className='h-3.5 w-3.5' />
+            </button>
+          </span>
+        )}
+      </span>
+    </li>
   )
 }
 
@@ -455,7 +340,6 @@ export function FlowsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -488,13 +372,10 @@ export function FlowsPage() {
       )
     : flows
 
-  const selectedFlow = flows.find((f) => f.id === selectedId) ?? null
-
   const deleteFlow = useMutation({
     mutationFn: (id: string) => api.delete(`/flows/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['flows'] })
-      if (selectedId === pendingDelete) setSelectedId(null)
       setPendingDelete(null)
       toast.success('Flow deleted')
     },
@@ -534,89 +415,68 @@ export function FlowsPage() {
         </div>
       </div>
 
-      {/* ── Master-detail body ────────────────────────────────── */}
-      <div className='flex flex-1 min-h-0 overflow-hidden'>
-        {/* ── Left: list panel ───────────────────────────────── */}
-        <aside className='flex w-[272px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
-          {/* Search bar */}
-          <div className='shrink-0 border-b border-slate-100 p-3 dark:border-border'>
-            <div className='relative'>
-              <Search className='absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
-              <Input
-                className='h-8 pl-8 text-[13px]'
-                placeholder='Filter flows…'
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Flow list */}
-          <div className='flex-1 overflow-y-auto'>
-            {isLoading ? (
-              <div className='space-y-px p-3'>
-                {[1, 2, 3, 4].map((k) => (
-                  <div key={k} className='rounded-lg p-3'>
-                    <Skeleton className='mb-2 h-4 w-3/4' />
-                    <Skeleton className='h-3 w-1/2' />
-                  </div>
-                ))}
-              </div>
-            ) : filtered.length === 0 ? (
-              <div className='flex flex-col items-center justify-center p-8 text-center'>
-                <Workflow className='mb-2 h-7 w-7 text-slate-300 dark:text-slate-600' />
-                <p className='text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
-                  {search ? 'No matching flows' : 'No flows yet'}
-                </p>
-                {!search && (
-                  <button
-                    type='button'
-                    onClick={() => setShowCreate(true)}
-                    className='mt-2 text-[11px] text-[#00ceff] hover:underline'
-                  >
-                    Create your first flow
-                  </button>
-                )}
-              </div>
-            ) : (
-              <ul className='divide-y divide-slate-100 dark:divide-border'>
-                {filtered.map((flow) => (
-                  <FlowListItem
-                    key={flow.id}
-                    flow={flow}
-                    selected={selectedId === flow.id}
-                    onClick={() => {
-                      setSelectedId(flow.id)
-                      setPendingDelete(null)
-                    }}
-                  />
-                ))}
-              </ul>
-            )}
-          </div>
-        </aside>
-
-        {/* ── Right: detail panel ────────────────────────────── */}
-        <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
-          {selectedFlow ? (
-            <FlowDetail
-              flow={selectedFlow}
-              pendingDelete={pendingDelete === selectedFlow.id}
-              onEdit={() => navigate(`/flows/${selectedFlow.id}`)}
-              onExport={async () => {
-                try {
-                  await exportFlow(selectedFlow.id)
-                } catch {
-                  toast.error('Export failed')
-                }
-              }}
-              onRequestDelete={() => setPendingDelete(selectedFlow.id)}
-              onCancelDelete={() => setPendingDelete(null)}
-              onConfirmDelete={() => deleteFlow.mutate(selectedFlow.id)}
-              isDeleting={deleteFlow.isPending}
+      {/* ── Full-width list — rows open the editor directly ───── */}
+      <div className='flex flex-1 min-h-0 flex-col overflow-hidden bg-white dark:bg-card'>
+        <div className='shrink-0 border-b border-slate-100 px-6 py-3 dark:border-border'>
+          <div className='relative max-w-xs'>
+            <Search className='absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
+            <Input
+              className='h-8 pl-8 text-[13px]'
+              placeholder='Filter flows…'
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
             />
+          </div>
+        </div>
+
+        <div className='flex-1 overflow-y-auto'>
+          {isLoading ? (
+            <div className='space-y-px p-6'>
+              {[1, 2, 3, 4].map((k) => (
+                <div key={k} className='rounded-lg py-3'>
+                  <Skeleton className='mb-2 h-4 w-1/3' />
+                  <Skeleton className='h-3 w-1/4' />
+                </div>
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className='flex flex-col items-center justify-center p-12 text-center'>
+              <Workflow className='mb-2 h-7 w-7 text-slate-300 dark:text-slate-600' />
+              <p className='text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
+                {search ? 'No matching flows' : 'No flows yet'}
+              </p>
+              {!search && (
+                <button
+                  type='button'
+                  onClick={() => setShowCreate(true)}
+                  className='mt-2 text-[11px] text-[#00ceff] hover:underline'
+                >
+                  Create your first flow
+                </button>
+              )}
+            </div>
           ) : (
-            <NoFlowSelected />
+            <ul className='divide-y divide-slate-100 dark:divide-border'>
+              {filtered.map((flow) => (
+                <FlowRow
+                  key={flow.id}
+                  flow={flow}
+                  pendingDelete={pendingDelete === flow.id}
+                  isDeleting={deleteFlow.isPending && pendingDelete === flow.id}
+                  onOpen={() => navigate(`/flows/${flow.id}`)}
+                  onExport={async () => {
+                    try {
+                      await exportFlow(flow.id)
+                    } catch {
+                      toast.error('Export failed')
+                    }
+                  }}
+                  onRequestDelete={() => setPendingDelete(flow.id)}
+                  onCancelDelete={() => setPendingDelete(null)}
+                  onConfirmDelete={() => deleteFlow.mutate(flow.id)}
+                />
+              ))}
+            </ul>
           )}
         </div>
       </div>

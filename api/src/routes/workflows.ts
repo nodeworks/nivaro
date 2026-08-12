@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { syncStateField } from '../services/workflow-transitions.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
@@ -222,19 +223,9 @@ async function checkJoin(childInstanceId: string, userId: string | null) {
       timestamp: now
     })
 
-    // Sync state_field on the record if the binding configures one.
-    const binding = (await db('nivaro_workflow_bindings')
-      .where({ collection: parent.collection })
-      .first()) as { state_field: string | null } | undefined
-    if (binding?.state_field) {
-      try {
-        await db(parent.collection)
-          .where({ id: parent.item })
-          .update({ [binding.state_field]: joinState.key })
-      } catch {
-        // Non-fatal: field may not exist on this collection
-      }
-    }
+    // Sync state_field on the record if the binding configures one
+    // (honors state_field_map for legacy INT/enum state columns).
+    await syncStateField(parent.collection, String(parent.item), joinState)
 
     return { parentId, joinState }
   }

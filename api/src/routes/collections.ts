@@ -4,6 +4,7 @@ import { rawRows } from '../db/raw-rows.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
+import { clearAccountabilityCache } from '../hooks/activity.js'
 import * as svc from '../services/collections.js'
 import type { CMSCollection, CMSField } from '../types.js'
 
@@ -137,7 +138,17 @@ export async function collectionsRoutes(app: FastifyInstance) {
       svc.getRelations(collection)
     ])
     const fields = metaFields.length > 0 ? metaFields : await synthesizeFields(collection)
-    return reply.send({ data: { ...col, fields, relations } })
+    // browser_config is JSON text — parse for consumers (CollectionBrowserView).
+    const raw = (col as { browser_config?: string | null }).browser_config
+    let browserConfig: unknown = null
+    if (raw) {
+      try {
+        browserConfig = JSON.parse(raw)
+      } catch {
+        browserConfig = null
+      }
+    }
+    return reply.send({ data: { ...col, fields, relations, browser_config: browserConfig } })
   })
 
   app.post('/', async (req, reply) => {
@@ -168,19 +179,29 @@ export async function collectionsRoutes(app: FastifyInstance) {
   app.patch('/:collection', async (req, reply) => {
     if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
     const { collection } = req.params as { collection: string }
-    const body = req.body as Partial<CMSCollection> & { picker_filter?: unknown }
-    const { picker_filter: rawPickerFilter, ...restBody } = body
+    const body = req.body as Partial<CMSCollection> & {
+      picker_filter?: unknown
+      browser_config?: unknown
+    }
+    const { picker_filter: rawPickerFilter, browser_config: rawBrowserConfig, ...restBody } = body
     const patch: Record<string, unknown> = { ...restBody }
     if ('picker_filter' in body) {
       patch.picker_filter = rawPickerFilter != null ? JSON.stringify(rawPickerFilter) : null
     }
+    if ('browser_config' in body) {
+      patch.browser_config = rawBrowserConfig != null ? JSON.stringify(rawBrowserConfig) : null
+    }
     const data = await svc.updateCollection(collection, patch)
+    // Audit level is cached per collection in the activity hook — bust it so an
+    // accountability change takes effect on the next write, not 60s later.
+    if ('accountability' in body) clearAccountabilityCache(collection)
     await logActivity({
       action: 'update',
       user: req.user?.id,
       collection: 'nivaro_collections',
       item: collection,
-      req
+      req,
+      comment: 'accountability' in body ? `accountability=${body.accountability}` : undefined
     })
     return reply.send({ data })
   })

@@ -5,10 +5,13 @@ import {
   BarChart3,
   Check,
   ChevronsUpDown,
+  Database,
   ExternalLink,
   FileText,
   Globe,
+  Grid3x3,
   GripVertical,
+  LayoutDashboard,
   Plus,
   Table2,
   Trash2,
@@ -16,6 +19,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -62,7 +66,36 @@ const PALETTE: {
     defaults: { w: 4, h: 3, config: { content: '## Section\nWrite **markdown** here.' } }
   },
   { type: 'iframe', icon: Globe, defaults: { w: 6, h: 4, config: { url: '' } } },
-  { type: 'recent-activity', icon: Activity, defaults: { w: 4, h: 4, config: { limit: 10 } } }
+  { type: 'recent-activity', icon: Activity, defaults: { w: 4, h: 4, config: { limit: 10 } } },
+  {
+    type: 'query',
+    icon: Database,
+    defaults: { w: 12, h: 6, config: { query_slug: '', params: {}, table: { totals: true } } }
+  },
+  {
+    type: 'matrix',
+    icon: Grid3x3,
+    defaults: {
+      w: 12,
+      h: 6,
+      config: {
+        target_collection: '',
+        option_collection: '',
+        key_field: '',
+        value_field: '',
+        scope_fields: []
+      }
+    }
+  },
+  {
+    type: 'record-grid',
+    icon: Grid3x3,
+    defaults: {
+      w: 12,
+      h: 6,
+      config: { collection: '', scope: [], month_sets: [], columns: [] }
+    }
+  }
 ]
 
 // ─── Generic combobox (shadcn Popover + Command) ─────────────────────────────
@@ -223,7 +256,7 @@ function FiltersEditor({
           <button
             type='button'
             onClick={() => onChange(filters.filter((_, j) => j !== i))}
-            className='shrink-0 rounded p-1 text-slate-400 hover:text-red-500'
+            className='shrink-0 rounded p-1 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10'
             aria-label='Remove filter'
           >
             <X className='h-3.5 w-3.5' />
@@ -233,7 +266,7 @@ function FiltersEditor({
       <button
         type='button'
         onClick={() => onChange([...filters, { field: '', op: 'eq', value: '' }])}
-        className='flex items-center gap-1 text-[12px] text-slate-400 hover:text-nvr-cyan'
+        className='flex items-center gap-1 text-[12px] text-slate-500 transition-colors hover:text-nvr-cyan dark:text-slate-400'
       >
         <Plus className='h-3.5 w-3.5' /> Add filter
       </button>
@@ -242,6 +275,14 @@ function FiltersEditor({
 }
 
 // ─── Config panel ─────────────────────────────────────────────────────────────
+
+/** Escape-hatch JSON editors share one chrome with the standard Input. */
+const JSON_FIELD =
+  'w-full rounded-md border border-input bg-background p-2 font-mono text-[11px] leading-relaxed text-slate-700 transition-colors focus-visible:border-nvr-cyan focus-visible:outline-none dark:text-slate-300'
+
+const PANEL_LABEL = 'text-[11px] font-medium text-slate-500 dark:text-slate-400'
+
+const PANEL_HINT = 'text-[11px] leading-relaxed text-slate-400'
 
 function WidgetConfigPanel({
   widget,
@@ -275,24 +316,48 @@ function WidgetConfigPanel({
 
   return (
     <div className='flex h-full flex-col'>
-      <div className='flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800'>
-        <p className='text-[13px] font-semibold text-slate-800 dark:text-slate-200'>
-          {WIDGET_TYPE_LABELS[widget.type]} settings
+      <div className='flex h-[45px] shrink-0 items-center gap-2 border-b border-slate-200 px-4 dark:border-border'>
+        <p className='truncate text-[12px] font-semibold text-slate-800 dark:text-slate-200'>
+          {WIDGET_TYPE_LABELS[widget.type]}
         </p>
+        <span className='text-[11px] text-slate-400'>settings</span>
         <button
           type='button'
           onClick={onClose}
-          className='rounded p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+          className='-mr-1 ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
           aria-label='Close panel'
         >
           <X className='h-4 w-4' />
         </button>
       </div>
 
-      <div className='flex-1 space-y-4 overflow-y-auto p-4'>
+      <div className='flex-1 space-y-5 overflow-y-auto p-4'>
+        {widget.type !== 'kpi' && widget.type !== 'markdown' && (
+          <div className='space-y-1.5'>
+            <Label className={PANEL_LABEL}>Label</Label>
+            <Input
+              value={String(cfg.label ?? '')}
+              onChange={(e) => set('label', e.target.value)}
+              placeholder={WIDGET_TYPE_LABELS[widget.type]}
+              className='h-8 text-[12.5px]'
+              disabled={cfg.hide_label === true}
+            />
+            <p className={PANEL_HINT}>Card header text. Empty = collection name or widget type.</p>
+            <label className='flex items-center gap-2 pt-1 text-[12px] text-slate-600 dark:text-slate-300'>
+              <input
+                type='checkbox'
+                checked={cfg.hide_label === true}
+                onChange={(e) => set('hide_label', e.target.checked)}
+                className='h-3.5 w-3.5 accent-[#00ceff]'
+              />
+              Hide header entirely
+            </label>
+          </div>
+        )}
+
         {(widget.type === 'table' || widget.type === 'kpi') && (
           <div className='space-y-1.5'>
-            <Label className='text-[11px] text-slate-500'>Collection</Label>
+            <Label className={PANEL_LABEL}>Collection</Label>
             <Combobox
               value={collection}
               onChange={(v) =>
@@ -314,7 +379,7 @@ function WidgetConfigPanel({
         {widget.type === 'kpi' && (
           <>
             <div className='space-y-1.5'>
-              <Label className='text-[11px] text-slate-500'>Aggregate</Label>
+              <Label className={PANEL_LABEL}>Aggregate</Label>
               <Combobox
                 value={String(cfg.aggregate ?? 'count')}
                 onChange={(v) => set('aggregate', v || 'count')}
@@ -327,7 +392,7 @@ function WidgetConfigPanel({
             </div>
             {String(cfg.aggregate ?? 'count') !== 'count' && (
               <div className='space-y-1.5'>
-                <Label className='text-[11px] text-slate-500'>Field</Label>
+                <Label className={PANEL_LABEL}>Field</Label>
                 <Combobox
                   value={String(cfg.field ?? '')}
                   onChange={(v) => set('field', v)}
@@ -337,7 +402,7 @@ function WidgetConfigPanel({
               </div>
             )}
             <div className='space-y-1.5'>
-              <Label className='text-[11px] text-slate-500'>Label</Label>
+              <Label className={PANEL_LABEL}>Label</Label>
               <Input
                 value={String(cfg.label ?? '')}
                 onChange={(e) => set('label', e.target.value)}
@@ -351,12 +416,12 @@ function WidgetConfigPanel({
         {widget.type === 'table' && (
           <>
             <div className='space-y-1.5'>
-              <Label className='text-[11px] text-slate-500'>Columns</Label>
+              <Label className={PANEL_LABEL}>Columns</Label>
               <div className='flex flex-wrap gap-1'>
                 {columns.map((c) => (
                   <span
                     key={c}
-                    className='inline-flex items-center gap-1 rounded bg-nvr-cyan/10 px-1.5 py-0.5 font-mono text-[11px] text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                    className='inline-flex items-center gap-1 rounded border border-nvr-cyan bg-accent px-1.5 py-0.5 font-mono text-[11px] text-nvr-navy dark:text-nvr-cyan'
                   >
                     {c}
                     <button
@@ -383,10 +448,10 @@ function WidgetConfigPanel({
                 options={fieldOptions.filter((f) => !columns.includes(f.value))}
                 placeholder={collection ? '+ Add column…' : 'Select collection first'}
               />
-              <p className='text-[11px] text-slate-400'>Empty = first columns automatically.</p>
+              <p className={PANEL_HINT}>Empty = first columns automatically.</p>
             </div>
             <div className='space-y-1.5'>
-              <Label className='text-[11px] text-slate-500'>Limit</Label>
+              <Label className={PANEL_LABEL}>Limit</Label>
               <Input
                 type='number'
                 min={1}
@@ -403,7 +468,7 @@ function WidgetConfigPanel({
 
         {(widget.type === 'table' || widget.type === 'kpi') && collection && (
           <div className='space-y-1.5'>
-            <Label className='text-[11px] text-slate-500'>Filters</Label>
+            <Label className={PANEL_LABEL}>Filters</Label>
             <FiltersEditor
               collection={collection}
               filters={Array.isArray(cfg.filters) ? (cfg.filters as FilterRule[]) : []}
@@ -414,7 +479,7 @@ function WidgetConfigPanel({
 
         {widget.type === 'markdown' && (
           <div className='space-y-1.5'>
-            <Label className='text-[11px] text-slate-500'>Content (markdown)</Label>
+            <Label className={PANEL_LABEL}>Content (markdown)</Label>
             <Textarea
               value={String(cfg.content ?? '')}
               onChange={(e) => set('content', e.target.value)}
@@ -428,21 +493,93 @@ function WidgetConfigPanel({
 
         {widget.type === 'iframe' && (
           <div className='space-y-1.5'>
-            <Label className='text-[11px] text-slate-500'>URL</Label>
+            <Label className={PANEL_LABEL}>URL</Label>
             <Input
               value={String(cfg.url ?? '')}
               onChange={(e) => set('url', e.target.value)}
               placeholder='https://example.com/embed'
               className='h-8 font-mono text-[12px]'
             />
-            <p className='text-[11px] text-slate-400'>Rendered in a sandboxed iframe.</p>
+            <p className={PANEL_HINT}>Rendered in a sandboxed iframe.</p>
+          </div>
+        )}
+
+        {widget.type === 'query' && (
+          <>
+            <div className='space-y-1.5'>
+              <Label className={PANEL_LABEL}>Custom query slug</Label>
+              <Input
+                value={String(cfg.query_slug ?? '')}
+                onChange={(e) => set('query_slug', e.target.value)}
+                placeholder='project-type-allocations'
+                className='h-8 font-mono text-[12px]'
+              />
+            </div>
+            <div className='space-y-1.5'>
+              <Label className={PANEL_LABEL}>Params (JSON)</Label>
+              <textarea
+                defaultValue={JSON.stringify(cfg.params ?? {}, null, 2)}
+                onBlur={(e) => {
+                  try {
+                    set('params', JSON.parse(e.target.value || '{}'))
+                  } catch {
+                    /* keep last valid */
+                  }
+                }}
+                rows={3}
+                className={JSON_FIELD}
+              />
+            </div>
+            <div className='space-y-1.5'>
+              <Label className={PANEL_LABEL}>Table config (JSON)</Label>
+              <textarea
+                defaultValue={JSON.stringify(cfg.table ?? { totals: true }, null, 2)}
+                onBlur={(e) => {
+                  try {
+                    set('table', JSON.parse(e.target.value || '{}'))
+                  } catch {
+                    /* keep last valid */
+                  }
+                }}
+                rows={8}
+                className={JSON_FIELD}
+              />
+              <p className={PANEL_HINT}>
+                columns: [{'{'}field|formula, label, format: currency|number|percent, sum{'}'}] ·
+                group_by · totals
+              </p>
+            </div>
+          </>
+        )}
+
+        {widget.type === 'matrix' && (
+          <div className='space-y-1.5'>
+            <Label className={PANEL_LABEL}>Matrix config (JSON)</Label>
+            <textarea
+              defaultValue={JSON.stringify(widget.config ?? {}, null, 2)}
+              onBlur={(e) => {
+                try {
+                  const parsed = JSON.parse(e.target.value || '{}')
+                  for (const [k, v] of Object.entries(parsed)) set(k, v)
+                } catch {
+                  /* keep last valid */
+                }
+              }}
+              rows={12}
+              className={JSON_FIELD}
+            />
+            <p className={PANEL_HINT}>
+              target_collection · option_collection · option_label · option_filter ($scope tokens) ·
+              key_field · value_field · value_format · scope_fields: [{'{'}field, collection, label
+              {'}'}]
+            </p>
           </div>
         )}
 
         {widget.type === 'recent-activity' && (
           <>
             <div className='space-y-1.5'>
-              <Label className='text-[11px] text-slate-500'>Collection (optional)</Label>
+              <Label className={PANEL_LABEL}>Collection (optional)</Label>
               <Combobox
                 value={collection}
                 onChange={(v) => set('collection', v || undefined)}
@@ -450,12 +587,10 @@ function WidgetConfigPanel({
                 placeholder='All collections (admin)'
                 allowClear
               />
-              <p className='text-[11px] text-slate-400'>
-                Unscoped activity is visible to admins only.
-              </p>
+              <p className={PANEL_HINT}>Unscoped activity is visible to admins only.</p>
             </div>
             <div className='space-y-1.5'>
-              <Label className='text-[11px] text-slate-500'>Limit</Label>
+              <Label className={PANEL_LABEL}>Limit</Label>
               <Input
                 type='number'
                 min={1}
@@ -471,17 +606,15 @@ function WidgetConfigPanel({
         )}
       </div>
 
-      <div className='shrink-0 border-t border-slate-200 p-3 dark:border-slate-800'>
-        <Button
+      <div className='shrink-0 border-t border-slate-200 p-3 dark:border-border'>
+        <button
           type='button'
-          variant='ghost'
-          size='sm'
-          className='w-full text-red-500 hover:text-red-600'
           onClick={onRemove}
+          className='inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md text-[12px] font-medium text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:text-slate-400 dark:hover:bg-red-500/10 dark:hover:text-red-400'
         >
-          <Trash2 className='mr-1.5 h-3.5 w-3.5' />
+          <Trash2 className='h-3.5 w-3.5' />
           Remove widget
-        </Button>
+        </button>
       </div>
     </div>
   )
@@ -501,6 +634,7 @@ interface DragState {
 
 export function PageEditPage() {
   const { id } = useParams<{ id: string }>()
+  const goBack = useGoBack('/pages-admin')
   const qc = useQueryClient()
   const canvasRef = useRef<HTMLDivElement>(null)
 
@@ -636,46 +770,55 @@ export function PageEditPage() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       {/* Header */}
-      <div className='shrink-0 border-b border-slate-200 bg-white px-6 py-3 dark:border-slate-800 dark:bg-slate-950'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-2 text-[13px]'>
-            <Link
-              to='/pages-admin'
-              className='flex items-center gap-1 text-slate-400 transition-colors hover:text-slate-700 dark:hover:text-slate-200'
-            >
-              <ArrowLeft className='h-3.5 w-3.5' />
-              Pages
-            </Link>
-            <span className='text-slate-300'>/</span>
-            <span className='font-semibold text-slate-900 dark:text-slate-100'>{page.name}</span>
-            <span className='font-mono text-[11px] text-slate-400'>/p/{page.slug}</span>
-            {dirty && (
-              <span className='rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'>
-                unsaved changes
-              </span>
-            )}
-          </div>
-          <div className='flex items-center gap-2'>
-            <Link
-              to={`/p/${page.slug}`}
-              className='flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-900'
-            >
-              <ExternalLink className='h-3.5 w-3.5' />
-              View
-            </Link>
+      <header className='shrink-0 border-b border-slate-200 bg-white dark:border-border dark:bg-card'>
+        <div className='flex items-center gap-2.5 px-6 py-2.5'>
+          <Link
+            to='/pages-admin'
+            onClick={(e) => { e.preventDefault(); goBack() }}
+            title='Back to pages'
+            className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+          >
+            <ArrowLeft className='h-4 w-4' />
+          </Link>
+          <LayoutDashboard className='h-4 w-4 shrink-0 text-nvr-cyan' />
+          <h1 className='truncate text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+            {page.name}
+          </h1>
+          <span className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-500 dark:bg-muted dark:text-slate-400'>
+            /p/{page.slug}
+          </span>
+          {dirty && (
+            <span className='inline-flex shrink-0 items-center gap-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'>
+              <span className='h-1.5 w-1.5 rounded-full bg-amber-500' />
+              Unsaved
+            </span>
+          )}
+          <div className='ml-auto flex shrink-0 items-center gap-1.5'>
+            <Button asChild size='sm' variant='outline' className='h-8 gap-1.5 text-[12px]'>
+              <Link to={`/p/${page.slug}`}>
+                <ExternalLink className='h-3.5 w-3.5' />
+                View
+              </Link>
+            </Button>
             <Button
               size='sm'
+              // Idle save reads as an inert outline control — a disabled solid
+              // primary is white-on-pale-cyan and barely legible.
+              variant={dirty ? 'default' : 'outline'}
+              className='h-8 gap-1.5 text-[12px]'
               disabled={!dirty || saveMut.isPending}
               onClick={() => saveMut.mutate()}
             >
-              {saveMut.isPending ? 'Saving…' : 'Save Layout'}
+              {saveMut.isPending ? 'Saving…' : 'Save layout'}
             </Button>
           </div>
         </div>
 
-        {/* Palette */}
-        <div className='mt-3 flex items-center gap-1.5'>
-          <span className='mr-1 text-[11px] text-slate-400'>Add widget:</span>
+        {/* Widget palette */}
+        <div className='flex items-center gap-1 overflow-x-auto border-t border-slate-100 px-6 py-2 dark:border-border/60'>
+          <span className='mr-1.5 shrink-0 text-[11px] font-medium uppercase tracking-wider text-slate-400'>
+            Add
+          </span>
           {PALETTE.map((p) => {
             const Icon = p.icon
             return (
@@ -683,7 +826,8 @@ export function PageEditPage() {
                 key={p.type}
                 type='button'
                 onClick={() => addWidget(p.type)}
-                className='flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] font-medium text-slate-600 transition-colors hover:border-nvr-cyan/50 hover:text-nvr-cyan dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                title={`Add ${WIDGET_TYPE_LABELS[p.type]} widget`}
+                className='inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:border-nvr-cyan hover:bg-accent hover:text-nvr-navy dark:border-border dark:bg-card dark:text-slate-300 dark:hover:bg-accent dark:hover:text-nvr-cyan'
               >
                 <Icon className='h-3.5 w-3.5' />
                 {WIDGET_TYPE_LABELS[p.type]}
@@ -691,20 +835,28 @@ export function PageEditPage() {
             )
           })}
         </div>
-      </div>
+      </header>
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         {/* Canvas */}
-        <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+        <div className='flex flex-1 flex-col overflow-y-auto bg-slate-50 p-5 dark:bg-background'>
           {widgets.length === 0 && (
-            <div className='mb-4 rounded-lg border border-dashed border-slate-300 p-6 text-center text-[12.5px] text-slate-400 dark:border-slate-700'>
-              Add widgets from the palette above, then drag to position and resize from the corner
-              handle.
+            <div className='m-auto flex max-w-sm flex-col items-center gap-2 py-16 text-center'>
+              <span className='flex h-10 w-10 items-center justify-center rounded-lg border border-dashed border-slate-300 text-slate-400 dark:border-border'>
+                <Plus className='h-4 w-4' />
+              </span>
+              <p className='text-[13px] font-medium text-slate-600 dark:text-slate-300'>
+                No widgets yet
+              </p>
+              <p className='text-[12px] leading-relaxed text-slate-400'>
+                Pick a widget above to drop it on the canvas. Drag a widget by its header to move
+                it, and pull the corner handle to resize.
+              </p>
             </div>
           )}
           <div
             ref={canvasRef}
-            className='relative grid select-none'
+            className={cn('relative grid select-none', widgets.length === 0 && 'hidden')}
             style={{
               gridTemplateColumns: `repeat(${COLS}, minmax(0, 1fr))`,
               gridAutoRows: `${ROW_HEIGHT}px`,
@@ -721,10 +873,10 @@ export function PageEditPage() {
                   role='presentation'
                   onClick={() => setSelectedId(w.id)}
                   className={cn(
-                    'relative flex min-h-0 flex-col overflow-hidden rounded-xl border bg-white shadow-sm transition-shadow dark:bg-slate-950',
+                    'group/widget relative flex min-h-0 flex-col overflow-hidden rounded-lg border bg-white transition-colors dark:bg-card',
                     isSelected
-                      ? 'border-nvr-cyan ring-2 ring-nvr-cyan/30'
-                      : 'border-slate-200 hover:border-slate-300 dark:border-slate-800'
+                      ? 'border-nvr-cyan ring-2 ring-accent'
+                      : 'border-slate-200 hover:border-slate-300 dark:border-border dark:hover:border-slate-600'
                   )}
                   style={{
                     gridColumn: `${w.x + 1} / span ${w.w}`,
@@ -736,16 +888,23 @@ export function PageEditPage() {
                     onPointerDown={(e) => beginDrag(e, w, 'move')}
                     onPointerMove={onDragMove}
                     onPointerUp={endDrag}
-                    className='flex shrink-0 cursor-grab items-center gap-1.5 border-b border-slate-100 bg-slate-50/70 px-2.5 py-1.5 active:cursor-grabbing dark:border-slate-800 dark:bg-slate-900/60'
+                    className={cn(
+                      'flex shrink-0 cursor-grab items-center gap-1.5 border-b px-2 py-1 transition-colors active:cursor-grabbing',
+                      isSelected
+                        ? 'border-slate-100 bg-accent/60 dark:border-border'
+                        : 'border-slate-100 dark:border-border/70'
+                    )}
                     style={{ touchAction: 'none' }}
                   >
-                    <GripVertical className='h-3 w-3 text-slate-300' />
-                    <span className='truncate text-[11px] font-medium uppercase tracking-wide text-slate-400'>
+                    <GripVertical className='h-3 w-3 shrink-0 text-slate-300 transition-colors group-hover/widget:text-slate-400 dark:text-slate-600' />
+                    <span className='shrink-0 text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
                       {WIDGET_TYPE_LABELS[w.type]}
-                      {typeof w.config?.collection === 'string' && w.config.collection
-                        ? ` · ${w.config.collection}`
-                        : ''}
                     </span>
+                    {typeof w.config?.collection === 'string' && w.config.collection && (
+                      <span className='truncate font-mono text-[10.5px] text-slate-400 dark:text-slate-500'>
+                        {w.config.collection}
+                      </span>
+                    )}
                   </div>
 
                   {/* Live preview */}
@@ -758,16 +917,28 @@ export function PageEditPage() {
                     onPointerDown={(e) => beginDrag(e, w, 'resize')}
                     onPointerMove={onDragMove}
                     onPointerUp={endDrag}
-                    className='absolute bottom-0 right-0 z-10 h-4 w-4 cursor-nwse-resize'
+                    className={cn(
+                      'absolute bottom-0 right-0 z-10 h-5 w-5 cursor-nwse-resize p-1 opacity-0 transition-opacity group-hover/widget:opacity-100',
+                      isSelected && 'opacity-100'
+                    )}
                     style={{ touchAction: 'none' }}
                     title='Resize'
                   >
                     <svg
                       viewBox='0 0 12 12'
-                      className='h-full w-full text-slate-300'
+                      className={cn(
+                        'h-full w-full',
+                        isSelected ? 'text-nvr-cyan' : 'text-slate-400 dark:text-slate-500'
+                      )}
                       aria-hidden='true'
                     >
-                      <path d='M11 5v6H5z' fill='currentColor' />
+                      <path
+                        d='M11 1v10H1'
+                        fill='none'
+                        stroke='currentColor'
+                        strokeWidth='1.5'
+                        strokeLinecap='round'
+                      />
                     </svg>
                   </div>
                 </div>
@@ -775,7 +946,7 @@ export function PageEditPage() {
             })}
           </div>
           {widgets.length > 0 && (
-            <p className='mt-3 text-[11px] text-slate-400'>
+            <p className='mt-3 shrink-0 text-[11px] leading-relaxed text-slate-400'>
               Data widgets (table, KPI, activity) preview the last saved configuration — save to
               refresh their data.
             </p>
@@ -784,7 +955,7 @@ export function PageEditPage() {
 
         {/* Config panel */}
         {selected && (
-          <aside className='w-[320px] shrink-0 border-l border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950'>
+          <aside className='flex w-[320px] shrink-0 flex-col border-l border-slate-200 bg-white dark:border-border dark:bg-card'>
             <WidgetConfigPanel
               key={selected.id}
               widget={selected}

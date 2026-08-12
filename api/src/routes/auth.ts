@@ -5,7 +5,7 @@ import { buildLoginUrl, generateCodeVerifier, generateState, handleCallback } fr
 import { extractSamlIdentity, getSaml, samlEnabled } from '../auth/saml.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
-import { authenticate, requireAuth } from '../middleware/authenticate.js'
+import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
 import type { User } from '../types.js'
@@ -26,6 +26,24 @@ function resolveReturnTo(rawReturnTo: string | undefined): string {
     return allowedOrigins.has(parsed.origin) ? parsed.href : `${config.ADMIN_URL}/`
   } catch {
     return `${config.ADMIN_URL}/`
+  }
+}
+
+/**
+ * Where to send a login that failed or was interrupted.
+ *
+ * A failed login used to land on the admin's /login regardless of which app
+ * started it, so an EFP user who mistyped or was rejected by the IdP ended up
+ * on a different product with a message about contacting IT. The session's
+ * returnTo has already been through resolveReturnTo, so its origin is one of
+ * the configured allowed origins and is safe to reuse — that keeps people on
+ * the app they started from.
+ */
+function loginUrlFor(returnTo: string | undefined, query: string): string {
+  try {
+    return `${new URL(returnTo ?? config.ADMIN_URL).origin}/login${query}`
+  } catch {
+    return `${new URL(config.ADMIN_URL).origin}/login${query}`
   }
 }
 
@@ -134,7 +152,7 @@ export async function authRoutes(app: FastifyInstance) {
       if (user.totp_enabled) {
         req.session.userId = undefined
         req.session.pendingTotpUserId = user.id
-        return reply.redirect(`${config.ADMIN_URL}/login?totp=1`)
+        return reply.redirect(loginUrlFor(req.session.returnTo, '?totp=1'))
       }
 
       req.session.userId = user.id
@@ -147,7 +165,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.redirect(returnTo)
     } catch (err) {
       app.log.error({ err }, 'OIDC callback error')
-      return reply.redirect(`${config.ADMIN_URL}/login?error=auth_failed`)
+      return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
     }
   })
 
@@ -202,7 +220,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.redirect(url)
     } catch (err) {
       app.log.error({ err }, 'SAML login error')
-      return reply.redirect(`${config.ADMIN_URL}/login?error=auth_failed`)
+      return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
     }
   })
 
@@ -214,13 +232,13 @@ export async function authRoutes(app: FastifyInstance) {
         req.body as Record<string, string>
       )
       if (loggedOut || !profile) {
-        return reply.redirect(`${config.ADMIN_URL}/login?error=auth_failed`)
+        return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
       }
 
       const identity = extractSamlIdentity(profile)
       if (!identity.email) {
         app.log.error('SAML assertion missing email attribute')
-        return reply.redirect(`${config.ADMIN_URL}/login?error=auth_failed`)
+        return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
       }
 
       const user = (await findOrCreateFromOIDC(identity)) as UserWithTotp
@@ -229,7 +247,7 @@ export async function authRoutes(app: FastifyInstance) {
       if (user.totp_enabled) {
         req.session.userId = undefined
         req.session.pendingTotpUserId = user.id
-        return reply.redirect(`${config.ADMIN_URL}/login?totp=1`)
+        return reply.redirect(loginUrlFor(req.session.returnTo, '?totp=1'))
       }
 
       req.session.userId = user.id
@@ -242,7 +260,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.redirect(returnTo)
     } catch (err) {
       app.log.error({ err }, 'SAML callback error')
-      return reply.redirect(`${config.ADMIN_URL}/login?error=auth_failed`)
+      return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
     }
   })
 
@@ -360,7 +378,82 @@ export async function authRoutes(app: FastifyInstance) {
   app.get('/me', { preHandler: authenticate }, async (req, reply) => {
     // Never expose the TOTP secret
     const { totp_secret: _totpSecret, ...safeUser } = req.user as UserWithTotp
-    return reply.send({ data: { ...safeUser, is_admin: req.isAdmin } })
+    // preferences is stored as nvarchar JSON — clients expect an object
+    if (typeof safeUser.preferences === 'string') {
+      try {
+        safeUser.preferences = JSON.parse(safeUser.preferences)
+      } catch {
+        safeUser.preferences = null
+      }
+    }
+    return reply.send({
+      data: {
+        ...safeUser,
+        is_admin: req.isAdmin,
+        // Lets apps distinguish provisional accounts (e.g. an "Awaiting
+        // Authorization" default role for auto-created OIDC users) without
+        // admin access to the roles API.
+        role_name: req.userRole?.name ?? null,
+        app_access: req.userRole?.app_access ?? false,
+        ...(req.masqueradeAdminId ? { masquerade: true } : {})
+      }
+    })
+  })
+
+  // ─── Masquerade — admin views the app as another user ──────────────────────
+  // Issues a short-lived nvm_ Bearer token that authenticate() resolves to the
+  // target user. Redis-backed (masq:<token>), 4h TTL, activity-logged both ways.
+  app.post('/masquerade', { preHandler: requireAdmin }, async (req, reply) => {
+    const { user_id } = (req.body ?? {}) as { user_id?: string }
+    if (!user_id) return reply.code(400).send({ error: 'user_id is required' })
+    if (String(user_id).toLowerCase() === String(req.user!.id).toLowerCase()) {
+      return reply.code(400).send({ error: 'Cannot masquerade as yourself' })
+    }
+    const target = await db<User>('nivaro_users').where({ id: user_id, status: 'active' }).first()
+    if (!target) return reply.code(404).send({ error: 'User not found or inactive' })
+
+    const token = `nvm_${randomUUID()}`
+    await app.redis.setex(
+      `masq:${token}`,
+      4 * 3600,
+      JSON.stringify({ user_id: target.id, admin_id: req.user!.id })
+    )
+    await logActivity({
+      action: 'masquerade-start',
+      user: req.user!.id,
+      collection: 'nivaro_users',
+      item: String(target.id),
+      comment: `${target.first_name ?? ''} ${target.last_name ?? ''}`.trim() || target.email,
+      req
+    })
+    return reply.send({
+      data: {
+        token,
+        user: {
+          id: target.id,
+          first_name: target.first_name,
+          last_name: target.last_name,
+          email: target.email
+        }
+      }
+    })
+  })
+
+  app.delete('/masquerade', { preHandler: authenticate }, async (req, reply) => {
+    const authHeader = req.headers.authorization
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : ''
+    if (!token.startsWith('nvm_') || !req.masqueradeAdminId) {
+      return reply.code(400).send({ error: 'Not a masquerade session' })
+    }
+    await app.redis.del(`masq:${token}`)
+    await logActivity({
+      action: 'masquerade-stop',
+      user: req.masqueradeAdminId,
+      collection: 'nivaro_users',
+      item: String(req.user!.id),
+      req
+    })
+    return reply.send({ ok: true })
   })
 
   // Update last page

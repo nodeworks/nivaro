@@ -1,4 +1,5 @@
 import type { NivaroClient } from '@nivaro/sdk'
+import { applyValidationRule } from '../lib/validation-rules'
 import type React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOptionalNivaroClient } from '../context'
@@ -100,55 +101,6 @@ function shallowEqual(a: Record<string, unknown>, b: Record<string, unknown>): b
   return true
 }
 
-function applyValidationRule(
-  rule: { type: string; value?: unknown; message?: string },
-  value: unknown,
-  label: string
-): string | null {
-  if (isEmpty(value) && rule.type !== 'required') return null
-  switch (rule.type) {
-    case 'required':
-      return isEmpty(value) ? (rule.message ?? `${label} is required`) : null
-    case 'min': {
-      const min = Number(rule.value)
-      if (typeof value === 'number' && value < min)
-        return rule.message ?? `${label} must be at least ${min}`
-      if (typeof value === 'string' && value.length < min)
-        return rule.message ?? `${label} must be at least ${min} characters`
-      return null
-    }
-    case 'max': {
-      const max = Number(rule.value)
-      if (typeof value === 'number' && value > max)
-        return rule.message ?? `${label} must be at most ${max}`
-      if (typeof value === 'string' && value.length > max)
-        return rule.message ?? `${label} must be at most ${max} characters`
-      return null
-    }
-    case 'regex': {
-      try {
-        const re = new RegExp(String(rule.value))
-        return re.test(String(value)) ? null : (rule.message ?? `${label} is invalid`)
-      } catch {
-        return null
-      }
-    }
-    case 'email': {
-      const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-      return re.test(String(value)) ? null : (rule.message ?? `${label} must be a valid email`)
-    }
-    case 'url': {
-      try {
-        new URL(String(value))
-        return null
-      } catch {
-        return rule.message ?? `${label} must be a valid URL`
-      }
-    }
-    default:
-      return null
-  }
-}
 
 export function useNivaroForm(
   collection: string,

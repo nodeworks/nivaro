@@ -279,9 +279,26 @@ export function FieldRow({
       })()
     if (parentVal != null && parentVal !== '') {
       if (!cascadeFilter) cascadeFilter = {}
-      cascadeFilter[rule.filter_column] = rule.filter_is_m2m
-        ? { _some: { id: { _eq: parentVal } } }
-        : { _eq: parentVal }
+      // value_map: parent value → derived filter value(s); arrays become _in
+      let filterVal: unknown = parentVal
+      if (rule.value_map && typeof rule.value_map === 'object') {
+        filterVal = rule.value_map[String(parentVal)] ?? rule.value_map_default ?? parentVal
+      }
+      const clause = Array.isArray(filterVal)
+        ? { _in: filterVal }
+        : { _eq: filterVal }
+      if (rule.filter_is_m2m) {
+        cascadeFilter[rule.filter_column] = { _some: { id: clause } }
+      } else if (rule.filter_column.includes('.')) {
+        // Dotted path: fold right into nested relation filter; wrap the first
+        // hop in _some when it traverses a to-many alias (filter_via_many).
+        const segs = rule.filter_column.split('.')
+        let nested: Record<string, unknown> = clause
+        for (let i = segs.length - 1; i >= 1; i--) nested = { [segs[i]]: nested }
+        cascadeFilter[segs[0]] = rule.filter_via_many ? { _some: nested } : nested
+      } else {
+        cascadeFilter[rule.filter_column] = clause
+      }
       cascadeParentLabels.push(titleCase(String(rule.parent_field)))
       cascadeParentFieldKeys.push(String(rule.parent_field))
     } else {
@@ -399,24 +416,38 @@ export function FieldRow({
             </Tooltip>
           </TooltipProvider>
         )}
-        {cascadeFilter && Object.keys(cascadeFilter).length > 0 && cascadeParentLabels.length > 0 && (
-          <TooltipProvider delayDuration={100}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type='button'
-                  onClick={flashParentFields}
-                  className='inline-flex items-center text-slate-300 hover:text-nvr-cyan dark:text-slate-600 dark:hover:text-nvr-cyan transition-colors'
-                >
-                  <SlidersHorizontal className='h-3 w-3' />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side='top' className='text-[12px]'>
-                Filtered by {cascadeParentLabels.join(', ')} — click to highlight
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )}
+        {cascadeRules.length > 0 && (() => {
+          // Icon always shows for a cascade-configured field: cyan when the
+          // filter is actively narrowing options, gray when parents are unset.
+          const cascadeActive =
+            !!cascadeFilter && Object.keys(cascadeFilter).length > 0 && cascadeParentLabels.length > 0
+          const allParentLabels = cascadeRules.map((r) => titleCase(String(r.parent_field)))
+          return (
+            <TooltipProvider delayDuration={100}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type='button'
+                    onClick={flashParentFields}
+                    className={cn(
+                      'inline-flex items-center transition-colors',
+                      cascadeActive
+                        ? 'text-nvr-cyan hover:text-nvr-cyan'
+                        : 'text-slate-300 hover:text-nvr-cyan dark:text-slate-600 dark:hover:text-nvr-cyan'
+                    )}
+                  >
+                    <SlidersHorizontal className='h-3 w-3' />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side='top' className='text-[12px]'>
+                  {cascadeActive
+                    ? `Filtered by ${cascadeParentLabels.join(', ')} — click to highlight`
+                    : `Options filter by ${allParentLabels.join(', ')} once set`}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )
+        })()}
       </div>}
       {swapContent ?? <div className={cn(locked && 'cursor-not-allowed')}><div className={cn(locked && 'pointer-events-none opacity-60', error && 'ring-1 ring-red-400 rounded-md')}>
         {autoIdPattern ? (

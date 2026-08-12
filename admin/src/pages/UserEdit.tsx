@@ -2,8 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Copy, Eye, EyeOff, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { DelegationCard } from '@/components/delegation-card'
+import { UserScopesCard } from '@/components/user-scopes-card'
 import { JourneyTrail } from '@/components/journey-trail'
 import { RevisionsPanel } from '@/components/revisions-panel'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -40,6 +42,7 @@ function initials(user: User): string {
 export function UserEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const goBack = useGoBack('/users')
   const queryClient = useQueryClient()
   const { user: currentUser } = useAuth()
   const [showToken, setShowToken] = useState(false)
@@ -112,6 +115,7 @@ export function UserEditPage() {
           <div className='flex items-center gap-2 text-[13px]'>
             <Link
               to='/users'
+              onClick={(e) => { e.preventDefault(); goBack() }}
               className='flex items-center gap-1 text-slate-400 transition-colors hover:text-slate-700'
             >
               <ArrowLeft className='h-3.5 w-3.5' />
@@ -347,6 +351,7 @@ export function UserEditPage() {
 
             {/* Delegation (own save, outside the profile form) */}
             <DelegationCard user={user} mode='admin' />
+            <UserScopesCard userId={user.id} />
 
             {/* Journey trail (admin-only API) */}
             {currentUser?.is_admin && id && <JourneyTrail userId={id} />}

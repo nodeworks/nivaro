@@ -4,6 +4,14 @@ import { db } from '../db/index.js'
 // Re-export types needed by extension context and executor
 export interface FlowData extends Record<string, unknown> {}
 
+export interface FlowTraceStep {
+  key: string
+  name: string
+  type: string
+  status: 'resolve' | 'reject' | 'async'
+  preview?: unknown
+}
+
 export interface ExecutionContext {
   flowId: string
   flowName: string
@@ -11,6 +19,11 @@ export interface ExecutionContext {
   payload: Record<string, unknown>
   log: FastifyBaseLogger
   userId?: string
+  /** Test mode: side-effect ops (mail/notification/webhook/external-api/custom)
+   *  render but don't send — a preview lands in the trace instead. */
+  dryRun?: boolean
+  /** When provided, executeFlow appends one step per executed operation. */
+  trace?: FlowTraceStep[]
 }
 
 export type OpResult = { status: 'resolve' | 'reject'; output: FlowData }

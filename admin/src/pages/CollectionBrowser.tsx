@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import {
   Check,
+  ChevronDown,
   ChevronRight,
   ChevronsUpDown,
   Download,
@@ -55,6 +56,12 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -122,19 +129,42 @@ interface AtRiskCondition {
   value?: string
 }
 
+const RULE_COLORS = ['red', 'amber', 'yellow', 'green', 'blue', 'purple'] as const
+const RULE_DOT: Record<string, string> = {
+  red: 'bg-red-500', amber: 'bg-amber-500', yellow: 'bg-yellow-400',
+  green: 'bg-emerald-500', blue: 'bg-sky-500', purple: 'bg-purple-500'
+}
+const RULE_TEXT: Record<string, string> = {
+  red: 'text-red-500', amber: 'text-amber-500', yellow: 'text-yellow-500',
+  green: 'text-emerald-500', blue: 'text-sky-500', purple: 'text-purple-500'
+}
+const RULE_ROW: Record<string, string> = {
+  red: 'bg-red-50 dark:bg-red-950/20', amber: 'bg-amber-50 dark:bg-amber-950/20',
+  yellow: 'bg-yellow-50 dark:bg-yellow-950/20', green: 'bg-emerald-50 dark:bg-emerald-950/20',
+  blue: 'bg-sky-50 dark:bg-sky-950/20', purple: 'bg-purple-50 dark:bg-purple-950/20'
+}
+const RULE_CHIP: Record<string, string> = {
+  red: 'border-red-300 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400',
+  amber: 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-400',
+  yellow: 'border-yellow-300 bg-yellow-50 text-yellow-700 dark:border-yellow-900 dark:bg-yellow-950/30 dark:text-yellow-400',
+  green: 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-400',
+  blue: 'border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-400',
+  purple: 'border-purple-300 bg-purple-50 text-purple-700 dark:border-purple-900 dark:bg-purple-950/30 dark:text-purple-400'
+}
+
 interface AtRiskRule {
   id: number
   collection: string
   name: string
   conditions: AtRiskCondition[]
-  highlight_color: 'red' | 'amber'
+  highlight_color: string
   is_active: boolean
 }
 
 interface AtRiskHit {
   at_risk: boolean
   rule: string
-  color: 'red' | 'amber'
+  color: string
 }
 
 interface SlaBatchEntry {
@@ -251,6 +281,40 @@ export function CollectionBrowserPage() {
   } | null>(null)
   const { data: settings } = useSettings()
   const limit = settings?.collection_page_size ?? 25
+
+  // Grouped layouts with a slug feed the New-item layout menu (opt-in via slug);
+  // role-conditioned layouts only show for matching roles, admins see all.
+  const { data: collectionLayouts } = useQuery({
+    queryKey: ['admin-create-layout-options', collection],
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            id: number
+            name: string
+            slug: string | null
+            create_label: string | null
+            create_hidden: boolean | number
+            is_active: boolean | number
+            layout_type: string
+            conditions: { role_ids?: string[] } | null
+          }[]
+        }>('/collection-layouts', { params: { collection } })
+        .then((r) => r.data.data),
+    enabled: !!collection,
+    staleTime: 60_000
+  })
+  const newItemLayouts = useMemo(() => {
+    const visible = (collectionLayouts ?? []).filter((l) => {
+      if (l.layout_type !== 'grouped') return false
+      const roleIds = l.conditions?.role_ids
+      if (!roleIds?.length) return true
+      return isAdmin || (user?.role != null && roleIds.includes(user.role))
+    })
+    const options = visible.filter((l) => l.slug && !l.is_active && !l.create_hidden)
+    if (!options.length) return null
+    return { active: visible.find((l) => l.is_active) ?? null, options }
+  }, [collectionLayouts, isAdmin, user?.role])
 
   const conditions = activeFilters.map((f) => ({
     path: f.path,
@@ -660,10 +724,7 @@ export function CollectionBrowserPage() {
           return (
             <span title={`At risk: ${hit.rule}`} className='inline-flex'>
               <Flag
-                className={cn(
-                  'h-3.5 w-3.5',
-                  hit.color === 'amber' ? 'text-amber-500' : 'text-red-500'
-                )}
+                className={cn('h-3.5 w-3.5', RULE_TEXT[hit.color] ?? 'text-red-500')}
               />
             </span>
           )
@@ -925,12 +986,41 @@ export function CollectionBrowserPage() {
                 e.target.value = ''
               }}
             />
-            {!colMeta?.singleton && (
-              <Button size='sm' onClick={() => navigate(`/collections/${collection}/new`)}>
-                <Plus className='mr-1.5 h-3.5 w-3.5' />
-                New item
-              </Button>
-            )}
+            {!colMeta?.singleton &&
+              (newItemLayouts ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size='sm'>
+                      <Plus className='mr-1.5 h-3.5 w-3.5' />
+                      New item
+                      <ChevronDown className='ml-1.5 h-3.5 w-3.5' />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align='end'>
+                    <DropdownMenuItem onClick={() => navigate(`/collections/${collection}/new`)}>
+                      {newItemLayouts.active?.create_label ??
+                        newItemLayouts.active?.name ??
+                        'Default layout'}
+                      <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>
+                        default
+                      </span>
+                    </DropdownMenuItem>
+                    {newItemLayouts.options.map((l) => (
+                      <DropdownMenuItem
+                        key={l.id}
+                        onClick={() => navigate(`/collections/${collection}/new?layout=${l.slug}`)}
+                      >
+                        {l.create_label ?? l.name}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <Button size='sm' onClick={() => navigate(`/collections/${collection}/new`)}>
+                  <Plus className='mr-1.5 h-3.5 w-3.5' />
+                  New item
+                </Button>
+              ))}
             {!colMeta?.singleton && collection && (
               <ImportFromFileButton collection={collection} onParsed={handleImportParsed} />
             )}
@@ -1096,7 +1186,12 @@ export function CollectionBrowserPage() {
                   setSort(state.sort ?? '')
                   if (state.columns && state.columns.length > 0) {
                     const allKeys = allNonHiddenFields.map((f) => f.field)
-                    const valid = state.columns.filter((k) => allKeys.includes(k))
+                    // Views saved by CollectionBrowserView may store
+                    // {key, label} entries (renamed columns) — take the key.
+                    const keys = state.columns.map((c) =>
+                      typeof c === 'string' ? c : ((c as { key?: string })?.key ?? '')
+                    )
+                    const valid = keys.filter((k) => allKeys.includes(k))
                     if (valid.length > 0) setDisplayColumns(valid)
                   }
                   setAiResult(null)
@@ -1255,9 +1350,7 @@ export function CollectionBrowserPage() {
             rowClassName={(row) => {
               const hit = atRiskMap?.[String(row.id ?? '')]
               if (!hit) return undefined
-              return hit.color === 'amber'
-                ? 'bg-amber-50 dark:bg-amber-950/20'
-                : 'bg-red-50 dark:bg-red-950/20'
+              return RULE_ROW[hit.color] ?? RULE_ROW.red
             }}
             selectedIds={selectedIds}
             onSelectionChange={setSelectedIds}
@@ -1515,7 +1608,7 @@ interface RuleDraft {
   id: number | null
   name: string
   conditions: AtRiskCondition[]
-  color: 'red' | 'amber'
+  color: string
   active: boolean
 }
 
@@ -1658,10 +1751,7 @@ function AtRiskRulesPanel({
           {(rules ?? []).map((rule) => (
             <li key={rule.id} className='flex items-center gap-2 py-1.5'>
               <span
-                className={cn(
-                  'h-2 w-2 shrink-0 rounded-full',
-                  rule.highlight_color === 'amber' ? 'bg-amber-500' : 'bg-red-500'
-                )}
+                className={cn('h-2 w-2 shrink-0 rounded-full', RULE_DOT[rule.highlight_color] ?? 'bg-red-500')}
               />
               <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
                 {rule.name}
@@ -1691,7 +1781,7 @@ function AtRiskRulesPanel({
                             value: c.value === undefined ? '' : String(c.value)
                           }))
                         : [{ ...EMPTY_CONDITION }],
-                    color: rule.highlight_color === 'amber' ? 'amber' : 'red',
+                    color: rule.highlight_color || 'red',
                     active: rule.is_active
                   })
                 }
@@ -1812,7 +1902,7 @@ function AtRiskRulesPanel({
           <div className='flex flex-wrap items-center gap-3'>
             <div className='flex items-center gap-1'>
               <Label className='text-[11px] text-slate-500'>Highlight</Label>
-              {(['red', 'amber'] as const).map((color) => (
+              {RULE_COLORS.map((color) => (
                 <button
                   key={color}
                   type='button'
@@ -1820,18 +1910,11 @@ function AtRiskRulesPanel({
                   className={cn(
                     'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] capitalize transition-colors',
                     draft.color === color
-                      ? color === 'amber'
-                        ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-400'
-                        : 'border-red-300 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400'
+                      ? RULE_CHIP[color]
                       : 'border-slate-200 bg-white text-slate-500 dark:border-border dark:bg-background'
                   )}
                 >
-                  <span
-                    className={cn(
-                      'h-2 w-2 rounded-full',
-                      color === 'amber' ? 'bg-amber-500' : 'bg-red-500'
-                    )}
-                  />
+                  <span className={cn('h-2 w-2 rounded-full', RULE_DOT[color])} />
                   {color}
                 </button>
               ))}

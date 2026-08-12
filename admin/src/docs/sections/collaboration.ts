@@ -461,6 +461,29 @@ export const collabNotificationsCenter: DocSection = {
         'Click a notification to open its collection/item; it is marked read automatically.',
         '"Mark all read" clears the unread counter everywhere (bell included).'
       ]
+    },
+    { type: 'h3', text: 'Sending a notification (user to user)' },
+    {
+      type: 'p',
+      text: 'Any authenticated user can send an in-app notification to another active user — built for chat @mentions and similar frontend features. The sender is always the authenticated caller, and delivery rides the full channel stack: the inbox row, a live Socket.io `notification:new` event, and browser push for users with a registered subscription.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/notifications
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "recipient": "<user uuid>",
+  "subject": "Jane mentioned you in General chat",
+  "message": "optional body, max 500 chars",
+  "collection": "workflows",   // optional record link
+  "item": "123"                // optional record link
+}
+
+→ 201 { "ok": true }
+→ 400 { "error": "recipient and subject are required" }
+→ 404 { "error": "Recipient not found" }`
     }
   ]
 }
@@ -582,6 +605,68 @@ POST /api/message-actions/callback
         'View deep-links into the admin UI item editor.',
         'Signatures use HMAC-SHA256 with a server-side secret; expired or tampered tokens are rejected.'
       ]
+    }
+  ]
+}
+
+export const collabChat: DocSection = {
+  id: 'collab-chat',
+  label: 'Chat & Channels',
+  content: [
+    { type: 'h1', id: 'collab-chat', text: 'Chat & Channels' },
+    {
+      type: 'p',
+      text: 'Team chat has four kinds of room, and each decides who can see it differently. Everything goes through `/api/chat` — the underlying `chat_messages` collection is deliberately not readable through the items API or GraphQL, because "who may read this row" depends on the room, which a per-collection policy cannot express.'
+    },
+    {
+      type: 'table',
+      head: ['Room', 'Key', 'Who can see it'],
+      rows: [
+        ['General', '`global`', 'Every authenticated user.'],
+        ['Direct message', '`dm:<A>:<B>`', 'The two participants. Admins included? No — admin access is data access, not other people’s conversations.'],
+        [
+          'Channel',
+          '`ch:<key>`',
+          'Open: anyone may find and join. Role: that role, plus anyone explicitly added. Private: explicit members only, and it is not listed to anyone else.'
+        ],
+        [
+          'Record',
+          '`<prefix>:<token>`',
+          'Whoever can read the underlying record — resolved live, so row-level filters and user scopes apply automatically.'
+        ]
+      ]
+    },
+    { type: 'h3', text: 'Sidebar vs directory' },
+    {
+      type: 'p',
+      text: 'The sidebar lists rooms you belong to, plus General and your DMs. Open channels you have not joined live under the Browse tab, which is what keeps the list usable when an instance has hundreds of channels. Joining, leaving and muting are per-user; a muted room still shows its count but stops driving the unread badge and the notification sound.'
+    },
+    { type: 'h3', text: 'Managing a channel' },
+    {
+      type: 'p',
+      text: 'The gear in a channel’s header opens its settings: rename, set a topic, change who can see it, add or remove members, or archive it. Only the channel’s creator or an admin can edit — everyone else sees a read-only summary of what kind of room they are in and who else is in it. Adding a member to a private channel grants access immediately; removing one revokes it just as fast.'
+    },
+    { type: 'h3', text: 'Record conversations' },
+    {
+      type: 'p',
+      text: 'A record room needs no setup beyond registering its prefix: `wf:CR26-76773` resolves through the room-type registry to `workflows` matched on `workflow_id`. Nobody is enrolled in these — visibility is recomputed from the record each time, so a scope change takes effect immediately and there is no membership list to maintain across tens of thousands of records. An unregistered prefix is refused rather than treated as a free-form room.'
+    },
+    {
+      type: 'warn',
+      text: 'Mentions notify only people who can actually see the room and have not muted it — the server checks both before sending, so mentioning someone in a record room they cannot read notifies nobody.'
+    },
+    {
+      type: 'note',
+      text: 'Live delivery is per room: the client joins `chat:<room>` over Socket.io and the server emits only there. Hosts that do not wire the socket adapter still work — the room list and messages poll instead.'
+    },
+    { type: 'h2', id: 'chat-admin-ui', text: 'Chat in the admin UI' },
+    {
+      type: 'p',
+      text: 'The admin hosts the full chat surface in two places: a slide-over Team panel opened from the chat icon in the sidebar footer (unread badge, chirp on new messages), and a full-page workspace at `/chat` (Home → Chat) with the room list, channel browser and Online tab beside the open conversation. Both share the same data layer — mentions, typing indicators, read receipts, mute, join/leave and channel creation all work identically. `/chat?room=<key>` deep-links straight into a room.'
+    },
+    {
+      type: 'p',
+      text: 'Admins manage the entity-room registry from the "Record rooms" button on `/chat`: register a prefix + collection + match field, or deactivate an existing type. Entity ids mentioned in messages render as links into the collection browser when a matching room type is registered.'
     }
   ]
 }

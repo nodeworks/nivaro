@@ -3,7 +3,7 @@ import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
 import { callExternalApi } from './external-apis.js'
-import { sendRawMail } from './mail.js'
+import { renderMailTemplate, sendRawMail } from './mail.js'
 
 interface FlowOperation {
   id: string
@@ -18,6 +18,14 @@ interface FlowOperation {
   reject: string | null
 }
 
+export interface FlowTraceStep {
+  key: string
+  name: string
+  type: string
+  status: 'resolve' | 'reject' | 'async'
+  preview?: unknown
+}
+
 export interface ExecutionContext {
   flowId: string
   flowName: string
@@ -25,6 +33,11 @@ export interface ExecutionContext {
   payload: Record<string, unknown>
   log: FastifyBaseLogger
   userId?: string
+  /** Test mode: side-effect ops (mail/notification/webhook/external-api/custom)
+   *  render but don't send — a preview lands in the trace instead. */
+  dryRun?: boolean
+  /** When provided, executeFlow appends one step per executed operation. */
+  trace?: FlowTraceStep[]
 }
 
 type FlowData = Record<string, unknown>
@@ -32,12 +45,17 @@ type FlowData = Record<string, unknown>
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getByPath(obj: unknown, path: string): unknown {
-  return path.split('.').reduce((cur, key) => {
-    if (cur !== null && cur !== undefined && typeof cur === 'object') {
-      return (cur as Record<string, unknown>)[key]
-    }
-    return undefined
-  }, obj)
+  const keys = path.split('.')
+  let cur: unknown = obj
+  for (let i = 0; i < keys.length; i++) {
+    if (cur === null || cur === undefined || typeof cur !== 'object') return undefined
+    // Literal dotted keys win — item-read results store relation paths flat
+    // ('creator.email'), so check the remaining path as one key first.
+    const rest = keys.slice(i).join('.')
+    if (rest in (cur as Record<string, unknown>)) return (cur as Record<string, unknown>)[rest]
+    cur = (cur as Record<string, unknown>)[keys[i]]
+  }
+  return cur
 }
 
 function resolveTemplate(template: string, data: FlowData): string {
@@ -178,12 +196,33 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
   const opts = parseOpts(op)
   const to = resolveTemplate((opts.to as string) ?? '', data)
   const subject = resolveTemplate((opts.subject as string) ?? op.name, data)
-  const body = resolveTemplate((opts.body as string) ?? '', data)
+  // Optional named mail template (core or extension-registered): rendered with
+  // the FULL flow data as its context, replacing the plain-text body. A plain
+  // body still gets the branded chrome via sendRawMail's auto-wrap.
+  const templateName = typeof opts.template === 'string' ? opts.template.trim() : ''
+  let body = resolveTemplate((opts.body as string) ?? '', data)
+  if (templateName) {
+    try {
+      body = await renderMailTemplate(templateName, data as Record<string, unknown>)
+    } catch (err) {
+      ctx.log.warn(
+        { err, flowId: ctx.flowId, key: op.key, template: templateName },
+        'Mail template failed to render, falling back to body'
+      )
+    }
+  }
   const from = opts.from ? resolveTemplate(opts.from as string, data) : undefined
 
   if (!to) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'Mail operation missing recipient, skipping')
     return { status: 'reject' as const, output: { ...data, $error: 'missing recipient' } }
+  }
+
+  if (ctx.dryRun) {
+    return {
+      status: 'resolve' as const,
+      output: { ...data, [`$preview_${op.key}`]: { op: 'mail', to, from, subject, body } }
+    }
   }
 
   try {
@@ -205,6 +244,16 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
   if (!recipient) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'Notification missing recipient, skipping')
     return { status: 'reject' as const, output: { ...data, $error: 'missing recipient' } }
+  }
+
+  if (ctx.dryRun) {
+    return {
+      status: 'resolve' as const,
+      output: {
+        ...data,
+        [`$preview_${op.key}`]: { op: 'notification', recipient, subject, message }
+      }
+    }
   }
 
   try {
@@ -239,6 +288,16 @@ async function runWebhook(op: FlowOperation, data: FlowData, ctx: ExecutionConte
   const isAsync = (opts.async as boolean) ?? false
   const headers: Record<string, string> = { 'content-type': 'application/json', ...extraHeaders }
   const body = method !== 'GET' ? JSON.stringify(data) : undefined
+
+  if (ctx.dryRun) {
+    return {
+      status: 'resolve' as const,
+      output: {
+        ...data,
+        [`$preview_${op.key}`]: { op: 'webhook', url, method, headers, body: body ?? null }
+      }
+    }
+  }
 
   const doFetch = async () => {
     const res = await fetch(url, { method, headers, body })
@@ -342,7 +401,9 @@ async function runRunFlow(op: FlowOperation, data: FlowData, ctx: ExecutionConte
     trigger: 'run-flow',
     payload: { ...data, ...payloadOverride },
     log: ctx.log,
-    userId: ctx.userId
+    userId: ctx.userId,
+    dryRun: ctx.dryRun,
+    trace: ctx.trace
   }
 
   if (!wait) {
@@ -395,6 +456,25 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
       }
     }
 
+    if (ctx.dryRun) {
+      return {
+        status: 'resolve' as const,
+        output: {
+          ...data,
+          [`$preview_${op.key}`]: {
+            op: 'external-api',
+            mode: 'predefined',
+            api_id: apiId,
+            endpoint: callOpts.endpoint ?? null,
+            path: callOpts.path ?? null,
+            method: callOpts.method ?? null,
+            query: callOpts.query ?? null,
+            body: callOpts.body ?? null
+          }
+        }
+      }
+    }
+
     try {
       const result = await callExternalApi(apiId, callOpts)
       status = result.status
@@ -436,6 +516,22 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
         }
       } catch {
         init.body = resolved
+      }
+    }
+
+    if (ctx.dryRun) {
+      return {
+        status: 'resolve' as const,
+        output: {
+          ...data,
+          [`$preview_${op.key}`]: {
+            op: 'external-api',
+            mode: 'custom',
+            url,
+            method: init.method ?? 'GET',
+            body: typeof init.body === 'string' ? init.body : null
+          }
+        }
       }
     }
 
@@ -481,6 +577,67 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
   return { status: 'resolve' as const, output: { ...data, [resultKey]: response } }
 }
 
+const COLLECTION_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+async function runItemRead(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
+  const opts = parseOpts(op)
+  const collection = resolveTemplate((opts.collection as string) ?? '', data)
+  let id = resolveTemplate((opts.id as string) ?? '', data)
+  const fields = (Array.isArray(opts.fields) ? opts.fields : []).filter(
+    (f): f is string => typeof f === 'string' && f.length > 0
+  )
+  const resultKey = (opts.result_key as string) || 'record'
+
+  if (!collection || !COLLECTION_RE.test(collection) || /^nivaro_/i.test(collection)) {
+    ctx.log.warn({ flowId: ctx.flowId, key: op.key, collection }, 'item-read: invalid target')
+    return { status: 'reject' as const, output: { ...data, $error: 'item-read: invalid target' } }
+  }
+
+  // Filter mode: instead of a direct id, locate the first row matching
+  // templated column equalities (e.g. { workflow: '{{item}}' }).
+  if (!id && opts.filter && typeof opts.filter === 'object') {
+    try {
+      let q = db(collection)
+      for (const [col, tpl] of Object.entries(opts.filter as Record<string, string>)) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(col)) continue
+        const val = resolveTemplate(String(tpl), data)
+        if (val === '')
+          return {
+            status: 'reject' as const,
+            output: { ...data, $error: 'item-read: unresolved filter' }
+          }
+        q = q.where(col, val)
+      }
+      const row = (await q.orderBy('id', 'desc').first('id')) as { id: unknown } | undefined
+      if (!row) {
+        return { status: 'reject' as const, output: { ...data, $error: 'item-read: no match' } }
+      }
+      id = String(row.id)
+    } catch (err) {
+      ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'item-read filter failed')
+      return { status: 'reject' as const, output: { ...data, $error: 'item-read filter failed' } }
+    }
+  }
+
+  if (!id) {
+    ctx.log.warn({ flowId: ctx.flowId, key: op.key, collection }, 'item-read: no id')
+    return { status: 'reject' as const, output: { ...data, $error: 'item-read: no id' } }
+  }
+
+  try {
+    // Reuses the workflow-condition record fetcher: raw row + dotted M2O paths
+    // (up to 3 segments) resolved as flat 'a.b.c' keys on the result.
+    const { fetchRecordForConditions } = await import('./workflow-conditions.js')
+    const ruleSet = JSON.stringify(fields.map((f) => ({ field: f, op: 'nnull' })))
+    const record = await fetchRecordForConditions(collection, id, [ruleSet])
+    ctx.log.debug({ flowId: ctx.flowId, key: op.key, collection, id }, 'item-read executed')
+    return { status: 'resolve' as const, output: { ...data, [resultKey]: record } }
+  } catch (err) {
+    ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'item-read failed')
+    return { status: 'reject' as const, output: { ...data, $error: 'item-read failed' } }
+  }
+}
+
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 async function runOperation(
@@ -507,10 +664,21 @@ async function runOperation(
       return runRunFlow(op, data, ctx)
     case 'external-api':
       return runExternalApi(op, data, ctx)
+    case 'item-read':
+      return runItemRead(op, data, ctx)
     default: {
       const { getOp } = await import('../flows/registry.js')
       const customOp = getOp(op.type)
       if (customOp) {
+        if (ctx.dryRun) {
+          return {
+            status: 'resolve' as const,
+            output: {
+              ...data,
+              [`$preview_${op.key}`]: { op: op.type, note: 'custom op skipped in dry run' }
+            }
+          }
+        }
         try {
           return await customOp.handler(parseOpts(op), data, ctx)
         } catch (err) {
@@ -543,18 +711,10 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
     'Flow execution started'
   )
 
-  try {
-    await db('nivaro_activity').insert({
-      action: 'flow_trigger',
-      user: ctx.userId ?? null,
-      timestamp: new Date(),
-      collection: 'nivaro_flows',
-      item: ctx.flowId,
-      comment: `trigger:${ctx.trigger}`
-    })
-  } catch {
-    /* non-fatal */
-  }
+  // No activity row here: the nivaro_flow_runs insert below records the same
+  // flow/trigger/user with status, duration and output on top, and the Run
+  // History panel reads from it. Duplicating it into nivaro_activity added ~20
+  // rows/day of pure noise (same precedent as inbound flow webhooks).
 
   const runId = randomUUID()
   const startMs = Date.now()
@@ -599,6 +759,7 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
             ctx.log.warn({ err, flowId: ctx.flowId, key: op.key }, 'Async op failed')
           )
           ctx.log.debug({ flowId: ctx.flowId, key: op.key }, 'Operation fired async, continuing')
+          ctx.trace?.push({ key: op.key, name: op.name, type: op.type, status: 'async' })
           currentId = op.resolve ?? null
         } else {
           const result = await runOperation(op, d, ctx)
@@ -607,6 +768,13 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
             { flowId: ctx.flowId, key: op.key, status: result.status },
             'Operation executed'
           )
+          ctx.trace?.push({
+            key: op.key,
+            name: op.name,
+            type: op.type,
+            status: result.status,
+            preview: result.output[`$preview_${op.key}`]
+          })
           currentId = result.status === 'resolve' ? op.resolve : op.reject
         }
       }
@@ -623,6 +791,13 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
       for (const op of operations) {
         const result = await runOperation(op, data, ctx)
         data = result.output
+        ctx.trace?.push({
+          key: op.key,
+          name: op.name,
+          type: op.type,
+          status: result.status,
+          preview: result.output[`$preview_${op.key}`]
+        })
         if (result.status === 'reject') break
       }
     }

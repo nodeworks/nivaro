@@ -5,7 +5,7 @@ import { logActivity } from '../services/activity.js'
 
 // ─── Predefined scopes ────────────────────────────────────────────────────────
 
-export const BLACKOUT_SCOPES = ['mdsi', 'flows', 'pipeline', 'workflow'] as const
+export const BLACKOUT_SCOPES = ['delivery', 'flows', 'pipeline', 'workflow'] as const
 export type BlackoutScope = (typeof BLACKOUT_SCOPES)[number]
 
 // ─── Types ──────────────────────────────────────────────────────────────────

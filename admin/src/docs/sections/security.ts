@@ -188,6 +188,53 @@ DELETE /api/api-keys/:id    # revoke immediately`
   ]
 }
 
+export const securityMasquerade: DocSection = {
+  id: 'masquerade',
+  label: 'Masquerade',
+  content: [
+    { type: 'h1', id: 'masquerade', text: 'Masquerade (View as User)' },
+    {
+      type: 'p',
+      text: 'Admins can mint a short-lived masquerade token that authenticates as another user — server-side, so RBAC, row-level security, and activity logging all genuinely run as the target. This is how support and admins reproduce exactly what a user sees.'
+    },
+    { type: 'h3', text: 'How it works' },
+    {
+      type: 'ul',
+      items: [
+        '`POST /api/auth/masquerade` (admin only) with `{ "user_id": "<uuid>" }` returns an `nvm_`-prefixed Bearer token backed by Redis with a 4-hour TTL.',
+        'The `authenticate` middleware and the Socket.io `auth` handler both resolve `nvm_` tokens to the target user; API requests and realtime events behave identically to a real session.',
+        '`GET /api/auth/me` adds `"masquerade": true` while a masquerade token is in use, so frontends can show a banner.',
+        '`DELETE /api/auth/masquerade` (called with the `nvm_` token) revokes it immediately; otherwise it expires on its own.',
+        'Start and stop are activity-logged as `masquerade-start` / `masquerade-stop` against the issuing admin.'
+      ]
+    },
+    { type: 'h3', text: 'API' },
+    {
+      type: 'pre',
+      code: `POST /api/auth/masquerade
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{ "user_id": "57DA6884-E9BD-4A66-8F74-FFA6EC8B8B59" }
+
+→ 200 { "data": { "token": "nvm_...", "user": { "id": "...", "first_name": "...", "last_name": "...", "email": "..." } } }
+→ 400 { "error": "user_id is required" }        // or "Cannot masquerade as yourself"
+→ 403 { "error": "Forbidden" }                  // caller is not an admin
+→ 404 { "error": "User not found or inactive" }
+
+DELETE /api/auth/masquerade
+Authorization: Bearer <nvm_-token>
+
+→ 200 { "ok": true }
+→ 400 { "error": "Not a masquerade session" }`
+    },
+    {
+      type: 'warn',
+      text: 'A masquerade token carries the target user’s full permissions — including admin, if the target is an admin. Tokens live in Redis under `masq:<token>`; restarting Redis revokes all active masquerades.'
+    }
+  ]
+}
+
 export const securityScim: DocSection = {
   id: 'scim',
   label: 'SCIM 2.0 Provisioning',
@@ -386,6 +433,56 @@ GET    /api/retention/:id/runs    // run history`
     {
       type: 'note',
       text: 'All retention endpoints require admin access. The dry-run endpoint returns affected_count and up to 50 sample user IDs without writing any changes.'
+    }
+  ]
+}
+
+export const securityUserScopes: DocSection = {
+  id: 'user-scopes',
+  label: 'User Scopes',
+  content: [
+    { type: 'h1', id: 'user-scopes', text: 'User Scopes' },
+    {
+      type: 'p',
+      text: 'User Scopes give each user per-dimension DEFAULT filter values (seed their filter UIs) and RESTRICTED values (server-enforced row scoping — the user can only see rows matching the picked values). A scope dimension names a target collection (e.g. a "Zone" dimension targeting `divisions`); how it filters every other business collection is auto-resolved from the relations graph — including junction-table hops — so new collections are covered the moment a relation to the target exists.'
+    },
+    { type: 'h3', text: 'Dimensions' },
+    {
+      type: 'ul',
+      items: [
+        'Manage dimensions at **Settings → User Scopes** (`/scope-dimensions`): name, label, target collection, display field.',
+        'The **coverage table** previews how the dimension resolves per collection: `self` (the target itself), `auto` (derived route via relations), `override` (pinned field path), `excluded`, or `unreachable`.',
+        '`strict` — restricted users are DENIED (zero rows) on collections the dimension cannot reach, instead of being left unfiltered.',
+        '`overrides` pin an explicit field path per collection; `exclusions` opt a collection out entirely.'
+      ]
+    },
+    { type: 'h3', text: 'Per-user values' },
+    {
+      type: 'ul',
+      items: [
+        'Admins set both modes on the user page (Scopes card): defaults and restrictions.',
+        'Users self-serve their own DEFAULTS from their profile — restrictions are admin-only.',
+        'Values are stored as target-collection record ids, so renaming a zone never breaks a scope.'
+      ]
+    },
+    { type: 'h3', text: 'Enforcement and seeding' },
+    {
+      type: 'ul',
+      items: [
+        'Restrictions are enforced server-side on every item read (list + single) and on native report widgets, alongside role row filters. Admins bypass.',
+        'Defaults are never enforced — they pre-select filter chips and quick filters (collection browser, reports) the first time a surface loads; restricted values also narrow the visible filter options.',
+        'Raw-SQL surfaces (custom queries, stored procedures, query-type report widgets, queue caches) cannot be dimension-filtered — treat those as curated, not scoped.'
+      ]
+    },
+    { type: 'h3', text: 'API' },
+    {
+      type: 'pre',
+      code: `GET  /api/scope-dimensions                  # registry (authenticated)
+POST/PATCH/DELETE /api/scope-dimensions[/:id]  # admin
+GET  /api/scope-dimensions/:id/coverage     # live per-collection route preview (admin)
+GET  /api/users/me/scopes                   # caller's dimensions + defaults + restricted
+PUT  /api/users/me/scopes/:dimension        # self-edit defaults only { values: [ids] }
+GET/PUT /api/user-scopes/:userId            # admin: both modes { dimension, mode, values }`
     }
   ]
 }

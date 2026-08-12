@@ -5,6 +5,7 @@ import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
+import { useStaleTip } from './RelationCombobox'
 
 type Item = Record<string, unknown>
 type ColMeta = { display_template?: string | null; relations?: Array<{ many_field?: string; one_collection?: string; junction_field?: string | null }> }
@@ -170,6 +171,7 @@ export function RelationGroupedCombobox({
     triggerLabel = [gl, ol].filter(Boolean).join(' — ') || null
   }
   const showLoader = !!value && isLoadingSelected && !selectedItem
+  const staleTip = useStaleTip(isStale)
 
   return (
     <div ref={rootRef} className='relative'>
@@ -177,6 +179,7 @@ export function RelationGroupedCombobox({
         type='button'
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
+        {...staleTip.bind}
         className={cn(
           'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-slate-50 disabled:opacity-50',
           isStale ? 'border-amber-300 dark:border-amber-600' : 'border-input'
@@ -192,12 +195,7 @@ export function RelationGroupedCombobox({
         )}
         <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
       </button>
-      {isStale && (
-        <p className='mt-0.5 flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400'>
-          <AlertTriangle className='h-3 w-3 shrink-0' />
-          Current value is not an available option — clear to pick another
-        </p>
-      )}
+      {staleTip.tip}
 
       {open && (
         <div className='absolute z-50 mt-1 min-w-[280px] w-max max-w-[420px] rounded-md border border-border bg-popover shadow-md'>

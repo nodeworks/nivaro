@@ -14,6 +14,8 @@ declare module 'fastify' {
     apiKeyScopes?: ApiKeyScope[]
     /** Numeric per-minute rate limit configured on the API key, if any. */
     apiKeyRateLimit?: number | null
+    /** Set when the request authenticated via a masquerade token (nvm_*) — the admin who issued it. */
+    masqueradeAdminId?: string
   }
 }
 
@@ -159,6 +161,24 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
       // Named API key
       if (token.startsWith('nvk_')) {
         await authenticateApiKey(req, token)
+        return
+      }
+      // Masquerade token — admin-issued, Redis-backed, resolves to the target user
+      if (token.startsWith('nvm_')) {
+        const raw = await req.server.redis.get(`masq:${token}`)
+        if (!raw) throw httpError(401, 'Masquerade session expired')
+        let payload: { user_id?: string; admin_id?: string }
+        try {
+          payload = JSON.parse(raw) as { user_id?: string; admin_id?: string }
+        } catch {
+          throw httpError(401, 'Masquerade session expired')
+        }
+        const user = await db<User>('nivaro_users')
+          .where({ id: payload.user_id, status: 'active' })
+          .first()
+        if (!user) throw httpError(401, 'Masqueraded user is not active')
+        await hydrateRole(req, user)
+        req.masqueradeAdminId = payload.admin_id
         return
       }
       // Static user token

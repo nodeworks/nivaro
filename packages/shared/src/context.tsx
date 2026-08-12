@@ -119,6 +119,10 @@ export type NavigationContextValue = {
    *  skip navigation entirely — open your own modal/drawer instead). Checked
    *  before itemUrl/navigate. */
   openItem?: (target: ItemLinkTarget) => boolean | undefined
+  /** Route for a user's profile page (UserChip "View profile"). Absent = the
+   *  admin shape `/users/:id`; return null = host has no such page, the
+   *  action is hidden instead of navigating into the host's 404 fallback. */
+  userUrl?: (userId: string) => string | null
 }
 
 export const NavigationContext = createContext<NavigationContextValue>({
@@ -156,12 +160,28 @@ export function useItemNavigation(): {
 export type ParentDraftContextValue = {
   draft: Record<string, unknown>
   collection: string
+  /** Fields the USER changed this session — cascade clear_on_unavailable only
+   *  auto-clears when one of its parents is here; a record loaded with a
+   *  stale saved value keeps it (the picker flags it amber instead). */
+  dirtyFields?: ReadonlySet<string>
 }
 
 export const ParentDraftContext = createContext<ParentDraftContextValue | null>(null)
 
 export function useParentDraft(): ParentDraftContextValue | null {
   return useContext(ParentDraftContext)
+}
+
+// ─── Grid-level re-import trigger ─────────────────────────────────────────────
+// ItemEditForm provides its reimport parse handler so a grid configured with
+// `options.upload_template` can render its own upload button. Null on new
+// records and outside ItemEditForm.
+export type ReimportHandler = (result: unknown, template: unknown) => void
+
+export const ReimportHandlerContext = createContext<ReimportHandler | null>(null)
+
+export function useReimportHandler(): ReimportHandler | null {
+  return useContext(ReimportHandlerContext)
 }
 
 // ─── Drill-down ────────────────────────────────────────────────────────────────

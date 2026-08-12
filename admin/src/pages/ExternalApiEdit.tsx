@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -80,6 +81,7 @@ export function ExternalApiEditPage() {
   const { id } = useParams<{ id: string }>()
   const isNew = id === 'new'
   const navigate = useNavigate()
+  const goBack = useGoBack('/external-apis')
   const queryClient = useQueryClient()
   const [form, setForm] = useState<FormState>(EMPTY)
 
@@ -163,7 +165,7 @@ export function ExternalApiEditPage() {
     <div className='p-8 max-w-3xl'>
       <button
         type='button'
-        onClick={() => navigate('/external-apis')}
+        onClick={goBack}
         className='mb-4 flex items-center gap-1.5 text-[13px] text-slate-500 hover:text-slate-900'
       >
         <ArrowLeft className='h-4 w-4' />

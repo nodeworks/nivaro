@@ -5,7 +5,7 @@ import { logActivity } from '../services/activity.js'
 import type { QueueRow } from '../services/queues.js'
 import { canReadQueue } from './queues.js'
 
-const VALID_EVENT_TYPES = ['create', 'update', 'delete', 'all'] as const
+const VALID_EVENT_TYPES = ['create', 'update', 'delete', 'all', 'workflow_transition'] as const
 type EventType = (typeof VALID_EVENT_TYPES)[number]
 
 const VALID_DIGEST_FREQUENCIES = ['instant', 'daily', 'weekly'] as const
@@ -20,6 +20,13 @@ function serialize(row: Record<string, unknown>) {
     event_type: row.event_type,
     filter_field: row.filter_field ?? null,
     filter_value: row.filter_value ?? null,
+    filters: (() => {
+      try {
+        return row.filters ? JSON.parse(row.filters as string) : null
+      } catch {
+        return null
+      }
+    })(),
     label: row.label ?? null,
     is_active: !!row.is_active,
     digest_frequency: (row.digest_frequency as string | undefined) ?? 'instant',
@@ -61,6 +68,7 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       label?: string
       is_active?: boolean
       digest_frequency?: string
+      filters?: Array<{ field: string; op: string; value?: unknown }>
     }
 
     const hasCollection = !!body.collection?.trim()
@@ -138,6 +146,10 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
         filter_field,
         filter_value,
         label: body.label?.trim() || null,
+        filters:
+          !hasQueue && Array.isArray(body.filters) && body.filters.length
+            ? JSON.stringify(body.filters)
+            : null,
         is_active: body.is_active !== false,
         digest_frequency: (body.digest_frequency as DigestFrequency | undefined) ?? 'instant',
         created_at: new Date()
@@ -166,6 +178,7 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       filter_value?: string | null
       is_active?: boolean
       digest_frequency?: string
+      filters?: Array<{ field: string; op: string; value?: unknown }> | null
     }
 
     const existing = await db('nivaro_notification_subscriptions')
@@ -196,6 +209,10 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
     if ('filter_value' in body) updates.filter_value = body.filter_value?.trim() || null
     if ('is_active' in body) updates.is_active = !!body.is_active
     if ('digest_frequency' in body) updates.digest_frequency = body.digest_frequency
+    if ('filters' in body) {
+      updates.filters =
+        Array.isArray(body.filters) && body.filters.length ? JSON.stringify(body.filters) : null
+    }
 
     if (Object.keys(updates).length === 0) {
       return reply.send({ data: serialize(existing) })

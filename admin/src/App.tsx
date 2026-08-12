@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, useRef } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { Toaster } from 'sonner'
 import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
@@ -28,6 +28,9 @@ const ActivityDetailPage = lazy(() =>
 )
 const CollectionBrowserPage = lazy(() =>
   import('@/pages/CollectionBrowser').then((m) => ({ default: m.CollectionBrowserPage }))
+)
+const CollectionBrowserV2Page = lazy(() =>
+  import('@/pages/CollectionBrowserV2').then((m) => ({ default: m.CollectionBrowserV2Page }))
 )
 const CollectionsPage = lazy(() =>
   import('@/pages/Collections').then((m) => ({ default: m.CollectionsPage }))
@@ -92,6 +95,7 @@ const CustomQueryEditPage = lazy(() =>
   import('@/pages/CustomQueryEdit').then((m) => ({ default: m.CustomQueryEditPage }))
 )
 const AskPage = lazy(() => import('@/pages/Ask').then((m) => ({ default: m.AskPage })))
+const ChatPage = lazy(() => import('@/pages/Chat').then((m) => ({ default: m.ChatPage })))
 const ScheduledReportsPage = lazy(() =>
   import('@/pages/ScheduledReports').then((m) => ({ default: m.ScheduledReportsPage }))
 )
@@ -143,6 +147,9 @@ const ProfilePage = lazy(() => import('@/pages/Profile').then((m) => ({ default:
 const WorkspacesPage = lazy(() =>
   import('@/pages/Workspaces').then((m) => ({ default: m.WorkspacesPage }))
 )
+const ScopeDimensionsPage = lazy(() =>
+  import('@/pages/ScopeDimensions').then((m) => ({ default: m.ScopeDimensionsPage }))
+)
 const PresencePage = lazy(() =>
   import('@/pages/Presence').then((m) => ({ default: m.PresencePage }))
 )
@@ -164,16 +171,17 @@ const NotificationSubscriptionsPage = lazy(() =>
   }))
 )
 const ImportsPage = lazy(() => import('@/pages/Imports').then((m) => ({ default: m.ImportsPage })))
-const ImportJobPage = lazy(() =>
-  import('@/pages/ImportJobPage').then((m) => ({ default: m.ImportJobPage }))
-)
 const SlaRulesPage = lazy(() =>
   import('@/pages/SlaRules').then((m) => ({ default: m.SlaRulesPage }))
 )
 const TeamThroughputPage = lazy(() =>
   import('@/pages/TeamThroughput').then((m) => ({ default: m.TeamThroughputPage }))
 )
+const AccessAuditPage = lazy(() => import('@/pages/AccessAudit'))
 const AlertsPage = lazy(() => import('@/pages/Alerts').then((m) => ({ default: m.AlertsPage })))
+const AlertManagerPage = lazy(() =>
+  import('@/pages/AlertManager').then((m) => ({ default: m.AlertManager }))
+)
 const AlertEditPage = lazy(() =>
   import('@/pages/AlertEdit').then((m) => ({ default: m.AlertEditPage }))
 )
@@ -225,12 +233,7 @@ const RetentionPoliciesPage = lazy(() =>
   import('@/pages/RetentionPolicies').then((m) => ({ default: m.RetentionPoliciesPage }))
 )
 const IssuesPage = lazy(() => import('@/pages/Issues').then((m) => ({ default: m.IssuesPage })))
-const WorkflowsPage = lazy(() =>
-  import('@/pages/Workflows').then((m) => ({ default: m.WorkflowsPage }))
-)
-const WorkflowEditPage = lazy(() =>
-  import('@/pages/WorkflowEdit').then((m) => ({ default: m.WorkflowEditPage }))
-)
+
 const WidgetsPage = lazy(() => import('@/pages/Widgets').then((m) => ({ default: m.WidgetsPage })))
 const PersistedQueriesPage = lazy(() =>
   import('@/pages/PersistedQueries').then((m) => ({ default: m.PersistedQueriesPage }))
@@ -239,6 +242,13 @@ const ErpSubmissionsPage = lazy(() =>
   import('@/pages/ErpSubmissions').then((m) => ({ default: m.ErpSubmissionsPage }))
 )
 const TasksPage = lazy(() => import('@/pages/Tasks').then((m) => ({ default: m.TasksPage })))
+// /workflows/:id was the standalone workflow-template editor (parallel
+// branches); it now lives inside the pipeline editor.
+function WorkflowTemplateRedirect() {
+  const { id } = useParams<{ id: string }>()
+  return <Navigate to={`/pipelines/${id ?? ''}`} replace />
+}
+
 const ApprovalsPage = lazy(() =>
   import('@/pages/Approvals').then((m) => ({ default: m.ApprovalsPage }))
 )
@@ -364,7 +374,8 @@ export default function App() {
                 >
                   <Route index element={<DashboardPage />} />
                   <Route path='collections' element={<CollectionsPage />} />
-                  <Route path='collections/:collection' element={<CollectionBrowserPage />} />
+                  <Route path='collections/:collection' element={<CollectionBrowserV2Page />} />
+                  <Route path='collections/:collection/classic' element={<CollectionBrowserPage />} />
                   <Route path='collections/:collection/:id' element={<ItemEditPage />} />
                   <Route path='users' element={<UsersPage />} />
                   <Route path='users/:id' element={<UserEditPage />} />
@@ -405,10 +416,12 @@ export default function App() {
                   <Route path='rules/:id' element={<RuleEditPage />} />
                   <Route path='dashboards' element={<DashboardsPage />} />
                   <Route path='ask' element={<AskPage />} />
+                  <Route path='chat' element={<ChatPage />} />
                   <Route path='dashboards/:id' element={<DashboardEditPage />} />
                   <Route path='reports' element={<ReportsPage />} />
                   <Route path='profile' element={<ProfilePage />} />
                   <Route path='workspaces' element={<WorkspacesPage />} />
+                  <Route path='scope-dimensions' element={<ScopeDimensionsPage />} />
                   <Route path='presence' element={<PresencePage />} />
                   <Route path='analytics' element={<AnalyticsPage />} />
                   <Route path='submission-forms' element={<SubmissionFormsPage />} />
@@ -419,10 +432,12 @@ export default function App() {
                     element={<NotificationSubscriptionsPage />}
                   />
                   <Route path='imports' element={<ImportsPage />} />
-                  <Route path='imports/:id' element={<ImportJobPage />} />
+                  <Route path='imports/:id' element={<ImportsPage />} />
                   <Route path='sla-rules' element={<SlaRulesPage />} />
                   <Route path='team-throughput' element={<TeamThroughputPage />} />
+                  <Route path='access-audit' element={<AccessAuditPage />} />
                   <Route path='alerts' element={<AlertsPage />} />
+                  <Route path='alert-manager' element={<AlertManagerPage />} />
                   <Route path='alerts/:id' element={<AlertEditPage />} />
                   <Route path='hierarchies' element={<HierarchiesPage />} />
                   <Route path='hierarchies/:id' element={<HierarchiesPage />} />
@@ -445,8 +460,10 @@ export default function App() {
                   <Route path='data-quality' element={<DataQualityPage />} />
                   <Route path='privacy-retention' element={<RetentionPoliciesPage />} />
                   <Route path='issues' element={<IssuesPage />} />
-                  <Route path='workflows' element={<WorkflowsPage />} />
-                  <Route path='workflows/:id' element={<WorkflowEditPage />} />
+                  {/* The workflow template editor merged into /pipelines —
+                      old links land on the unified editor. */}
+                  <Route path='workflows' element={<Navigate to='/pipelines' replace />} />
+                  <Route path='workflows/:id' element={<WorkflowTemplateRedirect />} />
                   <Route path='widgets' element={<WidgetsPage />} />
                   <Route path='persisted-queries' element={<PersistedQueriesPage />} />
                   <Route path='erp-submissions' element={<ErpSubmissionsPage />} />

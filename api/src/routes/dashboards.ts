@@ -269,7 +269,9 @@ export async function dashboardsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'type and title are required' })
       }
 
-      const VALID_TYPES = ['count', 'sum', 'avg', 'latest', 'bar_chart', 'line_chart']
+      // 'report_preset' = a Report Studio catalog widget rendered client-side
+      // (field holds the preset id; the /data endpoint is never used for it)
+      const VALID_TYPES = ['count', 'sum', 'avg', 'latest', 'bar_chart', 'line_chart', 'report_preset']
       if (!VALID_TYPES.includes(type)) {
         return reply.code(400).send({ error: `type must be one of: ${VALID_TYPES.join(', ')}` })
       }
@@ -339,7 +341,7 @@ export async function dashboardsRoutes(app: FastifyInstance) {
       const { type, title, collection, field, filters, col, row, width, height } = req.body
 
       if (type !== undefined) {
-        const VALID_TYPES = ['count', 'sum', 'avg', 'latest', 'bar_chart', 'line_chart']
+        const VALID_TYPES = ['count', 'sum', 'avg', 'latest', 'bar_chart', 'line_chart', 'report_preset']
         if (!VALID_TYPES.includes(type))
           return reply.code(400).send({ error: 'Invalid widget type' })
         updates.type = type

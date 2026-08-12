@@ -62,6 +62,61 @@ async function loadUser(id: string | null) {
   return (await db('nivaro_users').where({ id, status: 'active' }).first()) ?? null
 }
 
+/**
+ * Resolve a condition's metric field against widget data. Field syntax:
+ *   value | row_count                — the generic metrics
+ *   <col> | sum:<col>                — SUM of a numeric column across rows
+ *   avg:<col> | max:<col> | min:<col>
+ *   tile:<label>                     — a kpi_group tile by label (case-insensitive)
+ */
+export function deriveAlertMetric(
+  field: string,
+  data: {
+    value?: number | null
+    row_count?: number
+    rows?: Array<Record<string, unknown>>
+    series?: Array<{ dim?: string; value: number }>
+    tiles?: Array<{ label: string; value?: number | null }>
+  }
+): number {
+  const series = data.series
+  const tiles = data.tiles
+  const rows = data.rows
+  if (field === 'value') {
+    return Number(
+      data.value ??
+        (series ? series.reduce((a, b) => a + (Number(b.value) || 0), 0) : null) ??
+        (tiles ? Number(tiles[0]?.value ?? 0) : 0)
+    )
+  }
+  if (field === 'row_count') {
+    return Number(data.row_count ?? series?.length ?? rows?.length ?? tiles?.length ?? 0)
+  }
+  const m = /^(sum|avg|max|min|tile):(.+)$/.exec(field)
+  const agg = m ? m[1] : 'sum'
+  const col = m ? m[2] : field
+  if (agg === 'tile') {
+    const t = tiles?.find((x) => x.label.toLowerCase() === col.toLowerCase())
+    return Number(t?.value ?? 0)
+  }
+  const vals: number[] = []
+  if (rows) for (const r of rows) vals.push(Number(r[col]) || 0)
+  else if (series) {
+    // charts: match a series dim by name, else nothing
+    for (const sv of series) if (String(sv.dim) === col) vals.push(Number(sv.value) || 0)
+  }
+  if (vals.length === 0) {
+    // tile label fallback (unprefixed)
+    const t = tiles?.find((x) => x.label.toLowerCase() === col.toLowerCase())
+    if (t) return Number(t.value ?? 0)
+    return 0
+  }
+  if (agg === 'avg') return vals.reduce((a, b) => a + b, 0) / vals.length
+  if (agg === 'max') return Math.max(...vals)
+  if (agg === 'min') return Math.min(...vals)
+  return vals.reduce((a, b) => a + b, 0)
+}
+
 export async function runReportAlertChecks(app: FastifyInstance): Promise<{
   evaluated: number
   fired: number
@@ -84,17 +139,25 @@ export async function runReportAlertChecks(app: FastifyInstance): Promise<{
       const dateRange =
         parseJson<{ date_range?: DateRange }>(report?.global_filters)?.date_range ?? null
 
+      const alertFilters =
+        parseJson<Array<{ field: string; values: Array<string | number>; labels?: string[] }>>(
+          (alert as { filters?: string | null }).filters ?? null
+        ) ?? []
       const data = await resolveWidgetData(
         creator,
         { type: widget.type, collection: widget.collection, config: parseJson(widget.config) },
-        dateRange
+        dateRange,
+        alertFilters
       )
-      const metrics: Record<string, number> = {
-        value: Number(data.value ?? 0),
-        row_count: Number(data.row_count ?? 0)
-      }
+      // Derive alertable metrics for EVERY widget type: kpi → value/row_count
+      // directly; charts → series sum + bucket count; kpi_group → first tile
+      // value + tile count; tables → row count.
       const conditions =
         parseJson<Array<{ field: string; op: string; value: number }>>(alert.conditions) ?? []
+      const metrics: Record<string, number> = {}
+      for (const c of conditions) {
+        metrics[c.field] = deriveAlertMetric(c.field, data as never)
+      }
       const isFiring =
         conditions.length > 0 &&
         conditions.every((c) => evaluate(c.op, metrics[c.field] ?? 0, c.value))

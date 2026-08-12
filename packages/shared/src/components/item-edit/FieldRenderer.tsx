@@ -1,21 +1,75 @@
 import { ExternalLink } from 'lucide-react'
 import { useContext } from 'react'
-import { fieldDrilldownConfig, RelationPathDataContext, useDrilldown } from '../../context'
+import { fieldDrilldownConfig, RelationPathDataContext, useDrilldown , useParentDraft } from '../../context'
 import { Badge } from '../ui/badge'
 import { formatDisplayValue } from './GroupSection'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
+import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
+import { CatalogPickerField, type CatalogModeConfig } from './CatalogPickerField'
 import { FilePickerField, FileM2MField } from './FilePickerField'
+import { choiceLabel } from '../../lib/utils'
 import { parseJson, toLocalDatetime } from './helpers'
 import { InlineGridField } from './InlineGridField'
 import { InlineTableField } from './InlineTableField'
 import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
+import { QuickCreateButton, type QuickCreateConfig } from './QuickCreateButton'
 import { RelationCombobox } from './RelationCombobox'
 import { RelationGroupedCombobox } from './RelationGroupedCombobox'
 import { RichTextEditor } from './RichTextEditor'
 import type { CMSField, CMSRelation } from './types'
+
+function resolveTokenNode(
+  node: unknown,
+  draft: Record<string, unknown> | undefined,
+  itemId: string
+): { v: unknown; ok: boolean } {
+  if (typeof node === 'string' && node.startsWith('$parent.')) {
+    const key = node.slice('$parent.'.length)
+    const val = key === 'id' ? (itemId && itemId !== 'new' ? itemId : undefined) : draft?.[key]
+    return { v: val, ok: val !== undefined && val !== null && val !== '' }
+  }
+  if (Array.isArray(node)) {
+    const out: unknown[] = []
+    for (const item of node) {
+      const r = resolveTokenNode(item, draft, itemId)
+      if (!r.ok) return { v: out, ok: false }
+      out.push(r.v)
+    }
+    return { v: out, ok: true }
+  }
+  if (node && typeof node === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      const r = resolveTokenNode(v, draft, itemId)
+      if (!r.ok) return { v: out, ok: false }
+      out[k] = r.v
+    }
+    return { v: out, ok: true }
+  }
+  return { v: node, ok: true }
+}
+
+export function resolveOptionFilterTokens(
+  filter: Record<string, unknown> | undefined,
+  draft: Record<string, unknown> | undefined,
+  itemId: string
+): Record<string, unknown> | undefined {
+  if (!filter) return undefined
+  // Top-level _and: prune entries whose tokens are unresolved
+  if (Array.isArray(filter._and)) {
+    const kept: unknown[] = []
+    for (const entry of filter._and) {
+      const r = resolveTokenNode(entry, draft, itemId)
+      if (r.ok) kept.push(r.v)
+    }
+    return kept.length > 0 ? { _and: kept } : undefined
+  }
+  const r = resolveTokenNode(filter, draft, itemId)
+  return r.ok ? (r.v as Record<string, unknown>) : undefined
+}
 
 export function FieldRenderer({
   field,
@@ -43,6 +97,7 @@ export function FieldRenderer({
   prefillParentId?: string
 }) {
   const drill = useDrilldown()
+  const parentDraftForFilters = useParentDraft()
   const relationPathData = useContext(RelationPathDataContext)
   const iface = field.interface ?? ''
   const isRelIface =
@@ -81,6 +136,31 @@ export function FieldRenderer({
       }
     }
     const m2oDrillCfg = drill && value != null && value !== '' ? fieldDrilldownConfig(field) : null
+    const m2oOpts = parseJson<{
+      picker_facets?: Array<{ field: string; label?: string; sort?: string; filter?: Record<string, unknown> }>
+      option_filter?: Record<string, unknown>
+      option_sort?: string
+      auto_select_single?: boolean
+      quick_create?: QuickCreateConfig
+    }>(field.options)
+    // Per-field option filter (options.option_filter) merged with any active
+    // cascade filter — curation of the picker's option set, not security.
+    // String values may be '$parent.<field>' tokens resolved from the parent
+    // record draft ('$parent.id' = the record id). A top-level _and entry whose
+    // tokens are unresolved is PRUNED (EFP semantics: clauses apply only when
+    // their driving value is set); any other unresolved shape drops the filter.
+    const staticFilter = resolveOptionFilterTokens(
+      m2oOpts?.option_filter && typeof m2oOpts.option_filter === 'object'
+        ? m2oOpts.option_filter
+        : undefined,
+      parentDraftForFilters?.draft,
+      itemId
+    )
+    const effectiveFilter = staticFilter
+      ? cascadeFilter
+        ? { _and: [staticFilter, cascadeFilter] }
+        : staticFilter
+      : cascadeFilter
     const combobox = (
       <RelationCombobox
         collection={m2oRel.one_collection}
@@ -88,29 +168,63 @@ export function FieldRenderer({
         onChange={onChange}
         disabled={field.readonly}
         placeholder={field.placeholder ?? undefined}
-        extraFilter={cascadeFilter}
+        extraFilter={effectiveFilter}
+        autoSelectSingle={m2oOpts?.auto_select_single === true}
+        optionSort={
+          typeof m2oOpts?.option_sort === 'string' && m2oOpts.option_sort
+            ? m2oOpts.option_sort
+            : undefined
+        }
         requiredParent={requiredParentLabel ?? undefined}
+        facets={
+          Array.isArray(m2oOpts?.picker_facets)
+            ? m2oOpts.picker_facets.map((f) => ({
+                ...f,
+                // Facet filters support the same '$parent.<field>' tokens (and
+                // _and clause pruning) as option_filter, resolved from the same
+                // parent draft — keeps facet option lists in sync with the main
+                // option query's eligibility clauses.
+                filter:
+                  f.filter && typeof f.filter === 'object'
+                    ? resolveOptionFilterTokens(f.filter, parentDraftForFilters?.draft, itemId)
+                    : undefined
+              }))
+            : undefined
+        }
       />
     )
-    if (!m2oDrillCfg) return combobox
+    const quickCreate =
+      m2oOpts?.quick_create && Array.isArray(m2oOpts.quick_create.fields) && !field.readonly
+        ? m2oOpts.quick_create
+        : null
+    if (!m2oDrillCfg && !quickCreate) return combobox
     return (
       <div className='flex items-center gap-1.5'>
         <div className='min-w-0 flex-1'>{combobox}</div>
-        <button
-          type='button'
-          title='Open detail panel'
-          onClick={() =>
-            drill?.open({
-              collection: m2oRel.one_collection as string,
-              itemId: String(value),
-              layoutId: m2oDrillCfg.layout_id,
-              width: m2oDrillCfg.width
-            })
-          }
-          className='shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-[#00ceff] dark:hover:bg-slate-800'
-        >
-          <ExternalLink className='h-3.5 w-3.5' />
-        </button>
+        {quickCreate && (
+          <QuickCreateButton
+            targetCollection={m2oRel.one_collection}
+            config={quickCreate}
+            onCreated={(id) => onChange(id)}
+          />
+        )}
+        {m2oDrillCfg && (
+          <button
+            type='button'
+            title='Open detail panel'
+            onClick={() =>
+              drill?.open({
+                collection: m2oRel.one_collection as string,
+                itemId: String(value),
+                layoutId: m2oDrillCfg.layout_id,
+                width: m2oDrillCfg.width
+              })
+            }
+            className='shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-[#00ceff] dark:hover:bg-slate-800'
+          >
+            <ExternalLink className='h-3.5 w-3.5' />
+          </button>
+        )}
       </div>
     )
   }
@@ -138,7 +252,11 @@ export function FieldRenderer({
       const fOpts = parseJson<{ allow_upload?: boolean; allow_pick?: boolean; pending_save?: boolean }>(field.options)
       return <FileM2MField relation={m2mRel} parentId={itemId} allRelations={relations} disabled={field.readonly} allowUpload={fOpts?.allow_upload !== false} allowPick={fOpts?.allow_pick !== false} pendingSave={fOpts?.pending_save === true} />
     }
-    const fieldOpts = parseJson<{ max_values?: number }>(field.options)
+    const fieldOpts = parseJson<{ max_values?: number; option_sort?: string }>(field.options)
+    const m2mOptionSort =
+      typeof fieldOpts?.option_sort === 'string' && fieldOpts.option_sort
+        ? fieldOpts.option_sort
+        : undefined
     if (fieldOpts?.max_values === 1) {
       return (
         <M2MSingleSelectCombobox
@@ -146,6 +264,7 @@ export function FieldRenderer({
           parentId={itemId}
           allRelations={relations}
           extraFilter={cascadeFilter}
+          optionSort={m2mOptionSort}
           requiredParent={requiredParentLabel ?? undefined}
           onCountChange={onCountChange}
           readOnly={displayOnly}
@@ -158,6 +277,7 @@ export function FieldRenderer({
         parentId={itemId}
         allRelations={relations}
         extraFilter={cascadeFilter}
+        optionSort={m2mOptionSort}
         requiredParent={requiredParentLabel ?? undefined}
         onCountChange={onCountChange}
       drilldown={fieldDrilldownConfig(field)} />
@@ -375,8 +495,51 @@ export function FieldRenderer({
         const uniqueBy = Array.isArray(opts.unique_by) ? opts.unique_by as string[] : undefined
         const sortField = typeof opts.sort_field === 'string' && opts.sort_field ? opts.sort_field : undefined
         const sortDir = opts.sort_dir === 'desc' ? 'desc' as const : 'asc' as const
+        const sectionGroupBy =
+          typeof opts.section_group_by === 'string' && opts.section_group_by.includes('.')
+            ? opts.section_group_by
+            : undefined
+        const rowFilter =
+          opts.row_filter && typeof opts.row_filter === 'object'
+            ? (opts.row_filter as Record<string, unknown>)
+            : undefined
+        const allocateDrawer =
+          opts.allocate_drawer && typeof opts.allocate_drawer === 'object'
+            ? (opts.allocate_drawer as import('./InlineTableField').AllocateDrawerConfig)
+            : undefined
+        const autoAllocate =
+          opts.auto_allocate && typeof opts.auto_allocate === 'object'
+            ? (opts.auto_allocate as import('./InlineTableField').AutoAllocateConfig)
+            : undefined
+        const uploadTemplate =
+          typeof opts.upload_template === 'string' && opts.upload_template
+            ? opts.upload_template
+            : undefined
+        const rowDefaults =
+          opts.row_defaults && typeof opts.row_defaults === 'object'
+            ? (opts.row_defaults as Record<string, unknown>)
+            : undefined
+        const submissionErrors =
+          opts.submission_errors === true
+            ? {}
+            : opts.submission_errors && typeof opts.submission_errors === 'object'
+              ? (opts.submission_errors as { line_field?: string })
+              : undefined
+        const catalogMode = opts.catalog_mode as CatalogModeConfig | undefined
+        if (catalogMode?.item_field && catalogMode?.section_by) {
+          return (
+            <CatalogPickerField
+              relatedCollection={o2mCol}
+              manyField={o2mManyField}
+              parentId={itemId}
+              parentCollection={collection}
+              config={catalogMode}
+              readOnly={field.readonly}
+            />
+          )
+        }
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} columnPresets={columnPresets} defaultPreset={defaultPreset} drawerRelations={drawerRelations} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} prefillParentId={prefillParentId} parentFieldKey={field.field} readOnly={field.readonly} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} columnPresets={columnPresets} defaultPreset={defaultPreset} drawerRelations={drawerRelations} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} sectionGroupBy={sectionGroupBy} rowFilter={rowFilter} rowDefaults={rowDefaults} allocateDrawer={allocateDrawer} autoAllocate={autoAllocate} uploadTemplate={uploadTemplate} submissionErrors={submissionErrors} prefillParentId={prefillParentId} parentFieldKey={field.field} readOnly={field.readonly} />
         )
       }
     }
@@ -395,18 +558,16 @@ export function FieldRenderer({
     })()
     if (opts.length > 0) {
       return (
-        <select
+        <SimpleSelect
           value={strVal}
-          onChange={(e) => onChange(e.target.value || null)}
-          className='h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring'
-        >
-          <option value=''>— Select —</option>
-          {opts.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.text}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => onChange(v || null)}
+          options={[
+            { value: '', label: '— Select —' },
+            ...opts.map((o) => ({ value: o.value, label: choiceLabel(o.text) }))
+          ]}
+          ariaLabel={field.label ?? field.field}
+          className='h-9 rounded-md text-sm'
+        />
       )
     }
   }

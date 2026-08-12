@@ -18,6 +18,7 @@ import { getCollection, getFields, getRelations } from './collections.js'
 import { decryptItemFields, encryptItemFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
+import { applyUserScopesToQuery } from './user-scopes.js'
 import { writeTrashRow } from './trash.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
@@ -75,6 +76,33 @@ export class CollectionNotFoundError extends Error {
     super(`Collection "${collection}" not found in registry`)
     this.name = 'CollectionNotFoundError'
   }
+}
+
+/**
+ * Collections the generic items API refuses to serve.
+ *
+ * `chat_messages` visibility is per-ROOM, which a table-level policy cannot
+ * express — before this, any role holding `read` could list every DM and every
+ * entity room through /api/items (verified: a non-admin got other users' DMs
+ * back). Serving it here would leave the door the /api/chat gate closes, and
+ * GraphQL resolves through this same service, so one guard covers both.
+ */
+const ROUTE_ONLY_COLLECTIONS = new Map<string, string>([
+  ['chat_messages', '/api/chat/messages'],
+  ['chat_last_read', '/api/chat/rooms/:room/read']
+])
+
+export class RouteOnlyCollectionError extends Error {
+  statusCode = 403
+  constructor(collection: string, route: string) {
+    super(`${collection} is only available through ${route}, which enforces per-room visibility`)
+    this.name = 'RouteOnlyCollectionError'
+  }
+}
+
+function assertNotRouteOnly(collection: string): void {
+  const route = ROUTE_ONLY_COLLECTIONS.get(collection)
+  if (route) throw new RouteOnlyCollectionError(collection, route)
 }
 
 export class ForbiddenError extends Error {
@@ -234,12 +262,19 @@ async function getComputedFields(collection: string): Promise<ComputedFieldRow[]
  */
 async function applyReadComputedFields(
   collection: string,
-  items: Record<string, unknown>[]
+  items: Record<string, unknown>[],
+  requestedFields?: string[]
 ): Promise<void> {
   if (!items.length) return
   const fields = await getComputedFields(collection)
-  const readFields = fields.filter((f) => f.computed_type === 'read' && f.computed_formula)
-  const rollupFields = fields.filter((f) => f.computed_type === 'rollup' && f.computed_formula)
+  // Explicit fields= requests only compute what was asked for — a virtual rollup
+  // costs one aggregate query PER ROW, and pickers fetching `fields=id,<label>`
+  // must not pay for rollups they never render (workflows list read was 14s).
+  const wanted = (f: { field: string }) => !requestedFields || requestedFields.includes(f.field)
+  const readFields = fields.filter((f) => f.computed_type === 'read' && f.computed_formula && wanted(f))
+  const rollupFields = fields.filter(
+    (f) => f.computed_type === 'rollup' && f.computed_formula && wanted(f)
+  )
   if (!readFields.length && !rollupFields.length) return
 
   for (const item of items) {
@@ -1164,51 +1199,145 @@ function applyOneFilter(q: QB, field: string, op: string, value: unknown): QB {
 
 type FilterCondition = { path: string[]; op: string; value: unknown }
 
-async function applyConditions(q: QB, conditions: FilterCondition[], collection: string) {
-  for (const cond of conditions) {
-    if (cond.path.length === 1) {
-      applyOneFilter(q, cond.path[0], cond.op, cond.value)
-    } else if (cond.path.length === 2) {
-      const [fkField, targetField] = cond.path
-      const rel = (await db('nivaro_relations')
-        .where({ many_collection: collection, many_field: fkField })
-        .first()) as { one_collection: string } | undefined
-      if (!rel?.one_collection) continue
-      const related = rel.one_collection
-      q.whereExists(function () {
-        this.select(db.raw('1'))
-          .from(related)
-          .whereRaw('??.?? = ??.??', [related, 'id', collection, fkField])
-          .andWhere((inner) =>
-            applyOneFilter(inner, `${related}.${targetField}`, cond.op, cond.value)
-          )
-      })
-    } else if (cond.path.length === 3) {
-      const [fk1, fk2, targetField] = cond.path
-      const rel1 = (await db('nivaro_relations')
-        .where({ many_collection: collection, many_field: fk1 })
-        .first()) as { one_collection: string } | undefined
-      if (!rel1?.one_collection) continue
-      const mid = rel1.one_collection
-      const rel2 = (await db('nivaro_relations')
-        .where({ many_collection: mid, many_field: fk2 })
-        .first()) as { one_collection: string } | undefined
-      if (!rel2?.one_collection) continue
-      const leaf = rel2.one_collection
-      q.whereExists(function () {
-        this.select(db.raw('1'))
-          .from(mid)
-          .whereRaw('??.?? = ??.??', [mid, 'id', collection, fk1])
-          .whereExists(function () {
-            this.select(db.raw('1'))
-              .from(leaf)
-              .whereRaw('??.?? = ??.??', [leaf, 'id', mid, fk2])
-              .andWhere((inner) =>
-                applyOneFilter(inner, `${leaf}.${targetField}`, cond.op, cond.value)
-              )
-          })
-      })
+type PathHop =
+  | { kind: 'm2o'; from: string; fk: string; to: string }
+  | { kind: 'alias'; from: string; child: string; childFk: string }
+type PathPlan = { hops: PathHop[]; leafTable: string; leafCol: string } | null
+
+// Resolve a condition path into a hop plan. Each segment is either an M2O FK
+// (many_collection=current, many_field=seg) or an alias — O2M/M2M — field
+// (one_collection=current, one_field=seg). M2M alias hops implicitly continue
+// through the junction's junction_field; a BARE alias as the final segment
+// compares related ids (junction_field column, or the child's own id for O2M).
+/**
+ * User-scope restrictions (per-user dimensional row scoping — see
+ * services/user-scopes.ts). Applied alongside row_filter RLS on every read.
+ * The hop route compiles to nested EXISTS inside the service — junction
+ * tables are joined explicitly, no alias fields required.
+ */
+async function applyUserScopes(q: QB, collection: string, user: User): Promise<void> {
+  await applyUserScopesToQuery(q, collection, user)
+}
+
+async function planConditionPath(collection: string, path: string[]): Promise<PathPlan> {
+  const hops: PathHop[] = []
+  let current = collection
+  let segs = [...path]
+  let guard = 0
+  while (segs.length > 0) {
+    if (guard++ > 6) return null
+    const seg = segs[0]
+    const m2o = (await db('nivaro_relations')
+      .where({ many_collection: current, many_field: seg })
+      .first()) as { one_collection: string | null } | undefined
+    const alias = m2o?.one_collection
+      ? undefined
+      : ((await db('nivaro_relations')
+          .where({ one_collection: current, one_field: seg })
+          .first()) as
+          | { many_collection: string; many_field: string; junction_field: string | null }
+          | undefined)
+    if (segs.length === 1) {
+      if (alias?.many_collection) {
+        hops.push({ kind: 'alias', from: current, child: alias.many_collection, childFk: alias.many_field })
+        return { hops, leafTable: alias.many_collection, leafCol: alias.junction_field ?? 'id' }
+      }
+      return { hops, leafTable: current, leafCol: seg }
     }
+    if (m2o?.one_collection) {
+      hops.push({ kind: 'm2o', from: current, fk: seg, to: m2o.one_collection })
+      current = m2o.one_collection
+      segs = segs.slice(1)
+    } else if (alias?.many_collection) {
+      hops.push({ kind: 'alias', from: current, child: alias.many_collection, childFk: alias.many_field })
+      current = alias.many_collection
+      // M2M: remaining segments live on the junction's target — route the walk
+      // through the junction_field M2O next. O2M: the child IS the target.
+      segs = alias.junction_field ? [alias.junction_field, ...segs.slice(1)] : segs.slice(1)
+    } else {
+      return null
+    }
+  }
+  return null
+}
+
+function applyPlannedCondition(
+  q: QB,
+  collection: string,
+  plan: NonNullable<PathPlan>,
+  op: string,
+  value: unknown
+) {
+  const build = (qb: Knex.QueryBuilder, idx: number, fromTable: string) => {
+    if (idx >= plan.hops.length) {
+      applyOneFilter(
+        qb as QB,
+        plan.hops.length === 0 ? plan.leafCol : `${plan.leafTable}.${plan.leafCol}`,
+        op,
+        value
+      )
+      return
+    }
+    const hop = plan.hops[idx]
+    const target = hop.kind === 'm2o' ? hop.to : hop.child
+    qb.whereExists(function () {
+      this.select(db.raw('1')).from(target)
+      if (hop.kind === 'm2o') this.whereRaw('??.?? = ??.??', [target, 'id', fromTable, hop.fk])
+      else this.whereRaw('??.?? = ??.??', [target, hop.childFk, fromTable, 'id'])
+      build(this, idx + 1, target)
+    })
+  }
+  build(q as unknown as Knex.QueryBuilder, 0, collection)
+}
+
+type OrCondition = { or: FilterCondition[] }
+
+async function applyConditions(
+  q: QB,
+  conditions: Array<FilterCondition | OrCondition>,
+  collection: string
+) {
+  for (const cond of conditions) {
+    // OR group: each branch is a normal path condition; the group ANDs with
+    // the rest of the conditions (EFP project-type _or parity).
+    if ('or' in cond && Array.isArray(cond.or)) {
+      const branches: Array<{ plan: NonNullable<PathPlan>; op: string; value: unknown }> = []
+      for (const sub of cond.or) {
+        if (!Array.isArray(sub.path) || sub.path.length === 0) continue
+        const plan = await planConditionPath(collection, sub.path)
+        if (plan) branches.push({ plan, op: sub.op, value: sub.value })
+      }
+      if (branches.length === 0) continue
+      q.where(function () {
+        for (const b of branches) {
+          this.orWhere(function () {
+            applyPlannedCondition(this as QB, collection, b.plan, b.op, b.value)
+          })
+        }
+      })
+      continue
+    }
+    if (!('path' in cond) || !Array.isArray(cond.path) || cond.path.length === 0) continue
+    // Virtual path: workflow/pipeline state by key — resolved against the
+    // instance tables so state filters run server-side over the full set.
+    if (cond.path[0] === '$state' && cond.path.length === 1) {
+      const keys = (Array.isArray(cond.value) ? cond.value : [cond.value]).filter(
+        (v) => typeof v === 'string' && v.length > 0
+      )
+      if (!keys.length) continue
+      q.whereExists(function () {
+        this.select(db.raw('1'))
+          .from('nivaro_workflow_instances as wfi')
+          .leftJoin('nivaro_workflow_states as wfs', 'wfi.current_state', 'wfs.id')
+          .where('wfi.collection', collection)
+          .whereRaw('wfi.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+          .whereIn('wfs.key', keys as string[])
+      })
+      continue
+    }
+    const plan = await planConditionPath(collection, cond.path)
+    if (!plan) continue
+    applyPlannedCondition(q, collection, plan, cond.op, cond.value)
   }
 }
 
@@ -1221,6 +1350,7 @@ export async function readItems(
   req?: FastifyRequest,
   workspaceId?: string
 ) {
+  assertNotRouteOnly(collection)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 
@@ -1228,10 +1358,10 @@ export async function readItems(
   if (!allowed) throw new ForbiddenError()
 
   const rawConditions = (req?.query as Record<string, string>)?.conditions
-  let conditions: FilterCondition[] | undefined
+  let conditions: Array<FilterCondition | OrCondition> | undefined
   if (rawConditions) {
     try {
-      conditions = JSON.parse(rawConditions) as FilterCondition[]
+      conditions = JSON.parse(rawConditions) as Array<FilterCondition | OrCondition>
     } catch {
       conditions = undefined
     }
@@ -1277,6 +1407,9 @@ export async function readItems(
         .filter((r) => r.one_collection === collection && r.one_field != null && !r.junction_field)
         .map((r) => r.one_field as string)
     )
+    // 'id' is the PK, never an O2M alias — a corrupted relation row with
+    // one_field='id' must not strip it from every select on the collection
+    o2mVirtual.delete('id')
     if (o2mVirtual.size > 0) {
       selectFields = selectFields.filter((f) => !o2mVirtual.has(f))
     }
@@ -1316,6 +1449,9 @@ export async function readItems(
     applyRowFilter(q, rowFilter, user)
     applyRowFilter(countQ, rowFilter, user)
   }
+  // Per-user dimensional scoping (restrict-mode user scopes)
+  await applyUserScopes(q, collection, user)
+  await applyUserScopes(countQ, collection, user)
 
   if (conditions?.length) {
     await applyConditions(q, conditions, collection)
@@ -1377,8 +1513,12 @@ export async function readItems(
   // formulas see effective values. Adds `_inherited` sidecar per row.
   await applyInheritedFields(collection, data)
 
-  // Apply read-time computed fields
-  await applyReadComputedFields(collection, data)
+  // Apply read-time computed fields (scoped to the explicit field selection when present)
+  await applyReadComputedFields(
+    collection,
+    data,
+    selectFields[0] === '*' ? undefined : (selectFields as string[])
+  )
 
   // Expand M2O relations for dotted fields (e.g. 'category.name', 'category.*')
   if (Object.keys(nestedFieldMap).length > 0 && data.length > 0) {
@@ -1471,6 +1611,7 @@ export async function readOne(
   workspaceId?: string,
   fields?: string[]
 ) {
+  assertNotRouteOnly(collection)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 
@@ -1504,6 +1645,7 @@ export async function readOne(
   await applyWorkspaceScope(q, collection, workspaceId)
 
   if (rowFilter) applyRowFilter(q, rowFilter, user)
+  await applyUserScopes(q, collection, user)
 
   let item = (await q.first()) as Record<string, unknown> | undefined
 
@@ -1527,6 +1669,7 @@ export async function createOne(
   workspaceId?: string,
   opts?: { skipRollupRecalc?: boolean }
 ) {
+  assertNotRouteOnly(collection)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 
@@ -1616,6 +1759,7 @@ export async function updateOne(
   req?: FastifyRequest,
   workspaceId?: string
 ) {
+  assertNotRouteOnly(collection)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 
@@ -1694,10 +1838,17 @@ export async function updateOne(
   const securedPayload = await encryptItemFields(collection, ctx.payload)
 
   const actualCols = await getActualColumns(collection)
-  const updQ = db(collection).where({ id })
-  await applyWorkspaceScope(updQ, collection, workspaceId)
-  if (rowFilter) applyRowFilter(updQ, rowFilter, user)
-  await updQ.update(filterToActualColumns(securedPayload, actualCols))
+  const columnPayload = filterToActualColumns(securedPayload, actualCols)
+  // A payload of only alias/virtual fields (e.g. an M2A alias like
+  // internal_contact) leaves nothing to write — knex throws on an empty
+  // .update(). Skip the UPDATE but still run the read-back + after hooks so
+  // the call stays a graceful no-op instead of a 500.
+  if (Object.keys(columnPayload).length > 0) {
+    const updQ = db(collection).where({ id })
+    await applyWorkspaceScope(updQ, collection, workspaceId)
+    if (rowFilter) applyRowFilter(updQ, rowFilter, user)
+    await updQ.update(columnPayload)
+  }
   const result = await readOne(user, collection, id, workspaceId)
 
   // Recalc any stored rollups this row contributes to — both the previous and
@@ -1726,6 +1877,7 @@ export async function deleteOne(
   req?: FastifyRequest,
   workspaceId?: string
 ) {
+  assertNotRouteOnly(collection)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 

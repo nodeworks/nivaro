@@ -253,6 +253,9 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
           group_key: assignment.group_key,
           sort: assignment.sort,
           layout_assigned: true,
+          // Inline-rename label (distinct from overrides.label) — the layouts
+          // editor round-trips it; header field chips read it back on load.
+          label_override: assignment.label_override ?? null,
           lock_conditions: assignment.lock_conditions ?? null,
           allow_revision_restore: assignment.allow_revision_restore == null ? true : !!assignment.allow_revision_restore,
           widget_id: assignment.widget_id ?? null,
@@ -299,7 +302,12 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
             hidden: false, readonly: true, required: false,
             interface: 'relation-path',
             display: null, display_options: null,
-            options: pathTarget ? { path_target_collection: pathTarget } : null,
+            options: {
+              ...(ov?.options && typeof ov.options === 'object'
+                ? (ov.options as Record<string, unknown>)
+                : {}),
+              ...(pathTarget ? { path_target_collection: pathTarget } : {})
+            },
             group_key: a.group_key, sort: a.sort,
             label_override: a.label_override, is_visible: a.is_visible, default_expanded: a.default_expanded,
             show_row_revisions: false, show_approval_chain: null,
@@ -322,7 +330,8 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         }
         formatted.push({
           field,
-          label: null, note: null, hidden: false, readonly: false, required: false,
+          label: (ov?.label as string | null) ?? null,
+          note: null, hidden: false, readonly: false, required: false,
           interface: ov?.interface !== undefined ? (ov.interface as string | null) : 'o2m',
           options: virtualOpts,
           group_key: a.group_key, sort: a.sort,

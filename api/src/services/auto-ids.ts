@@ -59,7 +59,11 @@ export function parseAutoIdPattern(pattern: string): ParsedAutoIdPattern {
   literals.push(pattern.slice(last))
 
   const seqIdxs = tokens.flatMap((t, i) => (t.kind === 'seq' ? [i] : []))
-  if (seqIdxs.length !== 1) throw new Error('Pattern must contain exactly one {seq} token')
+  if (seqIdxs.length > 1) throw new Error('Pattern may contain at most one {seq} token')
+  // Seq-less patterns are legal: the field is a rendered TEMPLATE (generated on
+  // create, prefix-recomputed on relation change) with no sequence suffix —
+  // e.g. a human-readable request name '{region.short_name}{funding_year % 100}…'.
+  if (seqIdxs.length === 0) return { tokens, literals, separator: '' }
   const seqIdx = seqIdxs[0]
   if (seqIdx !== tokens.length - 1) throw new Error('{seq} must be the final token')
   const before = literals[seqIdx]
@@ -86,6 +90,7 @@ export function renderAutoIdPattern(parsed: ParsedAutoIdPattern, tokenValues: st
 }
 
 export function extractSuffix(parsed: ParsedAutoIdPattern, currentValue: string): string | null {
+  if (!parsed.separator) return null
   const idx = currentValue.lastIndexOf(parsed.separator)
   if (idx < 0) return null
   return currentValue.slice(idx + 1)
@@ -389,10 +394,10 @@ export async function applyAutoIdsExt(
     const seqToken = parsed.tokens.find((t) => t.kind === 'seq') as
       | Extract<AutoIdToken, { kind: 'seq' }>
       | undefined
-    if (!seqToken) continue
-
-    const seqVal = await nextSequenceValue(db, collection, field)
-    const seqValue = seqValueFor(seqToken, seqVal, config)
+    // Seq-less pattern: pure template render, no sequence row consumed.
+    const seqValue = seqToken
+      ? seqValueFor(seqToken, await nextSequenceValue(db, collection, field), config)
+      : ''
 
     payload[field] = await resolveAutoIdTokens(parsed, {
       collection,
@@ -429,7 +434,8 @@ export async function recomputeAutoIdPrefix(
   const current = row?.[field]
   if (current == null || current === '') return null
 
-  const suffix = extractSuffix(parsed, String(current))
+  // Seq-less template fields re-render wholesale (nothing to preserve).
+  const suffix = parsed.separator ? extractSuffix(parsed, String(current)) : ''
   if (suffix == null) return null
 
   return resolveAutoIdTokens(parsed, {

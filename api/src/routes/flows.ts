@@ -495,13 +495,11 @@ export async function flowsRoutes(app: FastifyInstance) {
     if ('trigger' in body || 'trigger_options' in body) {
       await snapshotFlowVersion(app.log, id, req.user?.id)
     }
-    await db('nivaro_flows')
-      .where({ id })
-      .update({
-        ...body,
-        trigger_options: toJsonString(body.trigger_options),
-        updated_at: new Date()
-      })
+    // Same guard as the op PATCH below: a partial body (e.g. status-only
+    // activate toggle) must not wipe trigger_options to null.
+    const flowPatch: Record<string, unknown> = { ...body, updated_at: new Date() }
+    if ('trigger_options' in body) flowPatch.trigger_options = toJsonString(body.trigger_options)
+    await db('nivaro_flows').where({ id }).update(flowPatch)
     const flow = await db<Flow>('nivaro_flows').where({ id }).first()
     if (!flow) return reply.code(404).send({ error: 'Not found' })
 
@@ -582,9 +580,11 @@ export async function flowsRoutes(app: FastifyInstance) {
     if (opPatchIsStructural(opBody)) {
       await snapshotFlowVersion(app.log, id, req.user?.id)
     }
-    await db('nivaro_flow_operations')
-      .where({ id: opId, flow: id })
-      .update({ ...opBody, options: toJsonString(opBody.options) })
+    // Only touch options when the PATCH actually carries it — a position-only
+    // body (canvas node drag) must not wipe the stored op config to null.
+    const opPatch: Record<string, unknown> = { ...opBody }
+    if ('options' in opBody) opPatch.options = toJsonString(opBody.options)
+    await db('nivaro_flow_operations').where({ id: opId, flow: id }).update(opPatch)
     const updated = await db<FlowOperation>('nivaro_flow_operations').where({ id: opId }).first()
     await logActivity({
       action: 'update',
@@ -611,6 +611,36 @@ export async function flowsRoutes(app: FastifyInstance) {
       req
     })
     return reply.code(204).send()
+  })
+
+  // Test-run a flow with a caller-supplied payload. Works regardless of the
+  // flow's active status. dry_run (default true) renders side-effect ops
+  // (mail/notification/webhook/external-api/custom) WITHOUT sending — the
+  // rendered content comes back as per-step previews. Returns the full per-op
+  // trace plus the final flow data. The run is recorded with trigger 'test'.
+  app.post('/:id/test', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const flow = await db<Flow>('nivaro_flows').where({ id }).first()
+    if (!flow) return reply.code(404).send({ error: 'Not found' })
+    const body = (req.body ?? {}) as { payload?: Record<string, unknown>; dry_run?: boolean }
+    const trace: import('../services/flow-executor.js').FlowTraceStep[] = []
+    let output: Record<string, unknown> = {}
+    let error: string | null = null
+    try {
+      output = await executeFlow({
+        flowId: id,
+        flowName: flow.name,
+        trigger: 'test',
+        payload: body.payload ?? {},
+        log: app.log,
+        userId: req.user?.id,
+        dryRun: body.dry_run !== false,
+        trace
+      })
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+    }
+    return reply.send({ data: { steps: trace, output, error, dry_run: body.dry_run !== false } })
   })
 
   app.post('/:id/trigger', async (req, reply) => {

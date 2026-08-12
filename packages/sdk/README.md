@@ -665,6 +665,20 @@ import { NavigationContext } from '@nivaro/react'
 
 `openItem` is checked first; returning `true` skips navigation. Otherwise the component navigates to `itemUrl(target)`, falling back to the admin shape when neither is provided.
 
+#### Page renderer
+
+`<PageRenderer slug="…" />` renders a page-builder page (widget grid) in your own app — the same surface as the admin's `/p/:slug` viewer: table, KPI, markdown, iframe, recent-activity, query tables (param filters, progress columns, row-click picker/drill/matrix sheets), and matrix editors (inline or drawer-button). Widget data resolves through the client identity, so permissions apply server-side. Requires `NivaroProvider` + a TanStack Query `QueryClientProvider`; supply `NavigationContext` to control where record links go, and an outer `DrilldownContext` if you host your own record sheet (PageRenderer hosts one otherwise).
+
+```typescript
+import { NivaroProvider, PageRenderer } from '@nivaro/react'
+
+<NivaroProvider client={nivaro}>
+  <PageRenderer slug="budget-allocation" />
+</NivaroProvider>
+
+// Props: slug (required), hideHeader (skip the page-name row), className
+```
+
 #### Report Studio viewer
 
 `<ReportView reportId="…" />` renders a fully-styled, interactive Report Studio report in your own app — same as `QueueWorklist` / `ItemEditForm`: bring the styles via `@nivaro/react/full.css` (or the Tailwind preset). It fetches the definition and resolves every widget (KPIs, KPI groups, bar/line/donut charts via recharts, tables) as the client identity — collection read permissions apply server-side. Interactive: a global filter bar (date-range switcher + live entity-filter chips) and per-widget refresh. Read-only (no drag/resize edit surface).

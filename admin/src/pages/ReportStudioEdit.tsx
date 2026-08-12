@@ -24,9 +24,9 @@ import {
   Upload,
   X
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import GridLayout, { WidthProvider } from 'react-grid-layout/legacy'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import {
   Bar,
   BarChart,
@@ -55,9 +55,11 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { QueryWidgetBody } from '@nivaro/shared'
+import { createNivaro } from '@nivaro/sdk'
+import { NivaroProvider } from '@nivaro/shared'
 import { api } from '@/lib/api'
 import { cn, formatNumber, formatRelative } from '@/lib/utils'
-import 'react-grid-layout/css/styles.css'
 
 /**
  * Report Studio builder — 12-col drag/resize grid (react-grid-layout) of
@@ -67,9 +69,123 @@ import 'react-grid-layout/css/styles.css'
  * No Save button: edits debounce-persist automatically.
  */
 
-const Grid = WidthProvider(GridLayout)
 
-type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider'
+type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query'
+
+// ─── Prebuilt widget catalog ──────────────────────────────────────────────────
+// Data-driven presets (nivaro_report_widget_presets — EFP seeds its staging
+// report library). Users pick a ready-made widget instead of building the
+// metric by hand; Blank chips below keep the build-your-own path.
+
+interface WidgetPreset {
+  id: number
+  name: string
+  category: string
+  description: string | null
+  widget_type: WidgetType
+  config: Record<string, unknown> | null
+  w: number
+  h: number
+}
+
+const PRESET_CATEGORY_LABELS: Record<string, string> = {
+  overview: 'Overview',
+  financial: 'Financial',
+  workflows: 'Workflows',
+  operations: 'Operations',
+  integration: 'Integration',
+  layout: 'Layout',
+  general: 'General'
+}
+
+function WidgetCatalogDialog({
+  open,
+  onClose,
+  onPick
+}: {
+  open: boolean
+  onClose: () => void
+  onPick: (p: WidgetPreset) => void
+}) {
+  const [q, setQ] = useState('')
+  const [cat, setCat] = useState<string>('all')
+  const { data: presets = [] } = useQuery<WidgetPreset[]>({
+    queryKey: ['report-widget-presets'],
+    queryFn: () => api.get('/report-studio/widget-presets').then((r) => r.data.data ?? []),
+    enabled: open,
+    staleTime: 5 * 60_000
+  })
+  if (!open) return null
+  const cats = [...new Set(presets.map((p) => p.category))]
+  const shown = presets.filter(
+    (p) =>
+      (cat === 'all' || p.category === cat) &&
+      (!q.trim() ||
+        `${p.name} ${p.description ?? ''}`.toLowerCase().includes(q.trim().toLowerCase()))
+  )
+  return (
+    <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4' onClick={onClose}>
+      <div
+        className='flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-border dark:bg-card'
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className='border-b border-slate-100 px-4 py-3 dark:border-border'>
+          <p className='text-[14px] font-semibold text-slate-800 dark:text-foreground'>Add widgets</p>
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder='Search widgets…'
+            className='mt-2 h-8 w-full rounded-md border border-slate-200 px-2.5 text-[12.5px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+          />
+          <div className='mt-2 flex flex-wrap items-center gap-1'>
+            {['all', ...cats].map((c) => (
+              <button
+                key={c}
+                type='button'
+                onClick={() => setCat(c)}
+                className={[
+                  'rounded-full px-2.5 py-0.5 text-[11.5px] transition-colors',
+                  cat === c
+                    ? 'bg-nvr-cyan/10 font-semibold text-nvr-navy dark:text-nvr-cyan'
+                    : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-accent'
+                ].join(' ')}
+              >
+                {c === 'all'
+                  ? `All (${presets.length})`
+                  : `${PRESET_CATEGORY_LABELS[c] ?? c} (${presets.filter((p) => p.category === c).length})`}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className='grid flex-1 grid-cols-1 gap-2 overflow-y-auto p-3 sm:grid-cols-2'>
+          {shown.length === 0 ? (
+            <p className='col-span-2 px-2 py-6 text-center text-[12.5px] text-slate-400'>
+              No widgets match.
+            </p>
+          ) : (
+            shown.map((p) => (
+              <button
+                key={p.id}
+                type='button'
+                onClick={() => {
+                  onPick(p)
+                  onClose()
+                }}
+                className='rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-left transition-colors hover:border-nvr-cyan hover:bg-[#f0fbfe] dark:border-border dark:bg-background dark:hover:bg-[#0b2530]'
+              >
+                <p className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>{p.name}</p>
+                <p className='mt-0.5 line-clamp-2 text-[11.5px] leading-4 text-slate-500 dark:text-slate-400'>
+                  {p.description}
+                </p>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 interface WidgetFilter {
   field: string
@@ -87,18 +203,41 @@ interface KpiMetric {
   color?: string
 }
 
+interface QueryWidgetCfg {
+  slug: string
+  params?: Record<string, string>
+  display: 'table' | 'bar' | 'hbar' | 'stacked_bar' | 'line' | 'area' | 'donut' | 'kpis' | 'tree'
+  columns?: Array<{ field: string; label?: string; format?: string; decimals?: number }>
+  x_field?: string
+  series?: Array<{ field: string; label?: string; color?: string; dash?: boolean }>
+  value_format?: string
+  limit?: number
+  sort?: string
+  totals?: boolean
+  horizontal?: boolean
+  group_rows?: boolean
+  tree?: {
+    levels: string[]
+    badge?: string
+    pct?: { num: string; den: string; label?: string }
+    thresholds?: Array<{ gte: number; color: string }>
+    drill?: { collection: string; id_field: string }
+  }
+}
+
 interface WidgetConfig {
   metric?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string }
   dimension?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
   filters?: WidgetFilter[]
   date_field?: string | null
   limit?: number
-  columns?: string[]
+  columns?: Array<string | { field: string; label?: string; format?: string }>
   sort?: string
   format?: { prefix?: string; suffix?: string; decimals?: number }
   compare?: 'previous_period' | 'previous_year' | null
   orientation?: 'horizontal' | 'vertical'
   metrics?: KpiMetric[]
+  query?: QueryWidgetCfg
 }
 
 interface Widget {
@@ -113,19 +252,43 @@ interface Widget {
   h: number
 }
 
+// Category-axis ticks for date-heavy charts (mirrors shared ReportView):
+// '2026-07' → "Jul '26", full dates → 'Jul 4'; dense axes thin to ~12 labels.
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const compactCatTick = (v: unknown): string => {
+  const raw = String(v ?? '')
+  const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?/.exec(raw)
+  if (m) {
+    const mon = MONTH_ABBR[Number(m[2]) - 1] ?? m[2]
+    return m[3] ? `${mon} ${Number(m[3])}` : `${mon} '${m[1].slice(2)}`
+  }
+  return raw.length > 16 ? `${raw.slice(0, 15)}…` : raw
+}
+const catAxisProps = (count: number) => ({
+  interval: count > 12 ? Math.ceil(count / 12) - 1 : 0,
+  tickFormatter: compactCatTick,
+  minTickGap: 4
+})
+
 interface EntityFilter {
   field: string
   values: Array<string | number>
+  labels?: string[]
 }
 
 interface GlobalFilters {
   date_range?: { preset: string; start?: string; end?: string } | null
-  filter_bar?: Array<{ field: string; label: string }>
+  filter_bar?: Array<{
+    field: string
+    label: string
+    options?: { collection: string; value_field?: string; label_field?: string; sort?: string }
+  }>
 }
 
 interface ReportDetail {
   id: string
   name: string
+  description?: string | null
   is_shared: boolean
   role_id: string | null
   global_filters: GlobalFilters | null
@@ -158,6 +321,12 @@ interface WidgetDataShape {
 const NUMERIC_TYPES = new Set(['integer', 'bigInteger', 'decimal', 'float', 'number'])
 const DATE_TYPES = new Set(['date', 'datetime', 'dateTime', 'timestamp'])
 const CHART_COLORS = ['#00ceff', '#172940', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b']
+
+// Query widgets render through the SAME shared component headless hosts use;
+// the shared tree needs a Nivaro client context (admin is same-origin).
+const nivaroClient = createNivaro(window.location.origin)
+const toSharedRange = (r: { preset: string; start?: string; end?: string } | null | '') =>
+  r && r.preset ? ({ preset: r.preset, start: r.start, end: r.end } as never) : null
 const TILE_COLORS = ['#00ceff', '#10b981', '#172940', '#f59e0b', '#8b5cf6', '#ef4444']
 const DATE_PRESETS: Array<{ id: string; label: string }> = [
   { id: '', label: 'All time' },
@@ -166,7 +335,8 @@ const DATE_PRESETS: Array<{ id: string; label: string }> = [
   { id: 'last_3_months', label: 'Last 3 months' },
   { id: 'last_6_months', label: 'Last 6 months' },
   { id: 'last_12_months', label: 'Last 12 months' },
-  { id: 'ytd', label: 'Year to date' }
+  { id: 'ytd', label: 'Year to date' },
+  { id: 'custom', label: 'Custom range…' }
 ]
 const WIDGET_TYPES: Array<{ id: WidgetType; label: string }> = [
   { id: 'kpi', label: 'KPI' },
@@ -175,6 +345,7 @@ const WIDGET_TYPES: Array<{ id: WidgetType; label: string }> = [
   { id: 'line', label: 'Line' },
   { id: 'donut', label: 'Donut' },
   { id: 'table', label: 'Table' },
+  { id: 'query', label: 'Query' },
   { id: 'divider', label: 'Divider' }
 ]
 const FILTER_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'contains', 'null', 'nnull']
@@ -286,32 +457,59 @@ function FilterChip({
   reportId,
   field,
   label,
+  optionSource,
   selected,
   onChange,
   onRemove,
-  editable
+  editable,
+  allowedValues
 }: {
   reportId: string
   field: string
   label: string
+  optionSource?: { collection: string; value_field?: string; label_field?: string; sort?: string }
   selected: Array<string | number>
-  onChange: (values: Array<string | number>) => void
+  onChange: (values: Array<string | number>, labels: string[]) => void
   onRemove?: () => void
   editable: boolean
+  allowedValues?: Array<string | number>
 }) {
   const [open, setOpen] = useState(false)
   const { data: options = [] } = useQuery({
-    queryKey: ['rs-filter-options', reportId, field],
-    queryFn: () =>
-      api
+    queryKey: ['rs-filter-options', reportId, field, optionSource ?? null],
+    queryFn: async () => {
+      if (optionSource) {
+        const vf = optionSource.value_field ?? 'id'
+        const lf = optionSource.label_field ?? vf
+        const r = await api.get<{ data: Array<Record<string, unknown>> }>(
+          `/items/${optionSource.collection}`,
+          {
+            params: {
+              fields: [...new Set(['id', vf, lf])].join(','),
+              ...(optionSource.sort ? { sort: optionSource.sort } : {}),
+              limit: 200
+            }
+          }
+        )
+        return (r.data.data ?? []).map((row) => ({
+          value: String(row[vf] ?? row.id),
+          label: String(row[lf] ?? row[vf] ?? row.id)
+        }))
+      }
+      return api
         .get<{ data: Array<{ value: string; label: string }> }>(
           `/report-studio/${reportId}/filter-options`,
           { params: { field } }
         )
-        .then((r) => r.data.data),
+        .then((r) => r.data.data)
+    },
     enabled: open,
     staleTime: 120_000
   })
+  // Restricted scope values narrow the visible options (server enforces anyway)
+  const visibleOptions = allowedValues?.length
+    ? options.filter((o) => allowedValues.some((v) => String(v) === o.value))
+    : options
   const active = selected.length > 0
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -339,17 +537,20 @@ function FilterChip({
           <CommandInput placeholder={`Filter ${label}…`} className='h-8 text-[12.5px]' />
           <CommandList className='max-h-52'>
             <CommandEmpty>No values.</CommandEmpty>
-            {options.map((o) => {
+            {visibleOptions.map((o) => {
               const isOn = selected.some((v) => String(v) === o.value)
               return (
                 <CommandItem
                   key={o.value}
                   value={o.label}
-                  onSelect={() =>
-                    onChange(
-                      isOn ? selected.filter((v) => String(v) !== o.value) : [...selected, o.value]
-                    )
-                  }
+                  onSelect={() => {
+                    const next = isOn
+                      ? selected.filter((v) => String(v) !== o.value)
+                      : [...selected, o.value]
+                    const labelFor = (v: string | number) =>
+                      options.find((x) => x.value === String(v))?.label ?? String(v)
+                    onChange(next, next.map(labelFor))
+                  }}
                   className='text-[12.5px]'
                 >
                   <Check className={cn('mr-1.5 h-3 w-3', isOn ? 'opacity-100' : 'opacity-0')} />
@@ -363,7 +564,7 @@ function FilterChip({
           <button
             type='button'
             className='text-[11px] text-slate-400 hover:text-slate-600'
-            onClick={() => onChange([])}
+            onClick={() => onChange([], [])}
           >
             Clear
           </button>
@@ -413,12 +614,27 @@ function WidgetBody({
           entity_filters: entityFilters
         })
         .then((r) => r.data.data),
-    enabled: widget.type !== 'divider' && (!!widget.collection || widget.type === 'kpi_group'),
+    enabled:
+      widget.type !== 'divider' &&
+      widget.type !== 'query' &&
+      (!!widget.collection || widget.type === 'kpi_group'),
     staleTime: 60_000,
     retry: false
   })
 
   if (widget.type === 'divider') return null
+  if (widget.type === 'query') {
+    const qc = widget.config?.query
+    if (!qc?.slug)
+      return <p className='px-1 text-[12px] text-slate-400'>Set a query slug to see data.</p>
+    return (
+      <NivaroProvider client={nivaroClient}>
+        <div className='flex h-full min-h-0 flex-col'>
+          <QueryWidgetBody cfg={qc as never} dateRange={toSharedRange(dateRange ?? null)} entityFilters={entityFilters} />
+        </div>
+      </NivaroProvider>
+    )
+  }
   if (!widget.collection && widget.type !== 'kpi_group') {
     return <p className='px-1 text-[12px] text-slate-400'>Configure this widget to see data.</p>
   }
@@ -574,7 +790,12 @@ function WidgetBody({
         body = (
           <ResponsiveContainer width='100%' height='100%'>
             <LineChart data={series} margin={{ top: 6, right: 8, left: -18, bottom: 0 }}>
-              <XAxis dataKey='dim' tick={{ fontSize: 10 }} stroke='#94a3b8' />
+              <XAxis
+                dataKey='dim'
+                tick={{ fontSize: 10 }}
+                stroke='#94a3b8'
+                {...catAxisProps(series.length)}
+              />
               <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' />
               <Tooltip contentStyle={{ fontSize: 12 }} />
               {widget.config?.compare && (
@@ -614,7 +835,12 @@ function WidgetBody({
                 </>
               ) : (
                 <>
-                  <XAxis dataKey='dim' tick={{ fontSize: 10 }} stroke='#94a3b8' />
+                  <XAxis
+                    dataKey='dim'
+                    tick={{ fontSize: 10 }}
+                    stroke='#94a3b8'
+                    {...catAxisProps(series.length)}
+                  />
                   <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' />
                 </>
               )}
@@ -734,6 +960,13 @@ function ConfigSheet({
             </div>
           </div>
 
+          {widget.type === 'query' && (
+            <QueryConfigEditor
+              value={cfg.query ?? { slug: '', display: 'table' }}
+              onChange={(query) => setCfg({ query })}
+            />
+          )}
+
           {widget.type === 'kpi_group' && (
             <KpiGroupEditor
               metrics={cfg.metrics ?? []}
@@ -742,7 +975,7 @@ function ConfigSheet({
             />
           )}
 
-          {widget.type !== 'divider' && widget.type !== 'kpi_group' && (
+          {widget.type !== 'divider' && widget.type !== 'kpi_group' && widget.type !== 'query' && (
             <>
               <div className='space-y-1.5'>
                 <Label className='text-[11.5px]'>Collection</Label>
@@ -890,6 +1123,19 @@ function ConfigSheet({
                 </div>
               )}
 
+              {(widget.type === 'bar' || widget.type === 'donut') && (
+                <div className='flex items-center gap-2'>
+                  <Label className='text-[11.5px]'>Top N</Label>
+                  <Input
+                    type='number'
+                    value={cfg.limit ?? 12}
+                    onChange={(e) => setCfg({ limit: Number(e.target.value) || 12 })}
+                    className='h-7 w-16 text-[12px]'
+                  />
+                  <span className='text-[10.5px] text-slate-400'>groups (max 50)</span>
+                </div>
+              )}
+
               <div className='space-y-1.5'>
                 <Label className='text-[11.5px]'>Date field (for the report date range)</Label>
                 <Combo
@@ -1004,7 +1250,7 @@ function ConfigSheet({
                 ))}
               </div>
 
-              {widget.type === 'kpi' && (
+              {(widget.type as string) !== 'kpi_group' && (
                 <div className='space-y-1.5'>
                   <Label className='text-[11.5px]'>Format</Label>
                   <div className='flex items-center gap-2'>
@@ -1050,6 +1296,183 @@ function ConfigSheet({
 }
 
 // ── KPI group metrics editor ──────────────────────────────────────────────────
+
+function JsonArea({
+  label,
+  value,
+  onCommit,
+  rows = 3
+}: {
+  label: string
+  value: unknown
+  onCommit: (v: unknown) => void
+  rows?: number
+}) {
+  const [text, setText] = useState(() => (value == null ? '' : JSON.stringify(value, null, 1)))
+  const [bad, setBad] = useState(false)
+  return (
+    <div className='space-y-1.5'>
+      <Label className='text-[11.5px]'>{label}</Label>
+      <textarea
+        value={text}
+        rows={rows}
+        spellCheck={false}
+        onChange={(e) => {
+          setText(e.target.value)
+          const t = e.target.value.trim()
+          if (!t) {
+            setBad(false)
+            onCommit(undefined)
+            return
+          }
+          try {
+            onCommit(JSON.parse(t))
+            setBad(false)
+          } catch {
+            setBad(true)
+          }
+        }}
+        className={cn(
+          'w-full rounded-md border bg-white px-2 py-1.5 font-mono text-[11px] dark:bg-card',
+          bad ? 'border-red-400' : 'border-slate-200 dark:border-border'
+        )}
+      />
+    </div>
+  )
+}
+
+const QUERY_DISPLAYS: Array<QueryWidgetCfg['display']> = [
+  'table',
+  'bar',
+  'hbar',
+  'stacked_bar',
+  'line',
+  'area',
+  'donut',
+  'kpis',
+  'tree'
+]
+const COL_FORMATS = ['', 'currency', 'number', 'integer', 'percent', 'days', 'date', 'datetime']
+
+function QueryConfigEditor({
+  value,
+  onChange
+}: {
+  value: QueryWidgetCfg
+  onChange: (v: QueryWidgetCfg) => void
+}) {
+  const set = (patch: Partial<QueryWidgetCfg>) => onChange({ ...value, ...patch })
+  return (
+    <div className='space-y-4'>
+      <div className='space-y-1.5'>
+        <Label className='text-[11.5px]'>Custom query slug</Label>
+        <Input
+          value={value.slug}
+          onChange={(e) => set({ slug: e.target.value })}
+          placeholder='e.g. vendor-scorecard'
+          className='h-8 font-mono text-[12px]'
+        />
+      </div>
+      <div className='space-y-1.5'>
+        <Label className='text-[11.5px]'>Display</Label>
+        <div className='flex flex-wrap gap-1'>
+          {QUERY_DISPLAYS.map((d) => (
+            <button
+              key={d}
+              type='button'
+              onClick={() => set({ display: d })}
+              className={cn(
+                'rounded-full border px-2.5 py-0.5 text-[11.5px]',
+                value.display === d
+                  ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
+                  : 'border-slate-200 text-slate-400 dark:border-border'
+              )}
+            >
+              {d}
+            </button>
+          ))}
+        </div>
+      </div>
+      <JsonArea
+        label='Params — literals or $filters.<field> / $date.start / $date.end tokens'
+        value={value.params}
+        onCommit={(v) => set({ params: v as Record<string, string> | undefined })}
+      />
+      {value.display !== 'table' && value.display !== 'kpis' && (
+        <div className='space-y-1.5'>
+          <Label className='text-[11.5px]'>X / category field</Label>
+          <Input
+            value={value.x_field ?? ''}
+            onChange={(e) => set({ x_field: e.target.value || undefined })}
+            className='h-8 font-mono text-[12px]'
+          />
+        </div>
+      )}
+      <JsonArea
+        label='Columns — [{"field","label","format"}] (table + kpis)'
+        value={value.columns}
+        onCommit={(v) => set({ columns: v as QueryWidgetCfg['columns'] })}
+        rows={4}
+      />
+      <JsonArea
+        label='Series — [{"field","label","color","dash"}] (charts)'
+        value={value.series}
+        onCommit={(v) => set({ series: v as QueryWidgetCfg['series'] })}
+      />
+      {value.display === 'tree' && (
+        <JsonArea
+          label='Tree — {"levels":[...],"badge","pct":{"num","den"},"drill":{"collection","id_field"}}'
+          value={value.tree}
+          onCommit={(v) => set({ tree: v as QueryWidgetCfg['tree'] })}
+          rows={4}
+        />
+      )}
+      <div className='grid grid-cols-2 gap-2'>
+        <div className='space-y-1.5'>
+          <Label className='text-[11.5px]'>Value format</Label>
+          <select
+            value={value.value_format ?? ''}
+            onChange={(e) => set({ value_format: e.target.value || undefined })}
+            className='h-8 w-full rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
+          >
+            {COL_FORMATS.map((f) => (
+              <option key={f} value={f}>
+                {f || '(raw)'}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className='space-y-1.5'>
+          <Label className='text-[11.5px]'>Sort (-field = desc)</Label>
+          <Input
+            value={value.sort ?? ''}
+            onChange={(e) => set({ sort: e.target.value || undefined })}
+            className='h-8 font-mono text-[12px]'
+          />
+        </div>
+        <div className='space-y-1.5'>
+          <Label className='text-[11.5px]'>Row limit</Label>
+          <Input
+            type='number'
+            value={value.limit ?? ''}
+            onChange={(e) => set({ limit: e.target.value ? Number(e.target.value) : undefined })}
+            className='h-8 text-[12px]'
+          />
+        </div>
+        <div className='flex items-end gap-3 pb-1'>
+          <label className='flex items-center gap-1.5 text-[11.5px] text-slate-500'>
+            <Switch checked={!!value.totals} onCheckedChange={(v) => set({ totals: v })} />
+            Totals
+          </label>
+          <label className='flex items-center gap-1.5 text-[11.5px] text-slate-500'>
+            <Switch checked={!!value.horizontal} onCheckedChange={(v) => set({ horizontal: v })} />
+            Horiz.
+          </label>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function KpiGroupEditor({
   metrics,
@@ -1165,6 +1588,44 @@ function MetricRow({
           onChange={(v) => onChange({ ...metric, field: v ?? undefined })}
         />
       )}
+      <div className='flex items-center gap-1.5'>
+        <Input
+          value={metric.format?.prefix ?? ''}
+          onChange={(e) => onChange({ ...metric, format: { ...metric.format, prefix: e.target.value } })}
+          placeholder='$'
+          className='h-6 w-10 text-[11px]'
+        />
+        <Input
+          type='number'
+          value={metric.format?.decimals ?? ''}
+          onChange={(e) =>
+            onChange({
+              ...metric,
+              format: {
+                ...metric.format,
+                decimals: e.target.value === '' ? undefined : Number(e.target.value)
+              }
+            })
+          }
+          placeholder='dp'
+          className='h-6 w-12 text-[11px]'
+        />
+        <span className='flex gap-1'>
+          {TILE_COLORS.map((c) => (
+            <button
+              key={c}
+              type='button'
+              aria-label={`Tile color ${c}`}
+              onClick={() => onChange({ ...metric, color: metric.color === c ? undefined : c })}
+              className={cn(
+                'h-4 w-4 rounded-full border',
+                metric.color === c ? 'ring-2 ring-offset-1 ring-slate-400' : 'border-slate-200'
+              )}
+              style={{ backgroundColor: c }}
+            />
+          ))}
+        </span>
+      </div>
     </div>
   )
 }
@@ -1176,29 +1637,223 @@ interface ReportAlert {
   widget: string
   name: string
   conditions: Array<{ field: string; op: string; value: number }>
+  filters?: EntityFilter[] | null
   is_active: boolean
   firing: boolean
+  delivery_email?: boolean
+  delivery_inapp?: boolean
+  last_fired?: string | null
+}
+
+interface FilterPresetRow {
+  id: number
+  name: string
+  date_range: GlobalFilters['date_range']
+  entity_filters: EntityFilter[]
+}
+
+// Self-contained (memoized, own input state) so typing in the AI prompt or
+// preset name never re-renders the widget canvas — a page-level prompt state
+// re-rendered every chart per keystroke.
+const FilterExtrasBar = memo(function FilterExtrasBar({
+  reportId,
+  filterBar,
+  appliedRange,
+  appliedFilters,
+  onApply
+}: {
+  reportId: string
+  filterBar: NonNullable<GlobalFilters['filter_bar']>
+  appliedRange: GlobalFilters['date_range']
+  appliedFilters: EntityFilter[]
+  onApply: (d: { date_range?: GlobalFilters['date_range']; entity_filters?: EntityFilter[] }) => void
+}) {
+  const queryClient = useQueryClient()
+  const [prompt, setPrompt] = useState('')
+  const [savingPreset, setSavingPreset] = useState(false)
+  const [presetName, setPresetName] = useState('')
+
+  const { data: presets = [] } = useQuery({
+    queryKey: ['rs-filter-presets', reportId],
+    queryFn: () =>
+      api
+        .get<{ data: FilterPresetRow[] }>(`/report-studio/${reportId}/filter-presets`)
+        .then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['rs-filter-presets', reportId] })
+  const save = useMutation({
+    mutationFn: (name: string) =>
+      api.post(`/report-studio/${reportId}/filter-presets`, {
+        name,
+        date_range: appliedRange ?? null,
+        entity_filters: appliedFilters
+      }),
+    onSuccess: () => {
+      toast.success('Preset saved')
+      invalidate()
+    }
+  })
+  const remove = useMutation({
+    mutationFn: (pid: number) => api.delete(`/report-studio/${reportId}/filter-presets/${pid}`),
+    onSuccess: invalidate
+  })
+  const ai = useMutation({
+    mutationFn: (q: string) =>
+      api.post<{
+        data: { date_range?: GlobalFilters['date_range']; entity_filters?: EntityFilter[] }
+      }>(`/report-studio/${reportId}/ai-filters`, {
+        prompt: q,
+        fields: filterBar.map((f) => ({ field: f.field, label: f.label }))
+      }),
+    onSuccess: (r) => {
+      onApply(r.data.data)
+      setPrompt('')
+      toast.success('Filters applied')
+    },
+    onError: (err: { response?: { data?: { error?: string } } }) =>
+      toast.error(err.response?.data?.error ?? 'Could not parse that')
+  })
+
+  return (
+    <div className='mt-1.5 flex flex-wrap items-center gap-1.5'>
+      {presets.map((pr) => (
+        <span
+          key={pr.id}
+          className='group/preset inline-flex h-6 items-center gap-1 rounded-full border border-slate-200 pl-2 pr-1 text-[11px] text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:hover:text-nvr-cyan'
+        >
+          <button
+            type='button'
+            onClick={() =>
+              onApply({ date_range: pr.date_range ?? null, entity_filters: pr.entity_filters })
+            }
+          >
+            {pr.name}
+          </button>
+          <button
+            type='button'
+            title='Delete preset'
+            className='rounded-full p-0.5 text-slate-300 opacity-0 hover:text-red-500 group-hover/preset:opacity-100'
+            onClick={() => remove.mutate(pr.id)}
+          >
+            <X className='h-2.5 w-2.5' />
+          </button>
+        </span>
+      ))}
+      {savingPreset ? (
+        <input
+          value={presetName}
+          onChange={(e) => setPresetName(e.target.value)}
+          placeholder='Preset name'
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && presetName.trim()) {
+              save.mutate(presetName.trim())
+              setPresetName('')
+              setSavingPreset(false)
+            }
+            if (e.key === 'Escape') setSavingPreset(false)
+          }}
+          className='h-6 w-[130px] rounded-md border border-slate-200 bg-white px-2 text-[11px] dark:border-border dark:bg-card'
+        />
+      ) : (
+        <button
+          type='button'
+          className='inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-slate-300 px-2 text-[11px] text-slate-400 hover:border-nvr-cyan hover:text-slate-600 dark:border-border'
+          onClick={() => setSavingPreset(true)}
+        >
+          <Plus className='h-2.5 w-2.5' /> Save preset
+        </button>
+      )}
+
+      <form
+        className='ml-auto flex items-center gap-1'
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (prompt.trim()) ai.mutate(prompt.trim())
+        }}
+      >
+        <Sparkles className='h-3 w-3 text-nvr-cyan' />
+        <input
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder='Ask AI to set filters… e.g. "Zone 1 this year"'
+          className='h-7 w-64 rounded-md border border-slate-200 bg-white px-2 text-[11.5px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-card'
+        />
+        {ai.isPending && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
+      </form>
+    </div>
+  )
+})
+
+// Alertable metric fields per widget — mirrors the server's deriveAlertMetric
+// syntax: value | row_count | <col> (sum) | avg:/max:/min:<col> | tile:<label>.
+function alertFieldOptionsFor(widget: Widget | undefined): Array<{ value: string; label: string }> {
+  const base = [
+    { value: 'value', label: 'value (widget metric)' },
+    { value: 'row_count', label: 'row count' }
+  ]
+  if (!widget) return base
+  const qc = widget.config?.query
+  if (widget.type === 'query' && qc) {
+    const cols =
+      qc.columns && qc.columns.length > 0
+        ? qc.columns.map((c) => ({ value: c.field, label: c.label ?? c.field }))
+        : (qc.series ?? []).map((sd) => ({ value: sd.field, label: sd.label ?? sd.field }))
+    return [
+      ...base,
+      ...cols.flatMap((c) => [
+        { value: c.value, label: `sum ${c.label}` },
+        { value: `avg:${c.value}`, label: `avg ${c.label}` },
+        { value: `max:${c.value}`, label: `max ${c.label}` },
+        { value: `min:${c.value}`, label: `min ${c.label}` }
+      ])
+    ]
+  }
+  if (widget.type === 'kpi_group') {
+    return [
+      ...base,
+      ...(widget.config?.metrics ?? []).map((m) => ({
+        value: `tile:${m.label}`,
+        label: `tile ${m.label}`
+      }))
+    ]
+  }
+  if (widget.type === 'table') {
+    const cols = (widget.config?.columns ?? []).map((c) =>
+      typeof c === 'string' ? { field: c, label: c } : { field: c.field, label: c.label ?? c.field }
+    )
+    return [...base, ...cols.map((c) => ({ value: c.field, label: `sum ${c.label}` }))]
+  }
+  return base
 }
 
 function AlertsSheet({
   reportId,
   widgets,
   initialWidget,
+  filterBar = [],
   onClose
 }: {
   reportId: string
   widgets: Widget[]
   initialWidget?: string | null
+  filterBar?: NonNullable<GlobalFilters['filter_bar']>
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  const alertable = widgets.filter(
-    (w) => w.type === 'kpi' || w.type === 'table' || w.type === 'kpi_group'
-  )
+  // Every data widget is alertable — the checker derives `value` (kpi value,
+  // series total, first tile) and `row_count` (rows / buckets / tiles) per type.
+  const alertable = widgets.filter((w) => w.type !== 'divider')
   const [widgetId, setWidgetId] = useState<string | null>(initialWidget ?? alertable[0]?.id ?? null)
-  const [field, setField] = useState<'value' | 'row_count'>('value')
-  const [op, setOp] = useState('gt')
-  const [threshold, setThreshold] = useState('')
+  const [conds, setConds] = useState<Array<{ field: string; op: string; value: string }>>([
+    { field: 'value', op: 'gt', value: '' }
+  ])
+  const [emailOn, setEmailOn] = useState(true)
+  const [inappOn, setInappOn] = useState(true)
+  const [scope, setScope] = useState<EntityFilter[]>([])
+  const [showHistory, setShowHistory] = useState(false)
 
   const { data: alerts = [] } = useQuery({
     queryKey: ['rs-alerts', reportId],
@@ -1207,28 +1862,51 @@ function AlertsSheet({
         .get<{ data: ReportAlert[] }>(`/report-studio/${reportId}/alerts`)
         .then((r) => r.data.data)
   })
+  const { data: log = [] } = useQuery({
+    queryKey: ['rs-alert-log', reportId],
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{
+            id: number
+            alert: string
+            status: string
+            fired_at: string
+            resolved_at: string | null
+            metric_snapshot?: Record<string, number> | null
+          }>
+        }>(`/report-studio/${reportId}/alerts-log`)
+        .then((r) => r.data.data),
+    enabled: showHistory
+  })
 
+  const validConds = conds.filter((c) => c.value !== '' && Number.isFinite(Number(c.value)))
   const create = useMutation({
     mutationFn: () => {
       const widget = widgets.find((w) => w.id === widgetId)
+      const first = validConds[0]
       return api.post(`/report-studio/${reportId}/alerts`, {
         widget: widgetId,
-        name: `${widget?.title ?? 'Widget'} ${field} ${op} ${threshold}`,
-        conditions: [{ field, op, value: Number(threshold) }]
+        name: `${widget?.title ?? 'Widget'} ${first?.field} ${first?.op} ${first?.value}${validConds.length > 1 ? ` +${validConds.length - 1}` : ''}`,
+        conditions: validConds.map((c) => ({ field: c.field, op: c.op, value: Number(c.value) })),
+        delivery_email: emailOn,
+        delivery_inapp: inappOn,
+        filters: scope.filter((f) => f.values.length > 0)
       })
     },
     onSuccess: () => {
       toast.success('Alert created — checked hourly')
-      setThreshold('')
+      setConds([{ field: 'value', op: 'gt', value: '' }])
+      setScope([])
       queryClient.invalidateQueries({ queryKey: ['rs-alerts', reportId] })
     },
     onError: (err: { response?: { data?: { error?: string } } }) =>
       toast.error(err.response?.data?.error ?? 'Could not create alert')
   })
 
-  const toggle = useMutation({
-    mutationFn: (a: ReportAlert) =>
-      api.patch(`/report-studio/${reportId}/alerts/${a.id}`, { is_active: !a.is_active }),
+  const patchAlert = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) =>
+      api.patch(`/report-studio/${reportId}/alerts/${id}`, body),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rs-alerts', reportId] })
   })
   const remove = useMutation({
@@ -1237,23 +1915,67 @@ function AlertsSheet({
   })
 
   const widgetTitle = (id: string) => widgets.find((w) => w.id === id)?.title ?? 'deleted widget'
+  const alertName = (id: string) => alerts.find((a) => a.id === id)?.name ?? id
+
+  const condRow = (c: { field: string; op: string; value: string }, i: number) => (
+    <div key={i} className='flex items-center gap-1.5'>
+      <select
+        value={c.field}
+        onChange={(e) => setConds((cs) => cs.map((x, j) => (j === i ? { ...x, field: e.target.value } : x)))}
+        className='h-8 max-w-[180px] rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
+      >
+        {alertFieldOptionsFor(widgets.find((w) => w.id === widgetId)).map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <select
+        value={c.op}
+        onChange={(e) => setConds((cs) => cs.map((x, j) => (j === i ? { ...x, op: e.target.value } : x)))}
+        className='h-8 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
+      >
+        {['gt', 'gte', 'lt', 'lte', 'eq'].map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+      <Input
+        type='number'
+        value={c.value}
+        onChange={(e) => setConds((cs) => cs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+        placeholder='threshold'
+        className='h-8 flex-1 text-[12px]'
+      />
+      {conds.length > 1 && (
+        <button
+          type='button'
+          aria-label='Remove condition'
+          onClick={() => setConds((cs) => cs.filter((_, j) => j !== i))}
+          className='p-1 text-slate-300 hover:text-red-500'
+        >
+          <Trash2 className='h-3.5 w-3.5' />
+        </button>
+      )}
+    </div>
+  )
 
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className='w-[380px] overflow-y-auto sm:max-w-[380px]'>
+      <SheetContent className='w-[420px] overflow-y-auto sm:max-w-[420px]'>
         <SheetHeader>
           <SheetTitle className='flex items-center gap-2 text-[14px]'>
             <BellRing className='h-4 w-4 text-nvr-cyan' /> Report alerts
           </SheetTitle>
         </SheetHeader>
         <p className='mt-1 text-[11.5px] text-slate-400'>
-          Checked hourly. Fires once when crossed, resolves when back in range.
+          Checked hourly. Fires once when all conditions hold, resolves when back in range.
+          Charts alert on their series total; tables on row count.
         </p>
 
         {alertable.length === 0 ? (
-          <p className='mt-6 text-[12.5px] text-slate-400'>
-            Add a KPI or table widget first — alerts watch their value / row count.
-          </p>
+          <p className='mt-6 text-[12.5px] text-slate-400'>Add a data widget first.</p>
         ) : (
           <div className='mt-4 space-y-2 rounded-lg border border-slate-200 p-3 dark:border-border'>
             <Combo
@@ -1262,38 +1984,52 @@ function AlertsSheet({
               placeholder='Widget'
               onChange={(v) => setWidgetId(v)}
             />
-            <div className='flex items-center gap-1.5'>
-              <select
-                value={field}
-                onChange={(e) => setField(e.target.value as never)}
-                className='h-8 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
-              >
-                <option value='value'>value</option>
-                <option value='row_count'>row count</option>
-              </select>
-              <select
-                value={op}
-                onChange={(e) => setOp(e.target.value)}
-                className='h-8 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
-              >
-                {['gt', 'gte', 'lt', 'lte', 'eq'].map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </select>
-              <Input
-                type='number'
-                value={threshold}
-                onChange={(e) => setThreshold(e.target.value)}
-                placeholder='threshold'
-                className='h-8 flex-1 text-[12px]'
-              />
+            {conds.map(condRow)}
+            <button
+              type='button'
+              onClick={() => setConds((cs) => [...cs, { field: 'value', op: 'gt', value: '' }])}
+              className='text-[11.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+            >
+              + AND condition
+            </button>
+            {filterBar.length > 0 && (
+              <div className='pt-1'>
+                <Label className='mb-1 block text-[10.5px] uppercase tracking-wide text-slate-400'>
+                  Alert scope (optional — evaluates in this filter scope)
+                </Label>
+                <div className='flex flex-wrap gap-1'>
+                  {filterBar.map((f) => (
+                    <FilterChip
+                      key={f.field}
+                      reportId={reportId}
+                      field={f.field}
+                      label={f.label}
+                      optionSource={f.options}
+                      selected={scope.find((e) => e.field === f.field)?.values ?? []}
+                      editable={false}
+                      onChange={(values, labels) =>
+                        setScope((prev) => [
+                          ...prev.filter((e) => e.field !== f.field),
+                          ...(values.length > 0 ? [{ field: f.field, values, labels }] : [])
+                        ])
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className='flex items-center gap-4 pt-1'>
+              <label className='flex items-center gap-1.5 text-[11.5px] text-slate-500'>
+                <Switch checked={emailOn} onCheckedChange={setEmailOn} /> Email
+              </label>
+              <label className='flex items-center gap-1.5 text-[11.5px] text-slate-500'>
+                <Switch checked={inappOn} onCheckedChange={setInappOn} /> In-app
+              </label>
             </div>
             <Button
               size='sm'
               className='w-full'
-              disabled={!widgetId || threshold === '' || create.isPending}
+              disabled={!widgetId || validConds.length === 0 || create.isPending}
               onClick={() => create.mutate()}
             >
               <Bell className='mr-1.5 h-3.5 w-3.5' /> Create alert
@@ -1303,35 +2039,91 @@ function AlertsSheet({
 
         <div className='mt-4 space-y-1.5'>
           {alerts.map((a) => (
-            <div
-              key={a.id}
-              className='flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 dark:border-border'
-            >
-              <div className='min-w-0 flex-1'>
-                <p className='truncate text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
-                  {a.name}
-                  {a.firing && (
-                    <Badge className='ml-1.5 h-4 bg-red-500 px-1.5 text-[9.5px] text-white'>
-                      firing
-                    </Badge>
-                  )}
-                </p>
-                <p className='text-[10.5px] text-slate-400'>on “{widgetTitle(a.widget)}”</p>
+            <div key={a.id} className='rounded-lg border border-slate-200 px-3 py-2 dark:border-border'>
+              <div className='flex items-center gap-2'>
+                <div className='min-w-0 flex-1'>
+                  <p className='truncate text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
+                    {a.name}
+                    {a.firing && (
+                      <Badge className='ml-1.5 h-4 bg-red-500 px-1.5 text-[9.5px] text-white'>
+                        firing
+                      </Badge>
+                    )}
+                  </p>
+                  <p className='truncate text-[10.5px] text-slate-400'>
+                    on “{widgetTitle(a.widget)}”
+                    {a.filters && a.filters.length > 0 &&
+                      ` · scoped: ${a.filters.map((f) => (f.labels ?? f.values).join('/')).join(', ')}`}
+                    {' · Last fired: '}
+                    {a.last_fired ? formatRelative(a.last_fired) : 'never'}
+                  </p>
+                </div>
+                <Switch
+                  checked={a.is_active}
+                  onCheckedChange={() => patchAlert.mutate({ id: a.id, body: { is_active: !a.is_active } })}
+                />
+                <button
+                  type='button'
+                  className='p-1 text-slate-300 hover:text-red-500'
+                  onClick={() => remove.mutate(a.id)}
+                >
+                  <Trash2 className='h-3.5 w-3.5' />
+                </button>
               </div>
-              <Switch checked={a.is_active} onCheckedChange={() => toggle.mutate(a)} />
-              <button
-                type='button'
-                className='p-1 text-slate-300 hover:text-red-500'
-                onClick={() => remove.mutate(a.id)}
-              >
-                <Trash2 className='h-3.5 w-3.5' />
-              </button>
+              <div className='mt-1 flex items-center gap-3'>
+                <label className='flex items-center gap-1 text-[10.5px] text-slate-400'>
+                  <Switch
+                    checked={(a as { delivery_email?: boolean }).delivery_email !== false}
+                    onCheckedChange={(v) => patchAlert.mutate({ id: a.id, body: { delivery_email: v } })}
+                  />
+                  Email
+                </label>
+                <label className='flex items-center gap-1 text-[10.5px] text-slate-400'>
+                  <Switch
+                    checked={(a as { delivery_inapp?: boolean }).delivery_inapp !== false}
+                    onCheckedChange={(v) => patchAlert.mutate({ id: a.id, body: { delivery_inapp: v } })}
+                  />
+                  In-app
+                </label>
+              </div>
             </div>
           ))}
           {alerts.length === 0 && (
             <p className='text-[11.5px] text-slate-400'>No alerts on this report yet.</p>
           )}
         </div>
+
+        <button
+          type='button'
+          onClick={() => setShowHistory((h) => !h)}
+          className='mt-4 text-[11.5px] font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400'
+        >
+          {showHistory ? '▾' : '▸'} Alert history
+        </button>
+        {showHistory && (
+          <div className='mt-1.5 space-y-1'>
+            {log.length === 0 && <p className='text-[11px] text-slate-400'>No firings recorded.</p>}
+            {log.map((l) => (
+              <div
+                key={l.id}
+                className='flex items-center gap-2 rounded-md border border-slate-100 px-2.5 py-1.5 text-[11px] dark:border-border'
+              >
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${l.status === 'firing' ? 'bg-red-500' : 'bg-emerald-400'}`}
+                />
+                <span className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'>
+                  {alertName(l.alert)}
+                </span>
+                <span className='shrink-0 text-slate-400'>
+                  {new Date(l.fired_at).toLocaleString()}
+                </span>
+                <span className={`shrink-0 ${l.status === 'firing' ? 'text-red-500' : 'text-emerald-500'}`}>
+                  {l.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </SheetContent>
     </Sheet>
   )
@@ -1345,12 +2137,15 @@ function SubscribePopover({ reportId }: { reportId: string }) {
     queryKey: ['rs-sub', reportId],
     queryFn: () =>
       api
-        .get<{ data: { cadence: string } | null }>(`/report-studio/${reportId}/subscription`)
+        .get<{
+          data: { cadence: string; delivery_email?: boolean; delivery_inapp?: boolean } | null
+        }>(`/report-studio/${reportId}/subscription`)
         .then((r) => r.data.data)
   })
   const save = useMutation({
-    mutationFn: (body: { cadence: string } | null) =>
-      api.put(`/report-studio/${reportId}/subscription`, body),
+    mutationFn: (
+      body: { cadence: string; delivery_email?: boolean; delivery_inapp?: boolean } | null
+    ) => api.put(`/report-studio/${reportId}/subscription`, body),
     onSuccess: (_r, body) => {
       toast.success(body ? `Subscribed — ${body.cadence} email digest` : 'Unsubscribed')
       queryClient.invalidateQueries({ queryKey: ['rs-sub', reportId] })
@@ -1391,14 +2186,36 @@ function SubscribePopover({ reportId }: { reportId: string }) {
           </Button>
         </div>
         {sub && (
-          <Button
-            size='sm'
-            variant='ghost'
-            className='mt-1.5 h-7 w-full text-[11.5px] text-slate-400 hover:text-red-500'
-            onClick={() => save.mutate(null)}
-          >
-            Unsubscribe
-          </Button>
+          <>
+            <div className='mt-2 flex items-center gap-4 border-t border-slate-100 pt-2 dark:border-border'>
+              <label className='flex items-center gap-1.5 text-[11px] text-slate-500'>
+                <Switch
+                  checked={sub.delivery_email !== false}
+                  onCheckedChange={(v) =>
+                    save.mutate({ cadence: sub.cadence, delivery_email: v, delivery_inapp: sub.delivery_inapp !== false })
+                  }
+                />
+                Email
+              </label>
+              <label className='flex items-center gap-1.5 text-[11px] text-slate-500'>
+                <Switch
+                  checked={sub.delivery_inapp !== false}
+                  onCheckedChange={(v) =>
+                    save.mutate({ cadence: sub.cadence, delivery_email: sub.delivery_email !== false, delivery_inapp: v })
+                  }
+                />
+                In-app
+              </label>
+            </div>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='mt-1.5 h-7 w-full text-[11.5px] text-slate-400 hover:text-red-500'
+              onClick={() => save.mutate(null)}
+            >
+              Unsubscribe
+            </Button>
+          </>
         )}
       </PopoverContent>
     </Popover>
@@ -1479,6 +2296,7 @@ function AiBuildPopover({
 export function ReportStudioEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const goBack = useGoBack('/report-studio')
   const queryClient = useQueryClient()
   const [editMode, setEditMode] = useState(false)
   const [widgets, setWidgets] = useState<Widget[]>([])
@@ -1486,7 +2304,6 @@ export function ReportStudioEditPage() {
   const [alertsFor, setAlertsFor] = useState<string | null | false>(false)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [entityFilters, setEntityFilters] = useState<EntityFilter[]>([])
-  const [aiFilterPrompt, setAiFilterPrompt] = useState('')
   const skipSaveRef = useRef(true)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -1526,44 +2343,370 @@ export function ReportStudioEditPage() {
   const dateRange = gf.date_range ?? null
   const filterBar = gf.filter_bar ?? []
 
-  const aiFilters = useMutation({
-    mutationFn: () =>
-      api.post<{
-        data: { date_range?: GlobalFilters['date_range']; entity_filters?: EntityFilter[] }
-      }>(`/report-studio/${id}/ai-filters`, {
-        prompt: aiFilterPrompt,
-        fields: filterBar.map((f) => f.field)
-      }),
-    onSuccess: (r) => {
-      const d = r.data.data
+  // User Scopes: the viewer's DEFAULTS pre-select the preview filter chips
+  // (view state only — never written into the saved report config). Widget
+  // previews render behind the gate so their first fetch is already filtered.
+  const { data: myScopes, isFetched: scopesReady } = useQuery({
+    queryKey: ['my-scopes'],
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            dimensions: Array<{ name: string; target_collection: string }>
+            defaults: Record<string, Array<string | number>>
+            restricted: Record<string, Array<string | number>>
+          }
+        }>('/users/me/scopes')
+        .then((r) => r.data.data),
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+  const [scopeGateOpen, setScopeGateOpen] = useState(false)
+  const [scopeAllowed, setScopeAllowed] = useState<Record<string, Array<string | number>>>({})
+  useEffect(() => {
+    if (scopeGateOpen) return
+    if (!report || !scopesReady) return
+    const scopes = myScopes
+    const hasMaterial =
+      Object.values(scopes?.defaults ?? {}).some((v) => v.length > 0) ||
+      Object.values(scopes?.restricted ?? {}).some((v) => v.length > 0)
+    if (!scopes || filterBar.length === 0 || !hasMaterial) {
+      setScopeGateOpen(true)
+      return
+    }
+    void (async () => {
+      const seeds: EntityFilter[] = []
+      const allowed: Record<string, Array<string | number>> = {}
+      const translate = async (
+        target: string,
+        ids: Array<string | number>,
+        vf: string
+      ): Promise<Array<string | number>> => {
+        if (vf === 'id' || ids.length === 0) return ids
+        return api
+          .get<{ data: Array<Record<string, unknown>> }>(`/items/${target}`, {
+            params: { fields: `id,${vf}`, limit: 1000 }
+          })
+          .then((r) => {
+            const map = new Map((r.data.data ?? []).map((row) => [String(row.id), row[vf]]))
+            return ids
+              .map((v) => map.get(String(v)))
+              .filter((v): v is string | number => v != null)
+          })
+          .catch(() => [])
+      }
+      for (const f of filterBar) {
+        const dim =
+          scopes.dimensions.find((d) => d.name === f.field) ??
+          scopes.dimensions.find((d) => f.options && d.target_collection === f.options.collection)
+        if (!dim) continue
+        const vf = f.options ? (f.options.value_field ?? 'id') : 'id'
+        const restrictedIds = scopes.restricted[dim.name] ?? []
+        if (restrictedIds.length > 0) {
+          const vals = await translate(dim.target_collection, restrictedIds, vf)
+          if (vals.length > 0) allowed[f.field] = vals
+        }
+        // seed = defaults ∩ restricted; falls back to ALL restricted values
+        const defaults = scopes.defaults[dim.name] ?? []
+        let ids = defaults
+        if (restrictedIds.length > 0) {
+          const set = new Set(restrictedIds.map(String))
+          const kept = defaults.filter((v) => set.has(String(v)))
+          ids = kept.length > 0 ? kept : restrictedIds
+        }
+        if (ids.length === 0) continue
+        const vals = await translate(dim.target_collection, ids, vf)
+        if (vals.length > 0) seeds.push({ field: f.field, values: vals, labels: vals.map(String) })
+      }
+      if (Object.keys(allowed).length > 0) setScopeAllowed(allowed)
+      if (seeds.length > 0) {
+        setEntityFilters((prev) => {
+          const next = [...prev]
+          for (const sd of seeds) if (!next.some((e) => e.field === sd.field)) next.push(sd)
+          return next
+        })
+      }
+      setScopeGateOpen(true)
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeGateOpen, scopesReady, myScopes, report, filterBar])
+
+  const applyFilterState = useCallback(
+    (d: { date_range?: GlobalFilters['date_range']; entity_filters?: EntityFilter[] }) => {
       if (d.entity_filters) setEntityFilters(d.entity_filters.filter((f) => f.values?.length))
       if (d.date_range !== undefined) {
-        patchReport.mutate({ global_filters: { ...gf, date_range: d.date_range } })
-      }
-      setAiFilterPrompt('')
-      toast.success('Filters applied')
-    },
-    onError: (err: { response?: { data?: { error?: string } } }) =>
-      toast.error(err.response?.data?.error ?? 'Could not parse that')
-  })
-
-  const layout = useMemo(
-    () => widgets.map((w) => ({ i: w.id, x: w.x, y: w.y, w: w.w, h: w.h, minW: 2, minH: 1 })),
-    [widgets]
-  )
-
-  const onLayoutChange = useCallback(
-    (next: ReadonlyArray<{ i: string; x: number; y: number; w: number; h: number }>) => {
-      if (!editMode) return
-      setWidgets((prev) =>
-        prev.map((w) => {
-          const l = next.find((n) => n.i === w.id)
-          return l ? { ...w, x: l.x, y: l.y, w: l.w, h: l.h } : w
+        patchReport.mutate({
+          global_filters: { ...(report?.global_filters ?? {}), date_range: d.date_range }
         })
-      )
+      }
     },
-    [editMode]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [report?.global_filters]
   )
+
+  // ── Hand-rolled drag / resize over the 12-col × 72px grid ──────────────────
+  // react-grid-layout v2's dist ships NO interaction code (pure layout
+  // renderer) — its isDraggable/isResizable props are inert, so the canvas
+  // implements pointer-based drag + resize itself and RGL is gone entirely.
+  const canvasRef = useRef<HTMLDivElement | null>(null)
+  const canvasRO = useRef<ResizeObserver | null>(null)
+  const [canvasW, setCanvasW] = useState(0)
+  // Ref callback, NOT a mount effect — the canvas div only exists once the
+  // report has loaded, long after mount.
+  const setCanvasEl = useCallback((el: HTMLDivElement | null) => {
+    canvasRO.current?.disconnect()
+    canvasRO.current = null
+    canvasRef.current = el
+    if (el) {
+      setCanvasW(el.clientWidth)
+      const ro = new ResizeObserver(() => setCanvasW(el.clientWidth))
+      ro.observe(el)
+      canvasRO.current = ro
+    }
+  }, [])
+  const GAP = 12
+  const ROW = 72
+  const colUnit = canvasW > 0 ? (canvasW - GAP * 11) / 12 : 0
+  const cellW = colUnit + GAP
+  const cellH = ROW + GAP
+
+  // Interactions are DOM-driven: pointermove never touches React state (a
+  // state update would re-render every chart per frame). Positions preview via
+  // direct style writes; React commits once on pointerup.
+  const ghostElRef = useRef<HTMLDivElement | null>(null)
+  const interactRef = useRef<{
+    mode: 'drag' | 'resize'
+    id: string
+    startX: number
+    startY: number
+    orig: { x: number; y: number; w: number; h: number }
+    snapshot: Widget[]
+    lastKey: string
+    preview: Widget[] | null
+    raf: number
+  } | null>(null)
+
+  const overlaps = (
+    a: { x: number; y: number; w: number; h: number },
+    b: { x: number; y: number; w: number; h: number }
+  ) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+
+  // RGL-style: pin the active item at its target cell, push colliding items
+  // down, compact everything else up.
+  const layoutWithPinned = useCallback(
+    (list: Widget[], id: string, target: { x: number; y: number; w: number; h: number }): Widget[] => {
+      const pinned = { ...(list.find((w) => w.id === id) as Widget), ...target }
+      const others = list.filter((w) => w.id !== id).sort((a, b) => a.y - b.y || a.x - b.x)
+      const placed: Array<{ x: number; y: number; w: number; h: number }> = [
+        { x: pinned.x, y: pinned.y, w: pinned.w, h: pinned.h }
+      ]
+      const out: Widget[] = [pinned]
+      for (const w of others) {
+        let y = Math.max(0, w.y)
+        while (y > 0 && !placed.some((pl) => overlaps({ x: w.x, y: y - 1, w: w.w, h: w.h }, pl))) y--
+        while (placed.some((pl) => overlaps({ x: w.x, y, w: w.w, h: w.h }, pl))) y++
+        placed.push({ x: w.x, y, w: w.w, h: w.h })
+        out.push({ ...w, y })
+      }
+      return list.map((w) => out.find((o) => o.id === w.id) ?? w)
+    },
+    []
+  )
+
+  const compactUp = useCallback((list: Widget[]): Widget[] => {
+    const sorted = [...list].sort((a, b) => a.y - b.y || a.x - b.x)
+    const placed: Array<{ x: number; y: number; w: number; h: number }> = []
+    const out: Widget[] = []
+    for (const w of sorted) {
+      let y = Math.max(0, w.y)
+      while (y > 0 && !placed.some((pl) => overlaps({ x: w.x, y: y - 1, w: w.w, h: w.h }, pl))) y--
+      while (placed.some((pl) => overlaps({ x: w.x, y, w: w.w, h: w.h }, pl))) y++
+      placed.push({ x: w.x, y, w: w.w, h: w.h })
+      out.push({ ...w, y })
+    }
+    return list.map((w) => out.find((o) => o.id === w.id) ?? w)
+  }, [])
+
+  const px = useCallback(
+    (g: { x: number; y: number; w: number; h: number }) => ({
+      left: g.x * cellW,
+      top: g.y * cellH,
+      width: g.w * colUnit + (g.w - 1) * GAP,
+      height: g.h * ROW + (g.h - 1) * GAP
+    }),
+    [cellW, cellH, colUnit]
+  )
+
+  const applyPreviewStyles = useCallback(
+    (preview: Widget[], activeId: string) => {
+      const canvas = canvasRef.current
+      if (!canvas) return
+      for (const w of preview) {
+        if (w.id === activeId) continue
+        const el = canvas.querySelector<HTMLElement>(`[data-wid="${w.id}"]`)
+        if (!el) continue
+        const r = px(w)
+        el.style.transition = 'left 120ms ease, top 120ms ease'
+        el.style.left = `${r.left}px`
+        el.style.top = `${r.top}px`
+      }
+    },
+    [px]
+  )
+
+  const onCanvasPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (!editMode || e.button !== 0) return
+      const target = e.target as HTMLElement
+      const card = target.closest<HTMLElement>('[data-wid]')
+      if (!card) return
+      const mode = target.closest('.rs-resize') ? 'resize' : target.closest('.rs-drag') ? 'drag' : null
+      if (!mode) return
+      if (colUnit <= 0) return
+      const id = card.dataset.wid as string
+      const w = widgets.find((x) => x.id === id)
+      if (!w) return
+      e.preventDefault()
+      const it = {
+        mode: mode as 'drag' | 'resize',
+        id,
+        startX: e.clientX,
+        startY: e.clientY,
+        orig: { x: w.x, y: w.y, w: w.w, h: w.h },
+        snapshot: widgets,
+        lastKey: '',
+        preview: null as Widget[] | null,
+        raf: 0
+      }
+      interactRef.current = it
+      card.style.transition = 'none'
+      card.style.zIndex = '20'
+      card.style.opacity = '0.92'
+      card.style.boxShadow = '0 8px 24px -8px rgba(0,206,255,0.45)'
+      const ghostEl = ghostElRef.current
+      const showGhost = (g: { x: number; y: number; w: number; h: number }) => {
+        if (!ghostEl) return
+        const r = px(g)
+        ghostEl.style.display = 'block'
+        ghostEl.style.left = `${r.left}px`
+        ghostEl.style.top = `${r.top}px`
+        ghostEl.style.width = `${r.width}px`
+        ghostEl.style.height = `${r.height}px`
+      }
+      showGhost(it.orig)
+
+      const step = (ev: PointerEvent) => {
+        const dxPx = ev.clientX - it.startX
+        const dyPx = ev.clientY - it.startY
+        // active card follows the pointer raw (drag) / stretches raw (resize)
+        if (it.mode === 'drag') {
+          const o = px(it.orig)
+          card.style.left = `${o.left + dxPx}px`
+          card.style.top = `${Math.max(0, o.top + dyPx)}px`
+        } else {
+          const o = px(it.orig)
+          card.style.width = `${Math.max(colUnit, o.width + dxPx)}px`
+          card.style.height = `${Math.max(ROW, o.height + dyPx)}px`
+        }
+        // snapped target cell
+        const dx = Math.round(dxPx / cellW)
+        const dy = Math.round(dyPx / cellH)
+        const g =
+          it.mode === 'drag'
+            ? {
+                x: Math.max(0, Math.min(12 - it.orig.w, it.orig.x + dx)),
+                y: Math.max(0, it.orig.y + dy),
+                w: it.orig.w,
+                h: it.orig.h
+              }
+            : {
+                x: it.orig.x,
+                y: it.orig.y,
+                w: Math.max(2, Math.min(12 - it.orig.x, it.orig.w + dx)),
+                h: Math.max(1, it.orig.h + dy)
+              }
+        const key = `${g.x}:${g.y}:${g.w}:${g.h}`
+        if (key !== it.lastKey) {
+          it.lastKey = key
+          it.preview = layoutWithPinned(it.snapshot, it.id, g)
+          showGhost(g)
+          applyPreviewStyles(it.preview, it.id)
+        }
+      }
+      // Synchronous — the work per move is a handful of style writes plus a
+      // cell-key-guarded relayout; rAF indirection only added dropped frames.
+      const onMove = (ev: PointerEvent) => step(ev)
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        interactRef.current = null
+        if (ghostEl) ghostEl.style.display = 'none'
+        card.style.zIndex = ''
+        card.style.opacity = ''
+        card.style.boxShadow = ''
+        card.style.transition = ''
+        const finalLayout = it.preview ? compactUp(it.preview) : null
+        if (finalLayout) {
+          setWidgets(finalLayout)
+          // let React own the styles again (values match the committed layout)
+          requestAnimationFrame(() => {
+            const canvas = canvasRef.current
+            if (!canvas) return
+            for (const w of finalLayout) {
+              const el = canvas.querySelector<HTMLElement>(`[data-wid="${w.id}"]`)
+              if (el) {
+                el.style.transition = ''
+                const r = px(w)
+                el.style.left = `${r.left}px`
+                el.style.top = `${r.top}px`
+                el.style.width = `${r.width}px`
+                el.style.height = `${r.height}px`
+              }
+            }
+          })
+        } else {
+          const r = px(it.orig)
+          card.style.left = `${r.left}px`
+          card.style.top = `${r.top}px`
+          card.style.width = `${r.width}px`
+          card.style.height = `${r.height}px`
+        }
+      }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+    },
+    [editMode, widgets, cellW, cellH, colUnit, px, layoutWithPinned, compactUp, applyPreviewStyles]
+  )
+
+  const cardStyle = (w: Widget): React.CSSProperties => ({
+    position: 'absolute',
+    left: w.x * cellW,
+    top: w.y * cellH,
+    width: w.w * colUnit + (w.w - 1) * GAP,
+    height: w.h * ROW + (w.h - 1) * GAP
+  })
+  const canvasH = (Math.max(0, ...widgets.map((w) => w.y + w.h)) + 2) * cellH
+
+  const [catalogOpen, setCatalogOpen] = useState(false)
+
+  function addPresetWidget(p: WidgetPreset) {
+    const maxY = Math.max(0, ...widgets.map((w) => w.y + w.h))
+    setWidgets((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        type: p.widget_type,
+        title: p.name,
+        collection: null,
+        config: (p.config ?? (p.widget_type === 'query' ? { query: { slug: '', display: 'table' } } : {})) as Widget['config'],
+        x: 0,
+        y: maxY,
+        w: Math.min(12, Math.max(2, p.w)),
+        h: Math.max(1, p.h)
+      }
+    ])
+    setEditMode(true)
+  }
 
   function addWidget(type: WidgetType) {
     const maxY = Math.max(0, ...widgets.map((w) => w.y + w.h))
@@ -1575,18 +2718,40 @@ export function ReportStudioEditPage() {
         title:
           type === 'divider' ? 'Section' : type === 'kpi_group' ? 'KPI Summary' : `New ${type}`,
         collection: null,
-        config: type === 'kpi_group' ? { metrics: [] } : { metric: { aggregate: 'count' } },
+        config:
+          type === 'kpi_group'
+            ? { metrics: [] }
+            : type === 'query'
+              ? { query: { slug: '', display: 'table' } }
+              : { metric: { aggregate: 'count' } },
         x: 0,
         y: maxY,
         w: type === 'kpi' ? 3 : type === 'divider' || type === 'kpi_group' ? 12 : 6,
-        h: type === 'kpi' ? 2 : type === 'divider' ? 1 : type === 'kpi_group' ? 2 : 3
+        h: type === 'kpi' ? 2 : type === 'divider' ? 1 : type === 'kpi_group' ? 2 : type === 'query' ? 4 : 3
       }
     ])
     setEditMode(true)
   }
 
+  const resetCache = useMutation({
+    mutationFn: () => api.post(`/report-studio/${id}/reset-cache`),
+    onSuccess: (r: { data: { data: { queries: number; cleared: number } } }) => {
+      // drop every client-side widget result too — fresh fetches repopulate
+      queryClient.invalidateQueries({ queryKey: ['rs-widget'] })
+      queryClient.invalidateQueries({ queryKey: ['nivaro-report-query'] })
+      toast.success(`Cache cleared — ${r.data.data.queries} queries reset`)
+    }
+  })
+
   function exportJson() {
-    const blob = new Blob([JSON.stringify({ version: 1, name: report?.name, widgets }, null, 2)], {
+    const payload = {
+      version: 2,
+      name: report?.name,
+      description: report?.description ?? null,
+      global_filters: gf,
+      widgets
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: 'application/json'
     })
     const a = document.createElement('a')
@@ -1600,11 +2765,24 @@ export function ReportStudioEditPage() {
     const reader = new FileReader()
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(String(reader.result)) as { version?: number; widgets?: Widget[] }
+        const parsed = JSON.parse(String(reader.result)) as {
+          version?: number
+          widgets?: Widget[]
+          global_filters?: GlobalFilters
+          description?: string | null
+        }
         if (!parsed.version || !Array.isArray(parsed.widgets)) throw new Error('bad format')
         setWidgets(parsed.widgets.map((w) => ({ ...w, id: crypto.randomUUID() })))
+        if (parsed.global_filters || parsed.description !== undefined) {
+          patchReport.mutate({
+            ...(parsed.global_filters ? { global_filters: parsed.global_filters } : {}),
+            ...(parsed.description !== undefined ? { description: parsed.description } : {})
+          })
+        }
         setEditMode(true)
-        toast.success(`Imported ${parsed.widgets.length} widgets`)
+        toast.success(
+          `Imported ${parsed.widgets.length} widgets${parsed.global_filters ? ' + filters' : ''}`
+        )
       } catch {
         toast.error('Not a valid report export')
       }
@@ -1621,7 +2799,7 @@ export function ReportStudioEditPage() {
     }
   })
 
-  if (!report) {
+  if (!report || !scopeGateOpen) {
     return (
       <div className='flex flex-1 items-center justify-center text-[13px] text-slate-400'>
         Loading report…
@@ -1638,7 +2816,7 @@ export function ReportStudioEditPage() {
         <div className='flex items-center gap-2.5'>
           <button
             type='button'
-            onClick={() => navigate('/report-studio')}
+            onClick={goBack}
             className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
           >
             <ArrowLeft className='h-4 w-4' />
@@ -1694,6 +2872,15 @@ export function ReportStudioEditPage() {
                 <Button size='sm' variant='outline' className='gap-1.5' onClick={() => clone.mutate()}>
                   <Copy className='h-3.5 w-3.5' /> Clone
                 </Button>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='h-8 gap-1.5 text-[12px]'
+                  disabled={resetCache.isPending}
+                  onClick={() => resetCache.mutate()}
+                >
+                  <RefreshCw className={cn('h-3.5 w-3.5', resetCache.isPending && 'animate-spin')} /> Reset cache
+                </Button>
                 <Button size='sm' variant='outline' className='gap-1.5' onClick={exportJson}>
                   <Download className='h-3.5 w-3.5' /> Export
                 </Button>
@@ -1704,6 +2891,21 @@ export function ReportStudioEditPage() {
                   onClick={() => fileRef.current?.click()}
                 >
                   <Upload className='h-3.5 w-3.5' /> Import
+                </Button>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='gap-1.5 text-slate-400 hover:border-red-200 hover:text-red-500'
+                  onClick={() => {
+                    if (window.confirm(`Delete report “${report.name}”? Widgets, subscriptions and alerts go with it.`)) {
+                      void api.delete(`/report-studio/${report.id}`).then(() => {
+                        toast.success('Report deleted')
+                        navigate('/report-studio')
+                      })
+                    }
+                  }}
+                >
+                  <Trash2 className='h-3.5 w-3.5' /> Delete
                 </Button>
                 <input
                   ref={fileRef}
@@ -1738,7 +2940,11 @@ export function ReportStudioEditPage() {
               patchReport.mutate({
                 global_filters: {
                   ...gf,
-                  date_range: e.target.value ? { preset: e.target.value } : null
+                  date_range: e.target.value
+                    ? e.target.value === 'custom'
+                      ? { preset: 'custom', start: gf.date_range?.start, end: gf.date_range?.end }
+                      : { preset: e.target.value }
+                    : null
                 }
               })
             }
@@ -1751,18 +2957,52 @@ export function ReportStudioEditPage() {
             ))}
           </select>
 
+          {gf.date_range?.preset === 'custom' && (
+            <span className='flex items-center gap-1'>
+              <input
+                type='date'
+                value={gf.date_range?.start?.slice(0, 10) ?? ''}
+                onChange={(e) =>
+                  patchReport.mutate({
+                    global_filters: {
+                      ...gf,
+                      date_range: { preset: 'custom', start: e.target.value, end: gf.date_range?.end }
+                    }
+                  })
+                }
+                className='h-7 rounded-md border border-slate-200 bg-white px-1.5 text-[11.5px] dark:border-border dark:bg-card'
+              />
+              <span className='text-[10px] text-slate-400'>–</span>
+              <input
+                type='date'
+                value={gf.date_range?.end?.slice(0, 10) ?? ''}
+                onChange={(e) =>
+                  patchReport.mutate({
+                    global_filters: {
+                      ...gf,
+                      date_range: { preset: 'custom', start: gf.date_range?.start, end: e.target.value }
+                    }
+                  })
+                }
+                className='h-7 rounded-md border border-slate-200 bg-white px-1.5 text-[11.5px] dark:border-border dark:bg-card'
+              />
+            </span>
+          )}
+
           {filterBar.map((f) => (
             <FilterChip
               key={f.field}
               reportId={report.id}
               field={f.field}
               label={f.label}
+              optionSource={f.options}
+              allowedValues={scopeAllowed[f.field]}
               selected={entityFilters.find((e) => e.field === f.field)?.values ?? []}
               editable={!!report.editable}
-              onChange={(values) =>
+              onChange={(values, labels) =>
                 setEntityFilters((prev) => [
                   ...prev.filter((e) => e.field !== f.field),
-                  ...(values.length > 0 ? [{ field: f.field, values }] : [])
+                  ...(values.length > 0 ? [{ field: f.field, values, labels }] : [])
                 ])
               }
               onRemove={() =>
@@ -1794,27 +3034,26 @@ export function ReportStudioEditPage() {
             </button>
           )}
 
-          <form
-            className='ml-auto flex items-center gap-1'
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (aiFilterPrompt.trim()) aiFilters.mutate()
-            }}
-          >
-            <Sparkles className='h-3 w-3 text-nvr-cyan' />
-            <input
-              value={aiFilterPrompt}
-              onChange={(e) => setAiFilterPrompt(e.target.value)}
-              placeholder='Ask AI to set filters… e.g. "last 6 months"'
-              className='h-7 w-64 rounded-md border border-slate-200 bg-white px-2 text-[11.5px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-card'
-            />
-            {aiFilters.isPending && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
-          </form>
         </div>
+
+        <FilterExtrasBar
+          reportId={report.id}
+          filterBar={filterBar}
+          appliedRange={dateRange}
+          appliedFilters={entityFilters}
+          onApply={applyFilterState}
+        />
 
         {editMode && (
           <div className='mt-2 flex items-center gap-1.5'>
             <span className='text-[11px] text-slate-400'>Add widget:</span>
+            <button
+              type='button'
+              onClick={() => setCatalogOpen(true)}
+              className='rounded-full border border-nvr-cyan/50 bg-nvr-cyan/5 px-2.5 py-0.5 text-[11.5px] font-semibold text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
+            >
+              ▦ From catalog…
+            </button>
             {WIDGET_TYPES.map((t) => (
               <button
                 key={t.id}
@@ -1827,6 +3066,11 @@ export function ReportStudioEditPage() {
             ))}
           </div>
         )}
+        <WidgetCatalogDialog
+          open={catalogOpen}
+          onClose={() => setCatalogOpen(false)}
+          onPick={addPresetWidget}
+        />
       </header>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 px-4 py-4 dark:bg-background'>
@@ -1841,19 +3085,38 @@ export function ReportStudioEditPage() {
             </p>
           </div>
         ) : (
-          <Grid
-            layout={layout}
-            cols={12}
-            rowHeight={72}
-            margin={[12, 12]}
-            isDraggable={editMode}
-            isResizable={editMode}
-            draggableHandle='.rs-drag'
-            onLayoutChange={onLayoutChange}
+          <>
+          <style>{`
+            .rs-resize {
+              position: absolute; right: 0; bottom: 0; width: 22px; height: 22px;
+              cursor: nwse-resize; z-index: 3;
+            }
+            .rs-resize::after {
+              content: '';
+              position: absolute; right: 5px; bottom: 5px;
+              width: 9px; height: 9px;
+              border-right: 2px solid #94a3b8;
+              border-bottom: 2px solid #94a3b8;
+              border-bottom-right-radius: 2px;
+            }
+            .rs-resize:hover::after { border-color: #00ceff; }
+          `}</style>
+          <div
+            ref={setCanvasEl}
+            className='relative'
+            style={{ height: canvasH || undefined }}
+            onPointerDown={onCanvasPointerDown}
           >
+            <div
+              ref={ghostElRef}
+              className='pointer-events-none absolute rounded-lg border border-dashed border-[#00ceff] bg-[#00ceff1a]'
+              style={{ display: 'none' }}
+            />
             {widgets.map((w) => (
               <div
                 key={w.id}
+                data-wid={w.id}
+                style={cardStyle(w)}
                 className={cn(
                   'group/widget overflow-hidden',
                   w.type === 'divider'
@@ -1863,12 +3126,17 @@ export function ReportStudioEditPage() {
               >
                 {w.type === 'divider' ? (
                   <div className='flex w-full items-center gap-2 border-b border-slate-200 pb-1 dark:border-border'>
-                    {editMode && (
-                      <GripVertical className='rs-drag h-3.5 w-3.5 cursor-grab text-slate-300' />
-                    )}
-                    <h3 className='text-[13px] font-semibold text-slate-700 dark:text-slate-200'>
-                      {w.title}
-                    </h3>
+                    <span
+                      className={cn(
+                        'flex min-w-0 flex-1 items-center gap-2',
+                        editMode && 'rs-drag cursor-grab active:cursor-grabbing'
+                      )}
+                    >
+                      {editMode && <GripVertical className='h-3.5 w-3.5 text-slate-300' />}
+                      <h3 className='text-[13px] font-semibold text-slate-700 dark:text-slate-200'>
+                        {w.title}
+                      </h3>
+                    </span>
                     {editMode && (
                       <span className='ml-auto flex gap-0.5 opacity-0 transition-opacity group-hover/widget:opacity-100'>
                         <button
@@ -1891,23 +3159,29 @@ export function ReportStudioEditPage() {
                 ) : (
                   <div className='flex h-full flex-col p-3'>
                     <div className='mb-1.5 flex items-center gap-1.5'>
-                      {editMode && (
-                        <GripVertical className='rs-drag h-3.5 w-3.5 shrink-0 cursor-grab text-slate-300' />
-                      )}
-                      <p className='truncate text-[11.5px] font-medium uppercase tracking-wide text-slate-400'>
-                        {w.title}
-                      </p>
-                      <span className='ml-auto flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover/widget:opacity-100'>
-                        {(w.type === 'kpi' || w.type === 'table' || w.type === 'kpi_group') && (
-                          <button
-                            type='button'
-                            title='Alert on this widget'
-                            className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-amber-500 dark:hover:bg-muted'
-                            onClick={() => setAlertsFor(w.id)}
-                          >
-                            <Bell className='h-3.5 w-3.5' />
-                          </button>
+                      <span
+                        className={cn(
+                          'flex min-w-0 flex-1 items-center gap-1.5',
+                          editMode && 'rs-drag cursor-grab active:cursor-grabbing'
                         )}
+                      >
+                        {editMode && (
+                          <GripVertical className='h-3.5 w-3.5 shrink-0 text-slate-300' />
+                        )}
+                        <p className='truncate text-[11.5px] font-medium uppercase tracking-wide text-slate-400'>
+                          {w.title}
+                        </p>
+                      </span>
+                      <span className='ml-auto flex shrink-0 gap-0.5'>
+                        <button
+                          type='button'
+                          title='Alert on this widget'
+                          className='rounded p-0.5 text-slate-300 hover:bg-slate-100 hover:text-amber-500 dark:text-slate-600 dark:hover:bg-muted'
+                          onClick={() => setAlertsFor(w.id)}
+                        >
+                          <Bell className='h-3.5 w-3.5' />
+                        </button>
+                        <span className='flex gap-0.5 opacity-0 transition-opacity group-hover/widget:opacity-100'>
                         {editMode && (
                           <>
                             <button
@@ -1919,6 +3193,28 @@ export function ReportStudioEditPage() {
                             </button>
                             <button
                               type='button'
+                              title='Duplicate widget'
+                              className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
+                              onClick={() =>
+                                setWidgets((p) => {
+                                  const maxY = Math.max(0, ...p.map((x) => x.y + x.h))
+                                  return [
+                                    ...p,
+                                    {
+                                      ...w,
+                                      id: crypto.randomUUID(),
+                                      title: `${w.title} (copy)`,
+                                      y: maxY,
+                                      sort: p.length
+                                    }
+                                  ]
+                                })
+                              }
+                            >
+                              <Copy className='h-3.5 w-3.5' />
+                            </button>
+                            <button
+                              type='button'
                               className='rounded p-0.5 text-slate-400 hover:bg-red-50 hover:text-red-500'
                               onClick={() => setWidgets((p) => p.filter((x) => x.id !== w.id))}
                             >
@@ -1926,6 +3222,7 @@ export function ReportStudioEditPage() {
                             </button>
                           </>
                         )}
+                        </span>
                       </span>
                     </div>
                     <div className='min-h-0 flex-1'>
@@ -1933,9 +3230,11 @@ export function ReportStudioEditPage() {
                     </div>
                   </div>
                 )}
+                {editMode && w.type !== 'divider' && <span className='rs-resize' />}
               </div>
             ))}
-          </Grid>
+          </div>
+          </>
         )}
       </div>
 
@@ -1951,6 +3250,7 @@ export function ReportStudioEditPage() {
           reportId={report.id}
           widgets={widgets}
           initialWidget={alertsFor}
+          filterBar={filterBar}
           onClose={() => setAlertsFor(false)}
         />
       )}

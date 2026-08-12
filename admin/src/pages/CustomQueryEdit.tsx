@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Trash2, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -65,6 +66,7 @@ function slugify(name: string): string {
 export function CustomQueryEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const goBack = useGoBack('/custom-queries')
   const queryClient = useQueryClient()
   const isNew = id === 'new'
 
@@ -198,7 +200,7 @@ export function CustomQueryEditPage() {
           <div className='flex items-center gap-2'>
             <button
               type='button'
-              onClick={() => navigate('/custom-queries')}
+              onClick={goBack}
               className='flex items-center gap-1.5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700'
             >
               <ArrowLeft className='h-4 w-4' />

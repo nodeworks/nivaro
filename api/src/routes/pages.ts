@@ -169,7 +169,10 @@ const VALID_WIDGET_TYPES = new Set<string>([
   'kpi',
   'markdown',
   'iframe',
-  'recent-activity'
+  'recent-activity',
+  'query',
+  'matrix',
+  'record-grid'
 ])
 
 /** Minimal layout shape validation — returns an error string or null. */

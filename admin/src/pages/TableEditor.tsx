@@ -63,6 +63,7 @@ import {
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import {
@@ -3839,6 +3840,7 @@ function SettingsTab({
       <ItemLockingSection tableName={tableName} />
       <AddendumsSection tableName={tableName} />
       <PickerFilterSection tableName={tableName} />
+      <BrowserSettingsSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
     </div>
   )
@@ -4307,6 +4309,143 @@ function AddendumsSection({ tableName }: { tableName: string }) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Browser Settings card (Settings tab) ─────────────────────────────────────
+// nivaro_collections.browser_config — CollectionBrowserView behavior:
+// checkbox selection, row actions, create button, page size, quick filters.
+
+interface BrowserConfig {
+  checkbox_selection?: boolean
+  show_actions?: boolean
+  allow_create?: boolean
+  page_size?: number
+  quick_filters?: unknown[]
+}
+
+function BrowserSettingsSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const { data: col } = useQuery({
+    queryKey: ['collection-meta', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { browser_config: BrowserConfig | null } }>(`/collections/${tableName}`)
+        .then((r) => r.data.data),
+    enabled: !!tableName,
+    staleTime: 10 * 60 * 1000
+  })
+  const cfg = col?.browser_config ?? {}
+  const [pageSize, setPageSize] = useState('')
+  const [qfDraft, setQfDraft] = useState('')
+  const [qfError, setQfError] = useState('')
+  const [initialised, setInitialised] = useState(false)
+  useEffect(() => {
+    if (col !== undefined && !initialised) {
+      setPageSize(cfg.page_size ? String(cfg.page_size) : '')
+      setQfDraft(cfg.quick_filters?.length ? JSON.stringify(cfg.quick_filters, null, 2) : '')
+      setInitialised(true)
+    }
+  }, [col, initialised, cfg])
+
+  const patch = async (partial: BrowserConfig) => {
+    const next = { ...cfg, ...partial }
+    // Drop defaults so the stored JSON stays minimal.
+    const clean: BrowserConfig = {}
+    if (next.checkbox_selection === false) clean.checkbox_selection = false
+    if (next.show_actions === false) clean.show_actions = false
+    if (next.allow_create === false) clean.allow_create = false
+    if (next.page_size && next.page_size > 0) clean.page_size = next.page_size
+    if (next.quick_filters?.length) clean.quick_filters = next.quick_filters
+    await api.patch(`/collections/${tableName}`, {
+      browser_config: Object.keys(clean).length > 0 ? clean : null
+    })
+    qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+    toast.success('Browser settings saved')
+  }
+
+  const row = (label: string, desc: string, key: 'checkbox_selection' | 'show_actions' | 'allow_create') => (
+    <div className='flex items-center justify-between gap-4'>
+      <div>
+        <p className='text-[12.5px] font-medium text-slate-700'>{label}</p>
+        <p className='text-[11.5px] text-slate-500'>{desc}</p>
+      </div>
+      <Switch checked={cfg[key] !== false} onCheckedChange={(v) => void patch({ [key]: v })} />
+    </div>
+  )
+
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='px-4 py-3 space-y-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Collection Browser</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Behavior of the embeddable collection browser (CollectionBrowserView) for this
+            collection. Also editable via{' '}
+            <code className='text-[11px]'>PATCH /collections/{tableName}</code> with{' '}
+            <code className='text-[11px]'>browser_config</code>.
+          </p>
+        </div>
+        {row('Row selection', 'Checkbox column + bulk actions bar', 'checkbox_selection')}
+        {row('Row actions menu', 'Per-row Actions dropdown (transitions, audit log…)', 'show_actions')}
+        {row('New item button', 'Allow creating records from the browser', 'allow_create')}
+        <div className='flex items-center justify-between gap-4'>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>Page size</p>
+            <p className='text-[11.5px] text-slate-500'>Rows per page (default 25, max 200)</p>
+          </div>
+          <Input
+            type='number'
+            value={pageSize}
+            onChange={(e) => setPageSize(e.target.value)}
+            onBlur={() => {
+              const n = Number(pageSize)
+              void patch({ page_size: n > 0 ? Math.min(n, 200) : undefined })
+            }}
+            placeholder='25'
+            className='h-7 w-20 text-[12px]'
+          />
+        </div>
+        <div>
+          <p className='text-[12.5px] font-medium text-slate-700'>Quick filters</p>
+          <p className='mb-1 text-[11.5px] text-slate-500'>
+            Facet dropdowns above the table — JSON array of{' '}
+            {'{key, label, path, collection, label_field, value_field?, sort?, or_paths?}'}
+          </p>
+          <Textarea
+            value={qfDraft}
+            onChange={(e) => setQfDraft(e.target.value)}
+            placeholder='[{"key":"fy","label":"Funding Year","path":["funding_years"],"collection":"funding_years","label_field":"id","sort":"-id"}]'
+            rows={4}
+            className='font-mono text-[12px]'
+          />
+          {qfError && <p className='text-[11px] text-red-500'>{qfError}</p>}
+          <div className='mt-1.5 flex gap-2'>
+            <Button
+              size='sm'
+              className='h-7 text-[12px]'
+              onClick={() => {
+                if (!qfDraft.trim()) {
+                  setQfError('')
+                  void patch({ quick_filters: undefined })
+                  return
+                }
+                try {
+                  const parsed = JSON.parse(qfDraft)
+                  if (!Array.isArray(parsed)) throw new Error('not array')
+                  setQfError('')
+                  void patch({ quick_filters: parsed })
+                } catch {
+                  setQfError('Invalid JSON — must be an array of quick-filter objects')
+                }
+              }}
+            >
+              Save quick filters
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -6269,9 +6408,11 @@ function fieldTypeHint(
   field: string,
   type: string | undefined,
   m2oRels: Array<{ many_field: string }>,
-  o2mRels?: Array<{ one_field: string }>
+  o2mRels?: Array<{ one_field: string; many_collection?: string }>
 ): string {
-  if (o2mRels?.some((r) => r.one_field === field)) return 'O2M'
+  // one_field match OR the child-table-name alias form (second grid view on the
+  // same relation uses many_collection as its field key — FieldRenderer parity)
+  if (o2mRels?.some((r) => r.one_field === field || r.many_collection === field)) return 'O2M'
   if (m2oRels.some((r) => r.many_field === field)) return 'M2O'
   const t = (type ?? '').toLowerCase()
   if (['string', 'nvarchar', 'varchar', 'char', 'text'].some((x) => t.includes(x))) return 'text'
@@ -8608,6 +8749,18 @@ function FieldSettingsPopover({
   const [gridLayoutSlug, setGridLayoutSlug] = useState<string | null>(null)
   const [gridLayoutId, setGridLayoutId] = useState<number | null>(null)
   const [gridShowTotals, setGridShowTotals] = useState(false)
+  const [optionSort, setOptionSort] = useState<string>(() => {
+    try {
+      const o = settings.options
+        ? ((typeof settings.options === 'string'
+            ? JSON.parse(settings.options)
+            : settings.options) as Record<string, unknown>)
+        : {}
+      return typeof o.option_sort === 'string' ? o.option_sort : ''
+    } catch {
+      return ''
+    }
+  })
   const [allowUpload, setAllowUpload] = useState(true)
   const [allowPick, setAllowPick] = useState(true)
   const [filePendingSave, setFilePendingSave] = useState(false)
@@ -8630,6 +8783,8 @@ function FieldSettingsPopover({
   const [uniqueByOpen, setUniqueByOpen] = useState(false)
   const [sortField, setSortField] = useState<string>('')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [sectionGroupByLocal, setSectionGroupByLocal] = useState<string>('')
+  const [catalogModeLocal, setCatalogModeLocal] = useState<string>('')
   const [sortFieldOpen, setSortFieldOpen] = useState(false)
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
@@ -9038,6 +9193,8 @@ function FieldSettingsPopover({
         setUniqueBy(Array.isArray(opts.unique_by) ? (opts.unique_by as string[]) : [])
         setSortField((opts.sort_field as string) ?? '')
         setSortDir((opts.sort_dir as 'asc' | 'desc') === 'desc' ? 'desc' : 'asc')
+        setSectionGroupByLocal((opts.section_group_by as string) ?? '')
+        setCatalogModeLocal(opts.catalog_mode ? JSON.stringify(opts.catalog_mode, null, 2) : '')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
       } catch {
@@ -9091,7 +9248,8 @@ function FieldSettingsPopover({
       isNumericAbstractType ||
       iface === 'file-image' ||
       iface === 'files-m2m' ||
-      iface === 'relation-grouped'
+      iface === 'relation-grouped' ||
+      ((isM2O || isM2M) && optionSort.trim() !== '')
     if (needsOptionsPatch) {
       try {
         const existing = settings.options
@@ -9156,7 +9314,22 @@ function FieldSettingsPopover({
                       ...(uniqueBy.length > 0 ? { unique_by: uniqueBy } : { unique_by: undefined }),
                       ...(sortField
                         ? { sort_field: sortField, sort_dir: sortDir }
-                        : { sort_field: undefined, sort_dir: undefined })
+                        : { sort_field: undefined, sort_dir: undefined }),
+                      ...(sectionGroupByLocal.trim().includes('.')
+                        ? { section_group_by: sectionGroupByLocal.trim() }
+                        : { section_group_by: undefined }),
+                      ...(() => {
+                        try {
+                          const parsed = catalogModeLocal.trim()
+                            ? JSON.parse(catalogModeLocal)
+                            : null
+                          return parsed?.item_field && parsed?.section_by
+                            ? { catalog_mode: parsed }
+                            : { catalog_mode: undefined }
+                        } catch {
+                          return { catalog_mode: undefined }
+                        }
+                      })()
                     })
               }
             : {}
@@ -9175,12 +9348,19 @@ function FieldSettingsPopover({
                 option_field: groupedOptionField || undefined
               }
             : {}
+        const pickerSortOpts =
+          isM2O || isM2M
+            ? optionSort.trim()
+              ? { option_sort: optionSort.trim() }
+              : { option_sort: undefined }
+            : {}
         optionsPatch = JSON.stringify({
           ...existing,
           ...o2mOpts,
           ...fileOpts,
           ...formatOpts,
-          ...groupedOpts
+          ...groupedOpts,
+          ...pickerSortOpts
         })
       } catch {
         optionsPatch = JSON.stringify({
@@ -9488,6 +9668,24 @@ function FieldSettingsPopover({
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* ── Option sort (M2O / M2M pickers) ── */}
+            {(isM2O || isM2M) && (
+              <div className='space-y-2'>
+                <SectionHeader label='Option sort' />
+                <Input
+                  value={optionSort}
+                  onChange={(e) => setOptionSort(e.target.value)}
+                  placeholder='e.g. -year, name, label, -label'
+                  className='h-8 font-mono text-[12px]'
+                />
+                <p className='text-[10.5px] leading-relaxed text-slate-400'>
+                  Orders the dropdown options: a column name sorts on the server ("-" prefix =
+                  descending); "label" / "-label" sorts by the rendered display label. Empty =
+                  default (label ascending).
+                </p>
               </div>
             )}
 
@@ -10070,6 +10268,42 @@ function FieldSettingsPopover({
                         </button>
                       )}
                     </div>
+                  </div>
+                )}
+
+                {/* Section grouping (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Group rows into sections</Label>
+                    <Input
+                      value={sectionGroupByLocal}
+                      onChange={(e) => setSectionGroupByLocal(e.target.value)}
+                      placeholder='e.g. item.category.name'
+                      className='h-7 font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      Dotted relation path on the child collection. Rows render under one
+                      collapsible section per distinct value. Empty = no grouping.
+                    </p>
+                  </div>
+                )}
+
+                {/* Catalog picker (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Catalog picker (JSON)</Label>
+                    <Textarea
+                      value={catalogModeLocal}
+                      onChange={(e) => setCatalogModeLocal(e.target.value)}
+                      placeholder={'{\n  "item_field": "item",\n  "section_by": "bom_category.name",\n  "filter": {"status": {"_eq": true}},\n  "copy_fields": {"price": "price"},\n  "compute_fields": {"total": "{{price}} * {{quantity}}"}\n}'}
+                      rows={5}
+                      className='font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      Replaces the grid with a full-catalog picker: every item of the child's
+                      "item_field" M2O target renders under sections grouped by "section_by";
+                      entering a quantity creates the child row. Empty = normal grid.
+                    </p>
                   </div>
                 )}
 
@@ -11915,6 +12149,8 @@ interface CollectionLayout {
   collection: string
   name: string
   slug?: string | null
+  create_label?: string | null
+  create_hidden?: boolean | number
   is_active: boolean | number
   sort: number
   disable_comments?: boolean | number
@@ -12238,6 +12474,8 @@ function LayoutsTab({
         Pick<
           CollectionLayout,
           | 'slug'
+          | 'create_label'
+          | 'create_hidden'
           | 'disable_comments'
           | 'disable_tasks'
           | 'disable_revisions'
@@ -12285,11 +12523,15 @@ function LayoutsTab({
   const [settingsExpanded, setSettingsExpanded] = useState(false)
   const [slugDraft, setSlugDraft] = useState<string>('')
   const [slugEditing, setSlugEditing] = useState(false)
+  const [createLabelDraft, setCreateLabelDraft] = useState<string>('')
+  const [createLabelEditing, setCreateLabelEditing] = useState(false)
 
   // Sync slug draft when selection changes
   useEffect(() => {
     setSlugDraft(selected?.slug ?? '')
     setSlugEditing(false)
+    setCreateLabelDraft(selected?.create_label ?? '')
+    setCreateLabelEditing(false)
   }, [selected?.id])
 
   const [conditionRows, setConditionRows] = useState<
@@ -12648,6 +12890,66 @@ function LayoutsTab({
                     Used to reference this layout in code. Only a–z, 0–9, and _.
                   </p>
                 </div>
+
+                <div className='space-y-1'>
+                  <label className='block text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                    New-item menu label
+                  </label>
+                  <input
+                    value={createLabelDraft}
+                    onChange={(e) => {
+                      setCreateLabelDraft(e.target.value)
+                      setCreateLabelEditing(true)
+                    }}
+                    onBlur={() => {
+                      if (createLabelEditing && selected) {
+                        patchLayoutMut.mutate({
+                          id: selected.id,
+                          create_label: createLabelDraft.trim() || null
+                        })
+                        setCreateLabelEditing(false)
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && selected) {
+                        patchLayoutMut.mutate({
+                          id: selected.id,
+                          create_label: createLabelDraft.trim() || null
+                        })
+                        setCreateLabelEditing(false)
+                        e.currentTarget.blur()
+                      }
+                    }}
+                    placeholder={selected?.name ?? ''}
+                    className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+                  />
+                  <p className='text-[10px] text-slate-400'>
+                    Shown in the collection browser's New-item dropdown. Empty = layout name.
+                  </p>
+                </div>
+
+                <label className='flex cursor-pointer items-center justify-between'>
+                  <div>
+                    <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                      Hide from New-item menu
+                    </span>
+                    <p className='text-[10px] text-slate-400 dark:text-slate-500'>
+                      Keep the slug usable but exclude this layout from the dropdown
+                    </p>
+                  </div>
+                  <input
+                    type='checkbox'
+                    checked={!!selected?.create_hidden}
+                    onChange={(e) => {
+                      if (selected)
+                        patchLayoutMut.mutate({
+                          id: selected.id,
+                          create_hidden: e.target.checked
+                        })
+                    }}
+                    className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                  />
+                </label>
                 <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
                   <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
                     Layout type
@@ -14072,11 +14374,12 @@ function FieldGroupsTab({
           ((!r.one_field || r.one_field === 'id') && r.many_collection === fieldName))
     )
     if (m2m) return 'M2M'
-    // Virtual O2M field
+    // Virtual O2M field — one_field, or the child-table-name alias form (a second
+    // grid view on the same relation binds by many_collection; FieldRenderer parity)
     const o2m = relations.find(
       (r) =>
         r.junction_field === null &&
-        (r.one_field === fieldName || (r.one_field === 'id' && r.many_collection === fieldName))
+        (r.one_field === fieldName || r.many_collection === fieldName)
     )
     if (o2m) return 'O2M'
     // M2O FK column on this collection
@@ -14145,6 +14448,7 @@ function FieldGroupsTab({
     color?: string
     weight?: string
     display_as?: string
+    link_template?: string
   }
   const [headerFieldDisplayMeta, setHeaderFieldDisplayMeta] = useState<
     Record<string, HeaderFieldMeta>
@@ -14326,7 +14630,9 @@ function FieldGroupsTab({
         color: parsedBindings2.find((b) => b.key === '__color__')?.binding_value || undefined,
         weight: parsedBindings2.find((b) => b.key === '__weight__')?.binding_value || undefined,
         display_as:
-          parsedBindings2.find((b) => b.key === '__display_as__')?.binding_value || undefined
+          parsedBindings2.find((b) => b.key === '__display_as__')?.binding_value || undefined,
+        link_template:
+          parsedBindings2.find((b) => b.key === '__link_template__')?.binding_value || undefined
       }
     }
     setHeaderFieldDisplayMeta(nextHeaderFieldMeta)
@@ -14618,6 +14924,12 @@ function FieldGroupsTab({
                 binding_type: 'static',
                 binding_value: hMeta.display_as
               })
+            if (hMeta?.link_template)
+              styleBindings.push({
+                key: '__link_template__',
+                binding_type: 'static',
+                binding_value: hMeta.link_template
+              })
             fieldAssignments.push({
               field: f,
               group_key: gk,
@@ -14856,7 +15168,19 @@ function FieldGroupsTab({
     'parent_context_fields',
     'unique_by',
     'sort_field',
-    'sort_dir'
+    'sort_dir',
+    'section_group_by',
+    'catalog_mode',
+    'picker_facets',
+    'option_sort',
+    'option_filter',
+    'row_filter',
+    'row_defaults',
+    'allocate_drawer',
+    'drawer_relations',
+    'auto_allocate',
+    'upload_template',
+    'quick_create'
   ]
 
   const patchField = useCallback(
@@ -15442,9 +15766,9 @@ function FieldGroupsTab({
               <input
                 type='text'
                 placeholder='Label override'
-                defaultValue={meta.label_override ?? ''}
-                onBlur={(e) => {
-                  const v = e.target.value.trim() || null
+                value={meta.label_override ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value || null
                   setWidgetSlotMeta((prev) => ({ ...prev, [f]: { ...prev[f], label_override: v } }))
                   hasLocalChangeRef.current = true
                   changeSeqRef.current++
@@ -15639,9 +15963,9 @@ function FieldGroupsTab({
                 <input
                   type='text'
                   placeholder='Use default'
-                  defaultValue={wMeta.label_override ?? ''}
-                  onBlur={(e) => {
-                    const v = e.target.value.trim() || null
+                  value={wMeta.label_override ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value || null
                     setWidgetSlotMeta((prev) => ({
                       ...prev,
                       [f]: { ...prev[f], label_override: v }
@@ -15742,11 +16066,13 @@ function FieldGroupsTab({
           >
             <div className='space-y-1'>
               <p className='text-[10px] text-slate-400 font-medium'>Label override</p>
+              {/* Commit on change, not blur: closing the popover unmounts the input
+                  before blur can fire, silently dropping the typed label. */}
               <input
                 type='text'
                 placeholder='Use default'
-                defaultValue={meta.label_override ?? ''}
-                onBlur={(e) => update({ label_override: e.target.value.trim() || null })}
+                value={meta.label_override ?? ''}
+                onChange={(e) => update({ label_override: e.target.value || null })}
                 className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
               />
             </div>
@@ -15836,6 +16162,17 @@ function FieldGroupsTab({
                   </button>
                 ))}
               </div>
+            </div>
+            <div className='space-y-1'>
+              <p className='text-[10px] text-slate-400 font-medium'>Link URL template</p>
+              {/* Commit on change (popover unmount drops blur). {{value}} = the
+                  field's value; any {{field}} from the record also resolves. */}
+              <Input
+                className='h-6 text-[11px]'
+                placeholder='https://example.com/{{value}}'
+                value={meta.link_template ?? ''}
+                onChange={(e) => update({ link_template: e.target.value || undefined })}
+              />
             </div>
           </PopoverContent>
         </Popover>
@@ -18477,6 +18814,7 @@ type Tab =
 export function TableEditorPage() {
   const { table } = useParams<{ table: string }>()
   const navigate = useNavigate()
+  const goBack = useGoBack('/data-model')
   const qc = useQueryClient()
   const [tab, setTab] = usePersistedTab<Tab>(`nvr_tab_tableeditor_${table ?? ''}`, 'fields')
   const { user } = useAuth()
@@ -18540,6 +18878,7 @@ export function TableEditorPage() {
           <div className='flex items-center gap-2 text-[13px]'>
             <Link
               to='/data-model'
+              onClick={(e) => { e.preventDefault(); goBack() }}
               className='flex items-center gap-1 text-slate-400 transition-colors hover:text-slate-700'
             >
               <ArrowLeft className='h-3.5 w-3.5' />

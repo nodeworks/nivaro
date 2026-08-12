@@ -25,21 +25,26 @@ import {
   Download,
   Filter,
   GripVertical,
+  History,
   LayoutGrid,
   Link2,
   Link2Off,
   ListChecks,
   Loader2,
   Pencil,
+  PlugZap,
   Plus,
   Search,
   Settings,
   Trash2,
-  X
+  X,
+  Zap,
+  GitFork
 } from 'lucide-react'
 import type React from 'react'
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { FieldPicker, type PickedField } from '@/components/field-picker'
 import { OwnerMatrix } from '@/components/pipeline-owner-matrix'
@@ -51,6 +56,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import {
   api,
   type CMSField,
@@ -70,7 +77,7 @@ import {
   type TransitionRequirement
 } from '@/lib/api'
 import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from '@/lib/relations'
-import { cn, titleCase } from '@/lib/utils'
+import { cn, formatRelative, titleCase } from '@/lib/utils'
 
 // ─── Simple combobox ──────────────────────────────────────────────────────────
 
@@ -361,6 +368,7 @@ interface StateFormData {
   is_initial: boolean
   is_terminal: boolean
   lock_record: boolean
+  skip_if_no_owners: boolean
   stage_visibility: 'always' | 'hide' | 'hide_unless_active'
 }
 
@@ -382,6 +390,7 @@ function StateForm({
     is_initial: initial.is_initial ?? false,
     is_terminal: initial.is_terminal ?? false,
     lock_record: initial.lock_record ?? false,
+    skip_if_no_owners: initial.skip_if_no_owners ?? false,
     stage_visibility: (initial as Partial<StateFormData>).stage_visibility ?? 'always'
   })
 
@@ -455,6 +464,15 @@ function StateForm({
             className='rounded'
           />
           Lock record (read-only)
+        </label>
+        <label className='flex items-center gap-1.5 cursor-pointer'>
+          <input
+            type='checkbox'
+            checked={form.skip_if_no_owners}
+            onChange={(e) => set('skip_if_no_owners', e.target.checked)}
+            className='rounded'
+          />
+          Auto-skip when record resolves no owners
         </label>
       </div>
 
@@ -630,7 +648,31 @@ type RouteEntry = {
   condition_rules: ConditionRule[] | null
   required_roles: string[] | null
   requirements: TransitionRequirement[] | null
+  auto_trigger: boolean
+  actions: TransitionAction[] | null
   minSort: number
+}
+
+// Transition action shape (server: services/workflow-actions.ts). Nested config
+// (guard/context/writebacks/m2m) is edited as JSON — the flat fields are typed.
+type TransitionAction = {
+  type: 'erp_submit' | 'create_record'
+  // erp_submit
+  external_api?: string | number
+  endpoint_path?: string
+  method?: string
+  skip_when_empty?: string
+  // create_record
+  target_collection?: string
+  link_field?: string
+  skip_if_exists?: { match_field: string; value_template: string }
+  m2m?: Record<string, unknown>
+  // shared
+  payload_template?: string
+  guard?: unknown[]
+  context?: Record<string, unknown>
+  on_success?: { set?: Record<string, string> }
+  on_failure?: { set?: Record<string, string> }
 }
 
 type LabelGroup = {
@@ -674,6 +716,8 @@ function groupByLabel(transitions: PipelineTransition[]): LabelGroup[] {
         condition_rules: tx.condition_rules,
         required_roles: tx.required_roles,
         requirements: tx.requirements,
+        auto_trigger: !!tx.auto_trigger,
+        actions: (tx.actions as TransitionAction[] | null) ?? null,
         minSort: tx.sort
       })
     }
@@ -1375,6 +1419,273 @@ interface TransitionFormData {
   required_roles: string[] | null
   condition_rules: ConditionRule[] | null
   requirements: TransitionRequirement[] | null
+  auto_trigger: boolean
+  actions: TransitionAction[] | null
+}
+
+/** JSON sub-config editor: local text state, commits upward only when valid. */
+function JsonField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  rows = 3
+}: {
+  label: string
+  value: unknown
+  onChange: (v: unknown) => void
+  placeholder?: string
+  rows?: number
+}) {
+  const [text, setText] = useState(() =>
+    value === null || value === undefined ? '' : JSON.stringify(value, null, 2)
+  )
+  const [invalid, setInvalid] = useState(false)
+  return (
+    <div className='space-y-1'>
+      <span className='text-[10.5px] uppercase tracking-wide text-slate-400'>{label}</span>
+      <Textarea
+        value={text}
+        onChange={(e) => {
+          const t = e.target.value
+          setText(t)
+          if (!t.trim()) {
+            setInvalid(false)
+            onChange(undefined)
+            return
+          }
+          try {
+            onChange(JSON.parse(t))
+            setInvalid(false)
+          } catch {
+            setInvalid(true)
+          }
+        }}
+        rows={rows}
+        spellCheck={false}
+        placeholder={placeholder}
+        className={cn(
+          'font-mono text-[11px] resize-y',
+          invalid && 'border-red-400 focus-visible:ring-red-400'
+        )}
+      />
+      {invalid && <p className='text-[10.5px] text-red-500'>Invalid JSON — not saved yet.</p>}
+    </div>
+  )
+}
+
+function TransitionActionsSection({
+  actions,
+  onChange
+}: {
+  actions: TransitionAction[]
+  onChange: (a: TransitionAction[]) => void
+}) {
+  const [open, setOpen] = useState(actions.length > 0)
+  const update = (idx: number, patch: Partial<TransitionAction>) =>
+    onChange(actions.map((a, i) => (i === idx ? { ...a, ...patch } : a)))
+  const remove = (idx: number) => onChange(actions.filter((_, i) => i !== idx))
+
+  return (
+    <div className='space-y-2'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 hover:text-slate-800'
+      >
+        {open ? <ChevronDown className='h-3.5 w-3.5' /> : <ChevronRight className='h-3.5 w-3.5' />}
+        Actions
+        {actions.length > 0 && (
+          <span className='rounded-full bg-teal-100 px-1.5 py-0.5 text-[10px] font-medium text-teal-700'>
+            {actions.length}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className='space-y-2 rounded-xl border border-slate-200 bg-white p-3'>
+          <p className='text-[11px] text-slate-400'>
+            Run AFTER the transition lands — never block it. Liquid templates see{' '}
+            <code className='font-mono'>record</code>, <code className='font-mono'>context</code>,{' '}
+            <code className='font-mono'>state</code>, <code className='font-mono'>response</code>;
+            filters: jsonify, editorjs_text, add_days, iso_date, at_least_days_out, next_open_day.
+            Every erp_submit attempt logs to ERP Submissions (with retry).
+          </p>
+          {actions.map((action, idx) => (
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: positional
+              key={idx}
+              className='space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3'
+            >
+              <div className='flex items-center gap-2'>
+                <SimpleCombobox
+                  value={action.type}
+                  onChange={(v) => update(idx, { type: v as TransitionAction['type'] })}
+                  options={[
+                    { value: 'erp_submit', label: 'ERP submit — external API push' },
+                    { value: 'create_record', label: 'Create record — in another collection' }
+                  ]}
+                  placeholder='Action type'
+                />
+                <button
+                  type='button'
+                  onClick={() => remove(idx)}
+                  className='ml-auto rounded p-1 text-slate-400 hover:text-red-500'
+                >
+                  <Trash2 className='h-3.5 w-3.5' />
+                </button>
+              </div>
+
+              {action.type === 'erp_submit' && (
+                <div className='grid gap-2 sm:grid-cols-2'>
+                  <div className='space-y-1'>
+                    <span className='text-[10.5px] uppercase tracking-wide text-slate-400'>
+                      External API (name or id)
+                    </span>
+                    <Input
+                      value={String(action.external_api ?? '')}
+                      onChange={(e) => update(idx, { external_api: e.target.value })}
+                      placeholder='ERP name'
+                      className='h-8 font-mono text-[12px]'
+                    />
+                  </div>
+                  <div className='space-y-1'>
+                    <span className='text-[10.5px] uppercase tracking-wide text-slate-400'>
+                      Endpoint path
+                    </span>
+                    <Input
+                      value={action.endpoint_path ?? ''}
+                      onChange={(e) => update(idx, { endpoint_path: e.target.value })}
+                      placeholder='/customers/X/deploymentRequests'
+                      className='h-8 font-mono text-[12px]'
+                    />
+                  </div>
+                  <div className='space-y-1'>
+                    <span className='text-[10.5px] uppercase tracking-wide text-slate-400'>
+                      Method
+                    </span>
+                    <Input
+                      value={action.method ?? ''}
+                      onChange={(e) => update(idx, { method: e.target.value || undefined })}
+                      placeholder='POST'
+                      className='h-8 font-mono text-[12px]'
+                    />
+                  </div>
+                  <div className='space-y-1'>
+                    <span className='text-[10.5px] uppercase tracking-wide text-slate-400'>
+                      Skip when context key empty
+                    </span>
+                    <Input
+                      value={action.skip_when_empty ?? ''}
+                      onChange={(e) =>
+                        update(idx, { skip_when_empty: e.target.value || undefined })
+                      }
+                      placeholder='related_collection'
+                      className='h-8 font-mono text-[12px]'
+                    />
+                  </div>
+                </div>
+              )}
+
+              {action.type === 'create_record' && (
+                <div className='grid gap-2 sm:grid-cols-2'>
+                  <div className='space-y-1'>
+                    <span className='text-[10.5px] uppercase tracking-wide text-slate-400'>
+                      Target collection
+                    </span>
+                    <Input
+                      value={action.target_collection ?? ''}
+                      onChange={(e) => update(idx, { target_collection: e.target.value })}
+                      placeholder='projects'
+                      className='h-8 font-mono text-[12px]'
+                    />
+                  </div>
+                  <div className='space-y-1'>
+                    <span className='text-[10.5px] uppercase tracking-wide text-slate-400'>
+                      Link field (FK writeback)
+                    </span>
+                    <Input
+                      value={action.link_field ?? ''}
+                      onChange={(e) => update(idx, { link_field: e.target.value || undefined })}
+                      placeholder='project'
+                      className='h-8 font-mono text-[12px]'
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className='space-y-1'>
+                <span className='text-[10.5px] uppercase tracking-wide text-slate-400'>
+                  Payload template (Liquid — must render to valid JSON)
+                </span>
+                <Textarea
+                  value={action.payload_template ?? ''}
+                  onChange={(e) => update(idx, { payload_template: e.target.value })}
+                  rows={5}
+                  spellCheck={false}
+                  placeholder={'{"name": {{ record.name | jsonify }}}'}
+                  className='font-mono text-[11px] resize-y'
+                />
+              </div>
+              <div className='grid gap-2 sm:grid-cols-2'>
+                <JsonField
+                  label='Guard (condition rules)'
+                  value={action.guard}
+                  onChange={(v) => update(idx, { guard: v as unknown[] })}
+                  placeholder='[{"field": "status", "op": "eq", "value": "x"}]'
+                />
+                <JsonField
+                  label='Context queries'
+                  value={action.context}
+                  onChange={(v) => update(idx, { context: v as Record<string, unknown> })}
+                  placeholder='{"notes": {"collection": "notes", "filter": {"item": "$id"}, "sort": "-id", "limit": 1}}'
+                />
+                <JsonField
+                  label='On success — set fields'
+                  value={action.on_success}
+                  onChange={(v) => update(idx, { on_success: v as TransitionAction['on_success'] })}
+                  placeholder='{"set": {"order_number": "{{ response.salesOrderNumber }}"}}'
+                />
+                <JsonField
+                  label='On failure — set fields'
+                  value={action.on_failure}
+                  onChange={(v) => update(idx, { on_failure: v as TransitionAction['on_failure'] })}
+                  placeholder='{"set": {"status": "error"}}'
+                />
+                {action.type === 'create_record' && (
+                  <>
+                    <JsonField
+                      label='Skip if exists'
+                      value={action.skip_if_exists}
+                      onChange={(v) =>
+                        update(idx, { skip_if_exists: v as TransitionAction['skip_if_exists'] })
+                      }
+                      placeholder='{"match_field": "project_id", "value_template": "{{ record.project_id }}"}'
+                    />
+                    <JsonField
+                      label='M2M junction sets'
+                      value={action.m2m}
+                      onChange={(v) => update(idx, { m2m: v as Record<string, unknown> })}
+                      placeholder='{"regions": {"junction_collection": "…", "parent_field": "…", "related_field": "…", "values_template": "…"}}'
+                    />
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            className='h-7 gap-1 text-[12px]'
+            onClick={() => onChange([...actions, { type: 'erp_submit' }])}
+          >
+            <Plus className='h-3 w-3' />
+            Add action
+          </Button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function TransitionForm({
@@ -1402,7 +1713,9 @@ function TransitionForm({
     color: initial.color ?? null,
     required_roles: initial.required_roles ?? null,
     condition_rules: initial.condition_rules ?? null,
-    requirements: initial.requirements ?? null
+    requirements: initial.requirements ?? null,
+    auto_trigger: initial.auto_trigger ?? false,
+    actions: initial.actions ?? null
   })
 
   const set = <K extends keyof TransitionFormData>(k: K, v: TransitionFormData[K]) =>
@@ -1499,6 +1812,22 @@ function TransitionForm({
         onChange={(reqs) => set('requirements', reqs.length > 0 ? reqs : null)}
         collection={collection}
       />
+
+      <TransitionActionsSection
+        actions={form.actions ?? []}
+        onChange={(a) => set('actions', a.length > 0 ? a : null)}
+      />
+
+      <label className='flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2'>
+        <div>
+          <span className='text-[12px] font-medium text-slate-700'>Automatic</span>
+          <p className='text-[11px] text-slate-400'>
+            Fired by the engine when the conditions above match — never shown to users. Evaluated
+            after record writes, after manual transitions, and hourly.
+          </p>
+        </div>
+        <Switch checked={form.auto_trigger} onCheckedChange={(v) => set('auto_trigger', v)} />
+      </label>
 
       <div className='flex gap-2 justify-end'>
         <Button type='button' variant='outline' size='sm' onClick={onCancel}>
@@ -2055,6 +2384,7 @@ function BindingDimensionsPanel({
 
 export function PipelineEditPage() {
   const { id } = useParams<{ id: string }>()
+  const goBack = useGoBack('/pipelines')
   const _navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -2188,8 +2518,9 @@ export function PipelineEditPage() {
         required_roles: data.required_roles,
         condition_rules: data.condition_rules,
         requirements: data.requirements,
+        auto_trigger: data.auto_trigger,
         group_label: null,
-        actions: null,
+        actions: data.actions,
         sort: 0
       }
       for (const to_state of data.to_states) {
@@ -2220,8 +2551,9 @@ export function PipelineEditPage() {
           required_roles: data.required_roles,
           condition_rules: data.condition_rules,
           requirements: data.requirements,
+          auto_trigger: data.auto_trigger,
           group_label: null,
-          actions: null,
+          actions: data.actions,
           sort: Math.max(labelGroup.minSort, ...labelGroup.routes.map((r) => r.minSort)),
           to_state
         })
@@ -2251,7 +2583,9 @@ export function PipelineEditPage() {
         color: data.color,
         required_roles: data.required_roles,
         condition_rules: data.condition_rules,
-        requirements: data.requirements
+        requirements: data.requirements,
+        auto_trigger: data.auto_trigger,
+        actions: data.actions
       }
       for (const to_state of data.to_states) {
         const txId = existingByToState.get(to_state)
@@ -2261,7 +2595,6 @@ export function PipelineEditPage() {
           await api.post(`/pipelines/${id}/transitions`, {
             ...shared,
             group_label: null,
-            actions: null,
             sort: 0,
             to_state
           })
@@ -2441,6 +2774,7 @@ export function PipelineEditPage() {
           <div className='flex items-center gap-2 text-[13px]'>
             <Link
               to='/pipelines'
+              onClick={(e) => { e.preventDefault(); goBack() }}
               className='flex items-center gap-1 text-slate-400 transition-colors hover:text-slate-700'
             >
               <ArrowLeft className='h-3.5 w-3.5' />
@@ -2538,6 +2872,10 @@ export function PipelineEditPage() {
                 <span className='ml-2 font-mono text-[11px] font-normal text-slate-400'>
                   {states.length}
                 </span>
+                <span className='mt-0.5 block max-w-[72ch] text-[12px] font-normal text-slate-500'>
+                  The stages a record moves through, in order. Each can carry skip rules and
+                  stage-track visibility.
+                </span>
               </h2>
               {!addingState && (
                 <Button
@@ -2630,6 +2968,10 @@ export function PipelineEditPage() {
                 Transitions
                 <span className='ml-2 font-mono text-[11px] font-normal text-slate-400'>
                   {transitions.length}
+                </span>
+                <span className='mt-0.5 block max-w-[72ch] text-[12px] font-normal text-slate-500'>
+                  The allowed moves between states — who may take them, the conditions that gate
+                  them, and the actions they fire.
                 </span>
               </h2>
               {!addingTransition && (
@@ -2754,7 +3096,9 @@ export function PipelineEditPage() {
                                           color: grp.color,
                                           required_roles: route.required_roles,
                                           condition_rules: route.condition_rules,
-                                          requirements: route.requirements
+                                          requirements: route.requirements,
+                                          auto_trigger: route.auto_trigger,
+                                          actions: route.actions
                                         }}
                                         fixedLabel={grp.label}
                                         states={states}
@@ -2789,6 +3133,24 @@ export function PipelineEditPage() {
                                             </span>
                                           ) : null
                                         })}
+                                        {route.auto_trigger && (
+                                          <span
+                                            className='ml-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                                            title='Automatic — fired by the engine when conditions match; hidden from users'
+                                          >
+                                            <Zap className='h-2.5 w-2.5' />
+                                            Auto
+                                          </span>
+                                        )}
+                                        {(route.actions ?? []).length > 0 && (
+                                          <span
+                                            className='ml-1 inline-flex items-center gap-1 rounded-full bg-teal-100 px-1.5 py-0.5 text-[10px] font-semibold text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
+                                            title='Transition actions run after this transition lands'
+                                          >
+                                            <PlugZap className='h-2.5 w-2.5' />
+                                            {(route.actions ?? []).length}
+                                          </span>
+                                        )}
                                         {(route.condition_rules ?? []).length > 0 && (
                                           <span
                                             className='ml-1 inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy'
@@ -2867,9 +3229,18 @@ export function PipelineEditPage() {
         </div>
         {/* end states+transitions grid */}
 
+        {/* Parallel branches (split/join) */}
+        <ParallelBranchesCard templateId={id!} states={orderedStates} />
+
         {/* Bindings */}
         <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4'>
-          <h2 className='text-[13px] font-semibold text-slate-800'>Applied to Collections</h2>
+          <h2 className='text-[13px] font-semibold text-slate-800'>
+            Applied to Collections
+            <span className='mt-0.5 block max-w-[72ch] text-[12px] font-normal text-slate-500'>
+              Which collections run this pipeline, and the ownership dimensions (Region, Zone…)
+              the Owner Matrix below resolves against.
+            </span>
+          </h2>
 
           {bindings.length > 0 && (
             <div className='space-y-2'>
@@ -3024,7 +3395,13 @@ export function PipelineEditPage() {
         {/* Owner Matrix */}
         {hasMatrix && (
           <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4'>
-            <h2 className='text-[13px] font-semibold text-slate-800'>Owner Matrix</h2>
+            <h2 className='text-[13px] font-semibold text-slate-800'>
+              Owner Matrix
+              <span className='mt-0.5 block max-w-[72ch] text-[12px] font-normal text-slate-500'>
+                Who is responsible in each state, per dimension value. Records resolve their
+                owners from this grid automatically — notifications, queues, and SLAs follow it.
+              </span>
+            </h2>
             <OwnerMatrix templateId={id!} states={orderedStates} bindings={bindings} />
           </div>
         )}
@@ -3037,8 +3414,424 @@ export function PipelineEditPage() {
 
         {/* Time-lapse replay */}
         <PipelineReplayCard templateId={id!} />
+
+        {/* Config versions */}
+        <PipelineVersionsCard templateId={id!} />
       </div>
     </>
+  )
+}
+
+// ─── Config versions — snapshots captured before every template change ────────
+
+interface TemplateVersionRow {
+  id: number
+  version: number
+  note: string | null
+  created_at: string
+  created_by_name: string | null
+}
+
+function PipelineVersionsCard({ templateId }: { templateId: string }) {
+  const queryClient = useQueryClient()
+  const [confirmId, setConfirmId] = useState<number | null>(null)
+
+  const { data: versions, isLoading } = useQuery({
+    queryKey: ['pipeline-versions', templateId],
+    queryFn: () =>
+      api
+        .get<{ data: TemplateVersionRow[] }>(`/pipelines/${templateId}/versions`)
+        .then((r) => r.data.data)
+  })
+
+  const restoreMut = useMutation({
+    mutationFn: (versionId: number) =>
+      api.post(`/pipelines/${templateId}/versions/${versionId}/restore`).then((r) => r.data),
+    onSuccess: (res: {
+      data?: { transitions?: { deleted: number; kept_in_history: number } }
+    }) => {
+      setConfirmId(null)
+      const kept = res?.data?.transitions?.kept_in_history ?? 0
+      toast.success(
+        kept > 0
+          ? `Version restored — ${kept} extra transition(s) kept (referenced by history)`
+          : 'Version restored'
+      )
+      queryClient.invalidateQueries({ queryKey: ['pipeline', templateId] })
+      queryClient.invalidateQueries({ queryKey: ['pipeline-versions', templateId] })
+    },
+    onError: () => toast.error('Failed to restore version')
+  })
+
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-3'>
+      <div className='flex items-center gap-2'>
+        <History className='h-4 w-4 text-slate-400' />
+        <h2 className='text-[13px] font-semibold text-slate-800'>Config versions</h2>
+        {versions && versions.length > 0 && (
+          <span className='ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-muted dark:text-muted-foreground'>
+            {versions.length}
+          </span>
+        )}
+      </div>
+      {isLoading ? (
+        <div className='space-y-2'>
+          <Skeleton className='h-8 rounded' />
+          <Skeleton className='h-8 rounded' />
+        </div>
+      ) : !versions || versions.length === 0 ? (
+        <p className='text-[12px] text-slate-400'>
+          No versions yet. A snapshot of the states, transitions and bindings is captured
+          automatically before every config change.
+        </p>
+      ) : (
+        <div className='max-h-72 divide-y divide-slate-100 overflow-y-auto dark:divide-border'>
+          {versions.map((v) => (
+            <div key={v.id} className='flex items-center gap-2 py-1.5'>
+              <span className='shrink-0 font-mono text-[11px] font-semibold text-slate-700 dark:text-foreground'>
+                v{v.version}
+              </span>
+              <span className='min-w-0 flex-1 truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                {v.note ?? '—'}
+                {v.created_by_name?.trim() ? ` · ${v.created_by_name}` : ''}
+              </span>
+              <span className='shrink-0 text-[10.5px] text-slate-400'>
+                {formatRelative(v.created_at)}
+              </span>
+              {confirmId === v.id ? (
+                <span className='flex shrink-0 items-center gap-1.5'>
+                  <Button
+                    size='sm'
+                    variant='destructive'
+                    className='h-5 px-2 text-[10.5px]'
+                    disabled={restoreMut.isPending}
+                    onClick={() => restoreMut.mutate(v.id)}
+                  >
+                    {restoreMut.isPending ? 'Restoring…' : 'Yes, restore'}
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-5 px-2 text-[10.5px]'
+                    onClick={() => setConfirmId(null)}
+                  >
+                    Cancel
+                  </Button>
+                </span>
+              ) : (
+                <button
+                  type='button'
+                  onClick={() => setConfirmId(v.id)}
+                  className='shrink-0 rounded px-1.5 py-0.5 text-[10.5px] text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-muted'
+                >
+                  Restore
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <p className='text-[10.5px] text-slate-400'>
+        Restore snapshots the current config first, then upserts states/transitions/bindings by id
+        — states are never deleted, and transitions with execution history are kept.
+      </p>
+    </div>
+  )
+}
+
+
+// ─── Parallel branches (split/join) — merged from the old /workflows editor ───
+// A split fans one record into several states at once; each branch runs with
+// its own owners and SLA clock, and when every branch reaches a terminal
+// state the record auto-joins downstream. Config lives in the same template.
+
+type SplitStateLite = {
+  id: string
+  key: string
+  label: string
+  color: string | null
+  is_terminal: boolean
+}
+
+type SplitConfig = {
+  id: string
+  label: string
+  branch_states: string[]
+  branch_state_objs: SplitStateLite[]
+  join_state: string
+  join_state_obj: SplitStateLite | null
+}
+
+function SplitStateChip({
+  state,
+  selected,
+  onClick
+}: {
+  state: { key: string; label: string; color: string | null }
+  selected?: boolean
+  onClick?: () => void
+}) {
+  const base = 'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium'
+  const style = {
+    backgroundColor: state.color ? `${state.color}22` : '#f1f5f9',
+    color: state.color ?? '#475569',
+    border: `1px solid ${selected ? (state.color ?? '#475569') : state.color ? `${state.color}44` : '#e2e8f0'}`,
+    boxShadow: selected ? `0 0 0 1px ${state.color ?? '#475569'}` : undefined
+  }
+  if (!onClick) {
+    return (
+      <span className={base} style={style}>
+        {state.label}
+      </span>
+    )
+  }
+  return (
+    <button type='button' className={`${base} transition-shadow`} style={style} onClick={onClick}>
+      {selected && <Check className='h-3 w-3' />}
+      {state.label}
+    </button>
+  )
+}
+
+function SplitCreateForm({
+  states,
+  saving,
+  onSave,
+  onCancel
+}: {
+  states: PipelineState[]
+  saving: boolean
+  onSave: (data: { branch_states: string[]; join_state: string; label: string }) => void
+  onCancel: () => void
+}) {
+  const [label, setLabel] = useState('')
+  const [branchKeys, setBranchKeys] = useState<string[]>([])
+  const [joinKey, setJoinKey] = useState('')
+
+  const toggleBranch = (key: string) => {
+    setBranchKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
+    if (joinKey === key) setJoinKey('')
+  }
+  const valid = branchKeys.length >= 2 && !!joinKey && !branchKeys.includes(joinKey)
+
+  return (
+    <div className='rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-4'>
+      <div className='space-y-1.5'>
+        <Label className='text-[12px]'>Label</Label>
+        <Input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder='e.g. Finance + Engineering review in parallel'
+          className='text-[13px] bg-white'
+        />
+      </div>
+      <div className='space-y-1.5'>
+        <Label className='text-[12px]'>
+          Branch start states
+          <span className='ml-1.5 font-normal text-slate-400'>
+            (pick 2 or more — the record enters ALL of them at once)
+          </span>
+        </Label>
+        <div className='flex flex-wrap gap-1.5'>
+          {states.map((st) => (
+            <SplitStateChip
+              key={st.id}
+              state={st}
+              selected={branchKeys.includes(st.key)}
+              onClick={() => toggleBranch(st.key)}
+            />
+          ))}
+        </div>
+      </div>
+      <div className='space-y-1.5'>
+        <Label className='text-[12px]'>
+          Join state
+          <span className='ml-1.5 font-normal text-slate-400'>
+            (auto-entered when every branch reaches a terminal state)
+          </span>
+        </Label>
+        <div className='flex flex-wrap gap-1.5'>
+          {states
+            .filter((st) => !branchKeys.includes(st.key))
+            .map((st) => (
+              <SplitStateChip
+                key={st.id}
+                state={st}
+                selected={joinKey === st.key}
+                onClick={() => setJoinKey(joinKey === st.key ? '' : st.key)}
+              />
+            ))}
+        </div>
+      </div>
+      <div className='flex items-center justify-end gap-2'>
+        <Button type='button' size='sm' variant='ghost' className='text-[12px]' onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          type='button'
+          size='sm'
+          className='text-[12px]'
+          disabled={!valid || saving}
+          onClick={() =>
+            onSave({ branch_states: branchKeys, join_state: joinKey, label: label.trim() })
+          }
+        >
+          {saving ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Create Split'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function ParallelBranchesCard({
+  templateId,
+  states
+}: {
+  templateId: string
+  states: PipelineState[]
+}) {
+  const queryClient = useQueryClient()
+  const [adding, setAdding] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+
+  const splitsKey = ['workflow-splits', templateId]
+  const { data: splits } = useQuery<SplitConfig[]>({
+    queryKey: splitsKey,
+    queryFn: () =>
+      api
+        .get<{ data: SplitConfig[] }>(`/workflows/templates/${templateId}/splits`)
+        .then((r) => r.data.data)
+  })
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: splitsKey })
+
+  const createSplit = useMutation({
+    mutationFn: (body: { branch_states: string[]; join_state: string; label: string }) =>
+      api.post(`/workflows/templates/${templateId}/splits`, body).then((r) => r.data),
+    onSuccess: () => {
+      invalidate()
+      setAdding(false)
+      toast.success('Split created')
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Failed to create split')
+    }
+  })
+  const deleteSplit = useMutation({
+    mutationFn: (splitId: string) =>
+      api.delete(`/workflows/templates/${templateId}/splits/${splitId}`),
+    onSuccess: () => {
+      invalidate()
+      setConfirmDelete(null)
+      toast.success('Split deleted')
+    },
+    onError: () => toast.error('Failed to delete split')
+  })
+
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4'>
+      <div className='flex items-start justify-between gap-4'>
+        <h2 className='flex-1 text-[13px] font-semibold text-slate-800'>
+          <span className='flex items-center gap-2'>
+            <GitFork className='h-4 w-4 text-slate-400' />
+            Parallel Branches
+            <span className='font-mono text-[11px] font-normal text-slate-400'>
+              {splits?.length ?? 0}
+            </span>
+          </span>
+          <span className='mt-0.5 block max-w-[72ch] text-[12px] font-normal text-slate-500'>
+            A split sends one record into several states at the same time — each branch keeps its
+            own owners and SLA clock. When every branch reaches a terminal state, the record
+            auto-joins into the join state. Splits appear as a "Split" action on bound records.
+          </span>
+        </h2>
+        {!adding && (
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-7 shrink-0 gap-1.5 text-[12px]'
+            onClick={() => setAdding(true)}
+            disabled={states.length < 3}
+          >
+            <Plus className='h-3 w-3' />
+            Add Split
+          </Button>
+        )}
+      </div>
+
+      {states.length < 3 && (
+        <p className='text-[13px] text-slate-400'>
+          Define at least 3 states (2 branch starts + 1 join) before adding a split.
+        </p>
+      )}
+      {(splits?.length ?? 0) === 0 && !adding && states.length >= 3 && (
+        <p className='text-[13px] text-slate-400'>
+          No splits yet — this pipeline runs as a single track. Add one when two reviews should
+          happen concurrently instead of one after the other.
+        </p>
+      )}
+
+      {(splits ?? []).map((split) => (
+        <div
+          key={split.id}
+          className='flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 p-3'
+        >
+          <div className='min-w-0 flex-1 space-y-1.5'>
+            <p className='text-[12px] font-medium text-slate-700'>{split.label}</p>
+            <div className='flex flex-wrap items-center gap-1.5'>
+              {split.branch_state_objs.map((st) => (
+                <SplitStateChip key={st.id} state={st} />
+              ))}
+              <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
+              {split.join_state_obj ? (
+                <SplitStateChip state={split.join_state_obj} />
+              ) : (
+                <span className='text-[12px] italic text-slate-400'>missing join state</span>
+              )}
+            </div>
+          </div>
+          {confirmDelete === split.id ? (
+            <div className='flex shrink-0 items-center gap-2'>
+              <span className='text-[12px] text-slate-500'>Delete?</span>
+              <Button
+                size='sm'
+                variant='destructive'
+                className='h-7 text-[12px]'
+                disabled={deleteSplit.isPending}
+                onClick={() => deleteSplit.mutate(split.id)}
+              >
+                {deleteSplit.isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : 'Confirm'}
+              </Button>
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-7 text-[12px]'
+                onClick={() => setConfirmDelete(null)}
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <button
+              type='button'
+              className='shrink-0 rounded p-1.5 text-slate-400 hover:text-red-500'
+              onClick={() => setConfirmDelete(split.id)}
+            >
+              <Trash2 className='h-3.5 w-3.5' />
+            </button>
+          )}
+        </div>
+      ))}
+
+      {adding && (
+        <SplitCreateForm
+          states={states}
+          saving={createSplit.isPending}
+          onSave={(data) => createSplit.mutate(data)}
+          onCancel={() => setAdding(false)}
+        />
+      )}
+    </div>
   )
 }
 

@@ -282,6 +282,7 @@
           <a class="docs-nav-item" data-section="ai-overview" href="#ai-overview">Overview</a>
           <a class="docs-nav-item" data-section="ai-generate" href="#ai-generate">Generate with AI</a>
           <a class="docs-nav-item" data-section="ai-summarize" href="#ai-summarize">Summarize</a>
+          <a class="docs-nav-item" data-section="ai-review-brief" href="#ai-review-brief">Review &amp; Brief</a>
           <a class="docs-nav-item" data-section="ai-content-validation" href="#ai-content-validation">AI Content Validation</a>
           <a class="docs-nav-item" data-section="ai-duplicate-detection" href="#ai-duplicate-detection">AI Duplicate Detection</a>
         </div>
@@ -379,6 +380,7 @@
           <a class="docs-nav-item" data-section="two-factor" href="#two-factor">Two-Factor Auth (TOTP)</a>
           <a class="docs-nav-item" data-section="saml-sso" href="#saml-sso">SAML SSO</a>
           <a class="docs-nav-item" data-section="api-keys" href="#api-keys">Named API Keys</a>
+          <a class="docs-nav-item" data-section="masquerade" href="#masquerade">Masquerade</a>
           <a class="docs-nav-item" data-section="scim" href="#scim">SCIM 2.0 Provisioning</a>
           <a class="docs-nav-item" data-section="field-encryption" href="#field-encryption">Field Encryption at Rest</a>
           <a class="docs-nav-item" data-section="row-level-isolation" href="#row-level-isolation">Row-Level Workspace Isolation</a>
@@ -4219,6 +4221,15 @@ import '@nivaro/react/styles.css'</code></pre>
   }}
 &gt;</code></pre>
           <p class="doc-p"><code class="doc-code">openItem</code> is checked first; returning <code class="doc-code">true</code> skips navigation. Otherwise the component navigates to <code class="doc-code">itemUrl(target)</code>, falling back to the admin shape when neither is provided.</p>
+          <h3 class="doc-h3">Page renderer</h3>
+          <p class="doc-p"><code class="doc-code">&lt;PageRenderer slug="…" /&gt;</code> renders a page-builder page (widget grid) in your own app — the same surface as the admin's <code class="doc-code">/p/:slug</code> viewer: table, KPI, markdown, iframe, recent-activity, query tables (param filters, progress columns, row-click picker/drill/matrix sheets), and matrix editors (inline or drawer-button). Widget data resolves through the client identity, so permissions apply server-side. Requires <code class="doc-code">NivaroProvider</code> + a TanStack Query <code class="doc-code">QueryClientProvider</code>; supply <code class="doc-code">NavigationContext</code> to control where record links go, and an outer <code class="doc-code">DrilldownContext</code> if you host your own record sheet (PageRenderer hosts one otherwise).</p>
+          <pre class="doc-pre"><code>import { NivaroProvider, PageRenderer } from '@nivaro/react'
+
+&lt;NivaroProvider client={nivaro}&gt;
+  &lt;PageRenderer slug="budget-allocation" /&gt;
+&lt;/NivaroProvider&gt;
+
+// Props: slug (required), hideHeader (skip the page-name row), className</code></pre>
           <h3 class="doc-h3">Report Studio viewer</h3>
           <p class="doc-p"><code class="doc-code">&lt;ReportView reportId="…" /&gt;</code> renders a fully-styled, interactive Report Studio report in your own app — same as <code class="doc-code">QueueWorklist</code> / <code class="doc-code">ItemEditForm</code>: bring the styles via <code class="doc-code">@nivaro/react/full.css</code> (or the Tailwind preset). It fetches the definition and resolves every widget (KPIs, KPI groups, bar/line/donut charts via recharts, tables) as the client identity — collection read permissions apply server-side. Interactive: a global filter bar (date-range switcher + live entity-filter chips) and per-widget refresh. Read-only (no drag/resize edit surface).</p>
           <pre class="doc-pre"><code>import { NivaroProvider, ReportView } from '@nivaro/react'
@@ -6800,6 +6811,46 @@ ANTHROPIC_API_KEY=sk-ant-...</code></pre>
           <!-- /SYNC:ai-summarize -->
         </div>
 
+        <div class="doc-section" id="s-ai-review-brief" data-toc='[{"id":"ai-review-brief","label":"AI Review &amp; Brief"},{"id":"ai-review","label":"Record review"},{"id":"ai-brief","label":"Briefing"}]'>
+          <!-- SYNC:ai-review-brief -->
+          <h1 class="doc-h1" id="ai-review-brief">AI Review &amp; Brief</h1>
+          <p class="doc-p">Two authenticated (not admin-only) AI endpoints for headless frontends: <code class="doc-code">POST /api/ai/review</code> runs a pre-submission review of a record and returns a findings list, and <code class="doc-code">POST /api/ai/brief</code> renders a short plain-text briefing from context the caller supplies.</p>
+          <h2 class="doc-h2" id="ai-review">Record review</h2>
+          <p class="doc-p">Reviews a record plus up to three of its one-to-many child sets (line items ride along automatically). If the collection has plain-text AI validation rules configured (AI Collection Settings), they are folded into the review guidance. The caller must have read permission on the collection; <code class="doc-code">nivaro_*</code> collections are rejected.</p>
+          <pre class="doc-pre"><code>POST /api/ai/review
+Authorization: Bearer &lt;token&gt;
+Content-Type: application/json
+
+{ "collection": "workflows", "item": "123" }
+
+→ 200 { "data": { "findings": [
+    { "severity": "error",      "field": "lines",       "message": "Line 3 has a quantity of 0." },
+    { "severity": "warning",    "field": "date_required", "message": "Required date is in the past." },
+    { "severity": "suggestion", "field": "description", "message": "Description looks like placeholder text." }
+  ] } }
+→ 400 { "error": "collection and item are required" }   // or "Invalid collection"
+→ 403 { "error": "Forbidden" }                          // no read permission
+→ 404 { "error": "Item not found" }
+→ 503 { "error": "AI features require ANTHROPIC_API_KEY to be configured" }</code></pre>
+          <p class="doc-p">Severity is always one of <code class="doc-code">error</code> / <code class="doc-code">warning</code> / <code class="doc-code">suggestion</code>; an empty findings array means the record looks ready to submit. Each call is activity-logged as <code class="doc-code">ai-review</code>.</p>
+          <h2 class="doc-h2" id="ai-brief">Briefing</h2>
+          <p class="doc-p">The caller gathers the data (custom queries, aggregates, anything) and sends it as one text block — the endpoint only writes the words. Default style: one-sentence opener, 3-5 concrete insights citing real numbers, immediate-attention callouts, one or two positives, plain text, 150-220 words. Pass <code class="doc-code">instructions</code> to override the style entirely.</p>
+          <pre class="doc-pre"><code>POST /api/ai/brief
+Authorization: Bearer &lt;token&gt;
+Content-Type: application/json
+
+{
+  "context": "User: Jane (admin). Today: Mon Aug 3.\n\nActive workflows (25 rows): [...]\nBudget health: [...]",
+  "instructions": "Optional replacement system prompt (max 1000 chars)"
+}
+
+→ 200 { "data": { "brief": "Good morning — three workflows need attention today..." } }
+→ 400 { "error": "context is required" }
+→ 503 { "error": "AI features require ANTHROPIC_API_KEY to be configured" }</code></pre>
+          <div class="doc-note">Context is capped at 16,000 characters and the response at 512 tokens. Responses are not cached server-side — callers that want a once-per-day briefing should cache client-side.</div>
+          <!-- /SYNC:ai-review-brief -->
+        </div>
+
         <div class="doc-section" id="s-ai-content-validation" data-toc='[{"id":"ai-content-validation","label":"AI Content Validation"},{"id":"aggregate-cap-rules","label":"Aggregate cap rules (sum_cap)"}]'>
           <!-- SYNC:ai-content-validation -->
           <h1 class="doc-h1" id="ai-content-validation">AI Content Validation</h1>
@@ -7701,9 +7752,13 @@ docker compose up -d</code></pre>
               <tr><td>SMTP password</td><td>SMTP_PASSWORD</td><td>Masked on GET; preserved if placeholder re-submitted</td></tr>
               <tr><td>Mail from</td><td>MAIL_FROM</td><td>Sender address, e.g. <code class="doc-code">Nivaro &lt;no-reply@example.com&gt;</code></td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Test mode (dev / staging)</h3>
+          <p class="doc-p">When Test mode is enabled (Settings → Email → Test mode), every outgoing email is redirected to a single test recipient instead of its real recipients — the subject is prefixed with <code class="doc-code">[TEST — was: &lt;original addresses&gt;]</code> so you can see who would have received it. An optional allowlist (comma-separated exact emails and/or <code class="doc-code">@domains</code>) lets specific addresses receive mail normally. If test mode is on but no test recipient is configured, non-allowlisted mail is dropped with a server log rather than sent.</p>
+          <div class="doc-note">The <code class="doc-code">MAIL_TEST_MODE</code> and <code class="doc-code">MAIL_TEST_RECIPIENT</code> env vars override the settings values and force test mode on. Set them in dev/staging <code class="doc-code">.env</code> files so the protection survives database restores from production.</div>
           <h3 class="doc-h3">API</h3>
           <pre class="doc-pre"><code>GET   /api/settings          # smtp_pass → ••••••
-PATCH /api/settings          # smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, smtp_secure
+PATCH /api/settings          # smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, smtp_secure,
+                             # mail_test_mode, mail_test_recipient, mail_test_allowlist
 
 POST  /api/settings/mail/test  { "to": "you@example.com" }
       # → { "ok": true } | { "error": "&lt;SMTP error&gt;" }</code></pre>
@@ -7738,9 +7793,13 @@ await sendRawMail({ to: 'user@example.com', subject: 'Notice', html: '&lt;p&gt;H
               <tr><td>sms_from</td><td>Sender number (E.164) or alphanumeric ID</td></tr>
               <tr><td>sms_region</td><td>AWS region for SNS (default us-east-1)</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Test mode (dev / staging)</h3>
+          <p class="doc-p">When Test mode is enabled (Settings → SMS → Test mode), every outgoing SMS is redirected to a single test number — the message body is prefixed with <code class="doc-code">[TEST — was: &lt;original number&gt;]</code>. An optional allowlist (comma-separated phone numbers; formatting and country-code differences are ignored when matching) lets specific numbers receive texts normally. If test mode is on but no test number is configured, non-allowlisted SMS is dropped with a server log rather than sent.</p>
+          <div class="doc-note">The <code class="doc-code">SMS_TEST_MODE</code> and <code class="doc-code">SMS_TEST_RECIPIENT</code> env vars override the settings values and force test mode on — set them in dev/staging <code class="doc-code">.env</code> files so the protection survives database restores from production. Email has the same feature: see Email / SMTP → Test mode.</div>
           <h3 class="doc-h3">API</h3>
           <pre class="doc-pre"><code>GET   /api/settings           # sms_auth_token → ••••••
-PATCH /api/settings           # sms_provider, sms_account_sid, sms_auth_token, sms_from, sms_region
+PATCH /api/settings           # sms_provider, sms_account_sid, sms_auth_token, sms_from, sms_region,
+                              # sms_test_mode, sms_test_recipient, sms_test_allowlist
 
 POST  /api/settings/sms/test  { "to": "+12125550100" }
       # → { "ok": true } | { "error": "&lt;provider error&gt;" }</code></pre>
@@ -10385,6 +10444,40 @@ DELETE /api/api-keys/:id    # revoke immediately</code></pre>
           <!-- /SYNC:api-keys -->
         </div>
 
+        <!-- MASQUERADE -->
+        <div class="doc-section" id="s-masquerade" data-toc='[{"id":"masquerade","label":"Masquerade (View as User)"}]'>
+          <!-- SYNC:masquerade -->
+          <h1 class="doc-h1" id="masquerade">Masquerade (View as User)</h1>
+          <p class="doc-p">Admins can mint a short-lived masquerade token that authenticates as another user — server-side, so RBAC, row-level security, and activity logging all genuinely run as the target. This is how support and admins reproduce exactly what a user sees.</p>
+          <h3 class="doc-h3">How it works</h3>
+          <ul class="doc-ul">
+            <li><code class="doc-code">POST /api/auth/masquerade</code> (admin only) with <code class="doc-code">{ "user_id": "&lt;uuid&gt;" }</code> returns an <code class="doc-code">nvm_</code>-prefixed Bearer token backed by Redis with a 4-hour TTL.</li>
+            <li>The <code class="doc-code">authenticate</code> middleware and the Socket.io <code class="doc-code">auth</code> handler both resolve <code class="doc-code">nvm_</code> tokens to the target user; API requests and realtime events behave identically to a real session.</li>
+            <li><code class="doc-code">GET /api/auth/me</code> adds <code class="doc-code">"masquerade": true</code> while a masquerade token is in use, so frontends can show a banner.</li>
+            <li><code class="doc-code">DELETE /api/auth/masquerade</code> (called with the <code class="doc-code">nvm_</code> token) revokes it immediately; otherwise it expires on its own.</li>
+            <li>Start and stop are activity-logged as <code class="doc-code">masquerade-start</code> / <code class="doc-code">masquerade-stop</code> against the issuing admin.</li>
+          </ul>
+          <h3 class="doc-h3">API</h3>
+          <pre class="doc-pre"><code>POST /api/auth/masquerade
+Authorization: Bearer &lt;admin-token&gt;
+Content-Type: application/json
+
+{ "user_id": "57DA6884-E9BD-4A66-8F74-FFA6EC8B8B59" }
+
+→ 200 { "data": { "token": "nvm_...", "user": { "id": "...", "first_name": "...", "last_name": "...", "email": "..." } } }
+→ 400 { "error": "user_id is required" }        // or "Cannot masquerade as yourself"
+→ 403 { "error": "Forbidden" }                  // caller is not an admin
+→ 404 { "error": "User not found or inactive" }
+
+DELETE /api/auth/masquerade
+Authorization: Bearer &lt;nvm_-token&gt;
+
+→ 200 { "ok": true }
+→ 400 { "error": "Not a masquerade session" }</code></pre>
+          <div class="doc-note doc-warn">A masquerade token carries the target user’s full permissions — including admin, if the target is an admin. Tokens live in Redis under <code class="doc-code">masq:&lt;token&gt;</code>; restarting Redis revokes all active masquerades.</div>
+          <!-- /SYNC:masquerade -->
+        </div>
+
         <!-- SCIM 2.0 PROVISIONING -->
         <div class="doc-section" id="s-scim" data-toc='[{"id":"scim","label":"SCIM 2.0 User Provisioning"}]'>
           <!-- SYNC:scim -->
@@ -11978,6 +12071,23 @@ PATCH /api/item-locks/config/:collection
             <li>Click a notification to open its collection/item; it is marked read automatically.</li>
             <li>"Mark all read" clears the unread counter everywhere (bell included).</li>
           </ul>
+          <h3 class="doc-h3">Sending a notification (user to user)</h3>
+          <p class="doc-p">Any authenticated user can send an in-app notification to another active user — built for chat @mentions and similar frontend features. The sender is always the authenticated caller, and delivery rides the full channel stack: the inbox row, a live Socket.io <code class="doc-code">notification:new</code> event, and browser push for users with a registered subscription.</p>
+          <pre class="doc-pre"><code>POST /api/notifications
+Authorization: Bearer &lt;token&gt;
+Content-Type: application/json
+
+{
+  "recipient": "&lt;user uuid&gt;",
+  "subject": "Jane mentioned you in General chat",
+  "message": "optional body, max 500 chars",
+  "collection": "workflows",   // optional record link
+  "item": "123"                // optional record link
+}
+
+→ 201 { "ok": true }
+→ 400 { "error": "recipient and subject are required" }
+→ 404 { "error": "Recipient not found" }</code></pre>
           <!-- /SYNC:notifications-center -->
         </div>
 

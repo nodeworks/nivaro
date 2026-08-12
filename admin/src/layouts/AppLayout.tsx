@@ -34,6 +34,7 @@ import {
   Link2,
   ListFilter,
   LogOut,
+  MessagesSquare,
   Network,
   Package,
   PanelLeftClose,
@@ -47,6 +48,7 @@ import {
   Shield,
   ShieldCheck,
   ShieldOff,
+  Siren,
   SlidersHorizontal,
   Sparkles,
   Terminal,
@@ -66,6 +68,7 @@ import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
 import { NotificationBell } from '@/components/notification-bell'
 import { KeyboardShortcuts } from '@/components/shortcuts-overlay'
+import { TeamChatDock } from '@/components/team-chat'
 import { ThemeSwitcher } from '@/components/theme-switcher'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -95,7 +98,8 @@ export const navCategories: NavCategory[] = [
     items: [
       { icon: House, label: 'Overview', to: '/' },
       { icon: LayoutGrid, label: 'Dashboards', to: '/dashboards' },
-      { icon: Sparkles, label: 'Ask AI', to: '/ask' }
+      { icon: Sparkles, label: 'Ask AI', to: '/ask' },
+      { icon: MessagesSquare, label: 'Chat', to: '/chat' }
     ]
   },
   {
@@ -121,7 +125,8 @@ export const navCategories: NavCategory[] = [
     items: [
       { icon: Users, label: 'Users', to: '/users' },
       { icon: Shield, label: 'Roles', to: '/roles' },
-      { icon: Building2, label: 'Workspaces', to: '/workspaces' }
+      { icon: Building2, label: 'Workspaces', to: '/workspaces' },
+      { icon: SlidersHorizontal, label: 'User Scopes', to: '/scope-dimensions' }
     ]
   },
   {
@@ -130,7 +135,6 @@ export const navCategories: NavCategory[] = [
     label: 'Automation',
     items: [
       { icon: GitBranch, label: 'Pipelines', to: '/pipelines' },
-      { icon: Workflow, label: 'Workflows', to: '/workflows' },
       { icon: SlidersHorizontal, label: 'Flows', to: '/flows' },
       { icon: ThumbsUp, label: 'Approvals', to: '/approvals' },
       { icon: Inbox, label: 'Queues', to: '/queues' },
@@ -153,8 +157,10 @@ export const navCategories: NavCategory[] = [
       { icon: FileBarChart, label: 'Scheduled Reports', to: '/scheduled-reports' },
       { icon: TrendingUp, label: 'Team Throughput', to: '/team-throughput' },
       { icon: BellDot, label: 'Alerts', to: '/alerts' },
+      { icon: Siren, label: 'Alert Manager', to: '/alert-manager' },
       { icon: AlertTriangle, label: 'At-Risk Rules', to: '/at-risk' },
       { icon: Clock, label: 'SLA Rules', to: '/sla-rules' },
+      { icon: ShieldCheck, label: 'Access Audit', to: '/access-audit' },
       { icon: Eye, label: 'Field Watches', to: '/field-watches' },
       { icon: Bell, label: 'Subscriptions', to: '/notification-subscriptions' },
       { icon: Upload, label: 'Imports', to: '/imports' },
@@ -348,6 +354,23 @@ function PanelNavItem({ icon: Icon, label, to }: NavItem) {
   )
 }
 
+/** `#00ceff` / `#0cf` → `"0 206 255"`. Returns null for anything else, so a
+ *  non-hex setting leaves the default channels in place rather than breaking
+ *  every tinted surface. */
+function hexToRgbChannels(hex: string): string | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return null
+  const h =
+    m[1].length === 3
+      ? m[1]
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : m[1]
+  const n = Number.parseInt(h, 16)
+  return `${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255}`
+}
+
 export function AppLayout() {
   const t = useT()
   usePagePresence()
@@ -391,6 +414,14 @@ export function AppLayout() {
     const el = document.documentElement
     el.style.setProperty('--nvr-cyan', color)
     el.style.setProperty('--nvr-cyan-dark', color)
+    // The Tailwind token reads the CHANNEL form so `/N` opacity modifiers work,
+    // so a white-label colour has to land there too — otherwise solid fills
+    // rebrand and every tint stays default cyan.
+    const rgb = hexToRgbChannels(color)
+    if (rgb) {
+      el.style.setProperty('--nvr-cyan-rgb', rgb)
+      el.style.setProperty('--nvr-cyan-dark-rgb', rgb)
+    }
   }, [settings?.project_color])
 
   useEffect(() => {
@@ -538,6 +569,7 @@ export function AppLayout() {
 
             {/* Footer utilities */}
             <div className='flex shrink-0 flex-col items-center gap-0.5 border-t border-white/[0.07] px-1.5 py-2'>
+              <TeamChatDock />
               <NotificationBell collapsed compact />
               <ThemeSwitcher collapsed />
               <Tooltip>

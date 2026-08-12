@@ -116,55 +116,68 @@ export const notificationSubscriptionsGuide: DocSection = {
 
 export const dataImportGuide: DocSection = {
   id: 'data-import-guide',
-  label: 'Data Import Queue',
+  label: 'Imports',
   content: [
-    { type: 'h1', id: 'data-import-guide', text: 'Data Import Queue' },
+    { type: 'h1', id: 'data-import-guide', text: 'Imports' },
     {
       type: 'p',
-      text: 'The Data Import feature lets admins upload CSV data and map columns to collection fields. Imports are processed asynchronously in the background with real-time progress updates via Socket.io.'
+      text: 'The Import Console (Monitoring → Imports) covers two different importers behind one surface. Staged imports load a file into a staging table and optionally run a stored procedure over it. Collection imports map a CSV\'s columns onto a collection\'s fields and write each row through the item API. The console is the shared `ImportConsole` component, so the admin and any headless frontend built on @nivaro/react run exactly the same screen.'
     },
-    { type: 'h3', text: 'Creating an import' },
+    { type: 'h2', id: 'imports-staged', text: 'Staged imports' },
     {
       type: 'p',
-      text: 'Navigate to Monitoring → Imports. Click New Import and follow the 4-step wizard:'
+      text: 'Each staged import is a row in `nivaro_import_definitions`: a key, the staging table rows land in, and an optional procedure that runs afterwards. A definition with no procedure is still a valid import — the load alone is the job. Uploading queues a run in `nivaro_import_queue`; a worker drains it one run at a time, because procedures truncate and refill shared staging tables.'
     },
     {
       type: 'table',
-      head: ['Step', 'Description'],
+      head: ['Column', 'Meaning'],
       rows: [
-        ['1. Upload', 'Select collection and upload a CSV file (or paste CSV text).'],
-        [
-          '2. Map Columns',
-          'Map each CSV column to a collection field. Unmapped columns are skipped.'
-        ],
-        [
-          '3. Options',
-          'Choose duplicate strategy: skip, update, or error. Optionally specify an ID field for upsert matching.'
-        ],
-        ['4. Review & Run', 'Preview row count and start the import.']
+        ['Status', 'queued, running (live pulse), completed, error or canceled.'],
+        ['Import', 'Definition label, with its stable key underneath.'],
+        ['Rows / Duration', 'Rows parsed out of the file, and how long the run took.'],
+        ['Actions', 'Open the detail sheet, re-queue the same file, or cancel.']
       ]
     },
-    { type: 'h3', text: 'Progress tracking' },
     {
       type: 'p',
-      text: 'The import page auto-refreshes for in-progress jobs. Socket.io emits `import:progress` events every 10 rows — the job detail page shows live counters for created, updated, skipped, and error rows.'
+      text: 'The New import dialog previews the file BEFORE queueing, using the worker\'s own parser — so the cleaned values shown are the ones the procedure will consume — and diffs the file\'s columns against the staging table, warning about columns the table does not have and columns it expects but the file omits.'
     },
-    { type: 'h3', text: 'Duplicate strategies' },
+    {
+      type: 'note',
+      text: 'The insight strip is scoped by the window control (7d / 30d / 90d / All): status counts, success rate, rows imported and median duration all describe the runs inside that window, and so does the table.'
+    },
+    { type: 'h2', id: 'imports-collection', text: 'Collection imports' },
+    {
+      type: 'p',
+      text: 'The row-by-row CSV importer. Rows go through the normal item API, so validation rules, hooks, row-level security and activity logging all apply. Jobs process in the background with live progress counters.'
+    },
     {
       type: 'table',
-      head: ['Strategy', 'Behavior'],
+      head: ['Step', 'What it does'],
       rows: [
-        ['skip', 'If a row with the same ID field value exists, skip it.'],
-        ['update', 'If a row with the same ID field value exists, update it (upsert).'],
-        [
-          'error',
-          'If a row with the same ID field value exists, mark the row as an error and continue.'
-        ]
+        ['1. Source', 'Upload a CSV, paste rows, or have the server fetch a URL (25MB max). Shows a parsed preview.'],
+        ['2. Map columns', 'Pick the target collection and map each CSV column to a field. "Match columns with AI" fills the map and shows a confidence per column; unmapped columns are ignored.'],
+        ['3. Options', 'Duplicate strategy and the field used to match existing records.'],
+        ['4. Confirm', 'Review file, collection, row count, mapping count and duplicate handling before starting.']
       ]
+    },
+    {
+      type: 'table',
+      head: ['Duplicate strategy', 'Behavior'],
+      rows: [
+        ['skip', 'A row whose match field already exists is left alone.'],
+        ['overwrite', 'The existing record\'s mapped fields are all replaced.'],
+        ['merge', 'Only the mapped fields are updated.']
+      ]
+    },
+    { type: 'h2', id: 'imports-definitions', text: 'Definitions' },
+    {
+      type: 'p',
+      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts) and sort. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked.'
     },
     {
       type: 'warn',
-      text: 'Import is admin-only. `nivaro_*` system tables are blocked as import targets.'
+      text: 'Both importers are admin-only for writes, and `nivaro_*` system tables are blocked as collection-import targets. Staging table and procedure names are validated as plain identifiers because they are interpolated into SQL — BULK INSERT and EXEC cannot bind an object name.'
     }
   ]
 }
@@ -742,7 +755,7 @@ export const atRiskFlagging: DocSection = {
     { type: 'h1', id: 'at-risk-flagging', text: 'At-Risk Flagging' },
     {
       type: 'p',
-      text: 'At-risk rules highlight rows in the collection browser that meet risk conditions — overdue items, budget overruns, missing data. Flagged rows get a red or amber tint plus a flag icon, and an "At risk (N)" chip above the table filters the view down to flagged rows only.'
+      text: 'At-risk rules are the generic row-highlight engine: rows matching a rule\'s conditions get a coloured tint in the collection browser AND in queue worklists — overdue items, budget overruns, records sent back for rework, missing data. Flagged rows also get a flag icon, and an "At risk (N)" chip above the table filters the view down to flagged rows only.'
     },
     { type: 'h3', text: 'Managing rules' },
     {
@@ -760,7 +773,7 @@ export const atRiskFlagging: DocSection = {
         ],
         [
           'Highlight',
-          '`red` (default) or `amber` — controls the row tint. The first matching rule decides the colour.'
+          '`red` (default), `amber`, `yellow`, `green`, `blue`, or `purple` — controls the row tint. The first matching rule decides the colour.'
         ],
         ['Active', 'Inactive rules are kept but not evaluated.']
       ]

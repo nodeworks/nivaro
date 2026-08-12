@@ -20,6 +20,8 @@ function describeCondition(c: SkipCondition): string {
       return `${c.field || '?'} is empty`
     case 'field_nonempty':
       return `${c.field || '?'} is not empty`
+    case 'lookup_compare':
+      return `${c.record_field || '?'} ${c.op} ${c.collection || '?'}.${c.compare_column || '?'}`
   }
 }
 
@@ -71,6 +73,17 @@ export function PipelineSkipCriteria({
         break
       case 'field_nonempty':
         next = { type: 'field_nonempty', field: '' }
+        break
+      case 'lookup_compare':
+        next = {
+          type: 'lookup_compare',
+          collection: '',
+          filters: [],
+          compare_column: '',
+          record_field: '',
+          op: 'lt',
+          match: 'any'
+        }
         break
     }
     setConditions((c) => [...c, next])
@@ -220,6 +233,158 @@ export function PipelineSkipCriteria({
                     </div>
                   )}
 
+                  {cond.type === 'lookup_compare' && (
+                    <div className='space-y-2'>
+                      <p className='text-[11px] text-slate-400'>
+                        Skip when a matched row in another collection compares true against a
+                        record value (e.g. requisition amount below a threshold table amount).
+                        Filter values may come from a record field — plain column, dotted M2O
+                        path, or an M2M alias (matches any linked id).
+                      </p>
+                      <div className='grid gap-2 sm:grid-cols-2'>
+                        <div className='space-y-1'>
+                          <span className='text-[10px] text-slate-400'>Lookup collection</span>
+                          <Input
+                            value={cond.collection}
+                            onChange={(e) => updateCondition(idx, { collection: e.target.value })}
+                            placeholder='thresholds'
+                            className='h-8 font-mono text-[12px]'
+                          />
+                        </div>
+                        <div className='space-y-1'>
+                          <span className='text-[10px] text-slate-400'>Compare column</span>
+                          <Input
+                            value={cond.compare_column}
+                            onChange={(e) =>
+                              updateCondition(idx, { compare_column: e.target.value })
+                            }
+                            placeholder='threshold_amount'
+                            className='h-8 font-mono text-[12px]'
+                          />
+                        </div>
+                        <div className='space-y-1'>
+                          <span className='text-[10px] text-slate-400'>Record field</span>
+                          <Input
+                            value={cond.record_field}
+                            onChange={(e) => updateCondition(idx, { record_field: e.target.value })}
+                            placeholder='requisition_amount'
+                            className='h-8 font-mono text-[12px]'
+                          />
+                        </div>
+                        <div className='space-y-1'>
+                          <span className='text-[10px] text-slate-400'>
+                            Operator (record vs row)
+                          </span>
+                          <div className='flex gap-2'>
+                            <select
+                              value={cond.op}
+                              onChange={(e) =>
+                                updateCondition(idx, { op: e.target.value as SkipOp })
+                              }
+                              className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[13px]'
+                            >
+                              {OPS.map((op) => (
+                                <option key={op} value={op}>
+                                  {op}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={cond.match ?? 'any'}
+                              onChange={(e) =>
+                                updateCondition(idx, { match: e.target.value as 'any' | 'all' })
+                              }
+                              className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[13px]'
+                            >
+                              <option value='any'>any row</option>
+                              <option value='all'>all rows</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                      <div className='space-y-1.5'>
+                        <div className='flex items-center justify-between'>
+                          <span className='text-[10px] uppercase tracking-wide text-slate-400'>
+                            Row filters
+                          </span>
+                          <Button
+                            type='button'
+                            size='sm'
+                            variant='outline'
+                            className='h-6 gap-1 text-[11px]'
+                            onClick={() =>
+                              updateCondition(idx, {
+                                filters: [...cond.filters, { column: '', value: '' }]
+                              })
+                            }
+                          >
+                            <Plus className='h-3 w-3' />
+                            Filter
+                          </Button>
+                        </div>
+                        {cond.filters.map((f, fi) => (
+                          <div
+                            // biome-ignore lint/suspicious/noArrayIndexKey: positional
+                            key={fi}
+                            className='grid grid-cols-[1fr_1fr_1fr_auto] items-center gap-1.5'
+                          >
+                            <Input
+                              value={f.column}
+                              onChange={(e) =>
+                                updateCondition(idx, {
+                                  filters: cond.filters.map((x, i) =>
+                                    i === fi ? { ...x, column: e.target.value } : x
+                                  )
+                                })
+                              }
+                              placeholder='column'
+                              className='h-7 font-mono text-[11px]'
+                            />
+                            <Input
+                              value={String(f.value ?? '')}
+                              onChange={(e) =>
+                                updateCondition(idx, {
+                                  filters: cond.filters.map((x, i) =>
+                                    i === fi
+                                      ? { ...x, value: e.target.value || undefined }
+                                      : x
+                                  )
+                                })
+                              }
+                              placeholder='static value'
+                              className='h-7 text-[11px]'
+                            />
+                            <Input
+                              value={f.record_field ?? ''}
+                              onChange={(e) =>
+                                updateCondition(idx, {
+                                  filters: cond.filters.map((x, i) =>
+                                    i === fi
+                                      ? { ...x, record_field: e.target.value || undefined }
+                                      : x
+                                  )
+                                })
+                              }
+                              placeholder='or record field'
+                              className='h-7 font-mono text-[11px]'
+                            />
+                            <button
+                              type='button'
+                              onClick={() =>
+                                updateCondition(idx, {
+                                  filters: cond.filters.filter((_, i) => i !== fi)
+                                })
+                              }
+                              className='rounded p-1 text-slate-400 hover:text-red-500'
+                            >
+                              <Trash2 className='h-3 w-3' />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {(cond.type === 'field_empty' || cond.type === 'field_nonempty') && (
                     <CollectionFieldPicker
                       collection={collection ?? ''}
@@ -255,6 +420,16 @@ export function PipelineSkipCriteria({
             >
               <Plus className='h-3 w-3' />
               Field Compare
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              className='h-7 gap-1 text-[12px]'
+              onClick={() => addCondition('lookup_compare')}
+            >
+              <Plus className='h-3 w-3' />
+              Lookup Compare
             </Button>
             <Button
               type='button'

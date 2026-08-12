@@ -10,6 +10,7 @@ import {
 import { get } from '../lib/commands'
 import { titleCase } from '../lib/utils'
 import { ItemEditForm } from './ItemEditForm'
+import { RecordReadView, type ReadViewLayout } from './RecordReadView'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 
 // Drill-down sheet: a detailed view of any record, rendered by the SAME
@@ -27,7 +28,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 // trees) — it does not stand up its own client or auth context.
 
 interface DetailLayoutResponse {
-  layout: { id: number; name: string; slug: string | null }
+  layout: { id: number; name: string; slug: string | null; display_mode?: string | null }
   groups: unknown[]
   assignments: unknown[]
 }
@@ -135,9 +136,20 @@ export function RecordDrilldownSheet({
           {layoutLoading && !useRootSlug ? (
             <div className='space-y-2 px-4 py-3'>
               {[0, 1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className='h-8 animate-pulse rounded bg-slate-100 dark:bg-muted' />
+                <div key={i} className='h-8 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
               ))}
             </div>
+          ) : !useRootSlug && detailLayout?.layout.display_mode === 'read' ? (
+            // Read-only presentation — definition grids + tabbed child lists,
+            // no form inputs. Editing lives on the full record page.
+            <DrilldownContext.Provider value={drillCtx}>
+              <RecordReadView
+                key={`${current.collection}:${current.itemId}:read`}
+                collection={current.collection}
+                itemId={current.itemId}
+                layoutData={detailLayout as unknown as ReadViewLayout}
+              />
+            </DrilldownContext.Provider>
           ) : (
             <DrilldownContext.Provider value={drillCtx}>
               <ItemEditForm

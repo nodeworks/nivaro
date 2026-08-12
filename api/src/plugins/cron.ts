@@ -43,6 +43,19 @@ export class CronManager {
     })
   }
 
+  /**
+   * Run a scheduled job's handler immediately, out of band. Used by the admin
+   * "run now" endpoint to re-run a failed nightly job (or to exercise one in a
+   * test window) without waiting for its next tick. Errors propagate to the
+   * caller so the endpoint can report them; the scheduled run is unaffected.
+   */
+  async runNow(id: string): Promise<boolean> {
+    const entry = this.entries.get(id)
+    if (!entry) return false
+    await entry.fn()
+    return true
+  }
+
   unschedule(id: string): void {
     const entry = this.entries.get(id)
     if (!entry) return

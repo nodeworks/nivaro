@@ -441,11 +441,31 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   }, [rowDim, groupsMap])
 
   const rowValues = useMemo<MatrixRow[]>(() => {
-    const base = [...rowsFromGroups]
-    for (const r of customRows) {
-      if (!base.some((x) => x.value === r.value)) base.push(r)
+    // AUTO-POPULATE from the row dimension's related collection — the matrix
+    // used to start empty (rows appeared only once a group referenced them),
+    // forcing every axis value to be hand-added even though the target
+    // collection was already fetched. Group-derived and custom rows merge on
+    // top so historical values missing from the collection still render.
+    const base: MatrixRow[] = []
+    const push = (r: MatrixRow) => {
+      if (r.value !== '' && !base.some((x) => x.value === r.value)) base.push(r)
     }
-    // Sub-field path (e.g. "regions.short_name"): value IS the sub-field string, already readable
+    if (rowItems) {
+      if (rowSubField) {
+        // Sub-field path (regions.short_name): one row per distinct sub-field
+        // value, deduped (legacy data carries duplicate short names).
+        const vals = [...new Set(rowItems.map((i) => String(i[rowSubField] ?? '')).filter(Boolean))]
+        vals.sort((a, b) => a.localeCompare(b))
+        for (const v of vals) push({ value: v, label: v })
+      } else {
+        const displayTemplate: string | null = rowRelMeta?.display_template ?? null
+        for (const item of rowItems) {
+          push({ value: String(item.id), label: renderDisplayTemplate(displayTemplate, item) })
+        }
+      }
+    }
+    for (const r of rowsFromGroups) push(r)
+    for (const r of customRows) push(r)
     if (rowSubField || !rowRelatedCollection || !rowItems) return base
     // Pure ID-based relation: enrich labels from fetched items
     const displayTemplate: string | null = rowRelMeta?.display_template ?? null

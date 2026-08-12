@@ -53977,6 +53977,19 @@
           "unit_type": {
             "type": "integer"
           },
+          "isp_materials_contact": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "isp_shipping_location": {
+            "type": "integer"
+          },
+          "mdsi_order_status": {
+            "type": "string"
+          },
+          "bulk_allocation_total": {
+            "type": "number"
+          },
           "id": {
             "type": "integer"
           },
@@ -54077,6 +54090,18 @@
           },
           "project": {
             "type": "integer"
+          },
+          "unit_workflows": {
+            "type": "string",
+            "description": "OSP view of the workflows relation"
+          },
+          "unit_materials": {
+            "type": "string",
+            "description": "OSP view of the materials relation"
+          },
+          "allocated_cost": {
+            "type": "number",
+            "description": "Actual cost of allocated inventory (per-transaction unit cost × allocated qty)"
           }
         },
         "required": []
@@ -55272,7 +55297,16 @@
             "type": "boolean"
           }
         },
-        "required": []
+        "required": [
+          "funding_year",
+          "division",
+          "project_type",
+          "project",
+          "region",
+          "shipping_location",
+          "install_location",
+          "internal_contact"
+        ]
       },
       "ProjectOtherSpendCategories": {
         "type": "object",
@@ -55377,6 +55411,9 @@
           "changed": {
             "type": "string",
             "format": "date-time"
+          },
+          "allocated_total": {
+            "type": "number"
           }
         },
         "required": []
@@ -57167,6 +57204,12 @@
       "Projects": {
         "type": "object",
         "properties": {
+          "pub_amount": {
+            "type": "number"
+          },
+          "allocated_total": {
+            "type": "number"
+          },
           "id": {
             "type": "integer"
           },

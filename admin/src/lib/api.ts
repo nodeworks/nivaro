@@ -243,11 +243,27 @@ export type PipelineTemplate = {
 
 export type SkipOp = 'eq' | 'neq' | 'lt' | 'lte' | 'gt' | 'gte' | 'in' | 'notin'
 
+export type SkipLookupFilter = {
+  column: string
+  value?: unknown
+  record_field?: string
+  op?: 'eq' | 'in'
+}
+
 export type SkipCondition =
   | { type: 'no_owners' }
   | { type: 'field_compare'; field: string; op: SkipOp; value: unknown }
   | { type: 'field_empty'; field: string }
   | { type: 'field_nonempty'; field: string }
+  | {
+      type: 'lookup_compare'
+      collection: string
+      filters: SkipLookupFilter[]
+      compare_column: string
+      record_field: string
+      op: SkipOp
+      match?: 'any' | 'all'
+    }
 
 export type SkipCriteria = {
   mode: 'any' | 'all'
@@ -362,6 +378,7 @@ export type PipelineTransition = {
   color: string | null
   required_roles: string[] | null
   actions: unknown[] | null
+  auto_trigger?: boolean
   sort: number
   group_label: string | null
   condition_rules: ConditionRule[] | null

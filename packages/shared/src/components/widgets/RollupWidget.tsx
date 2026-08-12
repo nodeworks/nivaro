@@ -277,7 +277,7 @@ export function RollupWidget({ data, config, loading, error }: RollupWidgetProps
     return (
       <div className='space-y-2'>
         {[0, 1].map((i) => (
-          <div key={i} className='animate-pulse h-12 rounded-md bg-slate-100 dark:bg-slate-800' />
+          <div key={i} className='animate-pulse h-12 rounded-md bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
         ))}
       </div>
     )

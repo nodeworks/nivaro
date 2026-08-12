@@ -245,3 +245,52 @@ export const reportStudioDocs: DocSection = {
     }
   ]
 }
+
+export const auditLevelDocs: DocSection = {
+  id: 'audit-levels',
+  label: 'Audit Levels',
+  content: [
+    { type: 'h1', id: 'audit-levels', text: 'Audit Levels' },
+    {
+      type: 'p',
+      text: 'Every write to a business collection logs an activity entry and a full revision snapshot. That is the right default for records people care about, and the wrong one for high-frequency ephemeral tables — presence heartbeats, read markers, last-seen timestamps — which bury real audit history and bloat the revision table.'
+    },
+    {
+      type: 'p',
+      text: 'Each collection carries an accountability level that controls how deeply its writes are recorded. Set it in Data Model → collection settings, or via the API.'
+    },
+    {
+      type: 'table',
+      head: ['Level', 'Activity entry', 'Revision snapshot', 'Use for'],
+      rows: [
+        ['all (default)', 'Yes', 'Yes', 'Normal records — full history and time-travel restore'],
+        ['activity', 'Yes', 'No', 'Chatty but audit-relevant writes (chat messages, log-style rows)'],
+        ['(empty)', 'No', 'No', 'Ephemeral state — presence, read markers, heartbeats']
+      ]
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/collections/user_presence
+{ "accountability": "" }          # stop auditing entirely
+
+PATCH /api/collections/chat_messages
+{ "accountability": "activity" }  # keep the trail, drop snapshots`
+    },
+    {
+      type: 'note',
+      text: 'Webhooks fire at every level — delivery is a separate contract from auditing. Turning a collection down never affects integrations.'
+    },
+    {
+      type: 'warn',
+      text: 'Levels below "all" disable time-travel restore for that collection: with no revision snapshots there is nothing to roll back to. Trash-based restore of a deleted row still works.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A change takes effect on the next write — the level is cached for 60 seconds and busted immediately when you PATCH the collection.',
+        'Unregistered collections default to full auditing, so a lookup miss never silently loses coverage.',
+        'Extensions can write their own audit entries with ctx.logActivity() — entries are namespaced with the extension id.'
+      ]
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import { type RefObject, useEffect, useRef, useState } from 'react'
-import { useNivaroClient } from '../../context'
+import { useNivaroClient , useParentDraft } from '../../context'
 import { get } from '../../lib/commands'
 import type { NestedOps } from './types'
 
@@ -41,8 +41,18 @@ export function parseJson<T>(v: unknown): T | null {
 
 export type CascadeRule = {
   parent_field: string
+  /** Column on the picker's target collection — may be a dotted relation path
+   *  ('regions.region'); the first hop is wrapped in _some when filter_via_many. */
   filter_column: string
   filter_is_m2m?: boolean
+  /** Dotted filter_column's first hop is a to-many alias (O2M/M2M) — wrap in _some. */
+  filter_via_many?: boolean
+  /** Derive the filter value(s) from the parent's value instead of using it
+   *  directly: {parentValue: filterValue | filterValue[]}. Missing keys fall
+   *  back to value_map_default, then the raw parent value. Arrays become _in.
+   *  (EFP parent-unit hierarchy: DAAS→PPOD ids, PPOD→CPOD id, …) */
+  value_map?: Record<string, unknown>
+  value_map_default?: unknown
   clear_on_parent_change?: boolean
   clear_on_unavailable?: boolean
   show_all_if_no_parent?: boolean // default true; when false, field is disabled until parent is set
@@ -84,10 +94,34 @@ export function CascadeEffectController({
     if (cascadeRules.some((r) => r.clear_on_parent_change)) onClearRef.current()
   }, [cascadeFilterStr, cascadeRules])
 
+  // This check deliberately bypasses react-query (it clears a field as a side
+  // effect rather than rendering data), which also means nothing dedupes it —
+  // and `cascadeFilter` is a fresh object on every parent render, so the effect
+  // re-fired continuously. One item form issued the SAME availability request
+  // nine times concurrently, per cascading field. The ref records the exact
+  // question already asked, so an unchanged (collection, value, filter) never
+  // repeats no matter how often the effect re-runs.
+  const lastCheckRef = useRef<string | null>(null)
+  // Auto-clear ONLY when the user changed one of this cascade's PARENT fields
+  // this session (ParentDraftContext.dirtyFields). A record LOADED with a
+  // stale saved value keeps it — silently clearing there wiped a value the
+  // user never touched (dirtying the form; a Save would persist null) and hid
+  // the picker's amber "not an available option" flag. A filter-key heuristic
+  // is not enough: M2M parents settle asynchronously after mount, so the
+  // load-time filter itself changes without any user interaction.
+  const parentDraft = useParentDraft()
+  const dirtyFields = parentDraft?.dirtyFields
   useEffect(() => {
     if (!cascadeFilter || Object.keys(cascadeFilter).length === 0) return
     if (!cascadeRules.some((r) => r.clear_on_unavailable)) return
     if (currentValue == null || !relatedCollection) return
+    const parentTouched = cascadeRules.some(
+      (r) => r.clear_on_unavailable && dirtyFields?.has(r.parent_field)
+    )
+    if (!parentTouched) return
+    const checkKey = `${relatedCollection}|${String(currentValue)}|${cascadeFilterStr}`
+    if (lastCheckRef.current === checkKey) return
+    lastCheckRef.current = checkKey
     client
       .request<{ data: unknown[] }>(
         get(`/items/${relatedCollection}`, {
@@ -99,8 +133,12 @@ export function CascadeEffectController({
       .then((r) => {
         if ((r.data ?? []).length === 0) onClearRef.current()
       })
-      .catch(() => {})
-  }, [cascadeFilter, cascadeRules, client, currentValue, relatedCollection])
+      .catch(() => {
+        // A failed check must not stick: let the next render retry rather than
+        // leaving a value permanently unverified.
+        if (lastCheckRef.current === checkKey) lastCheckRef.current = null
+      })
+  }, [cascadeFilter, cascadeFilterStr, cascadeRules, client, currentValue, relatedCollection, dirtyFields])
 
   return null
 }

@@ -14,8 +14,19 @@
 
 @layer base {
   :root {
+    /* Skeleton/shimmer surfaces. Light keeps the slate tints; dark is
+       NEUTRAL on purpose — --muted carries the palette's blue shift, and a
+       loading row rendered in slate-800 reads as a blue block. */
+    --nvr-skeleton: 210 16% 93%;
+    --nvr-skeleton-hi: 210 20% 97%;
     --nvr-cyan: #00ceff;
     --nvr-cyan-dark: #00b8e6;
+    /* Channel triplets so Tailwind can compose alpha (bg-nvr-cyan/10).
+       A token defined as an opaque var() generates NO utility for the
+       /N modifier at all. Keep these in step with the hex above — the
+       admin overrides both at runtime for white-labelling. */
+    --nvr-cyan-rgb: 0 206 255;
+    --nvr-cyan-dark-rgb: 0 184 230;
     --background: 0 0% 100%;
     --foreground: 220 45% 11%;
     --card: 0 0% 100%;
@@ -150,6 +161,8 @@
 /* True neutral dark — zero chroma on all surfaces. Cyan accent unchanged.      */
 
 .dark {
+  --nvr-skeleton: 0 0% 17%;
+  --nvr-skeleton-hi: 0 0% 23%;
   --background: 224 15% 8%;
   --foreground: 210 15% 94%;
   --card: 220 12% 17%;

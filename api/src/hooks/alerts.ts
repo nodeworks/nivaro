@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { sendRawMail } from '../services/mail.js'
 import { type AnomalyResult, evaluateAnomalyAlert } from '../services/anomaly.js'
 import { hooks } from './registry.js'
 
@@ -105,6 +106,22 @@ async function notifyAlertSubscribers(
       } catch {
         // non-fatal
       }
+    }
+    // Email delivery — was accepted at subscribe time but never sent before.
+    // Record field values flow into `message`, so everything is HTML-escaped.
+    if (sub.notify_email && sub.email) {
+      const esc = (v: unknown) =>
+        String(v ?? '').replace(
+          /[&<>"']/g,
+          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
+        )
+      void sendRawMail({
+        to: sub.email as string,
+        subject,
+        html: `<p>${esc(message)}</p><p style="color:#64748b;font-size:12px">Alert definition: ${esc(def.name)} · ${esc(def.collection)}</p>`
+      }).catch(() => {
+        /* mail failures never block alert firing */
+      })
     }
   }
 }

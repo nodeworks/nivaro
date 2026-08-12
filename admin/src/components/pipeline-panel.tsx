@@ -87,10 +87,17 @@ function StateTrack({
       fwd.set(fromId, arr)
     }
 
-    // For the current state, replace forward edges with condition-evaluated available
-    // transitions so only passing branches appear ahead in the track.
+    // For the current state, union condition-evaluated available transitions with
+    // the template's own explicit edges — auto transitions and condition-gated
+    // ones (e.g. Submit hidden until an order number is entered) never appear in
+    // `available`, and dropping them would dead-end the track.
     if (currentStateId) {
-      fwd.set(currentStateId, availableTransitions.map((t) => t.to_state))
+      const explicitFromCurrent = explicit
+        .filter((t) => t.from_state === currentStateId)
+        .map((t) => t.to_state)
+      fwd.set(currentStateId, [
+        ...new Set([...availableTransitions.map((t) => t.to_state), ...explicitFromCurrent])
+      ])
     }
 
     // BFS from initial states

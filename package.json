@@ -51,5 +51,6 @@
     "concurrently": "^9.1.2",
     "fallow": "^2.88.3",
     "wait-on": "^9.0.10"
-  }
+  },
+  "license": "MIT"
 }

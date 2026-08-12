@@ -642,7 +642,109 @@ export function deleteSessionRecording(id: UUID): Command<{ data: { deleted: boo
   return cmd('DELETE', `/session-recordings/${id}`)
 }
 
+// ─── User scopes (dimensional defaults + restrictions) ────────────────────────
+
+export interface ScopeDimensionInfo {
+  name: string
+  label: string
+  target_collection: string
+  display_field: string | null
+  options_sort: string | null
+}
+
+export interface UserScopesInfo {
+  dimensions: ScopeDimensionInfo[]
+  defaults: Record<string, Array<string | number>>
+  restricted: Record<string, Array<string | number>>
+}
+
+/** The caller's scope dimensions + own default/restricted value sets. */
+export function readMyScopes(): Command<{ data: UserScopesInfo }> {
+  return cmd('GET', '/users/me/scopes')
+}
+
+/** Self-edit DEFAULT values for a dimension (restrictions are admin-set). */
+export function saveMyScopeDefaults(
+  dimension: string,
+  values: Array<string | number>
+): Command<{ data: { saved: boolean; values: Array<string | number> } }> {
+  return cmd('PUT', `/users/me/scopes/${dimension}`, undefined, { values })
+}
+
+/** Admin: any user's scopes. */
+export function readUserScopes(userId: UUID): Command<{ data: UserScopesInfo }> {
+  return cmd('GET', `/user-scopes/${userId}`)
+}
+
+/** Admin: set a user's default or restrict values for a dimension. */
+export function saveUserScope(
+  userId: UUID,
+  body: { dimension: string; mode: 'default' | 'restrict'; values: Array<string | number> }
+): Command<{ data: { saved: boolean } }> {
+  return cmd('PUT', `/user-scopes/${userId}`, undefined, body)
+}
+
 // ─── Report Studio ────────────────────────────────────────────────────────────
+
+/** Display format for a query-widget / table column value. */
+export type ReportColumnFormat =
+  | 'currency'
+  | 'number'
+  | 'integer'
+  | 'percent'
+  | 'days'
+  | 'date'
+  | 'datetime'
+
+export interface ReportQueryColumn {
+  field: string
+  label?: string
+  format?: ReportColumnFormat
+  decimals?: number
+}
+
+/**
+ * Custom-query-backed widget: executes a nivaro custom query (as the viewer)
+ * and renders rows as a table, chart, or KPI tile strip. Param values may be
+ * literals or tokens: '$filters.<field>' (selected option LABELS, comma-joined
+ * — stored procs take names), '$filters.<field>:values' (raw values),
+ * '$date.start' / '$date.end' (resolved from the report date range).
+ * Unresolved optional tokens are omitted from the execute call.
+ */
+export interface ReportQueryWidgetConfig {
+  slug: string
+  params?: Record<string, string>
+  display: 'table' | 'bar' | 'hbar' | 'stacked_bar' | 'line' | 'area' | 'donut' | 'kpis' | 'tree'
+  /** Table column defs / KPI tile defs (kpis reads row 0, one tile per column). */
+  columns?: ReportQueryColumn[]
+  /** Chart category/x-axis field. */
+  x_field?: string
+  /** Chart series — one line/bar per entry (multi-series supported). */
+  series?: Array<{ field: string; label?: string; color?: string; dash?: boolean }>
+  value_format?: ReportColumnFormat
+  limit?: number
+  sort?: string
+  /** Table: render a totals row over numeric columns. */
+  totals?: boolean
+  /** stacked_bar only: lay bars horizontally. */
+  horizontal?: boolean
+  /** Aggregate rows client-side: group by x_field, summing each series field. */
+  group_rows?: boolean
+  /**
+   * display='tree': collapsible group tree over flat rows (EFP budget-health
+   * style). `levels` are the group-by fields outer→leaf; series fields sum at
+   * every level; `pct` renders a utilization bar (num/den, % colored by
+   * `thresholds`, first match wins, checked in order); `badge` shows a leaf
+   * chip; `drill` opens the record detail sheet on leaf click.
+   */
+  tree?: {
+    levels: string[]
+    badge?: string
+    pct?: { num: string; den: string; label?: string }
+    thresholds?: Array<{ gte: number; color: string }>
+    drill?: { collection: string; id_field: string }
+  }
+}
 
 export interface ReportWidgetConfig {
   metric?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string }
@@ -650,7 +752,8 @@ export interface ReportWidgetConfig {
   filters?: Array<{ field: string; op: string; value?: unknown }>
   date_field?: string | null
   limit?: number
-  columns?: string[]
+  /** Table columns — plain field names or {field, label, format} defs. */
+  columns?: Array<string | ReportQueryColumn>
   sort?: string
   format?: { prefix?: string; suffix?: string; decimals?: number }
   compare?: 'previous_period' | 'previous_year' | null
@@ -663,9 +766,19 @@ export interface ReportWidgetConfig {
     format?: { prefix?: string; suffix?: string; decimals?: number }
     color?: string
   }>
+  /** type='query' widgets only. */
+  query?: ReportQueryWidgetConfig
 }
 
-export type ReportWidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider'
+export type ReportWidgetType =
+  | 'kpi'
+  | 'kpi_group'
+  | 'bar'
+  | 'line'
+  | 'donut'
+  | 'table'
+  | 'divider'
+  | 'query'
 
 export interface ReportWidget {
   id: UUID
@@ -696,6 +809,8 @@ export interface ReportDateRange {
 export interface ReportEntityFilter {
   field: string
   values: Array<string | number>
+  /** Display labels parallel to values — query-widget params default to these. */
+  labels?: string[]
 }
 
 export interface ReportDef {
@@ -708,7 +823,21 @@ export interface ReportDef {
   role_id: UUID | null
   global_filters: {
     date_range?: ReportDateRange | null
-    filter_bar?: Array<{ field: string; label: string }>
+    filter_bar?: Array<{
+      field: string
+      label: string
+      /**
+       * Optional explicit option source (fetched via /items) — for filter
+       * fields that aren't a physical column on any widget collection
+       * (e.g. funding year fed to query-widget params).
+       */
+      options?: {
+        collection: string
+        value_field?: string
+        label_field?: string
+        sort?: string
+      }
+    }>
   } | null
   widget_count?: number
   widgets?: ReportWidget[]
@@ -821,7 +950,7 @@ export function aiBuildReport(
 export function aiReportFilters(
   id: UUID,
   prompt: string,
-  fields: string[]
+  fields: Array<string | { field: string; label?: string }>
 ): Command<{
   data: { date_range?: ReportDateRange | null; entity_filters?: ReportEntityFilter[] }
 }> {
@@ -847,13 +976,61 @@ export function setReportSubscription(
   return cmd('PUT', `/report-studio/${id}/subscription`, undefined, body)
 }
 
+/**
+ * Alert condition field syntax: 'value' | 'row_count' | '<col>' (sum of a
+ * numeric result column) | 'sum:<col>' | 'avg:<col>' | 'max:<col>' |
+ * 'min:<col>' | 'tile:<label>' (kpi_group tile).
+ */
+/** Clear cached custom-query results for this report's query widgets. */
+export function resetReportCache(id: UUID): Command<{ data: { queries: number; cleared: number } }> {
+  return cmd('POST', `/report-studio/${id}/reset-cache`)
+}
+
+export interface ReportFilterPreset {
+  id: number
+  name: string
+  date_range: ReportDateRange | null
+  entity_filters: ReportEntityFilter[]
+}
+
+/** The caller's own named filter presets for a report (server-persisted). */
+export function listReportFilterPresets(id: UUID): Command<{ data: ReportFilterPreset[] }> {
+  return cmd('GET', `/report-studio/${id}/filter-presets`)
+}
+
+/** Save (upsert-by-name) a filter preset for the caller. */
+export function saveReportFilterPreset(
+  id: UUID,
+  body: { name: string; date_range?: ReportDateRange | null; entity_filters?: ReportEntityFilter[] }
+): Command<{ data: { id: number; updated: boolean } }> {
+  return cmd('POST', `/report-studio/${id}/filter-presets`, undefined, body)
+}
+
+export function deleteReportFilterPreset(
+  id: UUID,
+  presetId: number
+): Command<{ data: { deleted: boolean } }> {
+  return cmd('DELETE', `/report-studio/${id}/filter-presets/${presetId}`)
+}
+
+export interface ReportAlertCondition {
+  field: string
+  op: 'gt' | 'gte' | 'lt' | 'lte' | 'eq'
+  value: number
+}
+
 export interface ReportAlert {
   id: UUID
   widget: UUID
   name: string
-  conditions: Array<{ field: 'value' | 'row_count'; op: string; value: number }>
+  conditions: ReportAlertCondition[]
+  /** Per-alert entity-filter overrides — the alert evaluates in this scope. */
+  filters?: ReportEntityFilter[] | null
   is_active: boolean
+  delivery_email?: boolean
+  delivery_inapp?: boolean
   firing: boolean
+  last_fired?: ISODate | null
 }
 
 export function listReportAlerts(id: UUID): Command<{ data: ReportAlert[] }> {
@@ -865,12 +1042,52 @@ export function createReportAlert(
   body: {
     widget: UUID
     name?: string
-    conditions: Array<{ field: 'value' | 'row_count'; op: string; value: number }>
+    conditions: ReportAlertCondition[]
+    filters?: ReportEntityFilter[]
     delivery_email?: boolean
     delivery_inapp?: boolean
   }
 ): Command<{ data: { id: UUID } }> {
   return cmd('POST', `/report-studio/${id}/alerts`, undefined, body)
+}
+
+export function updateReportAlert(
+  id: UUID,
+  alertId: UUID,
+  body: {
+    name?: string
+    conditions?: ReportAlertCondition[]
+    filters?: ReportEntityFilter[] | null
+    delivery_email?: boolean
+    delivery_inapp?: boolean
+    is_active?: boolean
+  }
+): Command<{ data: { updated: boolean } }> {
+  return cmd('PATCH', `/report-studio/${id}/alerts/${alertId}`, undefined, body)
+}
+
+/** Mark an alert's open firing entry resolved. */
+export function resolveReportAlert(
+  id: UUID,
+  alertId: UUID
+): Command<{ data: { resolved: number } }> {
+  return cmd('POST', `/report-studio/${id}/alerts/${alertId}/resolve`)
+}
+
+export interface ReportAlertLogEntry {
+  id: number
+  alert: UUID
+  status: 'firing' | 'resolved'
+  metric_snapshot: Record<string, number> | null
+  fired_at: ISODate
+  resolved_at: ISODate | null
+}
+
+export function readReportAlertLog(
+  id: UUID,
+  alertId: UUID
+): Command<{ data: ReportAlertLogEntry[] }> {
+  return cmd('GET', `/report-studio/${id}/alerts/${alertId}/log`)
 }
 
 export function toggleReportAlert(

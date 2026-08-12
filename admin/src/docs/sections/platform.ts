@@ -227,11 +227,21 @@ export const smtpConfig: DocSection = {
         ['Mail from', 'MAIL_FROM', 'Sender address, e.g. `Nivaro <no-reply@example.com>`']
       ]
     },
+    { type: 'h3', text: 'Test mode (dev / staging)' },
+    {
+      type: 'p',
+      text: 'When Test mode is enabled (Settings → Email → Test mode), every outgoing email is redirected to a single test recipient instead of its real recipients — the subject is prefixed with `[TEST — was: <original addresses>]` so you can see who would have received it. An optional allowlist (comma-separated exact emails and/or `@domains`) lets specific addresses receive mail normally. If test mode is on but no test recipient is configured, non-allowlisted mail is dropped with a server log rather than sent.'
+    },
+    {
+      type: 'note',
+      text: 'The `MAIL_TEST_MODE` and `MAIL_TEST_RECIPIENT` env vars override the settings values and force test mode on. Set them in dev/staging `.env` files so the protection survives database restores from production.'
+    },
     { type: 'h3', text: 'API' },
     {
       type: 'pre',
       code: `GET   /api/settings          # smtp_pass → ••••••
-PATCH /api/settings          # smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, smtp_secure
+PATCH /api/settings          # smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, smtp_secure,
+                             # mail_test_mode, mail_test_recipient, mail_test_allowlist
 
 POST  /api/settings/mail/test  { "to": "you@example.com" }
       # → { "ok": true } | { "error": "<SMTP error>" }`
@@ -284,11 +294,21 @@ export const smsConfig: DocSection = {
         ['sms_region', 'AWS region for SNS (default us-east-1)']
       ]
     },
+    { type: 'h3', text: 'Test mode (dev / staging)' },
+    {
+      type: 'p',
+      text: 'When Test mode is enabled (Settings → SMS → Test mode), every outgoing SMS is redirected to a single test number — the message body is prefixed with `[TEST — was: <original number>]`. An optional allowlist (comma-separated phone numbers; formatting and country-code differences are ignored when matching) lets specific numbers receive texts normally. If test mode is on but no test number is configured, non-allowlisted SMS is dropped with a server log rather than sent.'
+    },
+    {
+      type: 'note',
+      text: 'The `SMS_TEST_MODE` and `SMS_TEST_RECIPIENT` env vars override the settings values and force test mode on — set them in dev/staging `.env` files so the protection survives database restores from production. Email has the same feature: see Email / SMTP → Test mode.'
+    },
     { type: 'h3', text: 'API' },
     {
       type: 'pre',
       code: `GET   /api/settings           # sms_auth_token → ••••••
-PATCH /api/settings           # sms_provider, sms_account_sid, sms_auth_token, sms_from, sms_region
+PATCH /api/settings           # sms_provider, sms_account_sid, sms_auth_token, sms_from, sms_region,
+                              # sms_test_mode, sms_test_recipient, sms_test_allowlist
 
 POST  /api/settings/sms/test  { "to": "+12125550100" }
       # → { "ok": true } | { "error": "<provider error>" }`

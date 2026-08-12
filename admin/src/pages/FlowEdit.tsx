@@ -6,8 +6,11 @@ import {
   ArrowRight,
   Bell,
   Check,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Code,
+  Database,
   Download,
   GitBranch,
   Globe,
@@ -23,6 +26,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -46,6 +50,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { FlowRunsPanel } from '@/components/flow-runs-panel'
 import { api, exportFlow } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -118,7 +123,8 @@ const OP_ICONS: Record<string, React.ElementType> = {
   webhook: Globe,
   transform: ArrowLeftRight,
   'run-flow': Zap,
-  'external-api': PlugZap
+  'external-api': PlugZap,
+  'item-read': Database
 }
 
 const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string }> = {
@@ -166,6 +172,11 @@ const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string
     cls: 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-900/20 dark:text-teal-400 dark:border-teal-800',
     label: 'Ext API',
     color: '#0d9488'
+  },
+  'item-read': {
+    cls: 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800',
+    label: 'Read Item',
+    color: '#4f46e5'
   }
 }
 
@@ -1135,6 +1146,69 @@ function EditOperationDialog({
                 </div>
               </>
             )}
+            {op.type === 'item-read' && (
+              <>
+                <div className='rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 px-3 py-2 text-[11px] text-indigo-700 dark:text-indigo-400'>
+                  <Database className='inline h-3 w-3 mr-1' />
+                  Reads one record and merges it into flow data under the result key. Dotted
+                  fields (e.g. <code className='font-mono'>creator.email</code>) resolve through
+                  M2O relations and land as flat keys — reference them downstream as{' '}
+                  <code className='font-mono'>{'{{record.creator.email}}'}</code>.
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>
+                    Collection <span className='text-red-500'>*</span>
+                  </Label>
+                  <Input
+                    value={(optsState.collection as string) ?? ''}
+                    onChange={(e) => setOpt('collection', e.target.value)}
+                    placeholder='{{collection}} or a fixed name'
+                    className='font-mono text-[13px]'
+                  />
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>
+                    Record ID <span className='text-red-500'>*</span>
+                  </Label>
+                  <Input
+                    value={(optsState.id as string) ?? ''}
+                    onChange={(e) => setOpt('id', e.target.value)}
+                    placeholder='{{item}}'
+                    className='font-mono text-[13px]'
+                  />
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>Relation fields (comma-separated dotted paths)</Label>
+                  <Input
+                    value={
+                      Array.isArray(optsState.fields)
+                        ? (optsState.fields as string[]).join(', ')
+                        : ''
+                    }
+                    onChange={(e) =>
+                      setOpt(
+                        'fields',
+                        e.target.value
+                          .split(',')
+                          .map((v) => v.trim())
+                          .filter(Boolean)
+                      )
+                    }
+                    placeholder='creator.email, additional_contact.email'
+                    className='font-mono text-[13px]'
+                  />
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>Result key</Label>
+                  <Input
+                    value={(optsState.result_key as string) ?? ''}
+                    onChange={(e) => setOpt('result_key', e.target.value)}
+                    placeholder='record'
+                    className='font-mono text-[13px]'
+                  />
+                </div>
+              </>
+            )}
             {op.type === 'notification' && (
               <>
                 <div className='rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-400'>
@@ -1777,6 +1851,9 @@ function AddOperationDialog({
                   <SelectItem value='webhook'>Webhook — call external URL</SelectItem>
                   <SelectItem value='transform'>Transform — map/set/delete fields</SelectItem>
                   <SelectItem value='run-flow'>Run Flow — trigger another flow</SelectItem>
+                  <SelectItem value='item-read'>
+                    Read Item — fetch a record (+ relation fields) into flow data
+                  </SelectItem>
                   <SelectItem value='external-api'>
                     External API — call predefined or custom endpoint
                   </SelectItem>
@@ -2600,6 +2677,188 @@ function versionAuthor(v: FlowVersionRow): string {
   return v.user_email ?? 'System'
 }
 
+interface FlowTestStep {
+  key: string
+  name: string
+  type: string
+  status: 'resolve' | 'reject' | 'async'
+  preview?: unknown
+}
+
+interface FlowTestResult {
+  steps: FlowTestStep[]
+  output: Record<string, unknown>
+  error: string | null
+  dry_run: boolean
+}
+
+const STEP_STATUS_CLS: Record<FlowTestStep['status'], string> = {
+  resolve:
+    'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800',
+  reject:
+    'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-400 dark:border-red-800',
+  async:
+    'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800'
+}
+
+function FlowTesterSection({ flowId, trigger }: { flowId: string; trigger: string }) {
+  const [open, setOpen] = useState(false)
+  const [payload, setPayload] = useState(() =>
+    trigger === 'workflow-transition'
+      ? JSON.stringify(
+          {
+            collection: 'workflows',
+            item: 1,
+            transition_label: 'Approve',
+            from_state: { key: 'a', label: 'State A' },
+            to_state: { key: 'b', label: 'State B' },
+            comment: '',
+            owners: [],
+            owner_emails: 'owner@example.com'
+          },
+          null,
+          2
+        )
+      : trigger === 'event'
+        ? JSON.stringify(
+            { collection: 'my_collection', action: 'create', keys: [], payload: {}, previousData: {} },
+            null,
+            2
+          )
+        : '{}'
+  )
+  const [dryRun, setDryRun] = useState(true)
+  const [result, setResult] = useState<FlowTestResult | null>(null)
+  const [showOutput, setShowOutput] = useState(false)
+
+  const runTest = useMutation({
+    mutationFn: () => {
+      let parsed: Record<string, unknown>
+      try {
+        parsed = payload.trim() ? JSON.parse(payload) : {}
+      } catch {
+        throw new Error('invalid-json')
+      }
+      return api
+        .post<{ data: FlowTestResult }>(`/flows/${flowId}/test`, {
+          payload: parsed,
+          dry_run: dryRun
+        })
+        .then((r) => r.data.data)
+    },
+    onSuccess: (data) => setResult(data),
+    onError: (err) =>
+      toast.error(
+        (err as Error).message === 'invalid-json' ? 'Payload is not valid JSON' : 'Test run failed'
+      )
+  })
+
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-700'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-5 py-4'
+      >
+        <div className='flex items-center gap-2'>
+          <Zap className='h-4 w-4 text-slate-400' />
+          <h2 className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>Tester</h2>
+        </div>
+        {open ? (
+          <ChevronDown className='h-4 w-4 text-slate-400' />
+        ) : (
+          <ChevronRight className='h-4 w-4 text-slate-400' />
+        )}
+      </button>
+      {open && (
+        <div className='space-y-3 border-t border-slate-100 dark:border-border p-5'>
+          <div className='space-y-1.5'>
+            <Label className='text-[12px]'>Trigger payload (JSON)</Label>
+            <Textarea
+              value={payload}
+              onChange={(e) => setPayload(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              className='font-mono text-[11.5px] resize-y'
+            />
+          </div>
+          <div className='flex items-center justify-between'>
+            <label className='flex cursor-pointer items-center gap-2 text-[12px] text-slate-600 dark:text-slate-400'>
+              <Switch checked={dryRun} onCheckedChange={setDryRun} />
+              Dry run — render mail/API calls without sending
+            </label>
+            <Button
+              size='sm'
+              onClick={() => runTest.mutate()}
+              disabled={runTest.isPending}
+              className='gap-1.5'
+            >
+              <Zap className='h-3.5 w-3.5' />
+              {runTest.isPending ? 'Running…' : 'Run test'}
+            </Button>
+          </div>
+          {!dryRun && (
+            <p className='rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400'>
+              Live mode: mail, notifications, webhooks and external API calls really fire.
+            </p>
+          )}
+          {result && (
+            <div className='space-y-2'>
+              {result.error && (
+                <pre className='overflow-auto rounded-lg bg-red-50 p-2.5 font-mono text-[11px] text-red-700 dark:bg-red-950/40 dark:text-red-400'>
+                  {result.error}
+                </pre>
+              )}
+              {result.steps.length === 0 && !result.error && (
+                <p className='text-[12px] text-slate-400'>No operations executed.</p>
+              )}
+              {result.steps.map((step, i) => (
+                <div
+                  // biome-ignore lint/suspicious/noArrayIndexKey: trace is positional
+                  key={i}
+                  className='rounded-lg border border-slate-200 dark:border-border p-2.5'
+                >
+                  <div className='flex items-center gap-2'>
+                    <span
+                      className={cn(
+                        'inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-semibold',
+                        STEP_STATUS_CLS[step.status]
+                      )}
+                    >
+                      {step.status}
+                    </span>
+                    <span className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+                      {step.name}
+                    </span>
+                    <OpTypeBadge type={step.type} />
+                  </div>
+                  {step.preview != null && (
+                    <pre className='mt-2 max-h-48 overflow-auto rounded-lg bg-slate-900 p-2.5 font-mono text-[10.5px] text-slate-100'>
+                      {JSON.stringify(step.preview, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              ))}
+              <button
+                type='button'
+                onClick={() => setShowOutput((v) => !v)}
+                className='text-[11.5px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              >
+                {showOutput ? 'Hide' : 'Show'} final flow data
+              </button>
+              {showOutput && (
+                <pre className='max-h-56 overflow-auto rounded-lg bg-slate-900 p-2.5 font-mono text-[10.5px] text-slate-100'>
+                  {JSON.stringify(result.output, null, 2)}
+                </pre>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FlowVersionsSection({ flowId }: { flowId: string }) {
   const queryClient = useQueryClient()
   const [confirmVersion, setConfirmVersion] = useState<number | null>(null)
@@ -2707,6 +2966,7 @@ function FlowVersionsSection({ flowId }: { flowId: string }) {
 export function FlowEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const goBack = useGoBack('/flows')
   const queryClient = useQueryClient()
 
   const { data: flow, isLoading } = useQuery({
@@ -2800,7 +3060,7 @@ export function FlowEditPage() {
           <div className='flex items-center gap-2'>
             <button
               type='button'
-              onClick={() => navigate('/flows')}
+              onClick={goBack}
               className='flex items-center gap-1.5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700'
             >
               <ArrowLeft className='h-4 w-4' />
@@ -3095,7 +3355,9 @@ export function FlowEditPage() {
               )
             })()}
 
+            {id && <FlowTesterSection flowId={id} trigger={trigger} />}
             {id && <FlowVersionsSection flowId={id} />}
+            {id && <FlowRunsPanel flowId={id} />}
           </aside>
 
           {/* Canvas */}

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { CollectionFieldPickerPanel, type PickedField } from '@/components/field-picker'
 import { Badge } from '@/components/ui/badge'
@@ -414,6 +415,7 @@ export function SubmissionFormEditPage() {
   const { id } = useParams<{ id: string }>()
   const isNew = id === 'new'
   const navigate = useNavigate()
+  const goBack = useGoBack('/submission-forms')
   const qc = useQueryClient()
 
   const [name, setName] = useState('')
@@ -552,7 +554,7 @@ export function SubmissionFormEditPage() {
     onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ['submission-forms'] })
       toast.success('Form created')
-      navigate(`/submission-forms/${created.id}`)
+      navigate(`/submission-forms/${created.id}`, { replace: true })
     },
     onError: (err: unknown) => {
       const msg =
@@ -669,7 +671,7 @@ export function SubmissionFormEditPage() {
             variant='ghost'
             size='icon'
             className='h-8 w-8'
-            onClick={() => navigate('/submission-forms')}
+            onClick={goBack}
           >
             <ArrowLeft className='h-4 w-4' />
           </Button>

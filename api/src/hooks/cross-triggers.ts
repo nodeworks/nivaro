@@ -37,12 +37,23 @@ export interface CrossTriggerCondition {
  * `collection` = source collection, `trigger` = 'create' | 'update' | 'delete',
  * `conditions` = CrossTriggerCondition[] (AND semantics), `enabled` = active flag.
  */
+export interface ExecProcedureAction {
+  type: 'exec_procedure'
+  /** Stored procedure name — plain identifier, no schema prefix. */
+  procedure: string
+  /** Named args: @key = rendered template value. Omitted/empty-rendered args are skipped. */
+  args?: Record<string, string>
+}
+
 export interface CrossTriggerAction {
   type: 'cross_collection'
   target_collection: string
   operation: 'create' | 'update'
   field_map: Record<string, string>
   match_field?: string
+  // Multi-field match for updates: { targetColumn: 'template {{source_field}}' }.
+  // All must match (AND). Wins over match_field when present.
+  match_map?: Record<string, string>
 }
 
 interface RuleRow {
@@ -60,7 +71,7 @@ interface ParsedRule {
   name: string
   trigger: string
   conditions: CrossTriggerCondition[]
-  actions: CrossTriggerAction[]
+  actions: Array<CrossTriggerAction | ExecProcedureAction>
 }
 
 // ─── Rule cache (60s per source collection) ──────────────────────────────────
@@ -82,18 +93,27 @@ function parseJson<T = unknown>(val: string | null | undefined): T | null {
   }
 }
 
-function extractCrossActions(raw: string | null): CrossTriggerAction[] {
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+function extractCrossActions(raw: string | null): Array<CrossTriggerAction | ExecProcedureAction> {
   const parsed = parseJson<unknown>(raw)
   if (!parsed) return []
   const list = Array.isArray(parsed) ? parsed : [parsed]
-  return list.filter(
-    (a): a is CrossTriggerAction =>
-      !!a &&
-      typeof a === 'object' &&
-      (a as { type?: string }).type === 'cross_collection' &&
-      typeof (a as { target_collection?: unknown }).target_collection === 'string' &&
-      !!(a as { field_map?: unknown }).field_map
-  )
+  return list.filter((a): a is CrossTriggerAction | ExecProcedureAction => {
+    if (!a || typeof a !== 'object') return false
+    const t = (a as { type?: string }).type
+    if (t === 'cross_collection') {
+      return (
+        typeof (a as { target_collection?: unknown }).target_collection === 'string' &&
+        !!(a as { field_map?: unknown }).field_map
+      )
+    }
+    if (t === 'exec_procedure') {
+      const proc = (a as { procedure?: unknown }).procedure
+      return typeof proc === 'string' && IDENT_RE.test(proc)
+    }
+    return false
+  })
 }
 
 async function getRules(collection: string): Promise<ParsedRule[]> {
@@ -221,6 +241,26 @@ async function processCrossTriggers(ctx: HookContext) {
         if (!evaluateConditions(rule.conditions, data)) continue
 
         for (const act of rule.actions) {
+          if (act.type === 'exec_procedure') {
+            // EXEC <proc> @k1 = ?, @k2 = ? — proc + arg names identifier-checked,
+            // values rendered from the source row then bound as parameters.
+            try {
+              const argEntries = Object.entries(act.args ?? {}).filter(([k]) => IDENT_RE.test(k))
+              const binds: string[] = []
+              const parts: string[] = []
+              for (const [k, tpl] of argEntries) {
+                const rendered = renderTemplate(String(tpl), data)
+                if (rendered === '') continue
+                parts.push(`@${k} = ?`)
+                binds.push(rendered)
+              }
+              await db.raw(`EXEC ${act.procedure} ${parts.join(', ')}`, binds)
+            } catch (err) {
+              logError(err, { rule: rule.id, procedure: act.procedure })
+            }
+            continue
+          }
+
           const target = act.target_collection
           if (!target || target.startsWith('nivaro_')) {
             logError(new Error('Target collection not allowed'), { rule: rule.id, target })
@@ -234,18 +274,24 @@ async function processCrossTriggers(ctx: HookContext) {
           if (Object.keys(record).length === 0) continue
 
           if (act.operation === 'update') {
-            const matchField = act.match_field
-            if (!matchField || record[matchField] === undefined) {
-              logError(new Error('match_field missing for update operation'), { rule: rule.id })
+            const where: Record<string, unknown> = {}
+            if (act.match_map && Object.keys(act.match_map).length > 0) {
+              for (const [col, template] of Object.entries(act.match_map)) {
+                where[col] = renderTemplate(String(template), data)
+              }
+            } else if (act.match_field && record[act.match_field] !== undefined) {
+              where[act.match_field] = record[act.match_field]
+            }
+            if (Object.keys(where).length === 0) {
+              logError(new Error('match_field/match_map missing for update operation'), {
+                rule: rule.id
+              })
               continue
             }
-            const matchValue = record[matchField]
             const patch = { ...record }
-            delete patch[matchField]
+            for (const col of Object.keys(where)) delete patch[col]
             if (Object.keys(patch).length === 0) continue
-            await db(target)
-              .where({ [matchField]: matchValue })
-              .update(patch)
+            await db(target).where(where).update(patch)
           } else {
             await db(target).insert(record)
           }

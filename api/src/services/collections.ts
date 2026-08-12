@@ -54,7 +54,37 @@ const SYNTHETIC_COLLECTIONS: Record<string, Partial<CMSCollection>> = {
   }
 }
 
+// ─── Metadata cache ──────────────────────────────────────────────────────────
+// getCollection/getFields sit on the hot path of every items request (often
+// several times each, plus once per expanded relation). Against a remote SQL
+// Server every call costs a full round trip (~40-70ms measured), which was a
+// large share of the ~600ms floor on ANY list read. Schema metadata changes
+// only through the data-model/collections/field-config routes, which call
+// clearMetadataCache() — the short TTL is just a backstop for direct DB edits.
+const META_TTL_MS = 30_000
+const collectionCache = new Map<string, { value: CMSCollection | undefined; at: number }>()
+const fieldsCache = new Map<string, { value: CMSField[]; at: number }>()
+
+/** Drop cached collection/field metadata (all, or one collection). */
+export function clearMetadataCache(collection?: string): void {
+  if (collection) {
+    collectionCache.delete(collection)
+    fieldsCache.delete(collection)
+    return
+  }
+  collectionCache.clear()
+  fieldsCache.clear()
+}
+
 export async function getCollection(name: string): Promise<CMSCollection | undefined> {
+  const hit = collectionCache.get(name)
+  if (hit && Date.now() - hit.at < META_TTL_MS) return hit.value
+  const value = await loadCollection(name)
+  collectionCache.set(name, { value, at: Date.now() })
+  return value
+}
+
+async function loadCollection(name: string): Promise<CMSCollection | undefined> {
   const col = await db<CMSCollection>('nivaro_collections').where({ collection: name }).first()
   if (col) return serializeCollection(col)
   const synthetic = SYNTHETIC_COLLECTIONS[name]
@@ -118,6 +148,14 @@ export async function deleteCollection(name: string): Promise<void> {
 // ─── Fields ───────────────────────────────────────────────────────────────────
 
 export async function getFields(collection: string): Promise<CMSField[]> {
+  const hit = fieldsCache.get(collection)
+  if (hit && Date.now() - hit.at < META_TTL_MS) return hit.value
+  const value = await loadFields(collection)
+  fieldsCache.set(collection, { value, at: Date.now() })
+  return value
+}
+
+async function loadFields(collection: string): Promise<CMSField[]> {
   const rows = await db<CMSField>('nivaro_fields').where({ collection }).orderBy('sort', 'asc')
   return rows.map((f) => ({
     ...f,

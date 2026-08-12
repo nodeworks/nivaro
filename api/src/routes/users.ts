@@ -7,13 +7,19 @@ import { writeRevision } from '../services/revisions.js'
 import { getUser, listUsers, updateUser } from '../services/users.js'
 
 export async function usersRoutes(app: FastifyInstance) {
-  app.get('/', { preHandler: requireAdmin }, async (req, reply) => {
+  // Authenticated, not admin-only: the assignee and mention pickers on every
+  // record form read this list, so requireAdmin here 403'd record pages for
+  // every non-admin. Non-admins get the reduced directory projection instead
+  // of the full user row (see DIRECTORY_USER_COLS in services/users.ts).
+  app.get('/', { preHandler: authenticate }, async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ error: 'Unauthorized' })
     const q = req.query as {
       limit?: string
       offset?: string
       search?: string
       sort?: string
       filter?: string
+      include_suspended?: string
     }
     let filter: Record<string, unknown> = {}
     if (q.filter) {
@@ -24,11 +30,15 @@ export async function usersRoutes(app: FastifyInstance) {
       }
     }
     const result = await listUsers({
-      limit: Number(q.limit ?? 25),
+      // A picker asking for everyone shouldn't be able to pull the whole table.
+      limit: Math.min(Number(q.limit ?? 25) || 25, req.isAdmin ? 1000 : 500),
       offset: Number(q.offset ?? 0),
       search: q.search,
       sort: q.sort,
-      filter
+      filter,
+      directory: !req.isAdmin,
+      // Admin management surfaces (Users page) opt back in; pickers never do.
+      includeSuspended: req.isAdmin && q.include_suspended === 'true'
     })
     return reply.send(result)
   })
@@ -46,7 +56,7 @@ export async function usersRoutes(app: FastifyInstance) {
   // UserChip contact card including denormalised role_name and manager_name.
   app.get('/:id/card', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const row = await db('nivaro_users as u')
+    const row = (await db('nivaro_users as u')
       .leftJoin('nivaro_roles as r', 'u.role', 'r.id')
       .leftJoin('nivaro_users as m', 'u.manager_id', 'm.id')
       .where('u.id', id)
@@ -58,6 +68,8 @@ export async function usersRoutes(app: FastifyInstance) {
         'u.title',
         'u.phone',
         'u.department',
+        'u.company',
+        'u.avatar',
         'u.status',
         'u.last_access',
         'u.is_out_of_office',
@@ -65,7 +77,7 @@ export async function usersRoutes(app: FastifyInstance) {
         db.raw(`CONCAT(m.first_name, ' ', m.last_name) as manager_name`),
         'u.manager_id'
       )
-      .first() as Record<string, unknown> | undefined
+      .first()) as Record<string, unknown> | undefined
     if (!row) return reply.code(404).send({ error: 'Not found' })
     return reply.send({ data: row })
   })
@@ -78,6 +90,11 @@ export async function usersRoutes(app: FastifyInstance) {
       ? [
           'first_name',
           'last_name',
+          'avatar',
+          'title',
+          'phone',
+          'department',
+          'company',
           'status',
           'role',
           'last_page',
@@ -90,6 +107,7 @@ export async function usersRoutes(app: FastifyInstance) {
       : [
           'first_name',
           'last_name',
+          'avatar',
           'title',
           'phone',
           'department',
@@ -130,6 +148,39 @@ export async function usersRoutes(app: FastifyInstance) {
       })
     }
     return reply.send({ data: user })
+  })
+
+  // ─── Self-service preferences ─────────────────────────────────────────────
+  // PATCH /users/me/preferences — allowlisted keys only; merges into the
+  // existing preferences JSON. email_digest drives daily-vs-instant emails
+  // (see applyDigestDeferral in services/mail.ts + the daily-action-digest cron).
+  app.patch('/me/preferences', { preHandler: authenticate }, async (req, reply) => {
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const patch: Record<string, unknown> = {}
+    if ('email_digest' in body) {
+      if (!['instant', 'daily'].includes(String(body.email_digest))) {
+        return reply.code(400).send({ error: "email_digest must be 'instant' or 'daily'" })
+      }
+      patch.email_digest = body.email_digest
+    }
+    if (Object.keys(patch).length === 0) {
+      return reply.code(400).send({ error: 'No supported preference keys in body' })
+    }
+    const row = await db('nivaro_users').where({ id: req.user!.id }).first('preferences')
+    let current: Record<string, unknown> = {}
+    try {
+      current =
+        typeof row?.preferences === 'string'
+          ? JSON.parse(row.preferences)
+          : ((row?.preferences as Record<string, unknown>) ?? {})
+    } catch {
+      current = {}
+    }
+    const merged = { ...current, ...patch }
+    await db('nivaro_users')
+      .where({ id: req.user!.id })
+      .update({ preferences: JSON.stringify(merged) })
+    return reply.send({ data: { preferences: merged } })
   })
 
   // ─── Self-service delegation ──────────────────────────────────────────────

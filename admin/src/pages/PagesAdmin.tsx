@@ -33,7 +33,7 @@ import { cn, formatRelative } from '@/lib/utils'
 
 export interface PageWidget {
   id: string
-  type: 'table' | 'kpi' | 'markdown' | 'iframe' | 'recent-activity'
+  type: 'table' | 'kpi' | 'markdown' | 'iframe' | 'recent-activity' | 'query' | 'matrix' | 'record-grid'
   x: number
   y: number
   w: number

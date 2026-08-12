@@ -39,6 +39,12 @@ interface NestedRelationEditorProps {
   deferred?: boolean
   stagedOps?: NestedOps
   onStagedOpsChange?: (ops: NestedOps) => void
+  /** Match mode: rows come from an arbitrary collection selected by a filter
+   *  instead of an FK to this row (EFP unit allocations matched by cifa).
+   *  Live-write only; creates are seeded with matchSeed. */
+  matchCollection?: string
+  matchQuery?: Record<string, unknown> | null
+  matchSeed?: Record<string, unknown>
 }
 
 function fieldsEqual(a: unknown, b: unknown): boolean {
@@ -85,7 +91,10 @@ export function NestedRelationEditor({
   outerGridInvalidateKey,
   deferred = false,
   stagedOps,
-  onStagedOpsChange
+  onStagedOpsChange,
+  matchCollection,
+  matchQuery,
+  matchSeed
 }: NestedRelationEditorProps) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -107,8 +116,8 @@ export function NestedRelationEditor({
       ),
     [parentRelations, parentCollection, relationField]
   )
-  const grandCollection = grandRel?.many_collection ?? null
-  const fkField = grandRel?.many_field ?? null
+  const grandCollection = matchCollection ?? grandRel?.many_collection ?? null
+  const fkField = matchCollection ? null : (grandRel?.many_field ?? null)
 
   // Grandchild's own relations (for FieldRenderer's M2O pickers + read-only labels)
   const { data: grandRelations = [] } = useQuery<CMSRelation[]>({
@@ -139,6 +148,7 @@ export function NestedRelationEditor({
           !c.hidden &&
           !NON_DISPLAY_TYPES.has(c.type) &&
           c.field !== fkField &&
+          !(matchSeed && c.field in matchSeed) &&
           c.field !== 'id' &&
           !SENTINEL_FIELDS.has(c.field) &&
           !SPECIAL_GROUP_KEYS.has(c.group_key ?? '')
@@ -146,19 +156,25 @@ export function NestedRelationEditor({
     [grandFields, fkField]
   )
 
-  const nestedRowsKey = ['nested-rows', grandCollection, fkField, parentRowId]
+  const nestedRowsKey = matchCollection
+    ? ['nested-rows', grandCollection, JSON.stringify(matchQuery ?? null)]
+    : ['nested-rows', grandCollection, fkField, parentRowId]
   const { data: grandRows = [], isLoading: rowsLoading } = useQuery<Record<string, unknown>[]>({
     queryKey: nestedRowsKey,
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
           get(`/items/${grandCollection}`, {
-            filter: JSON.stringify({ [fkField as string]: { _eq: parentRowId } }),
+            filter: JSON.stringify(
+              matchCollection ? matchQuery : { [fkField as string]: { _eq: parentRowId } }
+            ),
             limit: 200
           })
         )
         .then((r) => r.data ?? []),
-    enabled: !!grandCollection && !!fkField && parentRowId != null,
+    enabled: matchCollection
+      ? !!matchQuery
+      : !!grandCollection && !!fkField && parentRowId != null,
     staleTime: 30_000
   })
 
@@ -250,7 +266,10 @@ export function NestedRelationEditor({
       try {
         if (editingKey === 'new') {
           await client.request(
-            post(`/items/${grandCollection}`, { ...rowPayload, [fkField]: parentRowId })
+            post(`/items/${grandCollection}`, {
+              ...rowPayload,
+              ...(matchCollection ? (matchSeed ?? {}) : { [fkField as string]: parentRowId })
+            })
           )
         } else {
           await client.request(patch(`/items/${grandCollection}/${editingKey}`, rowPayload))
@@ -406,8 +425,16 @@ export function NestedRelationEditor({
     : 0
   const remaining = cap - sum
 
-  if (relationsLoading) return null
-  if (!grandCollection || !fkField) return null
+  if (relationsLoading && !matchCollection) return null
+  if (!grandCollection || (!fkField && !matchCollection)) return null
+  // Match mode requires resolvable filter values (saved row + all tokens set)
+  if (matchCollection && !matchQuery) {
+    return (
+      <p className='rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-400'>
+        {titleCase(relationField)} — available after this row is saved.
+      </p>
+    )
+  }
 
   const actionColCount = readOnly ? 0 : 1
   const emptyColSpan = displayCols.length + actionColCount

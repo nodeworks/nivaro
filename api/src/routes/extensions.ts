@@ -363,13 +363,19 @@ export async function extensionsRoutes(app: FastifyInstance) {
     }
   })
 
-  app.post('/reload', async (_req, reply) => {
+  app.post('/reload', async (req, reply) => {
     const newIds = await scanNewExtensions({
       app,
       database: db,
       inngest,
       logger: app.log,
       callExternalApi
+    })
+    await logActivity({
+      action: 'extension-reload',
+      user: req.user?.id,
+      req,
+      comment: newIds.length > 0 ? `loaded: ${newIds.join(', ')}` : 'no new extensions'
     })
     const data = Array.from(extensionRegistry.values())
     return reply.send({ data, loaded: newIds })

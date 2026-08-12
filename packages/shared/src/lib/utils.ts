@@ -46,6 +46,32 @@ export function truncate(str: string, len = 60) {
   return str.length > len ? `${str.slice(0, len)}…` : str
 }
 
+/**
+ * Options filter for every nivaro_users picker: mirrors listUsers() — redacted
+ * accounts never appear, and suspended users cannot be PICKED (existing values
+ * still display, since current-value lookups fetch by id with no filter).
+ * Null-safe on status so a fresh install with unset statuses keeps working.
+ */
+export const ACTIVE_USER_OPTION_FILTER = {
+  _and: [
+    { is_redacted: { _eq: false } },
+    { _or: [{ status: { _neq: 'suspended' } }, { status: { _null: true } }] }
+  ]
+}
+
+/**
+ * Select-choice display text. Legacy Directus schema imports store choice
+ * labels as i18n keys ('$t:published') that Directus resolved through its own
+ * translation bundle — Nivaro has no such bundle, so the raw key leaked into
+ * dropdowns and read views. Strip the marker and humanize; plain labels pass
+ * through untouched.
+ */
+export function choiceLabel(text: string | null | undefined): string {
+  const s = String(text ?? '')
+  if (!s.startsWith('$t:')) return s
+  return titleCase(s.slice(3).replace(/-/g, '_'))
+}
+
 export function formatNumber(n: number | null | undefined): string {
   if (n == null) return '—'
   return n.toLocaleString('en-US')

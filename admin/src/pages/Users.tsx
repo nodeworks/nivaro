@@ -66,7 +66,9 @@ export function UsersPage() {
             offset: (page - 1) * limit,
             search: search || undefined,
             sort: sort || undefined,
-            filter: statusFilter ? JSON.stringify({ status: { _eq: statusFilter } }) : undefined
+            filter: statusFilter ? JSON.stringify({ status: { _eq: statusFilter } }) : undefined,
+            // Management surface — the default picker-safe list hides suspended.
+            include_suspended: true
           }
         })
         .then((r) => r.data)

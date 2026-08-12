@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { BellRing, Copy, Eye, EyeOff, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -13,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { UserActivityPanel } from '@/components/user-activity-panel'
 import { api, type Role, type User } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { formatDate, formatRelative } from '@/lib/utils'
+import { formatDate, formatRelative, cn } from '@/lib/utils'
 
 function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
   const padding = '='.repeat((4 - (base64.length % 4)) % 4)
@@ -22,6 +23,81 @@ function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(new ArrayBuffer(raw.length))
   for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i)
   return out
+}
+
+
+function EmailDeliveryCard() {
+  const qc = useQueryClient()
+  const { data: prefs } = useQuery({
+    queryKey: ['profile-email-prefs'],
+    queryFn: () =>
+      api
+        .get('/users/me')
+        .then((r) => (r.data.data?.preferences ?? {}) as Record<string, unknown>)
+  })
+  const mode = prefs?.email_digest === 'daily' ? 'daily' : 'instant'
+  const save = useMutation({
+    mutationFn: (email_digest: 'instant' | 'daily') =>
+      api.patch('/users/me/preferences', { email_digest }),
+    onSuccess: () => {
+      toast.success('Email delivery preference saved')
+      void qc.invalidateQueries({ queryKey: ['profile-email-prefs'] })
+    },
+    onError: () => toast.error('Failed to save preference')
+  })
+  const Option = ({
+    value,
+    label,
+    hint
+  }: {
+    value: 'instant' | 'daily'
+    label: string
+    hint: string
+  }) => (
+    <button
+      type='button'
+      onClick={() => save.mutate(value)}
+      disabled={save.isPending}
+      className={cn(
+        'flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors',
+        mode === value
+          ? 'border-nvr-cyan bg-nvr-cyan/5 dark:bg-nvr-cyan/10'
+          : 'border-slate-200 hover:border-slate-300 dark:border-border'
+      )}
+    >
+      <span
+        className={cn(
+          'mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border',
+          mode === value ? 'border-nvr-cyan' : 'border-slate-300 dark:border-slate-600'
+        )}
+      >
+        {mode === value && <span className='h-2 w-2 rounded-full bg-nvr-cyan' />}
+      </span>
+      <span>
+        <span className='block text-[12.5px] font-semibold'>{label}</span>
+        <span className='block text-[11.5px] text-muted-foreground'>{hint}</span>
+      </span>
+    </button>
+  )
+  return (
+    <Card>
+      <CardHeader className='pb-2'>
+        <CardTitle className='text-sm font-medium text-slate-500'>Email delivery</CardTitle>
+      </CardHeader>
+      <CardContent className='space-y-2'>
+        <Option
+          value='instant'
+          label='Individual emails'
+          hint='An email for every state change, assignment and review as it happens'
+        />
+        <Option
+          value='daily'
+          label='Daily action summary'
+          hint='One morning email with all updates, assigned items, and invoices awaiting review'
+        />
+      </CardContent>
+    </Card>
+  )
 }
 
 function BrowserPushCard() {
@@ -602,6 +678,7 @@ export function ProfilePage() {
             <TwoFactorCard />
 
             {/* Browser push (own save, outside the profile form) */}
+            <EmailDeliveryCard />
             <BrowserPushCard />
 
             {/* Delegation (own save, outside the profile form) */}

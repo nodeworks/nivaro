@@ -4,6 +4,7 @@ import fp from 'fastify-plugin'
 import { Redis } from 'ioredis'
 import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
+import { canSeeRoom } from '../services/chat.js'
 import { can } from '../services/permissions.js'
 import type { User } from '../types.js'
 
@@ -108,6 +109,23 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           return
         }
 
+        // Masquerade token (nvm_) — resolves to the target user; NOT one-time,
+        // lives as long as the Redis masq:<token> entry the auth route minted.
+        if (token.startsWith('nvm_')) {
+          const raw = await app.redis.get(`masq:${token}`)
+          if (!raw) return
+          const payloadIds = JSON.parse(raw) as { user_id?: string }
+          const user = await db<User>('nivaro_users')
+            .where({ id: payloadIds.user_id, status: 'active' })
+            .first()
+          if (user) {
+            authenticatedUser = user
+            socket.join(`user:${user.id}`)
+            socket.emit('auth:ok', { userId: user.id })
+          }
+          return
+        }
+
         const user = await db<User>('nivaro_users')
           .where({ static_token: token, status: 'active' })
           .first()
@@ -139,6 +157,26 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // check every REST/GraphQL/items read path already enforces. Rejects
     // silently (no error emit) to match this handler's existing minimal-
     // feedback style; the client just never receives collection:update events.
+    // Chat rooms are joined individually and gated by the SAME canSeeRoom the
+    // REST routes use — a socket must not become a way to observe a room you
+    // cannot read. Rejects silently, matching collection:join's posture.
+    socket.on('chat:join', async (payload: { room?: string }) => {
+      const room = payload?.room
+      if (typeof room !== 'string' || room.length === 0) return
+      const user = authenticatedUser
+      if (!user) return
+      try {
+        if (await canSeeRoom(user, room)) socket.join(`chat:${room}`)
+      } catch (err) {
+        app.log.warn({ err, room }, 'chat:join visibility check failed')
+      }
+    })
+
+    socket.on('chat:leave', (payload: { room?: string }) => {
+      const room = payload?.room
+      if (typeof room === 'string' && room) socket.leave(`chat:${room}`)
+    })
+
     socket.on('collection:join', async (payload: { collection?: string }) => {
       const collection = payload?.collection
       if (typeof collection !== 'string' || collection.length === 0) return

@@ -7,6 +7,12 @@ import { can } from '../services/permissions.js'
 const OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'null', 'nnull'] as const
 type Op = (typeof OPS)[number]
 
+// Row-highlight palette — generic conditional row tinting for the collection
+// browser and queue tables ('red'/'amber' were the original pair; the rest were
+// added when at-risk rules became the general row-highlight engine).
+export const HIGHLIGHT_COLORS = ['red', 'amber', 'yellow', 'green', 'blue', 'purple'] as const
+export type HighlightColor = (typeof HIGHLIGHT_COLORS)[number]
+
 const EVALUATE_CAP = 500
 const SUMMARY_SCAN_CAP = 1000
 
@@ -21,7 +27,7 @@ export interface AtRiskRuleRow {
   collection: string
   name: string
   conditions: string // JSON text
-  highlight_color: 'red' | 'amber' | null
+  highlight_color: HighlightColor | null
   is_active: boolean | number
   created_by: string
   created_at: Date
@@ -187,7 +193,7 @@ function formatRule(row: AtRiskRuleRow) {
 export interface ParsedRule {
   id: number
   name: string
-  color: 'red' | 'amber'
+  color: HighlightColor
   conditions: AtRiskCondition[]
 }
 
@@ -199,7 +205,9 @@ export function parseActiveRules(rows: AtRiskRuleRow[]): ParsedRule[] {
     rules.push({
       id: row.id,
       name: row.name,
-      color: row.highlight_color === 'amber' ? 'amber' : 'red',
+      color: (HIGHLIGHT_COLORS as readonly string[]).includes(row.highlight_color ?? '')
+        ? (row.highlight_color as HighlightColor)
+        : 'red',
       conditions
     })
   }
@@ -210,8 +218,8 @@ export function parseActiveRules(rows: AtRiskRuleRow[]): ParsedRule[] {
 export function evaluateRows(
   rows: Record<string, unknown>[],
   rules: ParsedRule[]
-): Record<string, { at_risk: true; rule: string; color: 'red' | 'amber' }> {
-  const result: Record<string, { at_risk: true; rule: string; color: 'red' | 'amber' }> = {}
+): Record<string, { at_risk: true; rule: string; color: HighlightColor }> {
+  const result: Record<string, { at_risk: true; rule: string; color: HighlightColor }> = {}
   for (const row of rows) {
     const id = row.id
     if (id === null || id === undefined) continue
@@ -278,10 +286,11 @@ export async function atRiskRoutes(app: FastifyInstance) {
     if (
       body.highlight_color !== undefined &&
       body.highlight_color !== null &&
-      body.highlight_color !== 'red' &&
-      body.highlight_color !== 'amber'
+      !(HIGHLIGHT_COLORS as readonly string[]).includes(body.highlight_color)
     ) {
-      return reply.code(400).send({ error: 'highlight_color must be "red", "amber", or null' })
+      return reply
+        .code(400)
+        .send({ error: `highlight_color must be one of ${HIGHLIGHT_COLORS.join(', ')}, or null` })
     }
 
     const [row] = await db('nivaro_at_risk_rules')
@@ -346,10 +355,11 @@ export async function atRiskRoutes(app: FastifyInstance) {
     if ('highlight_color' in body) {
       if (
         body.highlight_color !== null &&
-        body.highlight_color !== 'red' &&
-        body.highlight_color !== 'amber'
+        !(HIGHLIGHT_COLORS as readonly string[]).includes(body.highlight_color ?? '')
       ) {
-        return reply.code(400).send({ error: 'highlight_color must be "red", "amber", or null' })
+        return reply
+          .code(400)
+          .send({ error: `highlight_color must be one of ${HIGHLIGHT_COLORS.join(', ')}, or null` })
       }
       patch.highlight_color = body.highlight_color
     }

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { CollectionFieldPicker } from '@/components/field-picker'
 import { Button } from '@/components/ui/button'
@@ -84,6 +85,7 @@ export function AlertEditPage() {
   const { id } = useParams<{ id: string }>()
   const isNew = id === 'new'
   const navigate = useNavigate()
+  const goBack = useGoBack('/alerts')
   const queryClient = useQueryClient()
 
   // Form state
@@ -231,7 +233,7 @@ export function AlertEditPage() {
     <div className='p-6 max-w-2xl space-y-6'>
       {/* Header */}
       <div className='flex items-center gap-3'>
-        <Button variant='ghost' size='icon' onClick={() => navigate('/alerts')} className='h-8 w-8'>
+        <Button variant='ghost' size='icon' onClick={goBack} className='h-8 w-8'>
           <ArrowLeft className='h-4 w-4' />
         </Button>
         <div>

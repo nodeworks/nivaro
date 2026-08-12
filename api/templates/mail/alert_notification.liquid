@@ -1,0 +1,12 @@
+{% layout 'base' %}
+{% block content %}
+<p style="margin:0 0 18px;font-size:15px;font-weight:700;">Alert: {{ rule_name }}</p>
+<p style="margin:0 0 18px;">
+  <strong>{{ metric_name }}</strong> is now <strong>{{ metric_value }}</strong>
+  {% if operator and threshold_value and threshold_value != '' %}(threshold: {{ operator }} {{ threshold_value }}){% endif %}
+</p>
+<p style="margin:0 0 18px;color:#64748b;font-size:13px;">
+  You are receiving this because you subscribed to this alert rule. Manage your
+  subscriptions from the Alert Manager.
+</p>
+{% endblock %}

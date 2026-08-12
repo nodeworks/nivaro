@@ -686,6 +686,7 @@ export async function fetchMaterializedQueueItems(
       owners: ownersByQueueItemId.get(r.id) ?? [],
       sla_status: sla.status,
       at_risk: !!r.at_risk,
+      at_risk_color: r.at_risk_color ?? null,
       predicted_risk: prediction.predicted,
       predicted_note: prediction.note,
       aging_hours: sla.aging_hours,

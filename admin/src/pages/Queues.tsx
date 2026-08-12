@@ -19,6 +19,7 @@ import {
   ChevronsUpDown,
   GripVertical,
   Inbox,
+  Pin,
   Plus,
   Settings2,
   Trash2,
@@ -106,6 +107,9 @@ interface QueueDisplayConfig {
   /** Ordered column keys shown by default for viewers without saved column
    *  prefs; null = automatic (standard columns + first two extra fields). */
   default_columns: string[] | null
+  /** Builder-set default column pins applied when a viewer has no saved-view
+   *  pins; null = the historic first-column-pinned-left. */
+  default_pins: Record<string, 'left' | 'right'> | null
 }
 
 // Preview sidebar width presets — mirror the drill-down sheet's options.
@@ -118,18 +122,50 @@ const SHEET_WIDTHS: { value: number; label: string }[] = [
 
 // Draggable checked row in the builder's Default-columns editor. Grip drags
 // to reorder; unchecking drops the column back to the unchecked pool below.
+function PinCycleButton({
+  pin,
+  disabled,
+  onCycle
+}: {
+  pin: 'left' | 'right' | null
+  disabled: boolean
+  onCycle: () => void
+}) {
+  return (
+    <button
+      type='button'
+      disabled={disabled}
+      onClick={onCycle}
+      title={pin === 'left' ? 'Pinned left — click for right' : pin === 'right' ? 'Pinned right — click to unpin' : 'Pin column'}
+      className={cn(
+        'flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold transition-colors',
+        pin
+          ? 'bg-[#00ceff1a] text-nvr-navy dark:text-nvr-cyan'
+          : 'text-slate-300 hover:text-slate-500'
+      )}
+    >
+      <Pin className='h-3 w-3' />
+      {pin === 'left' ? 'L' : pin === 'right' ? 'R' : ''}
+    </button>
+  )
+}
+
 function SortableDefaultColumnRow({
   id,
   label,
   index,
   disabled,
-  onToggle
+  onToggle,
+  pin,
+  onCyclePin
 }: {
   id: string
   label: string
   index: number
   disabled: boolean
   onToggle: () => void
+  pin: 'left' | 'right' | null
+  onCyclePin: () => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
@@ -160,6 +196,7 @@ function SortableDefaultColumnRow({
       >
         {label}
       </label>
+      <PinCycleButton pin={pin} disabled={disabled} onCycle={onCyclePin} />
       <span className='text-[10px] tabular-nums text-slate-400'>{index + 1}</span>
     </div>
   )
@@ -1258,7 +1295,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     row_click: 'preview',
     item_layout: null,
     sheet_width: null,
-    default_columns: null
+    default_columns: null,
+    default_pins: null
   })
   const [sources, setSources] = useState<QueueSource[]>([])
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
@@ -1431,6 +1469,16 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
   const defaultColumns = displayConfig.default_columns
   const setDefaultColumns = (cols: string[] | null) =>
     setDisplayConfig((prev) => ({ ...prev, default_columns: cols }))
+  const defaultPins = displayConfig.default_pins ?? {}
+  const cyclePin = (key: string) =>
+    setDisplayConfig((prev) => {
+      const pins = { ...(prev.default_pins ?? {}) }
+      const cur = pins[key] ?? null
+      if (cur === null) pins[key] = 'left'
+      else if (cur === 'left') pins[key] = 'right'
+      else delete pins[key]
+      return { ...prev, default_pins: Object.keys(pins).length > 0 ? pins : null }
+    })
   // The "automatic" default the worklist computes when nothing is configured —
   // used to seed Custom mode so switching starts from what viewers see today.
   const automaticColumns = [
@@ -1667,6 +1715,34 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                 </p>
               ) : (
                 <div className='divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 dark:divide-border/60 dark:border-border'>
+                  <div className='flex items-center gap-3 bg-slate-50/60 px-3 py-1.5 dark:bg-muted/30'>
+                    <span className='w-[18px]' />
+                    <span className='w-4' />
+                    <span className='flex-1 truncate text-[12px] font-medium text-slate-800 dark:text-slate-100'>
+                      {columnAliases.label || 'Item'}
+                      <span className='ml-1.5 text-[10px] font-normal text-slate-400'>always first</span>
+                    </span>
+                    <PinCycleButton
+                      pin={defaultPins.label ?? null}
+                      disabled={!canEdit}
+                      onCycle={() => cyclePin('label')}
+                    />
+                    <span className='w-[15px]' />
+                  </div>
+                  <div className='flex items-center gap-3 bg-slate-50/60 px-3 py-1.5 dark:bg-muted/30'>
+                    <span className='w-[18px]' />
+                    <span className='w-4' />
+                    <span className='flex-1 truncate text-[12px] font-medium text-slate-800 dark:text-slate-100'>
+                      Actions
+                      <span className='ml-1.5 text-[10px] font-normal text-slate-400'>always last</span>
+                    </span>
+                    <PinCycleButton
+                      pin={defaultPins.__actions__ ?? null}
+                      disabled={!canEdit}
+                      onCycle={() => cyclePin('__actions__')}
+                    />
+                    <span className='w-[15px]' />
+                  </div>
                   <DndContext
                     sensors={defaultColsSensors}
                     collisionDetection={closestCenter}
@@ -1683,6 +1759,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                           onToggle={() =>
                             setDefaultColumns(defaultColumns.filter((k) => k !== col.key))
                           }
+                          pin={defaultPins[col.key] ?? null}
+                          onCyclePin={() => cyclePin(col.key)}
                         />
                       ))}
                     </SortableContext>

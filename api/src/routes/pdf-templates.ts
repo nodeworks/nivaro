@@ -146,6 +146,17 @@ export async function pdfTemplatesRoutes(app: FastifyInstance) {
       generated_at: new Date().toISOString()
     })
 
+    // Document generation is a data egress event — same audit class as the
+    // backup/content exports.
+    await logActivity({
+      action: 'pdf-render',
+      collection,
+      item: String(body.item_id),
+      user: req.user.id,
+      req,
+      comment: tpl.name
+    })
+
     const safeName = tpl.name.replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase() || 'document'
     return reply
       .header('Content-Type', 'application/pdf')

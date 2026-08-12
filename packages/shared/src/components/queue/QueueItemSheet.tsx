@@ -1,8 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
+
+interface ReqDialogState {
+  payload: TransitionRequirementsPayload
+  transitionId: string
+  revision: number
+}
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
+import { transitionRequirementsFromError } from '../panels/PipelinePanel'
+import {
+  TransitionRequirementsDialog,
+  type TransitionRequirementsPayload
+} from '../panels/TransitionRequirementsDialog'
 import { get, post } from '../../lib/commands'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
 import { cn, formatRelative } from '../../lib/utils'
@@ -122,6 +133,7 @@ export function QueueItemSheet({
   const client = useNivaroClient()
   const { open: openItemPage } = useItemNavigation()
   const [commentText, setCommentText] = useState('')
+  const [reqDialog, setReqDialog] = useState<ReqDialogState | null>(null)
 
   const collection = item?.collection
   const itemId = item?.item_id
@@ -152,11 +164,23 @@ export function QueueItemSheet({
         })
       ),
     onSuccess: () => {
+      setReqDialog(null)
       qc.invalidateQueries({ queryKey: ['queue-sheet-instance', collection, itemId] })
       refetchItems()
       toast.success('Transitioned')
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, transitionId) => {
+      // 422 requirements gate → open the fill-in dialog instead of erroring
+      // (same flow PipelinePanel runs on the item page).
+      const requirements = transitionRequirementsFromError(err)
+      if (requirements) {
+        setReqDialog((prev) => ({
+          payload: requirements,
+          transitionId,
+          revision: (prev?.revision ?? 0) + 1
+        }))
+        return
+      }
       toast.error(err instanceof Error ? err.message : 'Transition failed')
     }
   })
@@ -356,6 +380,15 @@ export function QueueItemSheet({
           </>
         )}
       </SheetContent>
+      {reqDialog && (
+        <TransitionRequirementsDialog
+          key={reqDialog.revision}
+          payload={reqDialog.payload}
+          isRetry={reqDialog.revision > 1}
+          onSubmitted={() => transitionMut.mutate(reqDialog.transitionId)}
+          onClose={() => setReqDialog(null)}
+        />
+      )}
     </Sheet>
   )
 }

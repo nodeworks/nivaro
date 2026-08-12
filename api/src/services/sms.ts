@@ -8,12 +8,24 @@ interface SmsConfig {
   authToken: string | null
   from: string | null
   region: string | null
+  testMode: boolean
+  testRecipient: string | null
+  testAllowlist: string[]
 }
 
 async function getSmsConfig(): Promise<SmsConfig> {
   try {
     const row = (await db('nivaro_settings')
-      .select('sms_provider', 'sms_account_sid', 'sms_auth_token', 'sms_from', 'sms_region')
+      .select(
+        'sms_provider',
+        'sms_account_sid',
+        'sms_auth_token',
+        'sms_from',
+        'sms_region',
+        'sms_test_mode',
+        'sms_test_recipient',
+        'sms_test_allowlist'
+      )
       .orderBy('id', 'asc')
       .first()) as Record<string, unknown> | undefined
 
@@ -22,11 +34,75 @@ async function getSmsConfig(): Promise<SmsConfig> {
       accountSid: (row?.sms_account_sid as string | null) ?? null,
       authToken: (row?.sms_auth_token as string | null) ?? null,
       from: (row?.sms_from as string | null) ?? null,
-      region: (row?.sms_region as string | null) ?? 'us-east-1'
+      region: (row?.sms_region as string | null) ?? 'us-east-1',
+      ...resolveTestMode(row)
     }
   } catch {
-    return { provider: null, accountSid: null, authToken: null, from: null, region: null }
+    return {
+      provider: null,
+      accountSid: null,
+      authToken: null,
+      from: null,
+      region: null,
+      ...resolveTestMode(undefined)
+    }
   }
+}
+
+// ─── SMS test mode ───────────────────────────────────────────────────────────
+// SMS counterpart of the mail test mode in services/mail.ts: redirect every
+// outgoing SMS to a single test number in dev/staging. Env vars WIN over the
+// settings row so a staging box survives a prod-DB restore (read via
+// process.env, not config.ts, deliberately — same as mail).
+
+function envBool(v: string | undefined): boolean {
+  return v === '1' || v?.toLowerCase() === 'true'
+}
+
+function normalizePhone(v: string): string {
+  return v.replace(/\D/g, '')
+}
+
+// Digits-only compare, tolerant of a missing/present country code: match when
+// equal or when one is a suffix of the other (both at least 7 digits).
+function phonesMatch(a: string, b: string): boolean {
+  const da = normalizePhone(a)
+  const db_ = normalizePhone(b)
+  if (!da || !db_) return false
+  if (da === db_) return true
+  return da.length >= 7 && db_.length >= 7 && (da.endsWith(db_) || db_.endsWith(da))
+}
+
+function resolveTestMode(row: Record<string, unknown> | undefined): {
+  testMode: boolean
+  testRecipient: string | null
+  testAllowlist: string[]
+} {
+  const dbMode = row?.sms_test_mode === 1 || row?.sms_test_mode === true
+  const testMode = envBool(process.env.SMS_TEST_MODE) || dbMode
+  const testRecipient =
+    process.env.SMS_TEST_RECIPIENT || (row?.sms_test_recipient as string | null) || null
+  const testAllowlist = String(row?.sms_test_allowlist ?? '')
+    .split(',')
+    .map((s) => normalizePhone(s.trim()))
+    .filter(Boolean)
+  return { testMode, testRecipient, testAllowlist }
+}
+
+/**
+ * Apply test-mode redirection to an outgoing SMS. Exported for tests.
+ * Returns null when the SMS should be DROPPED (test mode on, number not
+ * allowlisted, and no test recipient configured).
+ */
+export function applySmsTestMode(
+  cfg: Pick<SmsConfig, 'testMode' | 'testRecipient' | 'testAllowlist'>,
+  to: string,
+  body: string
+): { to: string; body: string } | null {
+  if (!cfg.testMode) return { to, body }
+  if (cfg.testAllowlist.some((a) => phonesMatch(a, to))) return { to, body }
+  if (!cfg.testRecipient) return null
+  return { to: cfg.testRecipient, body: `[TEST — was: ${to}] ${body}` }
 }
 
 export async function sendSms(to: string, body: string): Promise<void> {
@@ -35,6 +111,13 @@ export async function sendSms(to: string, body: string): Promise<void> {
     console.warn('[sms] Provider not configured, skipping SMS to', to)
     return
   }
+
+  const routed = applySmsTestMode(cfg, to, body)
+  if (!routed) {
+    console.warn('[sms] test mode: dropped SMS to', to, '(no test recipient configured)')
+    return
+  }
+  ;({ to, body } = routed)
 
   switch (cfg.provider) {
     case 'twilio':

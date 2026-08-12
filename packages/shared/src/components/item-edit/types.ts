@@ -18,6 +18,9 @@ export interface CMSField {
   placeholder: string | null
   repeater_schema: Record<string, unknown>[] | string | null
   dependency_config: Record<string, unknown> | string | null
+  /** {source_collection, source_fk_field?, field_map:{target:source}} — live copy from a related record when the FK changes. */
+  cross_record_defaults?: Record<string, unknown> | string | null
+  validation_rules?: Array<{ type: string; value?: unknown; message?: string; soft?: boolean }> | string | null
   layout_assigned?: boolean
   /** Raw layout-assignment overrides (label, readonly, drilldown, ...) — passed through by field-config. */
   _overrides?: Record<string, unknown> | null
@@ -30,6 +33,10 @@ export interface CMSRelation {
   many_collection: string | null
   many_field: string | null
   junction_field: string | null
+  /** M2A only — the junction column naming which collection each row's `item` id
+   *  belongs to (usually 'collection'); one_collection is null on those rows. */
+  one_collection_field?: string | null
+  one_allowed_collections?: string | null
 }
 
 // Staged grandchild ops for a NestedRelationEditor under saveMode='pending' on

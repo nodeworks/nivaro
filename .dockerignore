@@ -12,3 +12,5 @@ node_modules
 .claude
 .fallowrc.json
 biome.json
+# Deployment extensions never enter the image — mounted at runtime
+api/extensions

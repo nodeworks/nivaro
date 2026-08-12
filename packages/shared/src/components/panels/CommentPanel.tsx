@@ -380,10 +380,10 @@ export function CommentPanel({
                 <div className='space-y-4'>
                   {(['a', 'b'] as const).map((k) => (
                     <div key={k} className='flex gap-3'>
-                      <div className='h-8 w-8 shrink-0 animate-pulse rounded-full bg-slate-100' />
+                      <div className='h-8 w-8 shrink-0 animate-pulse rounded-full bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
                       <div className='flex-1 space-y-1.5'>
-                        <div className='h-3 w-32 animate-pulse rounded bg-slate-100' />
-                        <div className='h-3 w-full animate-pulse rounded bg-slate-100' />
+                        <div className='h-3 w-32 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+                        <div className='h-3 w-full animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
                       </div>
                     </div>
                   ))}

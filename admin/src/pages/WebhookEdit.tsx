@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, RefreshCw, Trash2, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -67,6 +68,7 @@ function pairsToHeaders(pairs: HeaderPair[]): Record<string, string> {
 export function WebhookEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const goBack = useGoBack('/webhooks')
   const queryClient = useQueryClient()
   const isNew = id === 'new'
 
@@ -191,7 +193,7 @@ export function WebhookEditPage() {
           <div className='flex items-center gap-2'>
             <button
               type='button'
-              onClick={() => navigate('/webhooks')}
+              onClick={goBack}
               className='flex items-center gap-1.5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700'
             >
               <ArrowLeft className='h-4 w-4' />

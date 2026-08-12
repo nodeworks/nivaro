@@ -704,6 +704,139 @@ export async function aiRoutes(app: FastifyInstance) {
     return reply.send({ data: { summary } })
   })
 
+  // POST /ai/review — pre-submission record review: findings list over the
+  // record + its O2M children, guided by the collection's AI rules when set.
+  app.post('/review', { preHandler: authenticate }, async (req, reply) => {
+    const client = await getClient()
+    if (!client) {
+      return reply
+        .code(503)
+        .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+    }
+    const { collection, item } = req.body as { collection?: string; item?: string | number }
+    if (!collection || item == null) {
+      return reply.code(400).send({ error: 'collection and item are required' })
+    }
+    if (/^nivaro_/i.test(collection) || !/^[A-Za-z0-9_]+$/.test(collection)) {
+      return reply.code(400).send({ error: 'Invalid collection' })
+    }
+    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+
+    const record = await db(collection).where({ id: item }).first()
+    if (!record) return reply.code(404).send({ error: 'Item not found' })
+
+    // Pull up to 3 O2M child sets so line items ride into the review.
+    const children: Record<string, unknown[]> = {}
+    try {
+      const rels = (await db('nivaro_relations')
+        .where({ one_collection: collection })
+        .whereNotNull('many_collection')
+        .limit(3)) as Array<{ many_collection: string; many_field: string; one_field: string | null }>
+      for (const rel of rels) {
+        if (!rel.many_collection || !rel.many_field) continue
+        if (!/^[A-Za-z0-9_]+$/.test(rel.many_collection) || !/^[A-Za-z0-9_]+$/.test(rel.many_field))
+          continue
+        const rows = await db(rel.many_collection)
+          .where({ [rel.many_field]: record.id })
+          .limit(50)
+        if (rows.length) children[rel.many_collection] = rows
+      }
+    } catch {
+      // Children are best-effort context — never fail the review over them.
+    }
+
+    // Per-collection review guidance (plain-text AI rules, if configured).
+    let guidance = ''
+    try {
+      const settings = await getAiCollectionSettings(collection)
+      const textRules = (settings?.validation_rules ?? []).filter(
+        (r): r is string => typeof r === 'string'
+      )
+      if (textRules.length) guidance = `\nCollection-specific rules:\n- ${textRules.join('\n- ')}`
+    } catch {}
+
+    const prompt = `You are reviewing a "${collection}" record before submission. Identify concrete problems a reviewer would flag: missing or blank required-looking fields, quantities/prices that are zero or negative, dates in the past where a future date is expected, inconsistent or placeholder text, and incomplete line items.${guidance}
+
+Record:
+${JSON.stringify(record).slice(0, 8000)}
+
+${Object.entries(children)
+  .map(([name, rows]) => `Related ${name} (${rows.length}):\n${JSON.stringify(rows).slice(0, 6000)}`)
+  .join('\n\n')}
+
+Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"suggestion","field":"<field name or area>","message":"<specific, actionable finding>"}]. Return [] if the record looks ready.`
+
+    const { model } = await getAiSettings()
+    const message = await client.messages.create({
+      model,
+      max_tokens: 1500,
+      messages: [{ role: 'user', content: prompt }]
+    })
+    const text = message.content[0]?.type === 'text' ? message.content[0].text : ''
+    let findings: Array<{ severity: string; field: string; message: string }> = []
+    try {
+      const match = text.match(/\[[\s\S]*\]/)
+      if (match) {
+        const parsed = JSON.parse(match[0]) as unknown
+        if (Array.isArray(parsed)) {
+          findings = parsed
+            .filter(
+              (f): f is { severity: string; field: string; message: string } =>
+                !!f && typeof f === 'object' && typeof (f as { message?: unknown }).message === 'string'
+            )
+            .map((f) => ({
+              severity: ['error', 'warning', 'suggestion'].includes(f.severity)
+                ? f.severity
+                : 'suggestion',
+              field: String(f.field ?? ''),
+              message: f.message
+            }))
+        }
+      }
+    } catch {}
+
+    await logActivity({
+      action: 'ai-review',
+      user: req.user?.id,
+      collection,
+      item: String(item),
+      req
+    })
+    return reply.send({ data: { findings } })
+  })
+
+  // POST /ai/brief — render a short plain-text briefing from caller-supplied
+  // context (dashboard daily summaries etc.). The caller gathers the data —
+  // this endpoint only writes the words.
+  app.post('/brief', { preHandler: authenticate }, async (req, reply) => {
+    const client = await getClient()
+    if (!client) {
+      return reply
+        .code(503)
+        .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+    }
+    const { context, instructions } = req.body as { context?: string; instructions?: string }
+    if (!context?.trim()) return reply.code(400).send({ error: 'context is required' })
+
+    const system =
+      instructions?.slice(0, 1000) ||
+      'You write a short daily briefing for a business user from the data provided. Open with one summary sentence, then 3-5 concrete insights citing real numbers from the data, call out anything needing immediate attention, and end with one or two positives. Plain text only — no markdown, no headers. 150-220 words.'
+
+    const { model } = await getAiSettings()
+    const message = await client.messages.create({
+      model,
+      max_tokens: 512,
+      system,
+      messages: [{ role: 'user', content: context.slice(0, 16000) }]
+    })
+    const briefText = message.content[0]?.type === 'text' ? message.content[0].text.trim() : ''
+
+    await logActivity({ action: 'ai-brief', user: req.user?.id, req })
+    return reply.send({ data: { brief: briefText } })
+  })
+
   // POST /ai/validate — pre-save content validation against the collection's AI rules.
   // Soft companion to the before-hook: lets the UI warn before submitting. Returns
   // an empty violations list when validation is disabled or no API key is set.
@@ -946,6 +1079,12 @@ export async function aiRoutes(app: FastifyInstance) {
     try {
       const { rejectProposal } = await import('../services/ai-actions.js')
       await rejectProposal(req.user!, id)
+      await logActivity({
+        action: 'ai-action-reject',
+        user: req.user?.id,
+        comment: `proposal ${id}`,
+        req
+      })
       return reply.code(204).send()
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode ?? 400

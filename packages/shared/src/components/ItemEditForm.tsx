@@ -15,13 +15,15 @@ import {
   useState
 } from 'react'
 import { toast } from 'sonner'
-import { GridFlushContext, type GridFlushContextValue, ItemEditAuthContext, ParentDraftContext, useApiFetchConfig, useNivaroClient, RelationPathDataContext } from '../context'
+import { applyValidationRule } from '../lib/validation-rules'
+import { GridFlushContext, type GridFlushContextValue, ItemEditAuthContext, ParentDraftContext, ReimportHandlerContext, useApiFetchConfig, useNivaroClient, RelationPathDataContext } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { FieldRow } from './item-edit/FieldRow'
 import { GroupSection, InlineDisplay, OwnersInline, OwnersInlineCompact, StripFieldValue } from './item-edit/GroupSection'
 import { applyDisplayTemplate, isSentinelKey, parseJson, resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
 import { useAutoIdPreview } from './item-edit/AutoIdPreviewField'
+import { m2aWriteMeta } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import { AddendumFieldContext, AddendumO2MContext, AddendumViewContext, type AddendumFieldMap, type AddendumO2MMap } from './item-edit/AddendumFieldContext'
 import { O2MStagingContext, type O2MStagingCtx } from './item-edit/O2MStagingContext'
@@ -39,7 +41,7 @@ import type {
   SummaryAggConfig,
   SummaryEntry
 } from './item-edit/types'
-import { AddendumPanel, CommentPanel, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
+import { AccessDeniedPanel, AddendumPanel, CommentPanel, ErpFailureBanner, ItemActionButtons, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
 import { WidgetSlot, type InputBinding } from './WidgetSlot'
 import type { PendingTask } from './panels/TaskPanel'
 import { Button } from './ui/button'
@@ -241,6 +243,10 @@ export interface ItemEditFormProps {
   onSaved?: (id: string) => void
   onDeleted?: () => void
   showHeader?: boolean
+  /** Render extension-registered item actions (Push to Fusion etc.) in the
+   *  header toolbar. Off by default — the admin's ItemEdit page renders its
+   *  own copy in the page header; headless hosts opt in. */
+  showItemActions?: boolean
   showRevisions?: boolean
   showClone?: boolean
   showPipeline?: boolean
@@ -258,6 +264,10 @@ export interface ItemEditFormProps {
    *  lines from an already-parsed import result (e.g. handed off by a caller
    *  that ran the file picker before this form existed). */
   initialImportResult?: ImportParseResponse
+  /** Consumed once, on mount, when `isNew` — seeds the draft with plain field
+   *  values (deep-link prefill, "create from common values", AI hand-offs).
+   *  User edits made before the seed applies win over seeded keys. */
+  initialValues?: Record<string, unknown>
 }
 
 export interface HeaderWidgetInfo {
@@ -501,6 +511,7 @@ export function ItemEditForm({
   onSaved,
   onDeleted,
   showHeader = true,
+  showItemActions = false,
   showRevisions = true,
   showClone = true,
   showPipeline = true,
@@ -514,7 +525,8 @@ export function ItemEditForm({
   extraTopContent,
   extraBottomContent,
   onHeaderWidgets,
-  initialImportResult
+  initialImportResult,
+  initialValues
 }: ItemEditFormProps) {
   const client = useNivaroClient()
   const fetchCfg = useApiFetchConfig()
@@ -646,21 +658,43 @@ export function ItemEditForm({
     return () => document.removeEventListener('mousedown', handleOutside)
   }, [showPdfDropdown])
 
-  const { data: itemData, isLoading: itemLoading } = useQuery<Record<string, unknown>>({
+  const {
+    data: itemData,
+    isLoading: itemLoading,
+    error: itemLoadError
+  } = useQuery<Record<string, unknown>>({
     queryKey: ['item', collection, itemId],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${itemId}`))
         .then((r) => r.data),
     enabled: !isNew,
-    staleTime: 30_000
+    staleTime: 30_000,
+    // 403/404 are access verdicts, not transient — retrying just delays the
+    // AccessDeniedPanel explanation.
+    retry: (failureCount, err) => {
+      const status =
+        (err as { status?: number; response?: { status?: number } })?.status ??
+        (err as { response?: { status?: number } })?.response?.status
+      if (status === 403 || status === 404) return false
+      return failureCount < 2
+    }
   })
+  const itemLoadDenied = (() => {
+    if (isNew || !itemLoadError) return false
+    const status =
+      (itemLoadError as { status?: number; response?: { status?: number } })?.status ??
+      (itemLoadError as { response?: { status?: number } })?.response?.status
+    return status === 403 || status === 404
+  })()
 
   // ── Draft state ────────────────────────────────────────────────────────────
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   // Synchronous mirror of draft — the save payload reads from this so that
   // grid-flush callbacks firing onChange mid-save still land in the PATCH.
   const draftRef = useRef<Record<string, unknown>>({})
+  // Fields the user actually edited this session (drives cascade auto-clear)
+  const userTouchedRef = useRef<Set<string>>(new Set())
 
   // ── Grid flush registry ────────────────────────────────────────────────────
   // Field components (file pickers, inline grids) register async commit
@@ -1365,6 +1399,17 @@ export function ItemEditForm({
     [collection, relations, o2mStagingCtx, m2mStagingCtx, client, itemId, fieldConfig]
   )
 
+  // One-shot plain-value prefill for new records (deep links, "create from
+  // common values", AI hand-offs). Keys the user already edited win.
+  const appliedInitialValuesRef = useRef(false)
+  useEffect(() => {
+    if (!isNew || !initialValues || appliedInitialValuesRef.current) return
+    appliedInitialValuesRef.current = true
+    setDraft((d) => ({ ...initialValues, ...d }))
+    draftRef.current = { ...initialValues, ...draftRef.current }
+    setIsDirty(true)
+  }, [isNew, initialValues])
+
   useEffect(() => {
     if (!isNew || !initialImportResult || appliedInitialImportRef.current) return
     const needsRelations =
@@ -1453,6 +1498,14 @@ export function ItemEditForm({
       fields.add(r.trigger_field)
       fields.add(r.target_field)
     }
+    // Also track EVERY M2M alias on the collection — their effective id sets
+    // feed ParentDraftContext so '$parent.<alias>' option-filter tokens (e.g.
+    // funding_years) resolve, not just rule trigger/target fields.
+    for (const r of relations) {
+      if (r.junction_field && r.one_collection === collection && r.one_field) {
+        fields.add(r.one_field)
+      }
+    }
     const map = new Map<string, M2MAliasInfo>()
     for (const f of fields) {
       const info = resolveM2MAlias(relations, collection, f)
@@ -1526,6 +1579,18 @@ export function ItemEditForm({
     [m2mAliasFieldStates]
   )
 
+  // Draft exposed via ParentDraftContext: scalar draft + every M2M alias
+  // field's effective id array (committed ± staged). Unsettled aliases are
+  // omitted, so '$parent.<alias>' tokens prune their clause instead of
+  // filtering on a stale empty set.
+  const parentDraftWithAliases = useMemo(() => {
+    const merged: Record<string, unknown> = { ...draft }
+    for (const [field, state] of Object.entries(m2mAliasFieldStates)) {
+      if (state?.known && state.ids.length > 0) merged[field] = state.ids
+    }
+    return merged
+  }, [draft, m2mAliasFieldStates])
+
   // Dispatches /field-rules/evaluate results: scalar targets merge into the
   // draft as before; M2M-alias targets (which don't exist in the draft) are
   // staged as links instead, skipping ids that are already effectively
@@ -1533,6 +1598,74 @@ export function ItemEditForm({
   // whose committed state hasn't settled yet are dropped entirely rather
   // than applied against a possibly-stale effective set — the rule gets
   // another chance on the next trigger fire.
+  // Cross-record defaults evaluator — fired for USER edits (handleFieldChange)
+  // and for FKs set by field rules (applyFieldRuleResults), so a rule-driven
+  // cascade (e.g. unit pick → install_location) still autofills its targets.
+  const runCrossDefaults = useCallback(
+    (field: string, value: unknown, depth = 0) => {
+      if (value === null || value === undefined || value === '') return
+      if (depth > 2) return
+      for (const fc of fieldConfig ?? []) {
+        const rawCfg = fc.cross_record_defaults
+        if (!rawCfg) continue
+        type CrossCfg = {
+          source_collection?: string
+          source_fk_field?: string
+          field_map?: Record<string, string>
+        }
+        let cfg: CrossCfg | null = null
+        try {
+          cfg = (typeof rawCfg === 'string' ? JSON.parse(rawCfg) : rawCfg) as CrossCfg
+        } catch {
+          continue
+        }
+        const fkField = cfg?.source_fk_field || fc.field
+        if (fkField !== field || !cfg?.source_collection || !cfg.field_map) continue
+        const map = cfg.field_map
+        const sourceFields = [
+          ...new Set(Object.values(map).flatMap((v) => String(v).split('||').map((c) => c.trim())))
+        ].filter(Boolean)
+        if (sourceFields.length === 0) continue
+        void client
+          .request<{ data: Record<string, unknown> }>(
+            get(`/items/${cfg.source_collection}/${value}`, {
+              fields: sourceFields.join(',')
+            })
+          )
+          .then((res) => {
+            const src = res.data
+            if (!src) return
+            const patch: Record<string, unknown> = {}
+            for (const [target, sourceField] of Object.entries(map)) {
+              // 'a||b' = first non-null of the listed source fields; 'id'
+              // refers to the source record itself (EFP: a location's
+              // designated shipping_location, else the location itself).
+              const candidates = String(sourceField).split('||').map((c) => c.trim())
+              let v: unknown = null
+              for (const c of candidates) {
+                v = src[c]
+                if (v !== null && v !== undefined && v !== '') break
+              }
+              patch[target] = v ?? null
+            }
+            draftRef.current = { ...draftRef.current, ...patch }
+            setDraft((prev) => ({ ...prev, ...patch }))
+            setIsDirty(true)
+            // Chain: a target that is itself a watched FK cascades its own
+            // defaults (billing location → shipping location → address copy).
+            // Depth-capped to break config cycles.
+            for (const [target, v] of Object.entries(patch)) {
+              if (target !== field && v != null && v !== '') runCrossDefaults(target, v, depth + 1)
+            }
+          })
+          .catch(() => {
+            /* source record unreadable — leave targets untouched */
+          })
+      }
+    },
+    [fieldConfig, client]
+  )
+
   const applyFieldRuleResults = useCallback(
     (results: Record<string, unknown> | null | undefined) => {
       const { scalar, alias } = partitionRuleResults(results, new Set(m2mAliasFieldsForRules.keys()))
@@ -1555,9 +1688,11 @@ export function ItemEditForm({
         const merged = mergeRuleResults(draftRef.current, scalar)
         draftRef.current = merged
         setDraft(merged)
+        // Rule-set FKs cascade their own cross-record defaults.
+        for (const [field, value] of Object.entries(scalar)) runCrossDefaults(field, value)
       }
     },
-    [m2mAliasFieldsForRules, m2mAliasFieldStates, m2mStagingCtx]
+    [m2mAliasFieldsForRules, m2mAliasFieldStates, m2mStagingCtx, runCrossDefaults]
   )
 
   const fieldRuleTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -1658,6 +1793,7 @@ export function ItemEditForm({
 
   const handleFieldChange = useCallback(
     (field: string, value: unknown) => {
+      userTouchedRef.current.add(field)
       const next = { ...draftRef.current, [field]: value }
       for (const fc of fieldConfig ?? []) {
         if (!fc.dependency_config) continue
@@ -1694,8 +1830,11 @@ export function ItemEditForm({
         return next
       })
       evaluateFieldRulesForChange(field)
+      // Cross-record defaults: any field whose cross_record_defaults watches this
+      // FK copies mapped source-record values into the draft when the FK is set.
+      if (!isEmpty) runCrossDefaults(field, value)
     },
-    [fieldConfig, evaluateFieldRulesForChange]
+    [fieldConfig, evaluateFieldRulesForChange, runCrossDefaults]
   )
 
   const [fieldCounts, setFieldCounts] = useState<Record<string, number>>({})
@@ -2154,6 +2293,16 @@ export function ItemEditForm({
     return steps
   }, [hasTabs, sectionGroups, tabGroups, isStepsMode, ungroupedFields])
 
+  // Stale persisted tab key (layout/groups changed since last visit) would
+  // leave steps/tabs rendering with no active entry — snap to the first one.
+  useEffect(() => {
+    if (!hasTabs || allSteps.length === 0) return
+    if (!allSteps.some((s) => s.key === activeTab)) {
+      setActiveTab(allSteps[0].key)
+    }
+    // biome-ignore lint/correctness/useExhaustiveDependencies: setActiveTab is a stable helper
+  }, [hasTabs, allSteps, activeTab])
+
   const completedSteps = useMemo(() => {
     const out = new Set<string>()
     for (const s of allSteps) {
@@ -2351,6 +2500,7 @@ export function ItemEditForm({
       let color: string | undefined
       let weight: string | undefined
       let displayAs: string | undefined
+      let linkTemplate: string | undefined
       try {
         const raw = (a as unknown as Record<string, unknown>).input_bindings
         const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
@@ -2359,6 +2509,7 @@ export function ItemEditForm({
         color = parsed.find((b) => b.key === '__color__')?.binding_value || undefined
         weight = parsed.find((b) => b.key === '__weight__')?.binding_value || undefined
         displayAs = parsed.find((b) => b.key === '__display_as__')?.binding_value || undefined
+        linkTemplate = parsed.find((b) => b.key === '__link_template__')?.binding_value || undefined
       } catch { /* noop */ }
       return {
         field: a.field,
@@ -2368,6 +2519,7 @@ export function ItemEditForm({
         color,
         weight,
         displayAs,
+        linkTemplate,
         cmsField: meta ?? null,
       }
     }), [activeLayoutData, fieldConfig])
@@ -2452,15 +2604,55 @@ export function ItemEditForm({
       if (f.required) {
         if (f.field in fieldCounts) {
           if (fieldCounts[f.field] === 0) errs[f.field] = 'This field is required'
+        } else if (f.field in m2mAliasFieldStates) {
+          // Alias (M2M/M2A) fields have no column in draft — judge by the
+          // committed junction state. Unsettled (query in flight) never blocks:
+          // a false "required" here froze transitions on steps layouts where the
+          // field's combobox hadn't mounted to report a count.
+          const st = m2mAliasFieldStates[f.field]
+          if (st.known && st.ids.length === 0) errs[f.field] = 'This field is required'
+        } else if (
+          relations.some(
+            (r) => r.one_collection === collection && r.one_field === f.field
+          )
+        ) {
+          // Other alias shapes (O2M, unresolvable M2A) — no draft value exists
+          // and no count was reported; skip rather than false-block.
         } else {
           const v = draft[f.field]
           if (v === null || v === undefined || v === '') errs[f.field] = 'This field is required'
         }
       }
+      // Field-level validation_rules (min/max/regex/email/url/min_days_from_today…)
+      if (!errs[f.field] && f.validation_rules) {
+        const rules = (
+          typeof f.validation_rules === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(f.validation_rules)
+                } catch {
+                  return []
+                }
+              })()
+            : f.validation_rules
+        ) as Array<{ type: string; value?: unknown; message?: string; soft?: boolean }>
+        if (Array.isArray(rules)) {
+          for (const rule of rules) {
+            if (!rule || rule.soft) continue
+            const err = applyValidationRule(rule, draft[f.field], f.label ?? titleCase(f.field))
+            if (err) {
+              errs[f.field] = err
+              break
+            }
+          }
+        }
+      }
     }
     if (Object.keys(errs).length > 0) {
       setValidationErrors(errs)
-      toast.error('Please fill in all required fields')
+      // Surface a rule message when the failure isn't a plain required miss.
+      const ruleMsg = Object.values(errs).find((m) => m !== 'This field is required')
+      toast.error(ruleMsg ?? 'Please fill in all required fields')
       return false
     }
     return true
@@ -2608,7 +2800,14 @@ export function ItemEditForm({
             if (!ids.length) continue
             const rel = findM2MRel(key)
             if (!rel) continue
-            for (const relId of ids) m2mOps.push(client.request(post(`/items/${rel.many_collection}`, { [rel.many_field!]: savedId, [rel.junction_field]: relId })).catch(() => {}))
+            // M2A junctions carry a collection-discriminator column — omit it
+            // and the row is unreadable by anything that filters on it.
+            const companion = relations.find(
+              c => c.many_collection === rel.many_collection && c.many_field === rel.junction_field && c.id !== rel.id
+            )
+            const m2a = m2aWriteMeta(companion)
+            const extra = m2a ? { [m2a.field]: m2a.value } : {}
+            for (const relId of ids) m2mOps.push(client.request(post(`/items/${rel.many_collection}`, { [rel.many_field!]: savedId, [rel.junction_field]: relId, ...extra })).catch(() => {}))
           }
           await Promise.all(m2mOps)
           updateStep('m2m', { status: 'done' })
@@ -3657,6 +3856,21 @@ export function ItemEditForm({
     )
   }
 
+  // ── Access denied / not found ──────────────────────────────────────────────
+  // A 403/404 on the record load used to leave a silently empty form —
+  // explain WHY (role permission, RLS, or which User Scope excludes it).
+  if (itemLoadDenied) {
+    return (
+      <div className={cn('flex flex-1 min-h-0 flex-col overflow-y-auto', className)}>
+        <AccessDeniedPanel
+          collection={collection}
+          itemId={String(itemId)}
+          onBack={() => window.history.back()}
+        />
+      </div>
+    )
+  }
+
   // ── Loading state ──────────────────────────────────────────────────────────
   const isLoading = fieldsLoading || (!isNew && itemLoading)
   if (isLoading) {
@@ -3683,11 +3897,12 @@ export function ItemEditForm({
   const canDelete = !isNew && isAdmin && effectiveShowDelete
 
   return (
+    <ReimportHandlerContext.Provider value={isNew ? null : (handleReimportParsed as import('../context').ReimportHandler)}>
     <RelationPathDataContext.Provider value={relationPathData}>
     <AddendumO2MContext.Provider value={addendumO2MMap}>
     <AddendumViewContext.Provider value={addendumViewId}>
     <AddendumFieldContext.Provider value={addendumFieldMap}>
-    <ParentDraftContext.Provider value={{ draft, collection }}>
+    <ParentDraftContext.Provider value={{ draft: parentDraftWithAliases, collection, dirtyFields: userTouchedRef.current }}>
     <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>
     <O2MStagingContext.Provider value={o2mStagingCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
@@ -3838,6 +4053,9 @@ export function ItemEditForm({
                   getLabel={(t) => t.reimport?.button_label ?? t.button_label}
                   onParsed={handleReimportParsed}
                 />
+              )}
+              {showItemActions && !isNew && (
+                <ItemActionButtons collection={collection} itemId={String(itemId)} />
               )}
               {(effectiveShowRevisions && !isNew) || (effectiveShowClone && !isNew && isAdmin) || canDelete ? (
                 <>
@@ -4013,7 +4231,12 @@ export function ItemEditForm({
                     </div>
                   )
                 }
-                const raw = draft[f.field]
+                // M2M alias fields have no draft column — their value is the
+                // committed junction id set the form already tracks (same
+                // source SummaryPanel uses). Without this every M2M header
+                // field renders '—' regardless of how many links exist.
+                const aliasState = m2mAliasFieldStates[f.field]
+                const raw = aliasState ? aliasState.ids : draft[f.field]
                 const hColorClass = f.color === 'cyan' ? 'text-nvr-cyan' : f.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : f.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : f.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : f.color === 'red' ? 'text-red-600 dark:text-red-400' : f.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-900 dark:text-slate-100'
                 const hWeightClass = f.weight === 'bold' ? 'font-bold' : f.weight === 'semibold' ? 'font-semibold' : f.weight === 'medium' ? 'font-medium' : 'font-semibold'
                 const textCls = `${hColorClass} ${hWeightClass}`
@@ -4025,11 +4248,33 @@ export function ItemEditForm({
                     className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
                   >
                     <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>{f.label}</span>
-                    <span className={['mt-1 leading-none truncate max-w-[220px]', isPill ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10` : isTag ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}` : ''].filter(Boolean).join(' ')}>
-                      {f.cmsField
-                        ? <StripFieldValue field={f.cmsField} val={raw} relations={relations} collection={collection} displayFormat={f.displayFormat} textClassName={textCls} />
-                        : <span className={`text-[13px] ${textCls}`}>{formatHeaderFieldValue(raw, f.displayFormat)}</span>
-                      }
+                    <span className={['mt-1 leading-tight truncate max-w-[220px] pb-px', isPill ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10` : isTag ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}` : ''].filter(Boolean).join(' ')}>
+                      {(() => {
+                        const inner = f.cmsField
+                          ? <StripFieldValue field={f.cmsField} val={raw} relations={relations} collection={collection} displayFormat={f.displayFormat} textClassName={textCls} />
+                          : <span className={`text-[13px] ${textCls}`}>{formatHeaderFieldValue(raw, f.displayFormat)}</span>
+                        // Configured link template ({{value}} + any {{field}} from
+                        // the draft) turns the header value into an external link
+                        // — how e.g. an MWF ID deep-links to the MWF system with
+                        // zero hardcoding (Table Editor header chip ⚙ → Link URL).
+                        const linkTemplate = (f as { linkTemplate?: string }).linkTemplate
+                        if (!linkTemplate || raw === null || raw === undefined || raw === '' || Array.isArray(raw)) return inner
+                        const href = linkTemplate
+                          .replace(/\{\{\s*value\s*\}\}/g, encodeURIComponent(String(raw)))
+                          .replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, k: string) => encodeURIComponent(String(draft[k] ?? '')))
+                        if (!/^https?:\/\//i.test(href)) return inner
+                        return (
+                          <a
+                            href={href}
+                            target='_blank'
+                            rel='noopener noreferrer'
+                            className='underline decoration-dotted underline-offset-2 hover:decoration-solid'
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {inner}
+                          </a>
+                        )
+                      })()}
                     </span>
                     {copiedHeaderField === f.field
                       ? <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
@@ -4087,6 +4332,9 @@ export function ItemEditForm({
                 takingOver={takingOver}
                 isAdmin={isAdmin}
               />
+            )}
+            {!isNew && itemId && (
+              <ErpFailureBanner collection={collection} itemId={String(itemId)} />
             )}
             {!isNew && addendumEnabled && activeAddendums.length > 0 && (
               <div className='relative mb-3 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5'>
@@ -4215,5 +4463,6 @@ export function ItemEditForm({
     </AddendumViewContext.Provider>
     </AddendumO2MContext.Provider>
     </RelationPathDataContext.Provider>
+    </ReimportHandlerContext.Provider>
   )
 }

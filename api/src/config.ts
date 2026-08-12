@@ -64,6 +64,8 @@ const schema = z.object({
   OIDC_REDIRECT_URI: requiredUrl(),
 
   ADMIN_URL: z.string().default('http://localhost:3056'),
+  // Comma-separated list of trusted app origins allowed as returnTo targets
+  APP_URLS: z.string().default(''),
 
   INNGEST_EVENT_KEY: z.string().default('local'),
   INNGEST_SIGNING_KEY: z.string().default('local'),

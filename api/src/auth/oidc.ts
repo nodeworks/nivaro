@@ -20,11 +20,54 @@ export async function buildLoginUrl(state: string, codeVerifier: string) {
 
   return oidc.buildAuthorizationUrl(cfg, {
     redirect_uri: config.OIDC_REDIRECT_URI,
-    scope: 'openid profile email',
+    scope: isMicrosoftIssuer() ? 'openid profile email User.Read' : 'openid profile email',
     state,
     code_challenge: codeChallenge,
     code_challenge_method: 'S256'
   })
+}
+
+function isMicrosoftIssuer() {
+  return /microsoftonline\.com|windows\.net/i.test(config.OIDC_ISSUER)
+}
+
+export interface GraphOrgProfile {
+  title: string | null
+  company: string | null
+  department: string | null
+  phone: string | null
+}
+
+// Azure AD ID tokens carry no org fields (jobTitle/companyName/department live
+// in Microsoft Graph only), so enrich via /me with the login's access token.
+// Best-effort: any failure returns null and login proceeds without org data.
+export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgProfile | null> {
+  if (!isMicrosoftIssuer()) return null
+  try {
+    const res = await fetch(
+      'https://graph.microsoft.com/v1.0/me?$select=jobTitle,companyName,department,mobilePhone,businessPhones',
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(5000)
+      }
+    )
+    if (!res.ok) return null
+    const g = (await res.json()) as {
+      jobTitle?: string | null
+      companyName?: string | null
+      department?: string | null
+      mobilePhone?: string | null
+      businessPhones?: string[]
+    }
+    return {
+      title: g.jobTitle ?? null,
+      company: g.companyName ?? null,
+      department: g.department ?? null,
+      phone: g.mobilePhone ?? g.businessPhones?.[0] ?? null
+    }
+  } catch {
+    return null
+  }
 }
 
 export async function handleCallback(requestUrl: URL, state: string, codeVerifier: string) {
@@ -49,6 +92,9 @@ export async function handleCallback(requestUrl: URL, state: string, codeVerifie
   const emailish = (v: unknown): string | null =>
     typeof v === 'string' && /.+@.+\..+/.test(v) ? v : null
   const emailClaim = claims?.email_verified === false ? null : emailish(claims?.email)
+
+  const graph = tokens.access_token ? await fetchGraphProfile(tokens.access_token) : null
+
   return {
     sub: claims?.sub ?? '',
     email: emailClaim ?? emailish(claims?.upn) ?? '',
@@ -56,6 +102,10 @@ export async function handleCallback(requestUrl: URL, state: string, codeVerifie
     given_name: (claims?.given_name as string | undefined) ?? null,
     family_name: (claims?.family_name as string | undefined) ?? null,
     groups: (claims?.groups as string[] | undefined) ?? [],
+    title: graph?.title ?? null,
+    company: graph?.company ?? null,
+    department: graph?.department ?? null,
+    phone: graph?.phone ?? null,
     tokens
   }
 }

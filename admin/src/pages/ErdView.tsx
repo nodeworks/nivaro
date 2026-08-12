@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Key, Link2, Maximize2, Search, Share2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -107,6 +108,7 @@ const CENTER_W = 260
 
 export function ErdViewPage() {
   const navigate = useNavigate()
+  const goBack = useGoBack('/data-model')
   const [search, setSearch] = useState('')
   const [focused, setFocused] = useState<string | null>(null)
   const [stack, setStack] = useState<string[]>([])
@@ -219,6 +221,7 @@ export function ErdViewPage() {
         <div className='flex items-center gap-2.5'>
           <Link
             to='/data-model'
+            onClick={(e) => { e.preventDefault(); goBack() }}
             className='rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
           >
             <ArrowLeft className='h-4 w-4' />

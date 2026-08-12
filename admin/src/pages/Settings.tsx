@@ -346,6 +346,12 @@ export function SettingsPage() {
   const [smtpPass, setSmtpPass] = useState('')
   const [smtpFrom, setSmtpFrom] = useState('')
   const [smtpSecure, setSmtpSecure] = useState(false)
+  const [mailTestMode, setMailTestMode] = useState(false)
+  const [mailTestRecipient, setMailTestRecipient] = useState('')
+  const [mailTestAllowlist, setMailTestAllowlist] = useState('')
+  const [smsTestMode, setSmsTestMode] = useState(false)
+  const [smsTestRecipient, setSmsTestRecipient] = useState('')
+  const [smsTestAllowlist, setSmsTestAllowlist] = useState('')
   const [testTo, setTestTo] = useState('')
   const [testSending, setTestSending] = useState(false)
   const [smsProvider, setSmsProvider] = useState('')
@@ -400,6 +406,12 @@ export function SettingsPage() {
     setSmtpPass((s.smtp_pass as string) ?? '')
     setSmtpFrom((s.smtp_from as string) ?? '')
     setSmtpSecure(s.smtp_secure === 1 || s.smtp_secure === true)
+    setMailTestMode(s.mail_test_mode === 1 || s.mail_test_mode === true)
+    setMailTestRecipient((s.mail_test_recipient as string) ?? '')
+    setMailTestAllowlist((s.mail_test_allowlist as string) ?? '')
+    setSmsTestMode(s.sms_test_mode === 1 || s.sms_test_mode === true)
+    setSmsTestRecipient((s.sms_test_recipient as string) ?? '')
+    setSmsTestAllowlist((s.sms_test_allowlist as string) ?? '')
     setHydrated(true)
   }
 
@@ -457,7 +469,10 @@ export function SettingsPage() {
       sms_account_sid: smsAccountSid || null,
       sms_auth_token: smsAuthToken || null,
       sms_from: smsFrom || null,
-      sms_region: smsRegion || null
+      sms_region: smsRegion || null,
+      sms_test_mode: smsTestMode,
+      sms_test_recipient: smsTestRecipient || null,
+      sms_test_allowlist: smsTestAllowlist || null
     } as unknown as Partial<CMSSettings>)
   }
 
@@ -487,7 +502,10 @@ export function SettingsPage() {
       smtp_user: smtpUser || null,
       smtp_pass: smtpPass || null,
       smtp_from: smtpFrom || null,
-      smtp_secure: smtpSecure
+      smtp_secure: smtpSecure,
+      mail_test_mode: mailTestMode,
+      mail_test_recipient: mailTestRecipient || null,
+      mail_test_allowlist: mailTestAllowlist || null
     } as unknown as Partial<CMSSettings>)
   }
 
@@ -1258,6 +1276,55 @@ export function SettingsPage() {
                     />
                   </Field>
 
+                  {/* Test mode */}
+                  <div
+                    className={
+                      mailTestMode
+                        ? 'rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-500/40 dark:bg-amber-500/10'
+                        : 'rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-border dark:bg-muted/30'
+                    }
+                  >
+                    <div className='mb-2 flex items-center justify-between'>
+                      <p className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+                        Test mode
+                      </p>
+                      <Switch checked={mailTestMode} onCheckedChange={setMailTestMode} />
+                    </div>
+                    <p className='mb-3 text-[11px] text-slate-400'>
+                      When on, every outgoing email is redirected to the test recipient instead of
+                      its real recipients — subjects are tagged with the original addresses. Use in
+                      dev and staging so real users never receive system mail. The MAIL_TEST_MODE
+                      env var forces this on regardless of this switch.
+                    </p>
+                    {mailTestMode && (
+                      <div className='space-y-3'>
+                        <Field
+                          label='Test recipient'
+                          hint='All redirected mail goes here. If empty (and no MAIL_TEST_RECIPIENT env var), non-allowlisted mail is dropped with a server log.'
+                        >
+                          <Input
+                            type='email'
+                            placeholder='dev@example.com'
+                            value={mailTestRecipient}
+                            onChange={(e) => setMailTestRecipient(e.target.value)}
+                            className='h-8 text-[13px]'
+                          />
+                        </Field>
+                        <Field
+                          label='Allowlist'
+                          hint='Comma-separated emails and/or @domains that still receive mail normally, e.g. "qa@acme.com, @nodeworks.com".'
+                        >
+                          <Input
+                            placeholder='qa@acme.com, @nodeworks.com'
+                            value={mailTestAllowlist}
+                            onChange={(e) => setMailTestAllowlist(e.target.value)}
+                            className='h-8 text-[13px]'
+                          />
+                        </Field>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Test email */}
                   <div className='rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-border dark:bg-muted/30'>
                     <p className='mb-2 text-[12px] font-medium text-slate-700 dark:text-foreground'>
@@ -1380,6 +1447,54 @@ export function SettingsPage() {
                           )}
                         </>
                       )}
+
+                      {/* Test mode */}
+                      <div
+                        className={
+                          smsTestMode
+                            ? 'rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-500/40 dark:bg-amber-500/10'
+                            : 'rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-border dark:bg-muted/30'
+                        }
+                      >
+                        <div className='mb-2 flex items-center justify-between'>
+                          <p className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+                            Test mode
+                          </p>
+                          <Switch checked={smsTestMode} onCheckedChange={setSmsTestMode} />
+                        </div>
+                        <p className='mb-3 text-[11px] text-slate-400'>
+                          When on, every outgoing SMS is redirected to the test number instead of
+                          its real recipient — the message is prefixed with the original number.
+                          Use in dev and staging so real users never receive system texts. The
+                          SMS_TEST_MODE env var forces this on regardless of this switch.
+                        </p>
+                        {smsTestMode && (
+                          <div className='space-y-3'>
+                            <Field
+                              label='Test number'
+                              hint='All redirected SMS goes here. If empty (and no SMS_TEST_RECIPIENT env var), non-allowlisted SMS is dropped with a server log.'
+                            >
+                              <Input
+                                placeholder='+12125550100'
+                                value={smsTestRecipient}
+                                onChange={(e) => setSmsTestRecipient(e.target.value)}
+                                className='h-8 font-mono text-[13px]'
+                              />
+                            </Field>
+                            <Field
+                              label='Allowlist'
+                              hint='Comma-separated phone numbers that still receive SMS normally. Formatting is ignored when matching.'
+                            >
+                              <Input
+                                placeholder='+12125550100, +13105550199'
+                                value={smsTestAllowlist}
+                                onChange={(e) => setSmsTestAllowlist(e.target.value)}
+                                className='h-8 font-mono text-[13px]'
+                              />
+                            </Field>
+                          </div>
+                        )}
+                      </div>
 
                       {/* Test SMS */}
                       <div className='rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-border dark:bg-muted/30'>

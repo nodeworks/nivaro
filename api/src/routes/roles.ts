@@ -4,7 +4,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
-import { getPoliciesForRole, parseRowFilter } from '../services/permissions.js'
+import { getPoliciesForRole, parsePolicyFields, parseRowFilter } from '../services/permissions.js'
 import type { Role, User } from '../types.js'
 
 /**
@@ -191,14 +191,7 @@ export async function rolesRoutes(app: FastifyInstance) {
         ? `Allowed by the wildcard (*) '${body.action}' policy`
         : `Allowed by the '${body.collection}' '${body.action}' policy`
 
-    let fields: string[] | null = null
-    if (policy?.fields) {
-      try {
-        fields = typeof policy.fields === 'string' ? JSON.parse(policy.fields) : policy.fields
-      } catch {
-        fields = null
-      }
-    }
+    const fields = parsePolicyFields(policy?.fields)
 
     const rowFilter = policy ? parseRowFilter(policy.row_filter) : null
 
@@ -322,7 +315,7 @@ export async function rolesRoutes(app: FastifyInstance) {
     return reply.send({
       data: {
         ...updated,
-        fields: updated.fields ? JSON.parse(updated.fields) : null,
+        fields: parsePolicyFields(updated.fields),
         row_filter: parseRowFilter(updated.row_filter)
       }
     })

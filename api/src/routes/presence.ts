@@ -5,7 +5,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 const KEY_PREFIX = 'presence:session:'
 
 // Defaults used when DB columns are null/missing
-const DEFAULT_SESSION_TTL = 20
+const DEFAULT_SESSION_TTL = 90
 const DEFAULT_SWEEP_INTERVAL = 8_000
 const DEFAULT_PING_INTERVAL = 10_000
 

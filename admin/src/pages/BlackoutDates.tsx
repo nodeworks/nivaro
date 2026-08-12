@@ -24,7 +24,7 @@ type BlackoutDate = {
 // Mirrors GET /api/blackout-dates/scopes. Stable list, hardcoded for the UI.
 
 const PREDEFINED_SCOPES = [
-  { value: 'mdsi', label: 'MDSi Delivery', description: 'MDSi order delivery scheduling' },
+  { value: 'delivery', label: 'Delivery', description: 'Order delivery scheduling (ERP submissions skip these dates)' },
   { value: 'flows', label: 'Scheduled Flows', description: 'Prevents flow execution on this date' },
   { value: 'pipeline', label: 'Pipeline Processing', description: 'Pipeline state resolution' },
   {

@@ -24,10 +24,11 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-const EVENT_TYPES = ['all', 'create', 'update', 'delete'] as const
+const EVENT_TYPES = ['all', 'create', 'update', 'delete', 'workflow_transition'] as const
 type EventType = (typeof EVENT_TYPES)[number]
 
 type DigestFrequency = 'instant' | 'daily' | 'weekly'
@@ -113,6 +114,7 @@ interface SubscriptionFormState {
   event_type: EventType
   filter_field: string
   filter_value: string
+  filters_json: string
   is_active: boolean
 }
 
@@ -122,6 +124,7 @@ const DEFAULT_FORM: SubscriptionFormState = {
   event_type: 'all',
   filter_field: '',
   filter_value: '',
+  filters_json: '',
   is_active: true
 }
 
@@ -213,8 +216,16 @@ function SubscriptionForm({
             <SelectItem value='create'>Create</SelectItem>
             <SelectItem value='update'>Update</SelectItem>
             <SelectItem value='delete'>Delete</SelectItem>
+            <SelectItem value='workflow_transition'>Workflow transition</SelectItem>
           </SelectContent>
         </Select>
+        {form.event_type === 'workflow_transition' && (
+          <p className='text-[12px] text-muted-foreground'>
+            Fires when a workflow instance on this collection enters a state. Set filter field to{' '}
+            <code className='font-mono'>to_state</code> and the value to a state key to scope it,
+            or leave blank for every transition.
+          </p>
+        )}
       </div>
 
       <div className='space-y-1.5'>
@@ -239,6 +250,26 @@ function SubscriptionForm({
             onChange={(e) => set('filter_value', e.target.value)}
             placeholder='e.g. open'
           />
+        </div>
+      )}
+
+      {form.event_type === 'workflow_transition' && (
+        <div className='space-y-1.5'>
+          <Label htmlFor='sub-filters'>Record filters (JSON, optional)</Label>
+          <Textarea
+            id='sub-filters'
+            value={form.filters_json}
+            onChange={(e) => set('filters_json', e.target.value)}
+            rows={4}
+            spellCheck={false}
+            className='font-mono text-[12px]'
+            placeholder={'[\n  { "field": "divisions", "op": "intersects", "value": [2] },\n  { "field": "project.project_type", "op": "in", "value": ["3"] }\n]'}
+          />
+          <p className='text-[12px] text-muted-foreground'>
+            AND-evaluated against the record. Fields may be plain columns, dotted relation paths,
+            or M2M alias fields (matched against the linked ids). Ops: eq, in, intersects, null,
+            nnull.
+          </p>
         </div>
       )}
 
@@ -286,6 +317,14 @@ export function NotificationSubscriptionsPage() {
         event_type: body.event_type,
         filter_field: body.filter_field.trim() || undefined,
         filter_value: body.filter_value.trim() || undefined,
+        filters: (() => {
+          try {
+            const parsed = body.filters_json.trim() ? JSON.parse(body.filters_json) : undefined
+            return Array.isArray(parsed) && parsed.length ? parsed : undefined
+          } catch {
+            return undefined
+          }
+        })(),
         label: body.label.trim() || undefined,
         is_active: body.is_active
       }),
@@ -308,6 +347,14 @@ export function NotificationSubscriptionsPage() {
         label: body.label?.trim() || null,
         filter_field: body.filter_field?.trim() || null,
         filter_value: body.filter_value?.trim() || null,
+        filters: (() => {
+          try {
+            const parsed = body.filters_json?.trim() ? JSON.parse(body.filters_json) : null
+            return Array.isArray(parsed) && parsed.length ? parsed : null
+          } catch {
+            return null
+          }
+        })(),
         is_active: body.is_active
       }),
     onSuccess: () => {
@@ -354,6 +401,9 @@ export function NotificationSubscriptionsPage() {
       event_type: sub.event_type,
       filter_field: sub.filter_field ?? '',
       filter_value: sub.filter_value ?? '',
+      filters_json: (sub as { filters?: unknown }).filters
+        ? JSON.stringify((sub as { filters?: unknown }).filters, null, 2)
+        : '',
       is_active: sub.is_active
     }
   }

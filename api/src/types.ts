@@ -16,6 +16,7 @@ export interface User {
   title?: string | null
   phone?: string | null
   department?: string | null
+  company?: string | null
   manager_id: string | null
   delegate_id: string | null
   delegate_expires_at: Date | null

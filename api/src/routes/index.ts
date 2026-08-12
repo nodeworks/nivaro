@@ -5,6 +5,7 @@ import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
 import { aiSettingsRoutes } from './ai-settings.js'
 import { alertsRoutes } from './alerts.js'
+import { metricAlertsRoutes } from './metric-alerts.js'
 import { analyticsRoutes } from './analytics.js'
 import { apiAnalyticsRoutes } from './api-analytics.js'
 import { apiKeysRoutes } from './api-keys.js'
@@ -21,8 +22,11 @@ import { commentsRoutes } from './comments.js'
 import { contentExportRoutes } from './content-export.js'
 import { crossTriggersRoutes } from './cross-triggers.js'
 import { customQueriesRoutes } from './custom-queries.js'
+import { userScopesRoutes } from './user-scopes.js'
 import { dashboardsRoutes } from './dashboards.js'
-import { dataModelRoutes } from './data-model.js'
+import { dataModelReadRoutes, dataModelRoutes } from './data-model.js'
+import { chatRoutes } from './chat.js'
+import { stagedImportRoutes } from './staged-imports.js'
 import { dataQualityRoutes } from './data-quality.js'
 import { deadLettersRoutes } from './dead-letters.js'
 import { devToolsRoutes } from './dev-tools.js'
@@ -34,17 +38,22 @@ import { externalApisRoutes } from './external-apis.js'
 import { fieldConfigRoutes } from './field-config.js'
 import { fieldGroupsRoutes } from './field-groups.js'
 import { fieldRulesRoutes } from './field-rules.js'
+import { pinnedRoutes } from './pinned.js'
 import { fieldTranslationsRoutes } from './field-translations.js'
 import { fieldWatchesRoutes } from './field-watches.js'
 import { filesRoutes } from './files.js'
 import { flowRegistryRoutes } from './flow-registry.js'
 import { flowsRoutes, webhookFlowRoute } from './flows.js'
 import { globalSearchRoutes } from './global-search.js'
+import { clearMetadataCache } from '../services/collections.js'
+import { cronRoutes } from './cron.js'
 import { healthRoutes } from './health.js'
 import { hierarchyRoutes } from './hierarchy.js'
 import { importTemplatesRoutes } from './import-templates.js'
 import { importsRoutes } from './imports.js'
 import { issuesRoutes } from './issues.js'
+import { accessAuditsRoutes } from './access-audits.js'
+import { accessExplainRoutes } from './access-explain.js'
 import { itemActionsRoutes } from './item-actions.js'
 import { itemLocksRoutes } from './item-locks.js'
 import { itemsRoutes } from './items.js'
@@ -108,14 +117,32 @@ import { workspacesRoutes } from './workspaces.js'
 import { zapierRoutes } from './zapier.js'
 
 export async function registerRoutes(app: FastifyInstance) {
+  // Collection/field metadata is cached in-process (services/collections.ts) to
+  // keep schema lookups off the hot path. Any successful write to a route that
+  // can change that metadata drops the cache immediately, so edits are visible
+  // on the next request instead of waiting out the TTL. One hook rather than a
+  // call at every mutation site — no site can be missed.
+  const META_ROUTES = /^\/api\/(data-model|collections|field-config|collection-layouts|field-groups)\b/
+  app.addHook('onResponse', async (req, reply) => {
+    if (req.method === 'GET' || reply.statusCode >= 400) return
+    if (META_ROUTES.test(req.url)) clearMetadataCache()
+  })
+
   await app.register(healthRoutes)
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(aiRoutes, { prefix: '/ai' })
   await app.register(activityRoutes, { prefix: '/activity' })
+  await app.register(cronRoutes, { prefix: '/cron' })
   await app.register(collectionsRoutes, { prefix: '/collections' })
+  await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
+  await app.register(chatRoutes, { prefix: '/chat' })
   await app.register(dataModelRoutes, { prefix: '/data-model' })
+  // Same prefix, auth-only: the read-only relation lookup every record form needs
+  await app.register(dataModelReadRoutes, { prefix: '/data-model' })
   await app.register(extensionsRoutes, { prefix: '/extensions' })
   await app.register(itemsRoutes, { prefix: '/items' })
+  await app.register(accessExplainRoutes)
+  await app.register(accessAuditsRoutes, { prefix: '/access-audits' })
   await app.register(settingsRoutes, { prefix: '/settings' })
   await app.register(usersRoutes, { prefix: '/users' })
   await app.register(revisionsRoutes, { prefix: '/revisions' })
@@ -144,10 +171,12 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(webhooksRoutes, { prefix: '/webhooks' })
   await app.register(commentsRoutes, { prefix: '/comments' })
   await app.register(customQueriesRoutes, { prefix: '/custom-queries' })
+  await app.register(userScopesRoutes)
   await app.register(schemaSnapshotRoutes, { prefix: '/schema-snapshot' })
   await app.register(blackoutDatesRoutes, { prefix: '/blackout-dates' })
   await app.register(rulesRoutes, { prefix: '/rules' })
   await app.register(fieldRulesRoutes, { prefix: '/field-rules' })
+  await app.register(pinnedRoutes, { prefix: '/pinned' })
   await app.register(dashboardsRoutes, { prefix: '/dashboards' })
   await app.register(reportsRoutes, { prefix: '/reports' })
   await app.register(throughputRoutes, { prefix: '/reports' })
@@ -161,6 +190,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(importTemplatesRoutes, { prefix: '/import-templates' })
   await app.register(slaRoutes, { prefix: '/sla' })
   await app.register(alertsRoutes, { prefix: '/alerts' })
+  await app.register(metricAlertsRoutes, { prefix: '/metric-alerts' })
   await app.register(analyticsRoutes, { prefix: '/analytics' })
   await app.register(treeRoutes)
   await app.register(treePermissionsRoutes)

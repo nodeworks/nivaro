@@ -1,0 +1,22 @@
+{% layout 'base' %}
+{% block content %}
+<p style="margin:0 0 18px;font-size:15px;font-weight:700;">
+  Alert Digest ({{ frequency }}) — {{ alert_count }} active alert{% if alert_count != 1 %}s{% endif %}
+</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
+  {% for alert in alerts %}
+  <tr>
+    <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">
+      <p style="margin:0;font-size:14px;font-weight:600;">{{ alert.rule_name }}</p>
+      <p style="margin:2px 0 0;font-size:13px;color:#475569;">
+        {{ alert.metric_name }} = {{ alert.metric_value }}
+        (threshold: {{ alert.operator }} {{ alert.threshold_value }})
+      </p>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<p style="margin:18px 0 0;color:#64748b;font-size:13px;">
+  Manage your alert subscriptions from the Alert Manager.
+</p>
+{% endblock %}

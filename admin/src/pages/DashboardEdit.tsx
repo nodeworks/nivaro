@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, BarChart2, LineChart, Loader2, Plus, Trash2, TrendingUp } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import {
   Bar,
   BarChart,
@@ -450,6 +451,7 @@ function AddWidgetSheet({
 export function DashboardEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const goBack = useGoBack('/dashboards')
   const queryClient = useQueryClient()
   const [showAddWidget, setShowAddWidget] = useState(false)
   const [editingName, setEditingName] = useState(false)
@@ -531,7 +533,7 @@ export function DashboardEditPage() {
         <div className='flex items-center gap-4'>
           <button
             type='button'
-            onClick={() => navigate('/dashboards')}
+            onClick={goBack}
             className='rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-white/[0.06]'
             aria-label='Back to Dashboards'
           >

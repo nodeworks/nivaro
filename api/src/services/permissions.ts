@@ -157,6 +157,52 @@ export async function can(user: User, action: Action, collection: string): Promi
   return !!policy
 }
 
+/** Same tolerance for the sibling JSON-text columns on a policy row: a bad
+ *  value degrades to null instead of taking the whole response down. */
+export function parseJsonColumn(value: unknown): Record<string, unknown> | null {
+  if (value == null || value === '') return null
+  if (typeof value === 'object') return value as Record<string, unknown>
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    console.warn(`[permissions] ignoring unparseable policy JSON: ${value.slice(0, 60)}`)
+    return null
+  }
+}
+
+/**
+ * `nivaro_policies.fields` narrows a policy to specific columns, with `null`
+ * meaning "all fields". The legacy Directus import also wrote the literal
+ * string `*` for that same meaning, which is NOT valid JSON — a bare
+ * JSON.parse threw and 500'd every caller (16 rows across 4 roles were in
+ * this state, which made those roles' detail page and every items read for
+ * their members fail outright).
+ *
+ * `*` maps to null, the encoding this codebase already uses for unrestricted.
+ * Any other unparseable value also degrades to null rather than throwing: the
+ * column can only ever NARROW an access decision the action-level policy has
+ * already granted, so a corrupt narrowing list must not be able to take down
+ * reads. It is logged so the bad row still gets fixed.
+ */
+export function parsePolicyFields(value: unknown): string[] | null {
+  if (value == null || value === '') return null
+  if (Array.isArray(value)) return value as string[]
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (trimmed === '*') return null
+  try {
+    const parsed = JSON.parse(trimmed)
+    return Array.isArray(parsed) ? (parsed as string[]) : null
+  } catch {
+    console.warn(`[permissions] ignoring unparseable policy fields value: ${trimmed.slice(0, 60)}`)
+    return null
+  }
+}
+
 export async function getAllowedFields(
   user: User,
   action: Action,
@@ -175,9 +221,7 @@ export async function getAllowedFields(
     .first()
 
   if (!policy) return []
-  if (!policy.fields) return null
-
-  return typeof policy.fields === 'string' ? (JSON.parse(policy.fields) as string[]) : policy.fields
+  return parsePolicyFields(policy.fields)
 }
 
 export async function getPoliciesForRole(
@@ -188,12 +232,8 @@ export async function getPoliciesForRole(
   })[]
   return rows.map((p) => ({
     ...p,
-    fields: p.fields ? (typeof p.fields === 'string' ? JSON.parse(p.fields) : p.fields) : null,
-    permissions: p.permissions
-      ? typeof p.permissions === 'string'
-        ? JSON.parse(p.permissions)
-        : p.permissions
-      : null,
+    fields: parsePolicyFields(p.fields),
+    permissions: parseJsonColumn(p.permissions),
     row_filter: parseRowFilter(p.row_filter)
   }))
 }

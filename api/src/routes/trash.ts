@@ -116,6 +116,16 @@ export async function trashRoutes(app: FastifyInstance) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
       await db('nivaro_trash').where({ id: trashId }).del()
+      // Permanent purge — the last chance to recover this row is gone, so the
+      // audit entry records what was destroyed.
+      await logActivity({
+        action: 'trash-purge',
+        collection: row.collection,
+        item: String(row.item_id),
+        user: req.user!.id,
+        req,
+        comment: `purged trash entry ${trashId}`
+      })
       return reply.send({ data: { purged: true } })
     }
   )

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { FieldCombobox, type FieldOption } from '@/components/rule-condition-row'
 import { Button } from '@/components/ui/button'
@@ -56,6 +57,7 @@ export interface RuleAction {
   operation?: 'create' | 'update'
   field_map?: Record<string, string>
   match_field?: string
+  match_map?: Record<string, string>
 }
 
 type Rule = {
@@ -833,19 +835,40 @@ function ActionCard({
                 />
               </div>
               {(action.operation ?? 'create') === 'update' && (
-                <div className='space-y-1'>
-                  <Label className='text-[11px] text-slate-500'>Match field</Label>
-                  <div className='flex items-center gap-2'>
-                    <FieldCombobox
-                      fields={targetFields}
-                      value={action.match_field ?? ''}
-                      onChange={(f) => onChange({ ...action, match_field: f })}
-                    />
-                    <span className='text-[11px] text-slate-400'>
-                      Field on the target used to find the record to update.
-                    </span>
+                <>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-slate-500'>Match field</Label>
+                    <div className='flex items-center gap-2'>
+                      <FieldCombobox
+                        fields={targetFields}
+                        value={action.match_field ?? ''}
+                        onChange={(f) => onChange({ ...action, match_field: f })}
+                      />
+                      <span className='text-[11px] text-slate-400'>
+                        Field on the target used to find the record to update.
+                      </span>
+                    </div>
                   </div>
-                </div>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-slate-500'>
+                      Match map (multi-field — overrides match field)
+                    </Label>
+                    <p className='text-[11px] text-slate-400'>
+                      Target column → template value; all must match (AND), e.g. project ={' '}
+                      <code className='font-mono'>{'{{id}}'}</code> and workflow_type = 2.
+                    </p>
+                    <FieldMapEditor
+                      fieldMap={action.match_map ?? {}}
+                      targetFields={targetFields}
+                      onChange={(m) =>
+                        onChange({
+                          ...action,
+                          match_map: Object.keys(m).length ? m : undefined
+                        })
+                      }
+                    />
+                  </div>
+                </>
               )}
             </>
           )}
@@ -860,6 +883,7 @@ function ActionCard({
 export function RuleEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const goBack = useGoBack('/rules')
   const queryClient = useQueryClient()
   const isNew = id === 'new'
 
@@ -979,7 +1003,7 @@ export function RuleEditPage() {
           <div className='flex items-center gap-2'>
             <button
               type='button'
-              onClick={() => navigate('/rules')}
+              onClick={goBack}
               className='flex items-center gap-1.5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800'
             >
               <ArrowLeft className='h-4 w-4' />

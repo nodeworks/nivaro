@@ -1,4 +1,5 @@
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { registerDigestSection } from '../services/daily-digest.js'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -17,6 +18,8 @@ import {
 import { type HookAction, hooks } from '../hooks/registry.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
+import { logActivity } from '../services/activity.js'
+import { registerMailTemplateRoot } from '../services/mail.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'
 import { type DashboardWidgetDef, dashboardWidgetRegistry } from './dashboard-widgets.js'
@@ -54,6 +57,20 @@ export interface ExtensionContext {
   logger: FastifyInstance['log']
   /** Call a configured external API by name or numeric ID. Auth resolved automatically. */
   callExternalApi(nameOrId: string | number, options?: CallOptions): Promise<CallResult>
+  /**
+   * Write an audit entry to nivaro_activity. Extension-driven mutations that
+   * bypass the items service (raw knex writes in crons, hooks, or routes) are
+   * invisible to the audit log otherwise — log them here. The action string is
+   * automatically namespaced with the extension id (`<extId>:<action>`) so
+   * extension activity is distinguishable from core activity. Never throws.
+   */
+  logActivity(entry: {
+    action: string
+    user?: string | null
+    collection?: string
+    item?: string | number
+    comment?: string
+  }): Promise<number | null>
   /** Hook helpers scoped to this extension — hooks are tagged and can be disabled/removed. */
   hooks: {
     before(
@@ -113,6 +130,10 @@ export interface ExtensionContext {
     register(def: ValidatorDef): void
   }
   /** Register custom flow operation types and triggers. */
+  digest: {
+    /** Add a per-user section to the daily action digest email. */
+    registerSection(fn: import('../services/daily-digest.js').DigestSectionProvider): void
+  }
   flows: {
     /**
      * Register a custom operation type. The handler receives parsed options,
@@ -217,8 +238,10 @@ async function loadExtension(
     ExtensionContext,
     | 'hooks'
     | 'cron'
+    | 'logActivity'
     | 'auth'
     | 'flows'
+    | 'digest'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
@@ -248,6 +271,23 @@ async function loadExtension(
 
   const enabled = config[entry] !== false // enabled by default
 
+  // Convention: <extension>/templates/mail holds Liquid mail templates that
+  // override/extend the core set (including 'base' — how a deployment
+  // rebrands every outgoing email). Registered before register() runs so an
+  // extension's own startup sends already resolve its templates.
+  if (enabled) {
+    const mailDir = join(dirPath, 'templates', 'mail')
+    try {
+      const s = await stat(mailDir)
+      if (s.isDirectory()) {
+        registerMailTemplateRoot(mailDir)
+        ctx.logger.info({ entry }, 'Registered extension mail templates')
+      }
+    } catch {
+      // no templates dir — fine
+    }
+  }
+
   try {
     // Cache-bust with timestamp so hot-scan reloads fresh modules
     const mod = (await import(`${indexPath}?t=${Date.now()}`)) as { default: Extension }
@@ -264,6 +304,14 @@ async function loadExtension(
     const scopedCtx: ExtensionContext = {
       ...ctx,
       callExternalApi,
+      logActivity: (entry) =>
+        logActivity({
+          action: `${extId}:${entry.action}`,
+          user: entry.user ?? null,
+          collection: entry.collection,
+          item: entry.item != null ? String(entry.item) : undefined,
+          comment: entry.comment
+        }),
       auth: { authenticate, requireAuth, requireAdmin },
       hooks: {
         before: (collection, action, fn) =>
@@ -303,6 +351,9 @@ async function loadExtension(
       },
       validators: {
         register: (def) => validatorRegistry.register(def)
+      },
+      digest: {
+        registerSection: (fn) => registerDigestSection(fn)
       },
       flows: {
         registerOperation: (op) => registerOp(op),
@@ -386,8 +437,10 @@ export async function loadExtensions(
     ExtensionContext,
     | 'hooks'
     | 'cron'
+    | 'logActivity'
     | 'auth'
     | 'flows'
+    | 'digest'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
@@ -438,6 +491,7 @@ export async function loadCloudExtensions(
     ExtensionContext,
     | 'hooks'
     | 'cron'
+    | 'logActivity'
     | 'auth'
     | 'flows'
     | 'bulkActions'
@@ -449,6 +503,7 @@ export async function loadCloudExtensions(
     | 'collectionViews'
     | 'importParsers'
     | 'validators'
+    | 'digest'
   >
 ) {
   let entries: string[]
@@ -474,7 +529,10 @@ export async function loadCloudExtensions(
     let indexPath: string | null = null
     for (const name of ['index.js', 'index.ts']) {
       const p = join(dirPath, name)
-      if (existsSync(p)) { indexPath = p; break }
+      if (existsSync(p)) {
+        indexPath = p
+        break
+      }
     }
     if (!indexPath) {
       ctx.logger.warn({ entry }, 'Cloud extension has no index file, skipping')
@@ -495,6 +553,17 @@ export async function loadCloudExtensions(
       const scopedCtx: ExtensionContext = {
         ...ctx,
         callExternalApi,
+        digest: {
+          registerSection: (fn) => registerDigestSection(fn)
+        },
+        logActivity: (entry) =>
+          logActivity({
+            action: `${extId}:${entry.action}`,
+            user: entry.user ?? null,
+            collection: entry.collection,
+            item: entry.item != null ? String(entry.item) : undefined,
+            comment: entry.comment
+          }),
         auth: { authenticate, requireAuth, requireAdmin },
         hooks: {
           before: (collection, action, fn) =>
@@ -504,7 +573,9 @@ export async function loadCloudExtensions(
         },
         cron: {
           schedule: (id, expression, fn) =>
-            ctx.app.cron.schedule(`cloud-ext:${extId}:${id}`, expression, fn, { extensionId: extId }),
+            ctx.app.cron.schedule(`cloud-ext:${extId}:${id}`, expression, fn, {
+              extensionId: extId
+            }),
           unschedule: (id) => ctx.app.cron.unschedule(`cloud-ext:${extId}:${id}`)
         },
         bulkActions: { register: (def) => bulkActionRegistry.register(def) },
@@ -623,6 +694,7 @@ export async function scanNewExtensions(
     ExtensionContext,
     | 'hooks'
     | 'cron'
+    | 'logActivity'
     | 'auth'
     | 'flows'
     | 'bulkActions'
@@ -634,6 +706,7 @@ export async function scanNewExtensions(
     | 'collectionViews'
     | 'importParsers'
     | 'validators'
+    | 'digest'
   >
 ): Promise<string[]> {
   let entries: string[]

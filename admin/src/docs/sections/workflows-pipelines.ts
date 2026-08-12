@@ -56,7 +56,9 @@ export const userWorkflows: DocSection = {
         'from_state=null: transition available from ANY state (useful for "Reject" paths).',
         'required_roles: JSON array of role UUIDs that can execute this transition; empty = all authenticated users.',
         'condition_rules (optional): field conditions that must match to offer the transition.',
-        'group_label: optional; transitions with same label render in a dropdown menu instead of individual buttons.'
+        'group_label: optional; transitions with same label render in a dropdown menu instead of individual buttons.',
+        'requirements (optional): data-entry gates enforced at execute time (422 + a fill-in dialog). Type child_fields requires listed fields on every related child row (scalar inputs or m2m multi-selects writing junction rows); type record_fields collects fields on the transitioning record itself (text inputs, m2o pickers) — e.g. confirm an order number at submit time.',
+        'auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, after manual transitions, and via the hourly sweep).'
       ]
     },
     {

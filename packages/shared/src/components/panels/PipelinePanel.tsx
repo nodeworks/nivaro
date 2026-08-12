@@ -10,7 +10,7 @@ import {
   Users,
   X
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
@@ -100,7 +100,7 @@ interface RequirementsDialogState {
 // Shared by both executeTransition mutations below: pulls the 422 requirements
 // payload out of a failed transition request, or null when the failure is
 // something else (409 conflict, permission error, etc).
-function transitionRequirementsFromError(err: unknown): TransitionRequirementsPayload | null {
+export function transitionRequirementsFromError(err: unknown): TransitionRequirementsPayload | null {
   const e = err as {
     status?: number
     response?: { error?: string; requirements?: TransitionRequirementsPayload }
@@ -144,16 +144,34 @@ function StateTrack({
   allTransitions,
   availableTransitions,
   currentStateId,
-  history
+  history,
+  onPathIds
 }: {
   states: PipelineState[]
   allTransitions: PipelineTransition[]
   availableTransitions: PipelineTransition[]
   currentStateId: string | null
   history: PipelineHistoryEntry[]
+  /** Server-computed relevant-state ids (condition-aware branch pruning from
+   *  /owners/all). null while loading — the client BFS below is the fallback. */
+  onPathIds?: Set<string> | null
 }) {
   const visitedIds = new Set(history.map((h) => h.to_state))
   const relevant = (() => {
+    // Server relevance (owners/all on_path) is authoritative when loaded — it
+    // is condition-aware and understands skip-jump history edges; the client
+    // BFS below dead-ends on both (kept only as a fallback while loading).
+    if (onPathIds) {
+      return states
+        .filter((s) => onPathIds.has(s.id) || visitedIds.has(s.id) || s.id === currentStateId)
+        .filter((s) => {
+          const v = s.stage_visibility ?? 'always'
+          if (v === 'hide') return false
+          if (v === 'hide_unless_active') return visitedIds.has(s.id) || s.id === currentStateId
+          return true
+        })
+        .sort((a, b) => a.sort - b.sort)
+    }
     if (allTransitions.length === 0) {
       const show = new Set([...visitedIds])
       if (currentStateId) show.add(currentStateId)
@@ -172,11 +190,19 @@ function StateTrack({
       arr.push(t.to_state)
       fwd.set(fromId, arr)
     }
-    if (currentStateId)
-      fwd.set(
-        currentStateId,
-        availableTransitions.map((t) => t.to_state)
-      )
+    if (currentStateId) {
+      // Available transitions alone can dead-end the track: auto transitions
+      // and condition-gated ones (e.g. Submit hidden until an order number is
+      // entered) never appear in `available`, so union in the template's own
+      // explicit edges from the current state — a hidden button is a pending
+      // path, not a missing one.
+      const explicitFromCurrent = explicit
+        .filter((t) => t.from_state === currentStateId)
+        .map((t) => t.to_state)
+      fwd.set(currentStateId, [
+        ...new Set([...availableTransitions.map((t) => t.to_state), ...explicitFromCurrent])
+      ])
+    }
     const pathIds = new Set<string>()
     const queue = states.filter((s) => s.is_initial).map((s) => s.id)
     while (queue.length) {
@@ -591,7 +617,7 @@ function OwnersSection({
           <Users className='h-3.5 w-3.5' />
           Owners
           {ownersLoading || groupOwnersLoading ? (
-            <span className='inline-block h-3 w-4 animate-pulse rounded bg-slate-200' />
+            <span className='inline-block h-3 w-4 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
           ) : (
             <span className='text-slate-300'>({groupOwners.length + (owners?.length ?? 0)})</span>
           )}
@@ -751,6 +777,18 @@ function OwnersSection({
 interface AllOwnersEntry {
   state: PipelineState
   owners: Array<{ id: string; email: string; first_name: string | null; last_name: string | null }>
+  /** Server-predicted: this state's skip criteria currently evaluate true
+   *  (no resolved owners, threshold conditions, lookup_compare…) — the
+   *  pipeline will pass straight through it. */
+  skipped?: boolean
+  /** Human sentences explaining WHY the skip criteria match right now
+   *  (e.g. "requisition amount (14,560) is below the threshold amount of 25,000"). */
+  skip_reasons?: string[]
+  /** Server-computed: this state is on the record's actual path — reachable
+   *  from the initial state through the taken history edges and any branch
+   *  edges whose conditions this record satisfies. false = another branch's
+   *  state (e.g. Beeline submission on an Oracle-path workflow); hide it. */
+  on_path?: boolean
 }
 
 function ApprovalChainView({
@@ -778,7 +816,11 @@ function ApprovalChainView({
     staleTime: 30_000
   })
 
-  const sorted = [...states].sort((a, b) => a.sort - b.sort)
+  // Only the record's actual path — other branches' states (on_path false)
+  // are noise here. Legacy responses without the flag show everything.
+  const sorted = [...states]
+    .filter((s) => !data || data[s.id]?.on_path !== false)
+    .sort((a, b) => a.sort - b.sort)
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -814,6 +856,8 @@ function ApprovalChainView({
                   name: [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
                 }))
                 const isCurrent = s.id === currentStateId
+                const isSkipped = data[s.id]?.skipped === true && !isCurrent
+                const skipReasons = (data[s.id]?.skip_reasons ?? []).filter(Boolean)
                 return (
                   <div
                     key={s.id}
@@ -823,12 +867,49 @@ function ApprovalChainView({
                       // nvr-cyan token is an opaque var() so Tailwind silently
                       // drops opacity modifiers on it. Kept very light so the
                       // tint doesn't clash with the state badge's own color.
-                      isCurrent && 'bg-[#00ceff0f] dark:bg-[#00ceff1c]'
+                      isCurrent && 'bg-[#00ceff0f] dark:bg-[#00ceff1c]',
+                      isSkipped && 'opacity-60'
                     )}
                   >
                     <StateBadge label={s.label} color={s.color} small />
-                    <div className='flex flex-1 flex-wrap items-center gap-1'>
-                      <OwnerAvatars owners={owners} max={10} emptyLabel='—' />
+                    <div className='flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5'>
+                      {isSkipped ? (
+                        // Radix tooltip with zero delay — native `title` waits on
+                        // the OS hover timer, and a truncated reason needs its
+                        // full text the moment the cursor lands on it.
+                        <TooltipProvider delayDuration={0}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className='flex min-w-0 flex-1 cursor-default items-center gap-2'>
+                                <span className='inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-[10.5px] font-medium text-slate-400 dark:border-slate-600 dark:text-slate-500'>
+                                  Skipped
+                                </span>
+                                {skipReasons.length > 0 && (
+                                  <span className='min-w-0 flex-1 truncate text-[11px] text-slate-400 dark:text-slate-500'>
+                                    {skipReasons.join(' · ')}
+                                  </span>
+                                )}
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent
+                              side='bottom'
+                              align='start'
+                              className='max-w-[420px] space-y-0.5 text-[11.5px] leading-snug'
+                            >
+                              <p className='text-slate-500 dark:text-slate-400'>
+                                The pipeline will pass through this state without stopping:
+                              </p>
+                              {skipReasons.length > 0 ? (
+                                skipReasons.map((r) => <p key={r}>{r}</p>)
+                              ) : (
+                                <p>Skip criteria currently match</p>
+                              )}
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      ) : (
+                        <OwnerAvatars owners={owners} max={10} emptyLabel='—' />
+                      )}
                     </div>
                   </div>
                 )
@@ -944,6 +1025,25 @@ function PipelinePanelInner({
       }),
     [queryClient, collection, item]
   )
+  // Server-computed path relevance for the state track — same key/data as the
+  // Approval Chain popover + OwnersSection, so the cache is shared.
+  const { data: pathOwners } = useQuery<Record<string, AllOwnersEntry> | null>({
+    queryKey: ['pipeline-all-owners', collection, item],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, AllOwnersEntry> | null }>(
+          get(`/pipelines/instance/${collection}/${item}/owners/all`)
+        )
+        .then((r) => r.data ?? null),
+    enabled: expanded && !!data?.instance,
+    staleTime: 30_000
+  })
+  const onPathIds = useMemo(() => {
+    if (!pathOwners) return null
+    const entries = Object.entries(pathOwners)
+    if (entries.length === 0 || entries.every(([, e]) => e.on_path === undefined)) return null
+    return new Set(entries.filter(([, e]) => e.on_path !== false).map(([id]) => id))
+  }, [pathOwners])
 
   const startPipeline = useMutation({
     mutationFn: () => client.request(post(`/pipelines/instance/${collection}/${item}/start`, {})),
@@ -976,16 +1076,43 @@ function PipelinePanelInner({
         }))
         return
       }
-      const resp = (err as { response?: { status?: number; data?: { error?: string } } })?.response
-      toast.error(resp?.data?.error ?? 'Failed to execute transition')
+      // The SDK attaches the parsed error body as `response` (same shape
+      // transitionRequirementsFromError reads); `data.error` covers
+      // axios-shaped hosts. Show the FULL server message — for a blocked
+      // external submission it carries the transition label + HTTP status +
+      // response body, which is what the user needs to act on.
+      const resp = (
+        err as { response?: { status?: number; error?: string; data?: { error?: string } } }
+      )?.response
+      toast.error(resp?.error ?? resp?.data?.error ?? 'Failed to execute transition', {
+        duration: 12000
+      })
+      // A blocked transition (e.g. MDSi failure) lands here as a plain 422:
+      // the dialog's line values already saved — close it and refresh the
+      // persistent failure banner immediately.
+      setRequirementsDialog(null)
+      setPendingTransition(null)
+      queryClient.invalidateQueries({ queryKey: ['erp-submissions', collection, String(item)] })
       if (resp?.status === 409) {
         queryClient.invalidateQueries({ queryKey })
-        setPendingTransition(null)
       }
     }
   })
 
-  if (isLoading) return null
+  if (isLoading)
+    // Collapsed-shell skeleton at the real header height (px-5 py-3.5 row) —
+    // returning null here made the whole Progress bar pop in after load and
+    // shove everything below it down.
+    return (
+      <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-border dark:bg-card'>
+        <div className='flex w-full items-center gap-2.5 px-5 py-3.5'>
+          <Skeleton className='h-3.5 w-3.5 shrink-0 rounded' />
+          <Skeleton className='h-4 w-20' />
+          <Skeleton className='h-[22px] w-40 rounded-full' />
+          <Skeleton className='ml-auto h-3.5 w-3.5 rounded' />
+        </div>
+      </div>
+    )
   if (!data?.binding) return null
 
   const { instance, available_transitions: transitions, history, states } = data
@@ -1229,6 +1356,7 @@ function PipelinePanelInner({
                       availableTransitions={transitions ?? []}
                       currentStateId={instance.current_state}
                       history={history ?? []}
+                      onPathIds={onPathIds}
                     />
                   </div>
                 )}
@@ -1379,11 +1507,25 @@ function PipelineTransitionButtonsInner({
         }))
         return
       }
-      const resp = (err as { response?: { status?: number; data?: { error?: string } } })?.response
-      toast.error(resp?.data?.error ?? 'Failed to execute transition')
+      // The SDK attaches the parsed error body as `response` (same shape
+      // transitionRequirementsFromError reads); `data.error` covers
+      // axios-shaped hosts. Show the FULL server message — for a blocked
+      // external submission it carries the transition label + HTTP status +
+      // response body, which is what the user needs to act on.
+      const resp = (
+        err as { response?: { status?: number; error?: string; data?: { error?: string } } }
+      )?.response
+      toast.error(resp?.error ?? resp?.data?.error ?? 'Failed to execute transition', {
+        duration: 12000
+      })
+      // A blocked transition (e.g. MDSi failure) lands here as a plain 422:
+      // the dialog's line values already saved — close it and refresh the
+      // persistent failure banner immediately.
+      setRequirementsDialog(null)
+      setPendingTransition(null)
+      queryClient.invalidateQueries({ queryKey: ['erp-submissions', collection, String(item)] })
       if (resp?.status === 409) {
         queryClient.invalidateQueries({ queryKey })
-        setPendingTransition(null)
       }
     }
   })
@@ -1465,7 +1607,7 @@ function PipelineTransitionButtonsInner({
         })}
       </div>
       {pendingTransition && (
-        <div className='absolute right-0 top-full z-50 mt-1 w-96 space-y-3 rounded-lg border border-slate-200 bg-white shadow-lg dark:bg-card dark:border-border p-3.5'>
+        <div className='absolute right-0 top-full z-50 mt-1 w-[600px] space-y-3 rounded-lg border border-slate-200 bg-white shadow-lg dark:bg-card dark:border-border p-3.5'>
           <div className='flex flex-wrap items-center gap-2'>
             <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
             {pendingTx && (

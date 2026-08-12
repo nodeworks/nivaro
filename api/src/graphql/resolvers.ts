@@ -773,7 +773,13 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
       // Transition requirements gate — mirrors the REST transition routes so
       // GraphQL callers can't bypass incomplete child-row data.
       if (transition.requirements) {
-        const blocking = await evaluateTransitionRequirements(db, transition.requirements, item)
+        const blocking = await evaluateTransitionRequirements(
+          db,
+          transition.requirements,
+          item,
+          undefined,
+          collection
+        )
         if (blocking) throw new Error('TRANSITION_REQUIREMENTS')
       }
 
@@ -949,7 +955,13 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
       // Transition requirements gate — mirrors the REST transition routes so
       // GraphQL callers can't bypass incomplete child-row data.
       if (transition.requirements) {
-        const blocking = await evaluateTransitionRequirements(db, transition.requirements, item)
+        const blocking = await evaluateTransitionRequirements(
+          db,
+          transition.requirements,
+          item,
+          undefined,
+          collection
+        )
         if (blocking) throw new Error('TRANSITION_REQUIREMENTS')
       }
 

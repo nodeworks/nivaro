@@ -50,3 +50,41 @@ export async function logActivity(opts: {
     return null
   }
 }
+
+// ─── Throttled logging for hot paths ─────────────────────────────────────────
+//
+// Some audit-relevant actions fire far more often than they carry information:
+// a dashboard refreshing eight query widgets every minute is one access event,
+// not eight hundred rows a day. logActivityThrottled collapses repeats of the
+// same logical event within a window, keeping the "who touched what" signal
+// while dropping the machine-driven volume that buries it.
+//
+// Fails OPEN: with no Redis (or a Redis error) the entry is written normally —
+// losing audit coverage is worse than logging a duplicate.
+
+interface ThrottleRedis {
+  set(
+    key: string,
+    value: string,
+    mode: 'EX',
+    ttl: number,
+    nx: 'NX'
+  ): Promise<string | null>
+}
+
+export async function logActivityThrottled(
+  redis: ThrottleRedis | null | undefined,
+  dedupeKey: string,
+  windowSeconds: number,
+  opts: Parameters<typeof logActivity>[0]
+): Promise<number | null> {
+  if (redis) {
+    try {
+      const acquired = await redis.set(`actlog:${dedupeKey}`, '1', 'EX', windowSeconds, 'NX')
+      if (acquired === null) return null // already logged inside the window
+    } catch {
+      /* fall through and log — never trade audit coverage for cache health */
+    }
+  }
+  return logActivity(opts)
+}

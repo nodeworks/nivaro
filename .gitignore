@@ -15,7 +15,8 @@ CLAUDE.md
 .playwright-mcp
 .impeccable
 test-results/*
-tests/e2e/reports/*api/cloud-extensions/
+tests/e2e/reports/*
+api/cloud-extensions/
 .superpowers/
 packages/shared/src/**/*.js
 packages/shared/src/**/*.js.map
@@ -25,3 +26,12 @@ packages/react/src/**/*.js
 packages/react/src/**/*.js.map
 packages/react/src/**/*.d.ts
 packages/react/src/**/*.d.ts.map
+
+# Internal working docs — never in the public repo
+docs/claude/
+docs/superpowers/
+
+# Third-party / deployment extensions — dev-local only, mounted at deploy
+api/extensions/*
+!api/extensions/tsconfig.json
+!api/extensions/.config.json

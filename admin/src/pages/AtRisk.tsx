@@ -20,12 +20,21 @@ interface AtRiskCondition {
   value?: unknown
 }
 
+const BADGE_CLS: Record<string, string> = {
+  red: 'text-[11px] bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20',
+  amber: 'text-[11px] bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20',
+  yellow: 'text-[11px] bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20',
+  green: 'text-[11px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20',
+  blue: 'text-[11px] bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/20',
+  purple: 'text-[11px] bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/20'
+}
+
 interface AtRiskRule {
   id: number
   collection: string
   name: string
   conditions: AtRiskCondition[]
-  highlight_color: 'red' | 'amber'
+  highlight_color: string
   is_active: boolean
   created_at: string
 }
@@ -184,9 +193,7 @@ export function AtRiskPage() {
                         <Badge
                           variant='outline'
                           className={
-                            rule.highlight_color === 'amber'
-                              ? 'text-[11px] bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
-                              : 'text-[11px] bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20'
+                            BADGE_CLS[rule.highlight_color] ?? BADGE_CLS.red
                           }
                         >
                           {rule.highlight_color}

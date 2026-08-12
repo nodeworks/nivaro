@@ -50,7 +50,7 @@ const reviewListConfig = {
     { kind: 'm2m', field: 'workflows' }
   ],
   group_by: 'invoice_id',
-  status: { field: 'efp_review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
+  status: { field: 'review_status', options: [{ value: 'x', label: 'X', color: 'slate' }] }
 }
 
 function makeRenderDbMock(widgetRow: Record<string, unknown> | undefined) {

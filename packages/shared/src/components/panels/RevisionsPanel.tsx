@@ -224,7 +224,7 @@ function RevisionRow({
   const client = useNivaroClient()
   const [expanded, setExpanded] = useState(false)
   const [confirmRollback, setConfirmRollback] = useState(false)
-  const [view, setView] = useState<'delta' | 'side'>('delta')
+  const [view, setView] = useState<'delta' | 'side'>('side')
   const [o2mRestoring, setO2MRestoring] = useState<string | null>(null)
   const isUpdate = revision.action === 'update'
   const isCreate = revision.action === 'create'
@@ -447,22 +447,31 @@ export function RevisionsPanel({
   item,
   onRollback,
   triggerClassName,
-  inlineTableFields
+  inlineTableFields,
+  open,
+  onOpenChange
 }: {
   collection: string
   item: string
   onRollback?: () => void
   triggerClassName?: string
   inlineTableFields?: O2MFieldInfo[]
+  /** Controlled mode (no trigger button) — open the sheet programmatically,
+   *  e.g. from a row Actions menu. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
+  const controlled = open !== undefined
   return (
-    <Sheet>
-      <SheetTrigger asChild>
-        <Button variant='outline' size='sm' className={triggerClassName ?? 'gap-1.5'}>
-          <Clock className='h-3.5 w-3.5' />
-          History
-        </Button>
-      </SheetTrigger>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      {!controlled && (
+        <SheetTrigger asChild>
+          <Button variant='outline' size='sm' className={triggerClassName ?? 'gap-1.5'}>
+            <Clock className='h-3.5 w-3.5' />
+            History
+          </Button>
+        </SheetTrigger>
+      )}
       <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
         <SheetHeader>
           <SheetTitle className='flex items-center gap-2 text-base'>

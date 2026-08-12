@@ -33,8 +33,11 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post, put } from '../../lib/commands'
+import { RowActionsMenu } from '../CollectionBrowserView'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
 import { buildGroups } from '../../lib/queue-grouping'
+import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
+import { RowHighlightLegend } from '../RowHighlightLegend'
 import { cn, formatDate, formatDateTime, formatNumber } from '../../lib/utils'
 import {
   type Column,
@@ -87,6 +90,7 @@ export interface QueueItemRow {
   owners: QueueOwner[]
   sla_status: 'ok' | 'warning' | 'breached' | null
   at_risk: boolean
+  at_risk_color?: string | null
   predicted_risk?: boolean
   predicted_note?: string | null
   aging_hours: number | null
@@ -145,6 +149,7 @@ interface QueueMeta {
     item_layout: string | null
     sheet_width: number | string | null
     default_columns?: string[] | null
+    default_pins?: Record<string, 'left' | 'right'> | null
   }
 }
 
@@ -163,6 +168,8 @@ interface QueueView {
     view?: 'table' | 'kanban' | 'workload'
     /** Ordered visible columns; null/absent = follow the queue's default columns. */
     columns?: string[] | null
+    /** Per-column pin sides; null/absent = default (first column pinned left). */
+    pins?: Record<string, 'left' | 'right'> | null
   } | null
 }
 
@@ -409,6 +416,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const [groupBy, setGroupBy] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [swimlaneBy, setSwimlaneBy] = useState<'collection' | 'owners' | null>(null)
+  // Per-column pinning (CBV parity) — null = default (first column pinned left).
+  // Session state, snapshotted into saved views as `pins`.
+  const [columnPins, setColumnPins] = useState<Record<string, 'left' | 'right'> | null>(null)
   // Socket-driven updates no longer refetch under the user — they accumulate here
   // and surface as a "N updates · Refresh" pill the user triggers explicitly.
   const [pendingUpdates, setPendingUpdates] = useState(0)
@@ -547,7 +557,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   }, [filtersOpen, queueId])
   const activeFilterCount = Object.values(filterValues).filter((v) => !isFilterEmpty(v)).length
 
-  const { data, isLoading } = useQuery<{
+  const { data, isLoading, isFetching, isPlaceholderData } = useQuery<{
     data: QueueItemRow[]
     stats: QueueStats
     filtered_stats: QueueStats | null
@@ -581,10 +591,16 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       ),
     // Wait for display_config so the first fetch uses the configured default
     // scope/view instead of firing once with the hard-coded initial state.
-    enabled: !!queueId && displayReady
+    enabled: !!queueId && displayReady,
+    // Keep the previous page rendered while a sort/filter/page change refetches —
+    // swapping to skeletons collapsed the table height and jittered the page.
+    placeholderData: (prev) => prev
   })
 
-  const showLoading = isLoading || !displayReady
+  const showLoading = (isLoading && !data) || !displayReady
+  // True while a sort/filter/page change is in flight over kept-previous data —
+  // the table dims slightly instead of unmounting (no layout shift).
+  const isRefetching = (isFetching && !isLoading) || (isPlaceholderData && isFetching)
 
   async function performTransition(item: QueueItemRow, targetState: string) {
     const instanceRes = await client.request<{
@@ -968,6 +984,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     setGroupBy(s.group_by ?? null)
     // Full snapshot: a view without saved columns resets to the queue default.
     setVisibleColumns(s.columns ?? null)
+    setColumnPins(s.pins ?? null)
     if (s.view) setView(allowedViews.includes(s.view) ? s.view : allowedViews[0])
     setPage(1)
     setActiveViewId(v.id)
@@ -1004,7 +1021,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
             sort,
             group_by: groupBy,
             view,
-            columns: visibleColumns
+            columns: visibleColumns,
+            pins: columnPins
           }
         })
       ),
@@ -1030,7 +1048,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
             sort,
             group_by: groupBy,
             view,
-            columns: visibleColumns
+            columns: visibleColumns,
+            pins: columnPins
           }
         })
       ),
@@ -1193,7 +1212,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       sortable: true,
       render: (row) =>
         row.at_risk ? (
-          <span className='text-red-500'>⚑ At risk</span>
+          <span className={rowHighlightTextClass(row.at_risk_color ?? 'red')}>⚑ At risk</span>
         ) : row.predicted_risk ? (
           <span className='text-amber-500' title={row.predicted_note ?? undefined}>
             ⚑ Predicted
@@ -1390,14 +1409,71 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const labelColumn = baseColumns.find((c) => c.key === 'label') as Column<QueueItemRow>
   const allToggleable = [...baseColumns, ...extraColumns]
 
+  // CBV-parity per-row Actions menu (open / peek / transitions / copy / delete).
+  // Hidden for 'tasks' sentinel rows — their item_id is a task PK, not a record.
+  const actionsColumn: Column<QueueItemRow> = {
+    key: '__actions__',
+    header: '',
+    render: (row) =>
+      row.collection === 'tasks' ? null : (
+        <span onClick={(e) => e.stopPropagation()}>
+          <RowActionsMenu
+            collection={row.collection}
+            id={row.item_id}
+            hasPipeline={row.state != null}
+            onOpen={() => openItemPage(row)}
+            onPeek={() => setSheetItem(row)}
+            urlFor={itemNav.urlFor}
+            onDeleted={() => {
+              void client
+                .request(del(`/items/${row.collection}/${row.item_id}`))
+                .then(() => {
+                  toast.success('Moved to trash')
+                  void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
+                })
+                .catch((err: unknown) =>
+                  toast.error(err instanceof Error ? err.message : 'Delete failed')
+                )
+            }}
+            onAfterTransition={() =>
+              void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
+            }
+          />
+        </span>
+      )
+  }
+
   const columns: Column<QueueItemRow>[] = [
     labelColumn,
     ...orderedToggleableKeys
       .filter((k) => effectiveVisible.has(k))
       .map((k) => allToggleable.find((c) => c.key === k))
       .filter((c): c is Column<QueueItemRow> => c !== undefined),
-    ...(claimsEnabled ? [claimColumn] : [])
+    ...(claimsEnabled ? [claimColumn] : []),
+    actionsColumn
   ]
+
+  // Effective pin map — user pins (saved view / session) win, then the queue's
+  // builder-set display_config.default_pins, then the historic default of the
+  // first data column (Item) pinned left. Pins for columns no longer visible
+  // are dropped so stale saved-view pins can't wedge offsets.
+  const effectivePins = useMemo<Record<string, 'left' | 'right'>>(() => {
+    const configPins = displayConfig?.default_pins as
+      | Record<string, 'left' | 'right'>
+      | null
+      | undefined
+    const base =
+      columnPins ??
+      (configPins && Object.keys(configPins).length > 0
+        ? configPins
+        : { [columns[0]?.key ?? 'label']: 'left' as const })
+    const valid = new Set(columns.map((c) => c.key))
+    return Object.fromEntries(Object.entries(base).filter(([k]) => valid.has(k))) as Record<
+      string,
+      'left' | 'right'
+    >
+    // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the visible column keys, not column identity
+  }, [columnPins, displayConfig?.default_pins, columns.map((c) => c.key).join('|')])
 
   const groupOptions: { value: string; label: string }[] = [
     { value: 'state', label: 'State' },
@@ -1429,6 +1505,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         get(`/items/${meta.target_collection}`, params)
       )
       const rows = res.data ?? []
+      // Option VALUES stay raw (the server contains-match compares raw display
+      // values); only the label formats, so date/number columns offer readable
+      // options instead of raw ISO strings.
+      const fmt = formatConfigFor(meta.path)
       const seen = new Set<string>()
       const out: { label: string; value: string }[] = []
       for (const row of rows) {
@@ -1437,12 +1517,26 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         const str = String(v)
         if (seen.has(str)) continue
         seen.add(str)
-        out.push({ label: str, value: str })
+        out.push({ label: fmt ? formatMultiValue(str, fmt) : str, value: str })
       }
       return out
     }
 
   const extraFieldMetaByPath = new Map((queue?.extra_field_meta ?? []).map((m) => [m.path, m]))
+
+  // Applied-filter chip text: format extra-column values through the column's
+  // display format (dates/numbers) instead of echoing the raw stored value.
+  const displayFilterValue = (def: FilterDef, value: string | string[]): string => {
+    if (def.key.startsWith('extra.')) {
+      const fmt = formatConfigFor(def.key.slice('extra.'.length))
+      if (fmt) {
+        const vals = (Array.isArray(value) ? value : [value]).filter((v) => v !== '')
+        const names = vals.map((v) => formatMultiValue(String(v), fmt))
+        return names.slice(0, 2).join(', ') + (names.length > 2 ? ` +${names.length - 2}` : '')
+      }
+    }
+    return filterValueDisplay(def, value)
+  }
 
   const filterDefs: FilterDef[] = [
     {
@@ -1539,7 +1633,11 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <div className='flex-1 overflow-y-auto p-6'>
+      {/* Pinned band: banner, legend, stat tiles, scope/view toolbar. The view
+          below gets the REMAINING viewport height with its own scrollbar —
+          same containment contract as CollectionBrowserView, so the stats
+          never scroll away and the scrollbar is always in reach. */}
+      <div className='shrink-0 px-6 pt-6'>
         {data?.truncated && (
           <div className='mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'>
             <AlertTriangle className='h-4 w-4 shrink-0' />
@@ -1552,6 +1650,16 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         )}
         {/* One insight band: compact stat segments + state chips share a wrapping
       row — half the height of the old five-tile grid + separate chip row. */}
+        <RowHighlightLegend
+          collections={[
+            ...new Set(
+              (queue?.sources ?? [])
+                .filter((s) => s.type === 'collection' && s.collection)
+                .map((s) => s.collection as string)
+            )
+          ]}
+          className='mb-2'
+        />
         <div className='mb-3 flex flex-wrap items-center gap-x-4 gap-y-2'>
           <div className='flex divide-x divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
             <StatTile
@@ -1632,7 +1740,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           {/* Scope control waits for display_config so the configured default
         scope is active on first paint instead of flashing in. */}
           {!displayReady ? (
-            <div className='h-[30px] w-64 animate-pulse rounded-md bg-slate-100 dark:bg-muted' />
+            <div className='h-[30px] w-64 animate-pulse rounded-md bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
           ) : (
             <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
               {SCOPE_TABS.filter((tab) => claimsEnabled || tab.value !== 'claimed').map(
@@ -1684,7 +1792,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           {/* Hold the switcher until display_config applies — otherwise all
         three views flash before hidden ones disappear. */}
           {!displayReady ? (
-            <div className='h-[30px] w-40 animate-pulse rounded-md bg-slate-100 dark:bg-muted' />
+            <div className='h-[30px] w-40 animate-pulse rounded-md bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
           ) : (
             <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
               {(
@@ -1983,7 +2091,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
             )}
           </div>
         </div>
+      </div>
 
+      <div className='flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-6'>
         {view === 'table' ? (
           <>
             {!filtersOpen && activeFilterCount > 0 && (
@@ -2005,7 +2115,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                           {filterDefLabel(def)}:
                         </span>
                         <span className='max-w-[180px] truncate font-medium text-slate-700 dark:text-slate-200'>
-                          {filterValueDisplay(def, filterValues[def.key] ?? '')}
+                          {displayFilterValue(def, filterValues[def.key] ?? '')}
                         </span>
                       </button>
                       <button
@@ -2036,7 +2146,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 </button>
               </div>
             )}
-            <div className='flex items-start gap-4'>
+            {/* Stretch row: the table card fills the remaining height and
+                scrolls internally (DataTable fillHeight); the filter rail
+                keeps its own height via self-start. */}
+            <div className='flex min-h-0 flex-1 gap-4'>
               {filtersOpen && (
                 <aside className='w-[240px] shrink-0 self-start overflow-hidden rounded-lg border border-slate-200 bg-white motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-left-1 motion-safe:duration-200 dark:border-border dark:bg-card'>
                   <div className='flex h-10 items-center justify-between border-b border-slate-100 px-3 dark:border-border'>
@@ -2082,8 +2195,16 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                   </div>
                 </aside>
               )}
-              <div className='min-w-0 flex-1'>
+              <div
+                className={cn(
+                  'min-w-0 flex-1 transition-opacity duration-200',
+                  isRefetching && 'pointer-events-none opacity-60'
+                )}
+                aria-busy={isRefetching || undefined}
+              >
                 <DataTable<QueueItemRow>
+                  fillHeight
+                  minBodyHeight={360}
                   columns={columns}
                   rows={items}
                   rowKey={(row) => `${row.collection}:${row.item_id}`}
@@ -2094,7 +2215,15 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                   onPageChange={setPage}
                   onRowClick={(row) => openItem(row)}
                   rowClassName={(row) =>
-                    highlightedId === rowId(row) ? 'bg-nvr-cyan/5 dark:bg-nvr-cyan/10' : undefined
+                    highlightedId === rowId(row)
+                      ? // Pinned sticky cells use bg-inherit — the highlight must be
+                        // OPAQUE (nvr-cyan/5-over-white equivalents) or horizontally
+                        // scrolled content bleeds through the pinned columns. Same
+                        // pair DataTable uses for selected rows when pins are active.
+                        'bg-[#f2fdff] dark:bg-[#20303a]'
+                      : row.at_risk
+                        ? rowHighlightClass(row.at_risk_color ?? 'red')
+                        : undefined
                   }
                   emptyMessage='Nothing in this queue.'
                   sort={sort}
@@ -2115,7 +2244,17 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                   onSelectionChange={bulkActionsEnabled ? setSelectedIds : undefined}
                   hideFilterRow
                   nowrapCells
-                  pinFirstColumn
+                  columnPins={effectivePins}
+                  onColumnPinChange={(key, pin) => {
+                    setColumnPins((prev) => {
+                      const next = { ...(prev ?? effectivePins) }
+                      if (pin) next[key] = pin
+                      else delete next[key]
+                      return next
+                    })
+                  }}
+                  columnFilterRow
+                  hScrollProxy
                 />
               </div>
             </div>

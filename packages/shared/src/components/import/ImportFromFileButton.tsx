@@ -26,13 +26,16 @@ export function ImportFromFileButton({
   collection,
   templateFilter,
   getLabel,
-  onParsed
+  onParsed,
+  compact = false
 }: {
   collection: string
   templateFilter?: (t: ImportTemplateSummary) => boolean
   /** Per-template label source; defaults to the template's button_label. */
   getLabel?: (t: ImportTemplateSummary) => string | null | undefined
   onParsed: (result: ImportParseResponse, template: ImportTemplateSummary) => void
+  /** Grid-toolbar sizing (h-6, 11px) matching other inline-table buttons. */
+  compact?: boolean
 }) {
   const client = useNivaroClient()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -103,21 +106,42 @@ export function ImportFromFileButton({
         onChange={handleFileChange}
       />
       {templates.length === 1 ? (
-        <Button
-          type='button'
-          variant='outline'
-          size='sm'
-          disabled={importing}
-          onClick={() => openPicker(templates[0])}
-        >
-          {buttonLabel}
-        </Button>
+        compact ? (
+          <button
+            type='button'
+            disabled={importing}
+            onClick={() => openPicker(templates[0])}
+            className='inline-flex h-6 items-center gap-1 rounded border border-slate-200 px-2.5 text-[11px] text-slate-600 transition-colors hover:border-slate-400 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-slate-300'
+          >
+            {buttonLabel}
+          </button>
+        ) : (
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            disabled={importing}
+            onClick={() => openPicker(templates[0])}
+          >
+            {buttonLabel}
+          </Button>
+        )
       ) : (
         <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
           <PopoverTrigger asChild>
-            <Button type='button' variant='outline' size='sm' disabled={importing}>
-              {buttonLabel}
-            </Button>
+            {compact ? (
+              <button
+                type='button'
+                disabled={importing}
+                className='inline-flex h-6 items-center gap-1 rounded border border-slate-200 px-2.5 text-[11px] text-slate-600 transition-colors hover:border-slate-400 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-slate-300'
+              >
+                {buttonLabel}
+              </button>
+            ) : (
+              <Button type='button' variant='outline' size='sm' disabled={importing}>
+                {buttonLabel}
+              </Button>
+            )}
           </PopoverTrigger>
           <PopoverContent className='w-[220px] p-0' align='start'>
             <Command>

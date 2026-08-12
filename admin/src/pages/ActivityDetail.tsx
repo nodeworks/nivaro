@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, GitBranch } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router'
+import { useGoBack } from '@/lib/nav'
 import { RevisionsPanel } from '@/components/revisions-panel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -75,6 +76,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 export function ActivityDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const goBack = useGoBack('/activity')
 
   const { data: entry, isLoading } = useQuery({
     queryKey: ['activity', id],
@@ -97,7 +99,7 @@ export function ActivityDetailPage() {
   return (
     <div className='p-8 max-w-3xl'>
       <div className='flex items-center gap-4 mb-8'>
-        <Button variant='ghost' size='icon' onClick={() => navigate('/activity')}>
+        <Button variant='ghost' size='icon' onClick={goBack}>
           <ArrowLeft className='h-4 w-4' />
         </Button>
         <div>

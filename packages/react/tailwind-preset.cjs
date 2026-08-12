@@ -63,8 +63,11 @@ module.exports = {
           active: '#1e96d2'
         },
         nvr: {
-          cyan: 'var(--nvr-cyan)',
-          'cyan-dark': 'var(--nvr-cyan-dark)',
+          // rgb(var(...) / <alpha-value>) rather than a bare var(): an opaque
+          // var() cannot carry an alpha channel, so `bg-nvr-cyan/10` silently
+          // produced no CSS at all.
+          cyan: 'rgb(var(--nvr-cyan-rgb) / <alpha-value>)',
+          'cyan-dark': 'rgb(var(--nvr-cyan-dark-rgb) / <alpha-value>)',
           navy: '#172940'
         }
       },

@@ -105,11 +105,24 @@ function toJsonStr(val: unknown): string | null {
 const SECRET_FIELDS = new Set(['token', 'password', 'client_secret', 'value'])
 const MASK = '••••••'
 
+const SECRET_HEADER_RE = /secret|token|password|key/i
+
 function maskAuthConfig(cfg: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!cfg) return null
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(cfg)) {
-    out[k] = SECRET_FIELDS.has(k) && v ? MASK : v
+    if (k === 'token_headers' && v && typeof v === 'object' && !Array.isArray(v)) {
+      // Nested header credentials (SAT-style X-Client-Secret) are secrets too —
+      // top-level-only masking returned them raw.
+      out[k] = Object.fromEntries(
+        Object.entries(v as Record<string, unknown>).map(([hk, hv]) => [
+          hk,
+          SECRET_HEADER_RE.test(hk) && hv ? MASK : hv
+        ])
+      )
+    } else {
+      out[k] = SECRET_FIELDS.has(k) && v ? MASK : v
+    }
   }
   return out
 }
@@ -145,6 +158,18 @@ function mergeAuthConfig(
     if (out[field] === MASK && existing && existing[field] != null) {
       out[field] = existing[field]
     }
+  }
+  // Nested token_headers: a still-masked header value keeps its stored secret.
+  const inTh = out.token_headers
+  const exTh = existing?.token_headers
+  if (inTh && typeof inTh === 'object' && !Array.isArray(inTh) && exTh && typeof exTh === 'object') {
+    const merged: Record<string, unknown> = { ...(inTh as Record<string, unknown>) }
+    for (const [hk, hv] of Object.entries(merged)) {
+      if (hv === MASK && (exTh as Record<string, unknown>)[hk] != null) {
+        merged[hk] = (exTh as Record<string, unknown>)[hk]
+      }
+    }
+    out.token_headers = merged
   }
   return out
 }

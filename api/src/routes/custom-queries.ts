@@ -1,18 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { buildFinalParams, execCustomQuerySql, type ParamDef, type ParamType } from '../services/custom-query-exec.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
-import { logActivity } from '../services/activity.js'
+import { logActivity, logActivityThrottled } from '../services/activity.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type ParamType = 'string' | 'number' | 'integer' | 'boolean' | 'date'
 
-interface ParamDef {
-  name: string
-  type: ParamType
-  required?: boolean
-  default?: unknown
-}
 
 interface CustomQueryRow {
   id: number
@@ -62,27 +56,27 @@ function serialize(row: CustomQueryRow) {
   }
 }
 
-function castParam(value: unknown, type: ParamType): unknown {
-  if (value == null) return value
-  switch (type) {
-    case 'number':
-    case 'integer': {
-      const n = Number(value)
-      return Number.isNaN(n) ? value : type === 'integer' ? Math.trunc(n) : n
-    }
-    case 'boolean':
-      return value === true || value === 'true' || value === 1 || value === '1'
-    case 'date': {
-      if (value === '') return null
-      const d = value instanceof Date ? value : new Date(String(value))
-      return Number.isNaN(d.getTime()) ? null : d
-    }
-    default:
-      return String(value)
-  }
-}
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
+
+/** Delete every cached result for a slug (cq:<slug>:*) via SCAN. */
+export async function bustCustomQueryCache(
+  redis: { scanStream(o: { match: string; count: number }): NodeJS.ReadableStream; del(...k: string[]): Promise<number> } | null | undefined,
+  slug: string
+): Promise<number> {
+  if (!redis) return 0
+  return new Promise((resolve) => {
+    const pending: Array<Promise<number>> = []
+    const stream = redis.scanStream({ match: `cq:${slug}:*`, count: 200 })
+    stream.on('data', (keys: string[]) => {
+      if (keys.length > 0) pending.push(redis.del(...keys).catch(() => 0))
+    })
+    stream.on('end', () => {
+      void Promise.all(pending).then((ns) => resolve(ns.reduce((a, b) => a + b, 0)))
+    })
+    stream.on('error', () => resolve(0))
+  })
+}
 
 export async function customQueriesRoutes(app: FastifyInstance) {
   // ── Admin CRUD ──────────────────────────────────────────────────────────
@@ -181,6 +175,20 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     if (body.access !== undefined) patch.access = body.access
 
     await db('nivaro_custom_queries').where({ id }).update(patch)
+    // Staleness guard: any change to the SQL, params, or slug invalidates every
+    // cached result for BOTH the old and new slug — a cached shape must never
+    // outlive the definition that produced it.
+    if (
+      body.sql_text !== undefined ||
+      body.params !== undefined ||
+      body.slug !== undefined ||
+      body.enabled !== undefined
+    ) {
+      await bustCustomQueryCache(app.redis, existing.slug).catch(() => {})
+      if (body.slug !== undefined && body.slug !== existing.slug) {
+        await bustCustomQueryCache(app.redis, body.slug).catch(() => {})
+      }
+    }
     const row = (await db('nivaro_custom_queries').where({ id }).first()) as CustomQueryRow
     await logActivity({
       action: 'update',
@@ -248,18 +256,11 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       const defs = parseJson<ParamDef[]>(query.params) ?? []
       const incoming = (req.body as { params?: Record<string, unknown> })?.params ?? {}
 
-      // Build the final param object: defaults merged with incoming, type-cast.
-      const finalParams: Record<string, unknown> = {}
-      for (const def of defs) {
-        const provided = Object.hasOwn(incoming, def.name)
-        let value = provided ? incoming[def.name] : def.default
-
-        if ((value == null || value === '') && def.required) {
-          return reply.code(400).send({ error: `Missing required parameter: ${def.name}` })
-        }
-        if (value != null && value !== '') value = castParam(value, def.type)
-        else value = null
-        finalParams[def.name] = value
+      let finalParams: Record<string, unknown>
+      try {
+        finalParams = buildFinalParams(defs, incoming)
+      } catch (err) {
+        return reply.code(400).send({ error: err instanceof Error ? err.message : 'Bad params' })
       }
 
       // Cache check.
@@ -279,61 +280,10 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         }
       }
 
-      // Knex MSSQL always routes through connection.execSql() which wraps the
-      // query in sp_executesql. Stored procedure result sets don't propagate
-      // row events through that path. We use execSqlBatch directly on the raw
-      // tedious connection instead — it sends the SQL as a plain batch, which
-      // correctly surfaces SP result sets.
-      //
-      // All values are substituted as safe literals:
-      //   NULL   → NULL       (no user content)
-      //   bool   → 1 / 0     (no user content)
-      //   number → validated finite literal
-      //   date   → 'YYYY-MM-DD HH:mm:ss.SSS' validated ISO string
-      //   string → 'value' with internal single-quotes doubled (' → '')
-      //            MSSQL '' quoting is injection-safe; backslash is not special
-      const resolvedSql = query.sql_text.replace(/:(\w+)/g, (_, k: string) => {
-        const v = finalParams[k]
-        if (v == null || v === '') return 'NULL'
-        if (typeof v === 'boolean') return v ? '1' : '0'
-        if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL'
-        if (v instanceof Date) {
-          if (Number.isNaN(v.getTime())) return 'NULL'
-          return `'${v.toISOString().slice(0, 23).replace('T', ' ')}'`
-        }
-        return `'${String(v).replace(/'/g, "''")}'`
-      })
-
       let rows: unknown[]
       try {
-        // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
-        const knexClient = (db as any).client
-        const Driver = knexClient._driver() as { Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown }
-        const conn = await knexClient.acquireConnection() as { execSqlBatch(r: unknown): void }
-        try {
-          rows = await new Promise<unknown[]>((resolve, reject) => {
-            let settled = false
-            const done = (fn: () => void) => { if (!settled) { settled = true; fn() } }
-            const req = new Driver.Request(resolvedSql, (err: Error | null) => {
-              if (err) done(() => reject(err))
-            }) as {
-              on(ev: 'row', h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void): unknown
-              on(ev: 'error', h: (e: Error) => void): unknown
-              once(ev: 'requestCompleted', h: () => void): unknown
-            }
-            const collected: unknown[] = []
-            req.on('row', (cols) => {
-              const row: Record<string, unknown> = {}
-              for (const col of cols) row[col.metadata.colName] = col.value
-              collected.push(row)
-            })
-            req.once('requestCompleted', () => done(() => resolve(collected)))
-            req.on('error', (e) => done(() => reject(e)))
-            conn.execSqlBatch(req)
-          })
-        } finally {
-          await knexClient.releaseConnection(conn)
-        }
+        // Literal-substitution + raw tedious batch — see services/custom-query-exec.ts
+        rows = await execCustomQuerySql(query.sql_text, finalParams)
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Query execution failed'
         return reply.code(400).send({ error: message })
@@ -348,13 +298,20 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         }
       }
 
-      await logActivity({
-        action: 'run',
-        collection: 'nivaro_custom_queries',
-        item: String(query.id),
-        user: req.user?.id,
-        req
-      })
+      // Dashboards and page widgets re-execute on every refresh; one row per
+      // (query, viewer) per 5 minutes keeps the access trail without the flood.
+      await logActivityThrottled(
+        app.redis,
+        `cq:${query.id}:${req.user?.id ?? 'anon'}`,
+        300,
+        {
+          action: 'run',
+          collection: 'nivaro_custom_queries',
+          item: String(query.id),
+          user: req.user?.id,
+          req
+        }
+      )
       return { data: rows, cached: false, executed_at: new Date().toISOString() }
     }
   )

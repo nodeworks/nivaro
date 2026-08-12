@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 
 /**
  * Session recording (rrweb) — opt-in, privacy-conscious screen replay.
@@ -179,6 +180,13 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     { preHandler: requireAdmin },
     async (req, reply) => {
       await db('nivaro_session_recordings').where({ id: req.params.id }).del()
+      await logActivity({
+        action: 'session-recording-delete',
+        collection: 'nivaro_session_recordings',
+        item: req.params.id,
+        user: req.user?.id,
+        req
+      })
       return reply.send({ data: { deleted: true } })
     }
   )

@@ -13,6 +13,8 @@ import {
 } from './hooks/notification-subscriptions.js'
 import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
 import { registerQueueMaterializationHooks } from './hooks/queue-materialization.js'
+import { registerCoreTriggers } from './flows/core-triggers.js'
+import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
 import { registerSlaHooks, setApp as setSlaApp } from './hooks/sla.js'
 import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
@@ -32,6 +34,8 @@ async function main() {
     registerAiValidationHooks()
     registerAggregateCapHooks()
     registerQueueMaterializationHooks()
+    registerWorkflowAutoHooks()
+    registerCoreTriggers()
   }
 
   // Run pending migrations on startup (self-hosted only).

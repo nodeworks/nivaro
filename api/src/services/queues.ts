@@ -194,6 +194,9 @@ export interface QueueDisplayConfig {
    *  for viewers with no saved column prefs; null = the computed default
    *  (base columns + first two extra fields). Array order IS the column order. */
   default_columns: string[] | null
+  /** Builder-set default column pins ({columnKey: 'left'|'right'}) applied when
+   *  a viewer has no saved-view pins; null = the historic first-column-left. */
+  default_pins: Record<string, 'left' | 'right'> | null
 }
 
 export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
@@ -205,7 +208,8 @@ export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
   row_click: 'preview',
   item_layout: null,
   sheet_width: null,
-  default_columns: null
+  default_columns: null,
+  default_pins: null
 }
 
 /** Normalize a display_config sheet width: finite px in [280, 2000], or an
@@ -258,6 +262,15 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
         )
       ]
     : null
+  const default_pins = (() => {
+    if (!src.default_pins || typeof src.default_pins !== 'object' || Array.isArray(src.default_pins))
+      return null
+    const out: Record<string, 'left' | 'right'> = {}
+    for (const [k, v] of Object.entries(src.default_pins as Record<string, unknown>)) {
+      if (typeof k === 'string' && k.trim() !== '' && (v === 'left' || v === 'right')) out[k] = v
+    }
+    return Object.keys(out).length > 0 ? out : null
+  })()
   return {
     views,
     default_view,
@@ -267,7 +280,8 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
     row_click,
     item_layout,
     sheet_width: normalizeSheetWidth(src.sheet_width),
-    default_columns: default_columns && default_columns.length > 0 ? default_columns : null
+    default_columns: default_columns && default_columns.length > 0 ? default_columns : null,
+    default_pins
   }
 }
 
@@ -285,6 +299,8 @@ export interface QueueItem {
   owners: QueueOwner[]
   sla_status: 'ok' | 'warning' | 'breached' | null
   at_risk: boolean
+  /** Matching at-risk rule's highlight color — drives row tinting in the tables. */
+  at_risk_color?: string | null
   /** Workflow state uuid — rides into the materialized cache for prediction. */
   state_id?: string | null
   /** Historical-P80 stuck prediction. */
@@ -1378,11 +1394,27 @@ export async function resolveCollectionSource(
   let instances: InstanceRow[] = []
 
   if (binding) {
+    const mode = source.state_mode === 'exclude' ? 'exclude' : 'include'
+    // An include-list of real state keys is expressible in SQL, so push it into
+    // the join instead of fetching every instance in the collection and
+    // discarding the misses in JS — a state-scoped queue over a 30k-row
+    // collection was pulling all 30k instance rows to keep one. Exclude mode
+    // and the "(No state)" sentinel both have to KEEP items that have no
+    // instance row at all, which a WHERE on s.key cannot express, so those
+    // keep the original fetch-then-filter path.
+    const pushdownStates =
+      stateValues?.length && mode === 'include' && !stateValues.includes(NO_STATE_SENTINEL)
+        ? stateValues
+        : null
+
     instances = (await selectInChunks(ids, 2000, (chunk) =>
       db('nivaro_workflow_instances as wi')
         .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
         .whereIn('wi.item', chunk)
         .where('wi.collection', source.collection)
+        .modify((qb) => {
+          if (pushdownStates) qb.whereIn('s.key', pushdownStates)
+        })
         .orderBy('wi.started_at', 'desc')
         .select(
           'wi.id as instance_id',
@@ -1395,8 +1427,12 @@ export async function resolveCollectionSource(
         )
     )) as InstanceRow[]
 
-    if (stateValues?.length) {
-      const mode = source.state_mode === 'exclude' ? 'exclude' : 'include'
+    if (pushdownStates) {
+      // Every surviving row already matched, so the id list is just the items
+      // that came back — no second JS pass needed.
+      const kept = new Set(instances.map((i) => i.item))
+      ids = ids.filter((id) => kept.has(id))
+    } else if (stateValues?.length) {
       const stateByItem = new Map<string, string | null>()
       for (const i of instances) stateByItem.set(i.item, i.state_key)
       ids = ids.filter((id) => stateFilterKeep(stateByItem.get(id) ?? null, stateValues, mode))
@@ -1485,7 +1521,7 @@ export async function resolveCollectionSource(
     ownerRequests.length
       ? resolveStateOwnersBatch(ownerRequests)
       : Promise.resolve(new Map<string, ResolvedOwner[]>()),
-    (async (): Promise<Record<string, { at_risk: true; rule: string; color: 'red' | 'amber' }>> => {
+    (async (): Promise<ReturnType<typeof evaluateRows>> => {
       const ruleRows = (await db('nivaro_at_risk_rules')
         .where({ collection: source.collection, is_active: true })
         .orderBy('id')) as AtRiskRuleRow[]
@@ -1574,6 +1610,7 @@ export async function resolveCollectionSource(
       owners: (ownersByItem.get(id) ?? []).map((o) => ({ id: o.id, name: userDisplayName(o) })),
       sla_status: slaMap[id]?.status ?? null,
       at_risk: !!atRiskMap[id]?.at_risk,
+      at_risk_color: atRiskMap[id]?.color ?? null,
       predicted_risk: prediction.predicted,
       predicted_note: prediction.note,
       aging_hours: slaMap[id]?.elapsed_hours ?? null,

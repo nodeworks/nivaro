@@ -1,3 +1,4 @@
+import { QueryTable, type QueryTableConfig } from './QueryTable'
 import {
   Activity,
   AlertCircle,
@@ -172,7 +173,7 @@ function StripCell({
       </span>
       <span className='mt-1 leading-none truncate max-w-[220px]'>
         {loading ? (
-          <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-slate-700' />
+          <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
         ) : (
           <span className='text-[13px] font-semibold tabular-nums text-slate-900 dark:text-slate-100'>
             {prefix}
@@ -356,7 +357,7 @@ function PillSection({
       >
         {loading ? (
           <span
-            className={`animate-pulse inline-block h-3 w-14 rounded ${dark ? 'bg-slate-600' : 'bg-slate-200'}`}
+            className={`animate-pulse inline-block h-3 w-14 rounded ${dark ? 'bg-slate-600' : 'bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]'}`}
           />
         ) : (
           <>
@@ -1034,6 +1035,15 @@ export function WidgetSlot({
     if (v == null || typeof v !== 'object') draftScalars[k] = v
   }
   const inputs = { ...draftScalars, ...resolveInputs(inputBindings, itemDraft) }
+  // A record-scoped widget (review_list / rollup) hard-requires `record_id` and
+  // 400s without it, but every `__widget_N__` slot assignment in the wild has
+  // `overrides = null` — no binding was ever configured, so nothing supplied it.
+  // On a record page the answer is almost always "this record", so fall back to
+  // the host record's own id. An explicit binding still wins.
+  if (inputs.record_id == null || inputs.record_id === '') {
+    const hostId = itemDraft.id
+    if (hostId != null && hostId !== '') inputs.record_id = hostId
+  }
   const inputsKey = JSON.stringify(inputs) + (itemCollection ?? '')
   // Every scalar draft field feeds inputs, so inputsKey changes per keystroke
   // while editing the parent form — debounce so render refetches settle.
@@ -1086,16 +1096,22 @@ export function WidgetSlot({
   // biome-ignore lint/correctness/useExhaustiveDependencies: inputs/itemDraft/bindings are captured via debouncedInputsKey; fetchCfg/buildHeaders stable in content
   useEffect(() => {
     if (!ready) return
+    // The definition arrives from a SEPARATE effect, and `widget` was missing
+    // from this effect's deps — so on mount the type guard below read null,
+    // failed to match, and fired a render the server rejected with 400. Wait
+    // for the definition (the effect now re-runs when widget_type lands).
+    if (!widget) return
     // review_list/rollup have no meaning for a record that doesn't exist yet
     // — the server 400s on a missing record_id. Skip the fetch entirely
     // rather than surfacing that 400 as a sticky "Render failed" (the
     // null-render gate below already handles the empty-record display).
     if (
-      (widget?.widget_type === 'review_list' || widget?.widget_type === 'rollup') &&
+      (widget.widget_type === 'review_list' || widget.widget_type === 'rollup') &&
       (inputs.record_id == null || inputs.record_id === '')
     ) {
       return
     }
+
     let cancelled = false
     if (!hasRenderDataRef.current) {
       setRenderLoading(true)
@@ -1132,7 +1148,7 @@ export function WidgetSlot({
     return () => {
       cancelled = true
     }
-  }, [widgetId, apiBase, debouncedInputsKey, ready, refetchTick])
+  }, [widgetId, apiBase, debouncedInputsKey, ready, refetchTick, widget?.widget_type])
 
   // Content report for hide_when_empty hosts. No report while loading with
   // nothing fetched yet — the host treats unreported widgets as empty.
@@ -1181,8 +1197,8 @@ export function WidgetSlot({
       if (defLoading) {
         return (
           <div className='flex flex-col justify-center border-r border-slate-200 dark:border-border px-4 py-2.5 w-36'>
-            <span className='animate-pulse h-2 w-10 rounded bg-slate-200 dark:bg-slate-700 mb-1' />
-            <span className='animate-pulse h-3.5 w-20 rounded bg-slate-200 dark:bg-slate-700' />
+            <span className='animate-pulse h-2 w-10 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))] mb-1' />
+            <span className='animate-pulse h-3.5 w-20 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
           </div>
         )
       }
@@ -1191,7 +1207,7 @@ export function WidgetSlot({
         return (
           <div className='h-full flex items-center px-3'>
             {renderLoading ? (
-              <div className='animate-pulse h-7 w-24 rounded bg-slate-200 dark:bg-slate-700' />
+              <div className='animate-pulse h-7 w-24 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
             ) : (
               renderData && (
                 <ButtonGroupDisplay
@@ -1222,7 +1238,7 @@ export function WidgetSlot({
       if (defLoading) {
         return (
           <div
-            className={`animate-pulse h-8 w-36 rounded-md ${compactStyle === 'pill-dark' ? 'bg-slate-700 border border-slate-700' : 'bg-slate-100 border border-slate-200'}`}
+            className={`animate-pulse h-8 w-36 rounded-md ${compactStyle === 'pill-dark' ? 'bg-slate-700 border border-slate-700' : 'bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] border border-slate-200'}`}
           />
         )
       }
@@ -1239,13 +1255,13 @@ export function WidgetSlot({
 
     // Default compact style — show label skeleton while def loads, value skeleton while rendering
     if (defLoading) {
-      return <div className='animate-pulse h-4 w-20 rounded bg-slate-200' />
+      return <div className='animate-pulse h-4 w-20 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
     }
     return (
       <div className='flex items-center gap-1.5'>
         {renderLoading ? (
           <div className='flex items-baseline gap-1'>
-            <div className='animate-pulse h-5 w-20 rounded bg-slate-200' />
+            <div className='animate-pulse h-5 w-20 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
           </div>
         ) : (
           renderData &&
@@ -1283,11 +1299,21 @@ export function WidgetSlot({
     )
   }
 
+  // Body-height skeleton while a widget resolves — a bare "Loading…" line was
+  // ~16px tall, so the real body arriving shoved everything below it down.
+  const bodySkeleton = (
+    <div className='space-y-2 py-0.5'>
+      <div className='animate-pulse h-4 w-2/3 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
+      <div className='animate-pulse h-4 w-full rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
+      <div className='animate-pulse h-4 w-5/6 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
+    </div>
+  )
+
   // Host-provided chrome (group sections, container tabs) → body only.
   if (frameless) {
     return (
       <div>
-        {loading && <p className='text-[12px] text-slate-400'>Loading…</p>}
+        {loading && bodySkeleton}
         {error && <p className='text-[12px] text-red-500'>{error}</p>}
         {!loading && !error && renderData && widget && renderTypedBody()}
       </div>
@@ -1306,7 +1332,7 @@ export function WidgetSlot({
       </button>
       {open && (
         <div className='border-t border-slate-100 px-4 py-3 dark:border-border'>
-          {loading && <p className='text-[12px] text-slate-400'>Loading…</p>}
+          {loading && bodySkeleton}
           {error && <p className='text-[12px] text-red-500'>{error}</p>}
           {!loading && !error && renderData && widget && renderTypedBody()}
         </div>
@@ -1325,9 +1351,12 @@ export function WidgetSlot({
         {widget.widget_type === 'custom-query' && 'values' in renderData && (
           <MultiStatDisplay data={renderData} />
         )}
-        {(widget.widget_type === 'list' ||
-          (widget.widget_type === 'custom-query' && 'rows' in renderData)) && (
-          <ListDisplay data={renderData} />
+        {widget.widget_type === 'list' && <ListDisplay data={renderData} />}
+        {widget.widget_type === 'custom-query' && 'rows' in renderData && (
+          <QueryTable
+            rows={(renderData.rows ?? []) as Array<Record<string, unknown>>}
+            config={(widget.config as { table?: QueryTableConfig })?.table}
+          />
         )}
         {widget.widget_type === 'review_list' && (
           <ReviewListWidget

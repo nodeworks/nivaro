@@ -1,0 +1,1 @@
+{"root":["./src/command.ts","./src/index.ts","./src/presence.ts","./src/realtime.ts","./src/commands/admin.ts","./src/commands/ai.ts","./src/commands/collab.ts","./src/commands/content.ts","./src/commands/devex.ts","./src/commands/files.ts","./src/commands/import-templates.ts","./src/commands/infra.ts","./src/commands/queues.ts"],"version":"5.9.3"}

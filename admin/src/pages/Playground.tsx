@@ -3,6 +3,7 @@ import {
   ItemEditForm,
   NavigationContext,
   NivaroProvider,
+  PageRenderer,
   QueueWorklist
 } from '@nivaro/react'
 import { createNivaro } from '@nivaro/sdk'
@@ -2583,8 +2584,147 @@ export function MyQueue() {
   )
 }
 
+function LivePageTab() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  const [pageSlug, setPageSlug] = useState(searchParams.get('lp_slug') ?? '')
+  const [pageOpen, setPageOpen] = useState(false)
+  const [pageSearch, setPageSearch] = useState('')
+  const [active, setActive] = useState<string | null>(searchParams.get('lp_slug'))
+  const [showCode, setShowCode] = useState(false)
+
+  const client = useMemo(() => createNivaro(window.location.origin), [])
+
+  const { data: pages = [] } = useQuery({
+    queryKey: ['pages'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: number; slug: string; name: string }> }>('/pages')
+        .then((r) => r.data.data ?? []),
+    staleTime: 30_000
+  })
+
+  const sortedPages = useMemo(() => {
+    const list = [...pages].sort((a, b) => a.name.localeCompare(b.name))
+    if (!pageSearch) return list
+    const q = pageSearch.toLowerCase()
+    return list.filter((x) => x.name.toLowerCase().includes(q) || x.slug.toLowerCase().includes(q))
+  }, [pages, pageSearch])
+
+  const selectedPage = pages.find((p) => p.slug === pageSlug)
+
+  function load() {
+    if (!pageSlug) return
+    setActive(pageSlug)
+    setSearchParams((p) => { p.set('lp_slug', pageSlug); return p }, { replace: true })
+  }
+
+  return (
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <div className='shrink-0 border-b border-slate-200 bg-slate-50 px-6 py-3 dark:border-border dark:bg-muted/30'>
+        <div className='flex flex-wrap items-end gap-3'>
+          <div className='flex flex-col gap-1'>
+            <label className='text-[11px] text-slate-500'>Page</label>
+            <Popover open={pageOpen} onOpenChange={setPageOpen}>
+              <PopoverTrigger asChild>
+                <button type='button' className='flex h-8 w-64 items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-left outline-none focus:border-nvr-cyan dark:border-border dark:bg-muted'>
+                  <span className={selectedPage ? 'text-slate-900 dark:text-foreground truncate' : 'text-slate-400'}>
+                    {selectedPage?.name ?? 'Select page…'}
+                  </span>
+                  <ChevronsUpDown className='h-3 w-3 text-slate-400 shrink-0' />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-64 p-0' align='start'>
+                <Command>
+                  <CommandInput placeholder='Search…' value={pageSearch} onValueChange={setPageSearch} className='text-[13px]' />
+                  <CommandList>
+                    <CommandEmpty>No pages found</CommandEmpty>
+                    <CommandGroup>
+                      {sortedPages.map((p) => (
+                        <CommandItem key={p.slug} value={`${p.name} ${p.slug}`} onSelect={() => { setPageSlug(p.slug); setPageSearch(''); setPageOpen(false) }}>
+                          <div className='flex flex-col min-w-0'>
+                            <span className='text-[12px] font-medium truncate'>{p.name}</span>
+                            <span className='text-[10px] text-slate-400 truncate'>/p/{p.slug}</span>
+                          </div>
+                          {pageSlug === p.slug && <Check className='ml-auto h-3 w-3 text-nvr-cyan shrink-0' />}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
+          <button type='button' onClick={load} className='h-8 rounded-md bg-nvr-cyan px-4 text-[13px] font-semibold text-white hover:brightness-110'>
+            Load
+          </button>
+          <button
+            type='button'
+            onClick={() => setShowCode(c => !c)}
+            className={cn(
+              'ml-auto inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+              showCode
+                ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-cyan'
+                : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground'
+            )}
+          >
+            <Code className='h-3.5 w-3.5' />
+            {showCode ? 'Hide Code' : 'View Code'}
+          </button>
+        </div>
+      </div>
+
+      {showCode && (
+        <div className='shrink-0 border-b border-slate-200 bg-slate-950 dark:border-border'>
+          <div className='flex items-center justify-between px-4 py-2 border-b border-slate-800'>
+            <span className='text-[11px] font-semibold text-slate-400 uppercase tracking-wider'>React usage</span>
+          </div>
+          <pre className='overflow-x-auto px-4 py-3 text-[12px] leading-relaxed text-slate-200'><code dangerouslySetInnerHTML={{ __html: highlightTs(`import {
+  ItemEditAuthContext,
+  NavigationContext,
+  NivaroProvider,
+  PageRenderer
+} from '@nivaro/react'
+import { createNivaro } from '@nivaro/sdk'
+
+const client = createNivaro('https://your-api-url.com')
+
+export function MyPage() {
+  return (
+    <NivaroProvider client={client}>
+      <NavigationContext.Provider value={{ navigate: (to) => { window.location.href = to } }}>
+        <ItemEditAuthContext.Provider value={{ isAdmin: false, userId: 'current-user-id' }}>
+          <PageRenderer slug="${active || 'your-page-slug'}" />
+        </ItemEditAuthContext.Provider>
+      </NavigationContext.Provider>
+    </NivaroProvider>
+  )
+}`) }} /></pre>
+        </div>
+      )}
+
+      {active ? (
+        <div className='flex flex-1 min-h-0 flex-col overflow-hidden bg-slate-50 p-6 dark:bg-background'>
+          <NivaroProvider client={client}>
+            <NavigationContext.Provider value={{ navigate }}>
+              <ItemEditAuthContext.Provider value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}>
+                <PageRenderer key={active} slug={active} />
+              </ItemEditAuthContext.Provider>
+            </NavigationContext.Provider>
+          </NivaroProvider>
+        </div>
+      ) : (
+        <div className='flex flex-1 items-center justify-center text-sm text-slate-400'>
+          Select a page and click Load to render it through @nivaro/react
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function PlaygroundPage() {
-  const [activeTab, setActiveTab] = usePersistedTab<'sdk' | 'react' | 'live' | 'queue'>('nvr_playground_tab', 'sdk')
+  const [activeTab, setActiveTab] = usePersistedTab<'sdk' | 'react' | 'live' | 'queue' | 'page'>('nvr_playground_tab', 'sdk')
   const [selectedName, setSelectedName] = useState<string>(COMMANDS[0].name)
   const [values, setValues] = useState<Record<string, string>>({})
   const [result, setResult] = useState<RunResult | null>(null)
@@ -2714,6 +2854,19 @@ export function PlaygroundPage() {
               <ListChecks className='h-3.5 w-3.5' />
               Live Queue
             </button>
+            <button
+              type='button'
+              onClick={() => setActiveTab('page')}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors',
+                activeTab === 'page'
+                  ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                  : 'text-slate-500 hover:text-slate-700 dark:text-muted-foreground dark:hover:text-foreground'
+              )}
+            >
+              <Layers className='h-3.5 w-3.5' />
+              Live Page
+            </button>
           </div>
         </div>
       </div>
@@ -2721,6 +2874,7 @@ export function PlaygroundPage() {
       {activeTab === 'react' ? <ReactReferenceTab /> : null}
       {activeTab === 'live' ? <LiveFormTab /> : null}
       {activeTab === 'queue' ? <LiveQueueTab /> : null}
+      {activeTab === 'page' ? <LivePageTab /> : null}
 
       <div className={cn('flex flex-1 min-h-0 overflow-hidden', activeTab !== 'sdk' && 'hidden')}>
         {/* Left: searchable command list */}

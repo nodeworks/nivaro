@@ -296,7 +296,8 @@ export async function itemsRoutes(app: FastifyInstance) {
             db,
             transition.requirements,
             String(item),
-            req.log
+            req.log,
+            collection
           )
           if (blocking) {
             failed++
@@ -451,6 +452,34 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
     return { readable: true, target }
   }
+
+  // GET /items/:collection/distinct?field=<col>&limit=200 — distinct non-null
+  // values of one PHYSICAL column, for column-filter dropdowns. Read-gated;
+  // registered as a static segment so it wins over GET /:collection/:id.
+  app.get('/:collection/distinct', async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    const { field, limit } = req.query as { field?: string; limit?: string }
+    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+    if (!/^[a-zA-Z0-9_]+$/.test(collection)) return reply.code(400).send({ error: 'Invalid collection' })
+    if (!(await can(req.user!, 'read', collection))) return reply.code(403).send({ error: 'Forbidden' })
+    if (!field || !/^[a-zA-Z0-9_]+$/.test(field)) return reply.code(400).send({ error: 'Invalid field' })
+    const colCheck = (await db.raw(
+      'SELECT 1 AS ok FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?',
+      [collection, field]
+    )) as unknown as Array<{ ok: number }>
+    if (!colCheck?.length) return reply.code(400).send({ error: 'Unknown column' })
+    const cap = Math.min(Math.max(Number(limit) || 200, 1), 500)
+    try {
+      const rows = (await db(collection)
+        .distinct(field)
+        .whereNotNull(field)
+        .orderBy(field, 'asc')
+        .limit(cap)) as Array<Record<string, unknown>>
+      return reply.send({ data: rows.map((r) => r[field]) })
+    } catch (err) {
+      return handleError(err, reply)
+    }
+  })
 
   // GET /items/:collection/resolve-paths?ids=1,2&paths=a.b.c — bulk variant for
   // inline tables (one call per table, all rows × all dotted columns).

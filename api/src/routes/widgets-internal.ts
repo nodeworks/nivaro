@@ -175,10 +175,30 @@ async function renderWidget(
     if (cq.access === 'authenticated' && !user) { const e = new Error('Unauthorized'); (e as NodeJS.ErrnoException & { statusCode: number }).statusCode = 401; throw e }
 
     const params: Record<string, unknown> = {}
+    let unresolvedParam = false
     for (const b of paramBindings) {
       const v = inputs[b.input_key]
       const paramKey = typeof b.param === 'string' && b.param.startsWith(':') ? b.param.slice(1) : String(b.param)
-      params[paramKey] = (v != null && v !== '') ? v : (b.default_value != null && b.default_value !== '' ? b.default_value : null)
+      const resolved = (v != null && v !== '') ? v : (b.default_value != null && b.default_value !== '' ? b.default_value : null)
+      if (resolved == null) unresolvedParam = true
+      params[paramKey] = resolved
+    }
+    // A bound param with no value (and no default) means the widget is scoped
+    // to something the record doesn't have yet (e.g. project budget before a
+    // project is chosen) — running the query would return UNSCOPED results.
+    // Return an empty render (null value chips) instead of querying.
+    if (unresolvedParam) {
+      const vf = config.value_fields as Array<{ field: string; label?: string; prefix?: string; suffix?: string; format?: string }> | undefined
+      if (vf && vf.length > 0) {
+        return {
+          values: vf.map((f) => ({
+            value: null,
+            label: f.label ?? f.field,
+            display: { prefix: f.prefix ?? '', suffix: f.suffix ?? '', format: f.format ?? '' }
+          }))
+        }
+      }
+      return { rows: [] }
     }
 
     // Use execSqlBatch directly — Knex MSSQL's execSql wraps in sp_executesql

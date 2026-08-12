@@ -4,10 +4,11 @@ import {
   ChevronRight,
   ChevronsUpDown,
   ChevronUp,
+  Pin,
   Search,
   X
 } from 'lucide-react'
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { cn, formatNumber } from '../lib/utils'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
@@ -16,6 +17,7 @@ import { Input } from './ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Skeleton } from './ui/skeleton'
+import { HScrollProxy } from './HScrollProxy'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -78,6 +80,30 @@ export interface DataTableProps<T = Record<string, unknown>> {
   /** Pin the selection checkbox (when present) and the first data column so
    *  they stay visible while the table scrolls horizontally. */
   pinFirstColumn?: boolean
+  /** Per-column pinning (CollectionBrowserView parity). When provided (even
+   *  empty), replaces `pinFirstColumn`: left-pinned columns render first,
+   *  right-pinned last, sticky offsets come from live header-cell width
+   *  measurement, and (with `onColumnPinChange`) every header grows a
+   *  hover-revealed pin button cycling none → left → right → none. */
+  columnPins?: Record<string, 'left' | 'right'>
+  onColumnPinChange?: (key: string, pin: 'left' | 'right' | null) => void
+  /** Render a compact per-column filter row under the headers — each column
+   *  whose key matches a FilterDef gets that def's control inline (the
+   *  CollectionBrowserView column-filter pattern). Independent of the
+   *  toolbar/rail rendering controlled by `hideFilterRow`. */
+  columnFilterRow?: boolean
+  /** Always-visible draggable horizontal scrollbar under the table (the
+   *  CollectionBrowserView HScrollProxy) — the native x-scrollbar is hidden
+   *  and trackpad panning is translated by the proxy. */
+  hScrollProxy?: boolean
+  /** Minimum height for the table body region — keeps empty/short tables from
+   *  collapsing to a sliver (empty message centers in the space). */
+  minBodyHeight?: number
+  /** Fill the parent's (bounded) height: rows scroll INSIDE the card under a
+   *  sticky header, so the h-scroll proxy and pagination stay pinned in view
+   *  instead of sitting below a page-tall table. Parent must give the card a
+   *  definite height (flex chain with min-h-0). */
+  fillHeight?: boolean
   selectedIds?: string[]
   onSelectionChange?: (ids: string[]) => void
   /** Optional per-row class — e.g. at-risk background tinting. */
@@ -280,17 +306,19 @@ export function FilterControl({
   def: FilterDef
   value: string | string[]
   onChange: (value: string | string[]) => void
-  layout?: 'inline' | 'stacked'
+  layout?: 'inline' | 'stacked' | 'cell'
 }) {
   const stacked = layout === 'stacked'
+  const cell = layout === 'cell'
   const currentVal = typeof value === 'string' ? value : ''
-  const widthCls = stacked ? 'w-full' : 'w-40'
+  const widthCls = stacked || cell ? 'w-full' : 'w-40'
+  const heightCls = cell ? 'h-7 text-[12px]' : 'text-[13px]'
 
   let control: React.ReactNode
   if (def.type === 'text') {
     control = (
       <Input
-        className={cn('h-8 border-slate-200 bg-slate-50 text-[13px]', widthCls)}
+        className={cn('h-8 border-slate-200 bg-slate-50', heightCls, widthCls)}
         placeholder={def.placeholder}
         value={currentVal}
         onChange={(e) => onChange(e.target.value)}
@@ -298,7 +326,12 @@ export function FilterControl({
     )
   } else if (def.type === 'combobox') {
     control = (
-      <div className={cn(stacked && '[&>button]:w-full')}>
+      <div
+        className={cn(
+          (stacked || cell) && '[&>button]:w-full',
+          cell && '[&>button]:h-7 [&>button]:min-w-[88px] [&>button]:px-1.5 [&>button]:text-[12px]'
+        )}
+      >
         <FilterCombobox def={def} value={value} onChange={onChange} />
       </div>
     )
@@ -309,8 +342,9 @@ export function FilterControl({
         <Input
           type='number'
           className={cn(
-            'h-8 border-slate-200 bg-slate-50 text-[13px]',
-            stacked ? 'w-full' : 'w-20'
+            'h-8 border-slate-200 bg-slate-50',
+            heightCls,
+            stacked || cell ? 'w-full min-w-[48px]' : 'w-20'
           )}
           placeholder='Min'
           value={minVal ?? ''}
@@ -320,8 +354,9 @@ export function FilterControl({
         <Input
           type='number'
           className={cn(
-            'h-8 border-slate-200 bg-slate-50 text-[13px]',
-            stacked ? 'w-full' : 'w-20'
+            'h-8 border-slate-200 bg-slate-50',
+            heightCls,
+            stacked || cell ? 'w-full min-w-[48px]' : 'w-20'
           )}
           placeholder='Max'
           value={maxVal ?? ''}
@@ -334,16 +369,20 @@ export function FilterControl({
     const selectVal = currentVal === '' ? '__all__' : currentVal
     control = (
       <Select value={selectVal} onValueChange={(v) => onChange(v === '__all__' ? '' : v)}>
-        <SelectTrigger className={cn('h-8 border-slate-200 bg-slate-50 text-[13px]', widthCls)}>
+        <SelectTrigger className={cn('h-8 border-slate-200 bg-slate-50', heightCls, widthCls)}>
           <SelectValue placeholder={def.placeholder} />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value='__all__'>{def.placeholder}</SelectItem>
-          {(def.options ?? []).map((opt) => (
-            <SelectItem key={opt.value} value={opt.value}>
-              {opt.label}
-            </SelectItem>
-          ))}
+          {/* An empty-valued option throws inside Radix; the sentinel above
+              already IS the clear-selection entry, so drop any caller's. */}
+          {(def.options ?? [])
+            .filter((opt) => opt.value !== '')
+            .map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
         </SelectContent>
       </Select>
     )
@@ -405,9 +444,15 @@ export function DataTable<T = Record<string, unknown>>({
   onFilterChange,
   toolbarRight,
   emptyMessage = 'No records found.',
+  minBodyHeight,
+  fillHeight = false,
   hideFilterRow = false,
   nowrapCells = false,
   pinFirstColumn = false,
+  columnPins,
+  onColumnPinChange,
+  columnFilterRow = false,
+  hScrollProxy = false,
   selectedIds,
   onSelectionChange,
   rowClassName,
@@ -427,6 +472,78 @@ export function DataTable<T = Record<string, unknown>>({
     onSortChange(nextSort(sort, col.key))
   }
 
+  // ── Per-column pinning ──────────────────────────────────────────────────────
+  // `columnPins` (even {}) supersedes pinFirstColumn: left pins render first,
+  // right pins last, offsets from live header-cell measurement (guarded — only
+  // sets state when values actually change, so the every-render effect is safe).
+  const pinsActive = columnPins !== undefined
+  const orderedColumns = useMemo(() => {
+    if (!pinsActive || !columnPins) return columns
+    const left = columns.filter((c) => columnPins[c.key] === 'left')
+    const right = columns.filter((c) => columnPins[c.key] === 'right')
+    const mid = columns.filter((c) => !columnPins[c.key])
+    return [...left, ...mid, ...right]
+  }, [columns, columnPins, pinsActive])
+
+  const headCellRefs = useRef<Record<string, HTMLTableCellElement | null>>({})
+  const hScrollRef = useRef<HTMLDivElement | null>(null)
+  const checkboxHeadRef = useRef<HTMLTableCellElement | null>(null)
+  const [pinPos, setPinPos] = useState<
+    Record<string, { side: 'left' | 'right'; offset: number; seam: boolean }>
+  >({})
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measures live DOM every render, guarded by value compare
+  useLayoutEffect(() => {
+    if (!pinsActive || !columnPins) return
+    const left = orderedColumns.filter((c) => columnPins[c.key] === 'left')
+    const right = orderedColumns.filter((c) => columnPins[c.key] === 'right')
+    const widthOf = (key: string) =>
+      headCellRefs.current[key]?.getBoundingClientRect().width ?? 120
+    const next: Record<string, { side: 'left' | 'right'; offset: number; seam: boolean }> = {}
+    let acc = onSelectionChange
+      ? (checkboxHeadRef.current?.getBoundingClientRect().width ?? 40)
+      : 0
+    // Floor so adjacent pinned cells overlap by a sub-pixel instead of meeting
+    // exactly on a fractional boundary — an exact meeting leaves a hairline for
+    // the scrolling content to show through (see CollectionBrowserView).
+    left.forEach((c, i) => {
+      next[c.key] = { side: 'left', offset: Math.floor(acc), seam: i === left.length - 1 }
+      acc += widthOf(c.key)
+    })
+    let racc = 0
+    for (let i = right.length - 1; i >= 0; i--) {
+      const c = right[i]
+      next[c.key] = { side: 'right', offset: Math.floor(racc), seam: i === 0 }
+      racc += widthOf(c.key)
+    }
+    setPinPos((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
+  })
+
+  const pinStyle = (key: string): React.CSSProperties | undefined => {
+    const p = pinPos[key]
+    if (!pinsActive || !p) return undefined
+    return p.side === 'left' ? { left: p.offset } : { right: p.offset }
+  }
+  const pinCls = (key: string, header: boolean): string | undefined => {
+    const p = pinPos[key]
+    if (!pinsActive || !p) return undefined
+    return cn(
+      header ? 'sticky z-[2]' : 'sticky z-[1] bg-inherit',
+      p.side === 'left' && p.seam && 'border-r border-slate-200 dark:border-border',
+      p.side === 'right' && p.seam && 'border-l border-slate-200 dark:border-border'
+    )
+  }
+  const cyclePin = (key: string) => {
+    if (!onColumnPinChange) return
+    const cur = columnPins?.[key] ?? null
+    onColumnPinChange(key, cur === null ? 'left' : cur === 'left' ? 'right' : null)
+  }
+  const filterDefByKey = useMemo(() => {
+    const m = new Map<string, FilterDef>()
+    for (const d of filterDefs ?? []) m.set(d.key, d)
+    return m
+  }, [filterDefs])
+  const showColumnFilterRow = columnFilterRow && (filterDefs?.length ?? 0) > 0
+
   const renderRow = (row: T, i: number) => {
     const rowId = rowKey ? rowKey(row, i) : String(i)
     const isSelected = selectedIds?.includes(rowId) ?? false
@@ -437,9 +554,9 @@ export function DataTable<T = Record<string, unknown>>({
         key={rowId}
         className={cn(
           'border-slate-100',
-          pinFirstColumn && 'bg-white dark:bg-card',
+          (pinFirstColumn || pinsActive) && 'bg-white dark:bg-card',
           onRowClick &&
-            (pinFirstColumn
+            (pinFirstColumn || pinsActive
               ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted'
               : 'cursor-pointer hover:bg-slate-50/80'),
           rowClassName?.(row),
@@ -447,7 +564,8 @@ export function DataTable<T = Record<string, unknown>>({
           // OPAQUE or horizontally-scrolled content bleeds through the pinned
           // column. bg-nvr-cyan/5 is semi-transparent — use an opaque equivalent
           // (5% nvr-cyan #00ceff over white / card) when pinning.
-          isSelected && (pinFirstColumn ? 'bg-[#f2fdff] dark:bg-[#20303a]' : 'bg-nvr-cyan/5')
+          isSelected &&
+            (pinFirstColumn || pinsActive ? 'bg-[#f2fdff] dark:bg-[#20303a]' : 'bg-nvr-cyan/5')
         )}
         onClick={() => onRowClick?.(row)}
       >
@@ -455,7 +573,7 @@ export function DataTable<T = Record<string, unknown>>({
           <TableCell
             className={cn(
               'w-9 px-3 py-2',
-              pinFirstColumn && 'sticky left-0 z-[1] min-w-[40px] bg-inherit'
+              (pinFirstColumn || pinsActive) && 'sticky left-0 z-[1] min-w-[40px] bg-inherit'
             )}
             onClick={(e) => {
               e.stopPropagation()
@@ -469,18 +587,21 @@ export function DataTable<T = Record<string, unknown>>({
             <Checkbox checked={isSelected} aria-label='Select row' />
           </TableCell>
         )}
-        {columns.map((col, colIdx) => (
+        {orderedColumns.map((col, colIdx) => (
           <TableCell
             key={col.key}
+            style={pinStyle(col.key)}
             className={cn(
               'px-3 py-2',
               nowrapCells && 'whitespace-nowrap',
-              pinFirstColumn &&
+              !pinsActive &&
+                pinFirstColumn &&
                 colIdx === 0 &&
                 cn(
                   'sticky z-[1] border-r border-slate-100 bg-inherit dark:border-border',
                   onSelectionChange ? 'left-[39px]' : 'left-0'
                 ),
+              pinCls(col.key, false),
               col.className
             )}
           >
@@ -503,7 +624,12 @@ export function DataTable<T = Record<string, unknown>>({
       )}
 
       {/* Card */}
-      <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div
+        className={cn(
+          'overflow-hidden rounded-lg border border-slate-200 bg-white',
+          fillHeight && 'flex h-full min-h-0 flex-col'
+        )}
+      >
         {/* Toolbar */}
         {hasToolbar && (
           <div className='flex items-center gap-2 border-b border-slate-100 px-3 py-2.5'>
@@ -551,14 +677,31 @@ export function DataTable<T = Record<string, unknown>>({
           </div>
         ) : (
           <>
-            <Table>
+            {/* With the proxy active this wrapper is the horizontal scroll
+                container (overflow-x hidden = single-bar guarantee; the ui
+                Table's internal overflow-auto wrapper is neutralized). */}
+            <div
+              ref={hScrollRef}
+              className={cn(
+                hScrollProxy && 'overflow-x-hidden [&>div]:overflow-visible',
+                // Bounded mode: rows scroll here under a sticky header. Header
+                // cells sit above pinned body cells (z-[1/2]); the pinned
+                // header corner (left-0) tops the other header cells so
+                // horizontal scroll cannot bleed through it.
+                fillHeight &&
+                  'min-h-0 flex-1 overflow-y-auto [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-[5] [&_thead_th.left-0]:z-[6]'
+              )}
+              style={minBodyHeight ? { minHeight: minBodyHeight } : undefined}
+            >
+              <Table>
               <TableHeader>
                 <TableRow className='border-b border-slate-200 hover:bg-transparent'>
                   {onSelectionChange && (
                     <TableHead
+                      ref={checkboxHeadRef}
                       className={cn(
                         'h-9 w-9 bg-slate-50 px-3 py-0',
-                        pinFirstColumn && 'sticky left-0 z-[2] min-w-[40px]'
+                        (pinFirstColumn || pinsActive) && 'sticky left-0 z-[2] min-w-[40px]'
                       )}
                     >
                       <Checkbox
@@ -582,31 +725,107 @@ export function DataTable<T = Record<string, unknown>>({
                       />
                     </TableHead>
                   )}
-                  {columns.map((col, colIdx) => (
+                  {orderedColumns.map((col, colIdx) => (
                     <TableHead
                       key={col.key}
+                      ref={(el) => {
+                        headCellRefs.current[col.key] = el
+                      }}
+                      style={pinStyle(col.key)}
                       className={cn(
-                        'h-9 whitespace-nowrap bg-slate-50 px-3 py-0 text-[11px] font-medium text-slate-500',
+                        'group/th h-9 whitespace-nowrap bg-slate-50 px-3 py-0 text-[11px] font-medium text-slate-500',
                         col.sortable &&
                           onSortChange &&
                           'cursor-pointer select-none hover:text-slate-600',
-                        pinFirstColumn &&
+                        !pinsActive &&
+                          pinFirstColumn &&
                           colIdx === 0 &&
                           cn(
                             'sticky z-[2] border-r border-slate-200 dark:border-border',
                             onSelectionChange ? 'left-[39px]' : 'left-0'
                           ),
+                        pinsActive && 'bg-slate-50 dark:bg-muted',
+                        pinCls(col.key, true),
                         col.headerClassName
                       )}
                       onClick={() => handleHeaderClick(col)}
                     >
-                      {col.header}
-                      {col.sortable && onSortChange && <SortIcon field={col.key} sort={sort} />}
+                      <span className='inline-flex items-center'>
+                        {col.header}
+                        {col.sortable && onSortChange && <SortIcon field={col.key} sort={sort} />}
+                        {pinsActive && onColumnPinChange && col.key !== 'claim' && (
+                          <button
+                            type='button'
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              cyclePin(col.key)
+                            }}
+                            aria-label={`Pin column ${col.key}`}
+                            title={
+                              columnPins?.[col.key] === 'left'
+                                ? 'Pinned left — click to pin right'
+                                : columnPins?.[col.key] === 'right'
+                                  ? 'Pinned right — click to unpin'
+                                  : 'Pin column'
+                            }
+                            className={cn(
+                              'ml-1 rounded p-0.5 transition-opacity',
+                              columnPins?.[col.key]
+                                ? 'text-nvr-cyan opacity-100'
+                                : 'text-slate-300 opacity-0 hover:text-slate-500 group-hover/th:opacity-100'
+                            )}
+                          >
+                            <Pin
+                              className={cn(
+                                'h-3 w-3',
+                                columnPins?.[col.key] === 'right' && 'rotate-90'
+                              )}
+                            />
+                          </button>
+                        )}
+                      </span>
                     </TableHead>
                   ))}
                 </TableRow>
+                {showColumnFilterRow && (
+                  <TableRow className='border-b border-slate-200 hover:bg-transparent'>
+                    {onSelectionChange && (
+                      <TableHead
+                        className={cn(
+                          'h-9 w-9 bg-slate-50 px-3 py-1',
+                          (pinFirstColumn || pinsActive) && 'sticky left-0 z-[2] min-w-[40px]'
+                        )}
+                      />
+                    )}
+                    {orderedColumns.map((col) => {
+                      const def = filterDefByKey.get(col.key)
+                      return (
+                        <TableHead
+                          key={col.key}
+                          style={pinStyle(col.key)}
+                          className={cn(
+                            'h-9 bg-slate-50 px-1.5 py-1 align-middle',
+                            pinsActive && 'bg-slate-50 dark:bg-muted',
+                            pinCls(col.key, true)
+                          )}
+                        >
+                          {def && onFilterChange ? (
+                            <FilterControl
+                              def={def}
+                              value={filterValues[def.key] ?? ''}
+                              onChange={(v) => onFilterChange(def.key, v)}
+                              layout='cell'
+                            />
+                          ) : null}
+                        </TableHead>
+                      )
+                    })}
+                  </TableRow>
+                )}
               </TableHeader>
-              <TableBody>
+              {/* Tabular figures: DM Sans is proportional by default, which
+                  leaves numeric columns visibly ragged. Letters are unaffected. */}
+              <TableBody className='tabular-nums'>
                 {rowGroups
                   ? rowGroups.map((group) => {
                       const collapsed = collapsedGroups?.has(group.key) ?? false
@@ -640,14 +859,17 @@ export function DataTable<T = Record<string, unknown>>({
                   <TableRow>
                     <TableCell
                       colSpan={columns.length + (onSelectionChange ? 1 : 0)}
-                      className='py-12 text-center text-[13px] text-slate-400'
+                      className='py-12 text-center align-middle text-[13px] text-slate-400'
+                      style={minBodyHeight ? { height: Math.max(96, minBodyHeight - 56) } : undefined}
                     >
                       {emptyMessage}
                     </TableCell>
                   </TableRow>
                 )}
               </TableBody>
-            </Table>
+              </Table>
+            </div>
+            {hScrollProxy && <HScrollProxy scrollerRef={hScrollRef} />}
 
             {/* Pagination */}
             {!rowGroups && total > limit && (

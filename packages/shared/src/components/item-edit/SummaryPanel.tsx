@@ -110,20 +110,38 @@ function M2MSummaryCount({
 function O2MSummaryCount({
   relatedCollection,
   manyField,
-  parentId
+  parentId,
+  rowFilter
 }: {
   relatedCollection: string
   manyField: string
   parentId: string
+  rowFilter?: Record<string, unknown>
 }) {
   const client = useNivaroClient()
+  // Same row_filter semantics as InlineTableField: flat values → _eq, object
+  // values pass through — so a filtered grid's summary count matches its rows.
+  const filterClause =
+    rowFilter && Object.keys(rowFilter).length > 0
+      ? {
+          _and: [
+            { [manyField]: { _eq: parentId } },
+            Object.fromEntries(
+              Object.entries(rowFilter).map(([k, v]) => [
+                k,
+                v !== null && typeof v === 'object' ? v : { _eq: v }
+              ])
+            )
+          ]
+        }
+      : { [manyField]: { _eq: parentId } }
   const { data: rows, isLoading } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['o2m-rows', relatedCollection, manyField, parentId],
+    queryKey: ['o2m-rows', relatedCollection, manyField, parentId, rowFilter ? JSON.stringify(rowFilter) : ''],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
           get(`/items/${relatedCollection}`, {
-            filter: JSON.stringify({ [manyField]: { _eq: parentId } }),
+            filter: JSON.stringify(filterClause),
             limit: 200
           })
         )
@@ -166,11 +184,25 @@ export function SummaryFieldValue({
         (r.one_collection === collection || r.one_collection == null)
     )
     if (o2mRel?.many_collection && o2mRel.many_field) {
+      const fOpts = (() => {
+        try {
+          return typeof field.options === 'string'
+            ? JSON.parse(field.options)
+            : (field.options ?? {})
+        } catch {
+          return {}
+        }
+      })()
       return (
         <O2MSummaryCount
           relatedCollection={o2mRel.many_collection}
           manyField={o2mRel.many_field}
           parentId={itemId}
+          rowFilter={
+            fOpts.row_filter && typeof fOpts.row_filter === 'object'
+              ? (fOpts.row_filter as Record<string, unknown>)
+              : undefined
+          }
         />
       )
     }
