@@ -1,6 +1,6 @@
 {
   "name": "@nivaro/react",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "React hooks and components for Nivaro CMS forms",
   "type": "module",
   "main": "./dist/index.js",
@@ -37,6 +37,7 @@
   },
   "scripts": {
     "build": "vite build && pnpm build:css",
+    "build:watch": "pnpm build:css && VITE_WATCH=1 vite build --watch",
     "build:css": "tailwindcss -c tailwind-build.config.cjs -i full.src.css -o dist/_tw.css --minify && cat styles.css dist/_tw.css > dist/full.css && rm dist/_tw.css",
     "dev": "tsc --watch"
   },
