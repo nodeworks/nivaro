@@ -54,6 +54,10 @@ export interface TransitionRequirementEntry {
   collection: string
   fk_field: string
   title: string
+  /** Dialog width override (px or 'NN%'). */
+  width?: string
+  /** Child fields offered as a header input + apply-to-all-lines button. */
+  apply_all?: string[]
   fields: TransitionRequirementFieldMeta[]
   /** Context columns rendered read-only per row. */
   display_fields: TransitionRequirementFieldMeta[]
@@ -510,6 +514,8 @@ export function TransitionRequirementsDialog({
 
   // Header → lines copy: fill the mapped child field on every AVAILABLE line
   // (waived inputs — e.g. MDSi order ids — are left alone).
+  const [bulkValues, setBulkValues] = useState<Record<string, string>>({})
+
   const copyHeaderToLines = (headerValue: string, childField: string) => {
     if (!headerValue.trim()) return
     setValues((prev) => {
@@ -680,6 +686,12 @@ export function TransitionRequirementsDialog({
               e.type === 'child_fields' && (e.display_fields ?? []).length + e.fields.length > 3
           ) && 'max-w-5xl'
         )}
+        style={(() => {
+          const w = payload.find(
+            (e): e is TransitionRequirementEntry => e.type === 'child_fields' && !!e.width
+          )?.width
+          return w ? { width: w, maxWidth: w } : undefined
+        })()}
       >
         <DialogHeader>
           <DialogTitle className='text-[15px]'>{title}</DialogTitle>
@@ -767,6 +779,39 @@ export function TransitionRequirementsDialog({
                 {payload.length > 1 && (
                   <h4 className='text-[12px] font-semibold text-slate-500'>{entry.title}</h4>
                 )}
+                {(entry.apply_all ?? [])
+                  .map((fName) => entry.fields.find((f) => f.field === fName))
+                  .filter((f): f is NonNullable<typeof f> => !!f && f.kind !== 'm2m')
+                  .map((f) => {
+                    const bulkKey = `__bulk__:${entry.collection}:${f.field}`
+                    const bulkVal = bulkValues[bulkKey] ?? ''
+                    return (
+                      <div
+                        key={bulkKey}
+                        className='flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2 dark:border-border dark:bg-white/[0.03]'
+                      >
+                        <label className='shrink-0 text-[11px] font-medium text-slate-500'>
+                          {f.label}
+                        </label>
+                        <Input
+                          value={bulkVal}
+                          onChange={(e) =>
+                            setBulkValues((prev) => ({ ...prev, [bulkKey]: e.target.value }))
+                          }
+                          placeholder={`${f.label} for every line…`}
+                          className='h-8 w-full max-w-xs text-[12px]'
+                        />
+                        <button
+                          type='button'
+                          disabled={!bulkVal.trim()}
+                          onClick={() => copyHeaderToLines(bulkVal, f.field)}
+                          className='h-8 shrink-0 whitespace-nowrap rounded-md bg-nvr-cyan px-3 text-[11px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40'
+                        >
+                          Apply to all lines
+                        </button>
+                      </div>
+                    )
+                  })}
                 <div className='overflow-x-auto rounded-md border border-slate-200 dark:border-border'>
                   <table className='w-full border-collapse text-[12px]'>
                     <thead>

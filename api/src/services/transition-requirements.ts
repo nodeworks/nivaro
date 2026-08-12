@@ -64,6 +64,10 @@ export interface RequirementBlockResult {
   collection: string
   fk_field: string
   title: string
+  /** Dialog width override (px or 'NN%'). */
+  width?: string
+  /** Child fields that get a header input + "apply to all lines" button. */
+  apply_all?: string[]
   fields: RequirementFieldMeta[]
   /** Context columns shown read-only per row in the dialog. */
   display_fields: RequirementFieldMeta[]
@@ -576,6 +580,8 @@ export async function evaluateTransitionRequirements(
     }
 
     hasBlockingEntry = true
+    const rawWidth = (entry as Record<string, unknown>).width
+    const rawApplyAll = (entry as Record<string, unknown>).apply_all
     blocking.push({
       type: 'child_fields',
       collection,
@@ -584,6 +590,10 @@ export async function evaluateTransitionRequirements(
       fields: fieldMeta,
       display_fields: displayFieldMeta,
       rows,
+      ...(typeof rawWidth === 'string' && rawWidth.trim() ? { width: rawWidth.trim() } : {}),
+      ...(Array.isArray(rawApplyAll) && rawApplyAll.length
+        ? { apply_all: rawApplyAll.map(String) }
+        : {}),
       ...(prefillValues ? { prefill_values: prefillValues } : {})
     })
   }
