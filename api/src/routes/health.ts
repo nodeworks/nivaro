@@ -55,14 +55,15 @@ export async function healthRoutes(app: FastifyInstance) {
       .catch(() => false)
     const redisLatency = Date.now() - redisStart
 
-    // Inngest — no health URL is exposed via config; in development the dev
-    // server runs on localhost:8288, so probe it there. Otherwise 'unknown'.
+    // Inngest — INNGEST_HEALTH_URL when configured (compose/stack service
+    // address); development falls back to the local dev server. Else 'unknown'.
     let inngestStatus: boolean | 'unknown' = 'unknown'
-    if (config.NODE_ENV === 'development') {
+    const inngestHealthUrl =
+      config.INNGEST_HEALTH_URL ??
+      (config.NODE_ENV === 'development' ? 'http://localhost:8288/health' : null)
+    if (inngestHealthUrl) {
       try {
-        const res = await fetch('http://localhost:8288/health', {
-          signal: AbortSignal.timeout(1500)
-        })
+        const res = await fetch(inngestHealthUrl, { signal: AbortSignal.timeout(1500) })
         inngestStatus = res.ok
       } catch {
         inngestStatus = false

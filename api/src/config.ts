@@ -75,6 +75,10 @@ const schema = z.object({
   APP_URLS: z.string().default(''),
 
   INNGEST_EVENT_KEY: z.string().default('local'),
+  // Optional health-probe URL for the inngest server (e.g.
+  // http://nivaro_inngest:8288/health in a compose stack). Development
+  // falls back to localhost:8288 automatically.
+  INNGEST_HEALTH_URL: z.string().optional(),
   INNGEST_SIGNING_KEY: z.string().default('local'),
 
   MAIL_FROM: z.string().default('noreply@nivaro.dev'),
