@@ -36,10 +36,12 @@ if (!rawCommits) {
 const commits = rawCommits
   .split('\n')
   .map(line => {
-    const [subject, body, hash] = line.split('|||');
+    // Multi-line commit bodies split into fragment lines with no '|||' parts —
+    // default the missing pieces instead of crashing on undefined.
+    const [subject = '', body = '', hash = ''] = line.split('|||');
     return { subject: subject.trim(), body: body.trim(), hash: hash.trim() };
   })
-  .filter(c => c.subject);
+  .filter(c => c.subject && c.hash);
 
 const commitText = commits
   .map(c => {
