@@ -2663,9 +2663,56 @@ export function ItemEditForm({
     return true
   }
 
+  // Client-side pre-flight: if this save WILL trip a change-reason requirement
+  // (parent draft or queued O2M row edits touching flagged fields), prompt
+  // BEFORE any write starts — otherwise the server 422 arrives mid-save with
+  // other steps already committed. The server check remains the backstop.
+  async function preflightChangeReason(): Promise<ChangeReasonChallenge | null> {
+    if (changeReasonRef.current) return null
+    const targets: Array<{ collection: string; changedFields: string[] }> = []
+    if (!isNew) {
+      const parentChanged = allFields
+        .filter(f => !SYSTEM_FIELDS.has(f.field) && !f.readonly && f.field in draft &&
+          !valuesEqual(draft[f.field], initialDataRef.current[f.field]))
+        .map(f => f.field)
+      if (parentChanged.length) targets.push({ collection, changedFields: parentChanged })
+    }
+    for (const [key, edits] of pendingO2MEdits.entries()) {
+      if (edits.size === 0) continue
+      const rc = key.split('.')[0]
+      const changed = new Set<string>()
+      for (const ch of edits.values()) for (const k of Object.keys(ch)) if (!k.startsWith('__')) changed.add(k)
+      if (changed.size) targets.push({ collection: rc, changedFields: [...changed] })
+    }
+    for (const t of targets) {
+      try {
+        const meta = await qc.fetchQuery({
+          queryKey: ['collection-meta-cr', t.collection],
+          queryFn: () => client.request<{ data: { change_reason_config?: { fields?: string[]; reasons?: string[]; allow_free_text?: boolean } | null } }>(get(`/collections/${t.collection}`)).then(r => r.data),
+          staleTime: 60_000
+        })
+        const cfg = meta?.change_reason_config
+        if (cfg?.fields?.length) {
+          const hit = t.changedFields.filter(f => cfg.fields!.includes(f))
+          if (hit.length) {
+            return { fields_changed: hit, reasons: cfg.reasons ?? [], allow_free_text: cfg.allow_free_text !== false }
+          }
+        }
+      } catch { /* meta unavailable — fall through to the server backstop */ }
+    }
+    return null
+  }
+
   function handleSave() {
     if (!validateAll()) return
-    saveMut.mutate()
+    void (async () => {
+      const challenge = await preflightChangeReason()
+      if (challenge) {
+        setCrChallenge(challenge)
+        return
+      }
+      saveMut.mutate()
+    })()
   }
 
   // ── Save / delete ──────────────────────────────────────────────────────────

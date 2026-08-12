@@ -339,6 +339,11 @@ function RevisionRow({
               </div>
             </div>
           )}
+          {!isO2M && revision.comment && (
+            <p className='mb-2 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800'>
+              Reason: {revision.comment}
+            </p>
+          )}
           {isO2M ? (
             <O2MEventView comment={revision.comment} action={revision.action ?? ''} />
           ) : view === 'side' ? (

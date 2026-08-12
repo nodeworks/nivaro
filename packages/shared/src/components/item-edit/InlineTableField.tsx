@@ -2206,7 +2206,16 @@ export function InlineTableField({
           // __nested_ops_* keys ride along here (exempt from the writableKeys filter) so the
           // batch flush can apply them — the immediate PATCH branch below still strips them.
           const nestedOpsEntries = Object.entries(editState.draft).filter(([k]) => k.startsWith('__nested_ops_'))
-          staging.queueEdit(relatedCollection, manyField, editState.rowId, { ...rowPayload, ...Object.fromEntries(nestedOpsEntries) })
+          // Queue only values that actually CHANGED vs the saved row — the full
+          // draft would make every column look edited (change-reason preflight
+          // would then name all of them, and the flush PATCH would re-write
+          // untouched columns).
+          const baseRow = rows.find(r => String(r.id) === editState.rowId)
+          const queuedPayload = baseRow
+            ? Object.fromEntries(Object.entries(rowPayload).filter(([k, v]) =>
+                String(v ?? '') !== String((baseRow as Record<string, unknown>)[k] ?? '')))
+            : rowPayload
+          staging.queueEdit(relatedCollection, manyField, editState.rowId, { ...queuedPayload, ...Object.fromEntries(nestedOpsEntries) })
           setEditState(null)
           return
         }
@@ -3474,6 +3483,11 @@ export function InlineTableField({
                     <span className='text-[10px] text-slate-400'>{rev.timestamp ? formatRelative(rev.timestamp) : ''}</span>
                   </div>
                   {rev.action && <span className='mt-0.5 inline-block text-[10px] font-medium uppercase tracking-wide text-slate-400'>{rev.action}</span>}
+                  {(rev as { comment?: string | null }).comment && (
+                    <p className='mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:bg-amber-500/10 dark:text-amber-300'>
+                      Reason: {(rev as { comment?: string | null }).comment}
+                    </p>
+                  )}
                   <div className='mt-2 space-y-1'>
                     {Object.entries(changes).map(([k, v]) => (
                       <div key={k} className='flex items-start gap-2 text-[11px]'>

@@ -59,7 +59,7 @@ export function ChangeReasonDialog({
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onCancel() }}>
-      <DialogContent className='max-w-md'>
+      <DialogContent className='max-w-md space-y-3 p-5'>
         <DialogHeader>
           <DialogTitle className='flex items-center gap-2 text-[15px]'>
             <MessageSquareWarning className='h-4 w-4 text-amber-500' />
