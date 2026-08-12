@@ -1,6 +1,11 @@
 {
   "installCommand": "pnpm install",
-  "buildCommand": "pnpm --filter @nivaro/sdk build && pnpm --filter @nivaro/shared build && pnpm --filter @nivaro/admin build",
+  "buildCommand": "pnpm --filter @nivaro/sdk build && pnpm --filter @nivaro/shared build && pnpm --filter @nivaro/react build && pnpm --filter @nivaro/admin build",
   "outputDirectory": "admin/dist",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
 }
