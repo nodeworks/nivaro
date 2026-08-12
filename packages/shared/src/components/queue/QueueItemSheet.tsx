@@ -386,6 +386,7 @@ export function QueueItemSheet({
           payload={reqDialog.payload}
           isRetry={reqDialog.revision > 1}
           onSubmitted={() => transitionMut.mutate(reqDialog.transitionId)}
+          executing={transitionMut.isPending}
           onClose={() => setReqDialog(null)}
         />
       )}

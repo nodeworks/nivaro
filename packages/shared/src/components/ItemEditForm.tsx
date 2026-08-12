@@ -42,7 +42,7 @@ import type {
   SummaryAggConfig,
   SummaryEntry
 } from './item-edit/types'
-import { AccessDeniedPanel, AddendumPanel, CommentPanel, ErpFailureBanner, ItemActionButtons, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
+import { AccessDeniedPanel, AddendumPanel, CommentPanel, ErpFailureBanner, ExternalRequestsChip, ItemActionButtons, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
 import { WidgetSlot, type InputBinding } from './WidgetSlot'
 import type { PendingTask } from './panels/TaskPanel'
 import { Button } from './ui/button'
@@ -4243,7 +4243,7 @@ export function ItemEditForm({
         )}
 
         {showHeader && (headerWidgets.length > 0 || headerFields.length > 0) && (
-          <div className='flex shrink-0 overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4'>
+          <div className='flex shrink-0 items-center overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4'>
             {[
               ...headerWidgets.map((w) => ({ type: 'widget' as const, sort: w.sort, key: w.field, data: w })),
               ...headerFields.map((f) => ({ type: 'field' as const, sort: f.sort, key: f.field, data: f })),
@@ -4389,6 +4389,11 @@ export function ItemEditForm({
                   </div>
                 )
               })}
+            {!isNew && itemId && (
+              <div className='ml-auto self-center py-2 pl-3'>
+                <ExternalRequestsChip collection={collection} itemId={String(itemId)} />
+              </div>
+            )}
           </div>
         )}
 

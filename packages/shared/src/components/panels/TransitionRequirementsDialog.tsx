@@ -453,12 +453,16 @@ export function TransitionRequirementsDialog({
   payload,
   isRetry,
   onSubmitted,
+  executing = false,
   onClose
 }: {
   payload: TransitionRequirementsPayload
   /** True when this payload came from a retry's second 422 (values changed underneath). */
   isRetry?: boolean
   onSubmitted: () => void
+  /** True while the PARENT is executing the transition (external submissions
+   *  can take several seconds) — the dialog stays open showing progress. */
+  executing?: boolean
   onClose: () => void
 }) {
   const client = useNivaroClient()
@@ -677,7 +681,7 @@ export function TransitionRequirementsDialog({
     payload.length === 1 && payload[0].title ? payload[0].title : 'Required before continuing'
 
   return (
-    <Dialog open onOpenChange={(open) => !open && !submitting && onClose()}>
+    <Dialog open onOpenChange={(open) => !open && !submitting && !executing && onClose()}>
       <DialogContent
         className={cn(
           'max-w-2xl',
@@ -696,7 +700,12 @@ export function TransitionRequirementsDialog({
         <DialogHeader>
           <DialogTitle className='text-[15px]'>{title}</DialogTitle>
         </DialogHeader>
-        <DialogBody className='max-h-[60vh] space-y-5 overflow-y-auto'>
+        <DialogBody
+          className={cn(
+            'max-h-[60vh] space-y-5 overflow-y-auto',
+            (submitting || executing) && 'pointer-events-none opacity-60 transition-opacity'
+          )}
+        >
           {isRetry && (
             <p className='flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'>
               <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400' />
@@ -931,12 +940,27 @@ export function TransitionRequirementsDialog({
             )
           })}
         </DialogBody>
-        <DialogFooter>
-          <Button type='button' variant='outline' onClick={onClose} disabled={submitting}>
+        <DialogFooter className='items-center'>
+          {(submitting || executing) && (
+            <span className='mr-auto flex items-center gap-2 text-[12px] text-slate-500 dark:text-slate-400'>
+              <Loader2 className='h-3.5 w-3.5 animate-spin text-nvr-cyan' />
+              {submitting
+                ? 'Saving line values…'
+                : 'Submitting — contacting external systems, this can take a few seconds…'}
+            </span>
+          )}
+          <Button type='button' variant='outline' onClick={onClose} disabled={submitting || executing}>
             Cancel
           </Button>
-          <Button type='button' onClick={handleSubmit} disabled={submitting || hasEmpty}>
-            {submitting ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Submit'}
+          <Button type='button' onClick={handleSubmit} disabled={submitting || executing || hasEmpty}>
+            {submitting || executing ? (
+              <span className='flex items-center gap-1.5'>
+                <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                {submitting ? 'Saving…' : 'Submitting…'}
+              </span>
+            ) : (
+              'Submit'
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

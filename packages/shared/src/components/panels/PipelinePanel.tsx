@@ -1413,6 +1413,7 @@ function PipelinePanelInner({
               comment: requirementsDialog.comment
             })
           }
+          executing={executeTransition.isPending}
           onClose={() => setRequirementsDialog(null)}
         />
       )}
