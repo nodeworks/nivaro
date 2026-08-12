@@ -31,6 +31,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # sdk FIRST — shared type-imports @nivaro/sdk's dist; building shared
+      # without it collapses inference into implicit-any errors.
+      - name: Build sdk
+        run: pnpm --filter @nivaro/sdk build
+
       - name: Build shared
         run: pnpm --filter @nivaro/shared build
 

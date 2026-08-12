@@ -19,8 +19,9 @@ jobs:
         run: npm install -g vercel@latest
 
       - name: Deploy (production)
+        # Run from the repo root — the Vercel project's Root Directory setting
+        # is already `www`; cd-ing into www doubled the path (www/www).
         run: vercel --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
-        working-directory: www
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

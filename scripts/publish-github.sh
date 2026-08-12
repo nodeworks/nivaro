@@ -106,7 +106,12 @@ if [ "${1:-}" = "--push" ]; then
   # main only — never every local branch (a --all push once dragged dozens of
   # stale agent worktree branches onto the public repo).
   git push --force public main
-  git push --force public --tags
+  # Tags ONE PER PUSH: GitHub creates no push events (and fires no workflows)
+  # when a single push contains more than three tags. filter-repo is
+  # deterministic, so unchanged tags re-push as no-ops with no event.
+  for t in $(git tag); do
+    git push --force public "refs/tags/$t"
+  done
   echo "✓ published"
 else
   echo "  (dry build — rerun with --push <github-url> to publish)"

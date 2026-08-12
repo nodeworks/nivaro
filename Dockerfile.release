@@ -16,19 +16,25 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY api/package.json ./api/
 COPY admin/package.json ./admin/
 COPY packages/sdk/package.json ./packages/sdk/
+COPY packages/shared/package.json ./packages/shared/
+COPY packages/react/package.json ./packages/react/
 RUN pnpm install --frozen-lockfile
 
 # ─── Stage 3: build SDK + API + Admin ────────────────────────────────────────
 FROM base AS build
 WORKDIR /app
-# git required for cloud extension injection
-RUN apk add --no-cache git
+# git for cloud extension injection; bash for its script (alpine ships ash)
+RUN apk add --no-cache git bash
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/api/node_modules ./api/node_modules
 COPY --from=deps /app/admin/node_modules ./admin/node_modules
 COPY --from=deps /app/packages/sdk/node_modules ./packages/sdk/node_modules
+COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY . .
+# Build order matters: shared type-imports @nivaro/sdk's dist, admin imports
+# shared's dist — without sdk built first, inference collapses to implicit-any.
 RUN pnpm --filter @nivaro/sdk build
+RUN pnpm --filter @nivaro/shared build
 # Inject cloud-only extensions before API build (fail-safe: exits 0 on any error).
 # Set CLOUD_EXTENSIONS_REPO + CLOUD_EXTENSIONS_TOKEN as Railway service env vars.
 # Both are declared as ARGs so Railway passes them in at build time.
@@ -54,6 +60,8 @@ RUN corepack enable pnpm
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY api/package.json ./api/
 COPY packages/sdk/package.json ./packages/sdk/
+COPY packages/shared/package.json ./packages/shared/
+COPY packages/react/package.json ./packages/react/
 RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
 
 # Compiled API + SDK
