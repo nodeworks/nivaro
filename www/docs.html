@@ -1125,7 +1125,7 @@ const article = await nivaro.request(readItem('articles', '123'))
         <div class="doc-section" id="s-external-apis-guide" data-toc='[{"id":"external-apis-guide","label":"External APIs"}]'>
           <!-- SYNC:external-apis-guide -->
           <h1 class="doc-h1" id="external-apis-guide">External APIs</h1>
-          <p class="doc-p">External APIs lets you configure connections to third-party services (Oracle EBS, MWF, MDSi, Azure, etc.) with stored authentication credentials. Configured APIs can be tested from the admin UI and called programmatically from extensions.</p>
+          <p class="doc-p">External APIs lets you configure connections to third-party services (Oracle EBS, SAP, Azure, etc.) with stored authentication credentials. Configured APIs can be tested from the admin UI and called programmatically from extensions.</p>
           <h3 class="doc-h3">Admin UI — /external-apis</h3>
           <p class="doc-p">Navigate to External APIs in the sidebar. Each entry shows the base URL, auth type, and enabled state. Click an entry to open the editor with three tabs: config, predefined endpoints, and the live test panel.</p>
           <h3 class="doc-h3">Auth types</h3>
@@ -1146,7 +1146,7 @@ const article = await nivaro.request(readItem('articles', '123'))
           <p class="doc-p">Secrets (token, password, client_secret, api_key value) are masked in GET responses with <code class="doc-code">••••••</code>. Re-submitting the masked value on PATCH preserves the existing secret. Only admins can read or write API configs.</p>
           <h3 class="doc-h3">Spec import (OpenAPI / Swagger)</h3>
           <p class="doc-p">The "Import Spec" collapsible in the Endpoints tab lets you bulk-create endpoint templates from an OpenAPI 3.x or Swagger 2.0 JSON document. Paste or upload the spec JSON; all paths and HTTP methods are parsed and inserted as predefined endpoint templates. YAML is not supported — convert to JSON first.</p>
-          <div class="doc-note">External APIs intentionally skip SSRF protection — they are admin-only and designed to reach internal corporate services (Oracle EBS, MWF, MDSi, etc.) that would otherwise be blocked. SSRF protection applies to webhooks, not external APIs.</div>
+          <div class="doc-note">External APIs intentionally skip SSRF protection — they are admin-only and designed to reach internal corporate services (Oracle EBS, SAP, etc.) that would otherwise be blocked. SSRF protection applies to webhooks, not external APIs.</div>
           <!-- /SYNC:external-apis-guide -->
         </div>
 
@@ -1718,6 +1718,8 @@ x-workspace: ws-uuid-here</code></pre>
             <li>required_roles: JSON array of role UUIDs that can execute this transition; empty = all authenticated users.</li>
             <li>condition_rules (optional): field conditions that must match to offer the transition.</li>
             <li>group_label: optional; transitions with same label render in a dropdown menu instead of individual buttons.</li>
+            <li>requirements (optional): data-entry gates enforced at execute time (422 + a fill-in dialog). Type child_fields requires listed fields on every related child row (scalar inputs or m2m multi-selects writing junction rows); type record_fields collects fields on the transitioning record itself (text inputs, m2o pickers) — e.g. confirm an order number at submit time.</li>
+            <li>auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, after manual transitions, and via the hourly sweep).</li>
           </ul>
           <div class="doc-note">Workflow state sync: if binding has state_field set, the current state KEY is written to that column on every transition. Enables cross-system integration and custom queries.</div>
           <!-- /SYNC:workflow-overview -->
@@ -7064,14 +7066,14 @@ Authorization: Bearer &lt;token&gt;
         <div class="doc-section" id="s-at-risk-flagging" data-toc='[{"id":"at-risk-flagging","label":"At-Risk Flagging"}]'>
           <!-- SYNC:at-risk-flagging -->
           <h1 class="doc-h1" id="at-risk-flagging">At-Risk Flagging</h1>
-          <p class="doc-p">At-risk rules highlight rows in the collection browser that meet risk conditions — overdue items, budget overruns, missing data. Flagged rows get a red or amber tint plus a flag icon, and an "At risk (N)" chip above the table filters the view down to flagged rows only.</p>
+          <p class="doc-p">At-risk rules are the generic row-highlight engine: rows matching a rule's conditions get a coloured tint in the collection browser AND in queue worklists — overdue items, budget overruns, records sent back for rework, missing data. Flagged rows also get a flag icon, and an "At risk (N)" chip above the table filters the view down to flagged rows only.</p>
           <h3 class="doc-h3">Managing rules</h3>
           <p class="doc-p">In the collection browser, admins see a "Manage rules" button next to the At-risk chip. The inline panel lists the collection's rules and lets you create, edit, activate/deactivate, and delete them. Each rule has:</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Setting</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>Name</td><td>Shown in the flag tooltip when the rule matches a row.</td></tr>
               <tr><td>Conditions</td><td>One or more field / operator / value rows. ALL must match (AND) for the rule to flag a row.</td></tr>
-              <tr><td>Highlight</td><td><code class="doc-code">red</code> (default) or <code class="doc-code">amber</code> — controls the row tint. The first matching rule decides the colour.</td></tr>
+              <tr><td>Highlight</td><td><code class="doc-code">red</code> (default), <code class="doc-code">amber</code>, <code class="doc-code">yellow</code>, <code class="doc-code">green</code>, <code class="doc-code">blue</code>, or <code class="doc-code">purple</code> — controls the row tint. The first matching rule decides the colour.</td></tr>
               <tr><td>Active</td><td>Inactive rules are kept but not evaluated.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Operators and cross-field references</h3>
@@ -7096,29 +7098,39 @@ Authorization: Bearer &lt;token&gt;
           <!-- /SYNC:at-risk-flagging -->
         </div>
 
-        <div class="doc-section" id="s-imports" data-toc='[{"id":"data-import-guide","label":"Data Import Queue"}]'>
+        <div class="doc-section" id="s-imports" data-toc='[{"id":"data-import-guide","label":"Imports"},{"id":"imports-staged","label":"Staged imports"},{"id":"imports-collection","label":"Collection imports"},{"id":"imports-definitions","label":"Definitions"}]'>
           <!-- SYNC:imports -->
-          <h1 class="doc-h1" id="data-import-guide">Data Import Queue</h1>
-          <p class="doc-p">The Data Import feature lets admins upload CSV data and map columns to collection fields. Imports are processed asynchronously in the background with real-time progress updates via Socket.io.</p>
-          <h3 class="doc-h3">Creating an import</h3>
-          <p class="doc-p">Navigate to Monitoring → Imports. Click New Import and follow the 4-step wizard:</p>
+          <h1 class="doc-h1" id="data-import-guide">Imports</h1>
+          <p class="doc-p">The Import Console (Monitoring → Imports) covers two different importers behind one surface. Staged imports load a file into a staging table and optionally run a stored procedure over it. Collection imports map a CSV's columns onto a collection's fields and write each row through the item API. The console is the shared <code class="doc-code">ImportConsole</code> component, so the admin and any headless frontend built on @nivaro/react run exactly the same screen.</p>
+          <h2 class="doc-h2" id="imports-staged">Staged imports</h2>
+          <p class="doc-p">Each staged import is a row in <code class="doc-code">nivaro_import_definitions</code>: a key, the staging table rows land in, and an optional procedure that runs afterwards. A definition with no procedure is still a valid import — the load alone is the job. Uploading queues a run in <code class="doc-code">nivaro_import_queue</code>; a worker drains it one run at a time, because procedures truncate and refill shared staging tables.</p>
           <div class="doc-table-wrap"><table class="doc-table">
-            <thead><tr><th>Step</th><th>Description</th></tr></thead>
-            <tbody><tr><tr><td>1. Upload</td><td>Select collection and upload a CSV file (or paste CSV text).</td></tr>
-              <tr><td>2. Map Columns</td><td>Map each CSV column to a collection field. Unmapped columns are skipped.</td></tr>
-              <tr><td>3. Options</td><td>Choose duplicate strategy: skip, update, or error. Optionally specify an ID field for upsert matching.</td></tr>
-              <tr><td>4. Review &amp; Run</td><td>Preview row count and start the import.</td></tr></tr></tbody>
+            <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>Status</td><td>queued, running (live pulse), completed, error or canceled.</td></tr>
+              <tr><td>Import</td><td>Definition label, with its stable key underneath.</td></tr>
+              <tr><td>Rows / Duration</td><td>Rows parsed out of the file, and how long the run took.</td></tr>
+              <tr><td>Actions</td><td>Open the detail sheet, re-queue the same file, or cancel.</td></tr></tr></tbody>
           </table></div>
-          <h3 class="doc-h3">Progress tracking</h3>
-          <p class="doc-p">The import page auto-refreshes for in-progress jobs. Socket.io emits <code class="doc-code">import:progress</code> events every 10 rows — the job detail page shows live counters for created, updated, skipped, and error rows.</p>
-          <h3 class="doc-h3">Duplicate strategies</h3>
+          <p class="doc-p">The New import dialog previews the file BEFORE queueing, using the worker's own parser — so the cleaned values shown are the ones the procedure will consume — and diffs the file's columns against the staging table, warning about columns the table does not have and columns it expects but the file omits.</p>
+          <div class="doc-note">The insight strip is scoped by the window control (7d / 30d / 90d / All): status counts, success rate, rows imported and median duration all describe the runs inside that window, and so does the table.</div>
+          <h2 class="doc-h2" id="imports-collection">Collection imports</h2>
+          <p class="doc-p">The row-by-row CSV importer. Rows go through the normal item API, so validation rules, hooks, row-level security and activity logging all apply. Jobs process in the background with live progress counters.</p>
           <div class="doc-table-wrap"><table class="doc-table">
-            <thead><tr><th>Strategy</th><th>Behavior</th></tr></thead>
-            <tbody><tr><tr><td>skip</td><td>If a row with the same ID field value exists, skip it.</td></tr>
-              <tr><td>update</td><td>If a row with the same ID field value exists, update it (upsert).</td></tr>
-              <tr><td>error</td><td>If a row with the same ID field value exists, mark the row as an error and continue.</td></tr></tr></tbody>
+            <thead><tr><th>Step</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>1. Source</td><td>Upload a CSV, paste rows, or have the server fetch a URL (25MB max). Shows a parsed preview.</td></tr>
+              <tr><td>2. Map columns</td><td>Pick the target collection and map each CSV column to a field. "Match columns with AI" fills the map and shows a confidence per column; unmapped columns are ignored.</td></tr>
+              <tr><td>3. Options</td><td>Duplicate strategy and the field used to match existing records.</td></tr>
+              <tr><td>4. Confirm</td><td>Review file, collection, row count, mapping count and duplicate handling before starting.</td></tr></tr></tbody>
           </table></div>
-          <div class="doc-note doc-warn">Import is admin-only. <code class="doc-code">nivaro_*</code> system tables are blocked as import targets.</div>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Duplicate strategy</th><th>Behavior</th></tr></thead>
+            <tbody><tr><tr><td>skip</td><td>A row whose match field already exists is left alone.</td></tr>
+              <tr><td>overwrite</td><td>The existing record's mapped fields are all replaced.</td></tr>
+              <tr><td>merge</td><td>Only the mapped fields are updated.</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="imports-definitions">Definitions</h2>
+          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts) and sort. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked.</p>
+          <div class="doc-note doc-warn">Both importers are admin-only for writes, and <code class="doc-code">nivaro_*</code> system tables are blocked as collection-import targets. Staging table and procedure names are validated as plain identifiers because they are interpolated into SQL — BULK INSERT and EXEC cannot bind an object name.</div>
           <!-- /SYNC:imports -->
         </div>
 

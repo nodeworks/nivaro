@@ -16,6 +16,238 @@
     }
   ],
   "paths": {
+    "/items/warehouses_regions": {
+      "get": {
+        "tags": [
+          "warehouses_regions"
+        ],
+        "operationId": "listWarehousesRegions",
+        "summary": "List warehouses_regions",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 25
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated fields; prefix - for descending"
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON filter DSL"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated field list"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WarehousesRegions"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "warehouses_regions"
+        ],
+        "operationId": "createWarehousesRegions",
+        "summary": "Create warehouses_regions",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehousesRegions"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WarehousesRegions"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items/warehouses_regions/{id}": {
+      "get": {
+        "tags": [
+          "warehouses_regions"
+        ],
+        "operationId": "getWarehousesRegions",
+        "summary": "Get warehouses_regions by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WarehousesRegions"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "warehouses_regions"
+        ],
+        "operationId": "updateWarehousesRegions",
+        "summary": "Update warehouses_regions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehousesRegions"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WarehousesRegions"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "warehouses_regions"
+        ],
+        "operationId": "deleteWarehousesRegions",
+        "summary": "Delete warehouses_regions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/items/additional_emails": {
       "get": {
         "tags": [
@@ -2780,6 +3012,238 @@
         ],
         "operationId": "deleteBids",
         "summary": "Delete bids",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/items/bom_categories_divisions": {
+      "get": {
+        "tags": [
+          "BOM Categories / Zones"
+        ],
+        "operationId": "listBomCategoriesDivisions",
+        "summary": "List bom_categories_divisions",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 25
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated fields; prefix - for descending"
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON filter DSL"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated field list"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BomCategoriesDivisions"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "BOM Categories / Zones"
+        ],
+        "operationId": "createBomCategoriesDivisions",
+        "summary": "Create bom_categories_divisions",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BomCategoriesDivisions"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BomCategoriesDivisions"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items/bom_categories_divisions/{id}": {
+      "get": {
+        "tags": [
+          "BOM Categories / Zones"
+        ],
+        "operationId": "getBomCategoriesDivisions",
+        "summary": "Get bom_categories_divisions by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BomCategoriesDivisions"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "BOM Categories / Zones"
+        ],
+        "operationId": "updateBomCategoriesDivisions",
+        "summary": "Update bom_categories_divisions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BomCategoriesDivisions"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BomCategoriesDivisions"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "BOM Categories / Zones"
+        ],
+        "operationId": "deleteBomCategoriesDivisions",
+        "summary": "Delete bom_categories_divisions",
         "parameters": [
           {
             "name": "id",
@@ -51983,6 +52447,238 @@
           }
         }
       }
+    },
+    "/items/inventory_request_materials_warehouses": {
+      "get": {
+        "tags": [
+          "Inventory Request Materials Warehouses"
+        ],
+        "operationId": "listInventoryRequestMaterialsWarehouses",
+        "summary": "List inventory_request_materials_warehouses",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 25
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated fields; prefix - for descending"
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON filter DSL"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated field list"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/InventoryRequestMaterialsWarehouses"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Inventory Request Materials Warehouses"
+        ],
+        "operationId": "createInventoryRequestMaterialsWarehouses",
+        "summary": "Create inventory_request_materials_warehouses",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryRequestMaterialsWarehouses"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/InventoryRequestMaterialsWarehouses"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items/inventory_request_materials_warehouses/{id}": {
+      "get": {
+        "tags": [
+          "Inventory Request Materials Warehouses"
+        ],
+        "operationId": "getInventoryRequestMaterialsWarehouses",
+        "summary": "Get inventory_request_materials_warehouses by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/InventoryRequestMaterialsWarehouses"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Inventory Request Materials Warehouses"
+        ],
+        "operationId": "updateInventoryRequestMaterialsWarehouses",
+        "summary": "Update inventory_request_materials_warehouses",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryRequestMaterialsWarehouses"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/InventoryRequestMaterialsWarehouses"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Inventory Request Materials Warehouses"
+        ],
+        "operationId": "deleteInventoryRequestMaterialsWarehouses",
+        "summary": "Delete inventory_request_materials_warehouses",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -51994,6 +52690,11 @@
       }
     },
     "schemas": {
+      "WarehousesRegions": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
       "AdditionalEmails": {
         "type": "object",
         "properties": {
@@ -52464,6 +53165,21 @@
           },
           "status": {
             "type": "string"
+          }
+        },
+        "required": []
+      },
+      "BomCategoriesDivisions": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "bom_categories_id": {
+            "type": "integer"
+          },
+          "divisions_id": {
+            "type": "integer"
           }
         },
         "required": []
@@ -53875,6 +54591,14 @@
           "changed": {
             "type": "string",
             "format": "date-time"
+          },
+          "base_amount": {
+            "type": "number",
+            "description": "Base Invoice"
+          },
+          "tax_amount": {
+            "type": "number",
+            "description": "Tax / Other"
           }
         },
         "required": []
@@ -54102,6 +54826,21 @@
           "allocated_cost": {
             "type": "number",
             "description": "Actual cost of allocated inventory (per-transaction unit cost × allocated qty)"
+          },
+          "isp_labor": {
+            "type": "number"
+          },
+          "osp_labor": {
+            "type": "number"
+          },
+          "isp_materials": {
+            "type": "number"
+          },
+          "osp_materials": {
+            "type": "number"
+          },
+          "inventory_requests": {
+            "type": "string"
           }
         },
         "required": []
@@ -54970,6 +55709,12 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "units": {
+            "type": "string"
+          },
+          "inventory_requests": {
+            "type": "string"
           }
         },
         "required": []
@@ -55137,6 +55882,9 @@
           "changed": {
             "type": "string",
             "format": "date-time"
+          },
+          "workflows": {
+            "type": "string"
           }
         },
         "required": []
@@ -55452,6 +56200,15 @@
           "changed": {
             "type": "string",
             "format": "date-time"
+          },
+          "regions": {
+            "type": "string"
+          },
+          "budget_targets": {
+            "type": "string"
+          },
+          "allocations": {
+            "type": "string"
           }
         },
         "required": []
@@ -55643,6 +56400,15 @@
           },
           "id": {
             "type": "integer"
+          },
+          "inventory_requests": {
+            "type": "string"
+          },
+          "budget_targets": {
+            "type": "string"
+          },
+          "allocations": {
+            "type": "string"
           }
         },
         "required": [
@@ -55717,6 +56483,9 @@
           "changed": {
             "type": "string",
             "format": "date-time"
+          },
+          "workflows": {
+            "type": "string"
           }
         },
         "required": []
@@ -55816,6 +56585,12 @@
           "date_updated": {
             "type": "string",
             "format": "date-time"
+          },
+          "sales_order_id": {
+            "type": "string"
+          },
+          "warehouses": {
+            "type": "string"
           }
         },
         "required": []
@@ -55994,6 +56769,9 @@
           "date_updated": {
             "type": "string",
             "format": "date-time"
+          },
+          "regions": {
+            "type": "string"
           }
         },
         "required": []
@@ -56025,6 +56803,10 @@
           "date_updated": {
             "type": "string",
             "format": "date-time"
+          },
+          "divisions": {
+            "type": "string",
+            "description": "Zones this BOM category is limited to — empty = available in every zone"
           }
         },
         "required": []
@@ -56320,6 +57102,15 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "units": {
+            "type": "string"
+          },
+          "shipping_requests": {
+            "type": "string"
+          },
+          "install_requests": {
+            "type": "string"
           }
         },
         "required": []
@@ -57009,6 +57800,9 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "allocations": {
+            "type": "string"
           }
         },
         "required": []
@@ -57101,6 +57895,15 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "inventory_requests": {
+            "type": "string"
+          },
+          "budget_targets": {
+            "type": "string"
+          },
+          "workflows": {
+            "type": "string"
           }
         },
         "required": []
@@ -57321,6 +58124,12 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "inventory_requests": {
+            "type": "string"
+          },
+          "units": {
+            "type": "string"
           }
         },
         "required": []
@@ -57356,6 +58165,15 @@
           "changed": {
             "type": "string",
             "format": "date-time"
+          },
+          "purchase_orders": {
+            "type": "string"
+          },
+          "units": {
+            "type": "string"
+          },
+          "allocations": {
+            "type": "string"
           }
         },
         "required": []
@@ -57539,6 +58357,10 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "workflows": {
+            "type": "string",
+            "description": "Workflows for this vendor"
           }
         },
         "required": []
@@ -58699,6 +59521,18 @@
           },
           "collection": {
             "type": "string"
+          }
+        },
+        "required": []
+      },
+      "InventoryRequestMaterialsWarehouses": {
+        "type": "object",
+        "properties": {
+          "inventory_request_materials_id": {
+            "type": "integer"
+          },
+          "warehouses_id": {
+            "type": "integer"
           }
         },
         "required": []
