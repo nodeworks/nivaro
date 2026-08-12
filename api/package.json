@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && tsc-alias",
+    "build": "tsc && tsc-alias && node scripts/fix-graphql-import.mjs",
     "build:ci": "tsc -p tsconfig.build.json || true && tsc-alias -p tsconfig.build.json && node scripts/fix-graphql-import.mjs",
     "start": "node dist/index.js",
     "migrate": "tsx src/db/migrate.ts",
