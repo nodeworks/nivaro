@@ -14,12 +14,12 @@ export async function getOIDCConfig() {
   return _oidcConfig
 }
 
-export async function buildLoginUrl(state: string, codeVerifier: string) {
+export async function buildLoginUrl(state: string, codeVerifier: string, redirectUri?: string) {
   const cfg = await getOIDCConfig()
   const codeChallenge = await oidc.calculatePKCECodeChallenge(codeVerifier)
 
   return oidc.buildAuthorizationUrl(cfg, {
-    redirect_uri: config.OIDC_REDIRECT_URI,
+    redirect_uri: redirectUri ?? config.OIDC_REDIRECT_URI,
     scope: isMicrosoftIssuer() ? 'openid profile email User.Read' : 'openid profile email',
     state,
     code_challenge: codeChallenge,

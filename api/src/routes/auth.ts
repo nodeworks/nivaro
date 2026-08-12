@@ -15,6 +15,7 @@ import type { User } from '../types.js'
 function resolveReturnTo(rawReturnTo: string | undefined): string {
   const allowedOrigins = new Set([
     new URL(config.ADMIN_URL).origin,
+    new URL(config.PUBLIC_URL).origin,
     ...config.APP_URLS.split(',')
       .map((u) => u.trim())
       .filter(Boolean)
@@ -129,7 +130,16 @@ export async function authRoutes(app: FastifyInstance) {
     const rawReturnTo = (req.query as Record<string, string>).returnTo
     req.session.returnTo = resolveReturnTo(rawReturnTo)
 
-    const url = await buildLoginUrl(state, codeVerifier)
+    // The OAuth callback must land on the SAME origin the login started from —
+    // the state/PKCE session cookie is host-only, so a callback pinned to one
+    // origin breaks logins begun on any other (frontend proxy vs the API's own
+    // admin). Derive it from the allowlisted returnTo; every callback origin
+    // used here must also be registered in the IdP.
+    const cbOrigin = new URL(req.session.returnTo).origin
+    const redirectUri = `${cbOrigin}/api/auth/callback`
+    req.session.oidcRedirectUri = redirectUri
+
+    const url = await buildLoginUrl(state, codeVerifier, redirectUri)
     return reply.redirect(url.href)
   })
 
@@ -141,12 +151,15 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     try {
-      const requestUrl = new URL(req.url, config.PUBLIC_URL)
+      // Token exchange validates redirect_uri — reconstruct the callback URL on
+      // the origin the login actually used, not a fixed configured one.
+      const requestUrl = new URL(req.url, req.session.oidcRedirectUri ?? config.PUBLIC_URL)
       const profile = await handleCallback(requestUrl, oidcState, codeVerifier)
       const user = (await findOrCreateFromOIDC(profile)) as UserWithTotp
 
       req.session.oidcState = undefined
       req.session.codeVerifier = undefined
+      req.session.oidcRedirectUri = undefined
 
       // Second factor required — defer the full session until TOTP passes
       if (user.totp_enabled) {

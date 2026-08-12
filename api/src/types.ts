@@ -163,6 +163,7 @@ declare module '@fastify/session' {
   interface FastifySessionObject {
     userId?: string
     oidcState?: string
+    oidcRedirectUri?: string
     codeVerifier?: string
     returnTo?: string
   }

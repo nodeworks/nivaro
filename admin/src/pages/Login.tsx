@@ -430,7 +430,7 @@ export function LoginPage() {
               {tab === 'microsoft' ? (
                 <>
                   <a
-                    href='/api/auth/login'
+                    href={`/api/auth/login?returnTo=${encodeURIComponent(`${window.location.origin}/`)}`}
                     className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
                     style={{ background: isMicrosoft ? '#0078d4' : '#0f172a' }}
                   >
