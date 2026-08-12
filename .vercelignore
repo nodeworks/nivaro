@@ -1,10 +1,9 @@
-api/
-api/node_modules/
-api/dist/
-sdk/src/
-react/
-examples/
-scripts/
-tests/
+# Keep the admin-project upload lean. Patterns are gitignore-style — anchor
+# with a leading slash or a bare name matches at ANY depth (a bare `react/`
+# once silently excluded packages/react and broke the build).
+/api/
+/examples/
+/tests/
+/scripts/
 *.test.ts
 *.spec.ts
