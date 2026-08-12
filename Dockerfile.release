@@ -30,6 +30,7 @@ COPY --from=deps /app/api/node_modules ./api/node_modules
 COPY --from=deps /app/admin/node_modules ./admin/node_modules
 COPY --from=deps /app/packages/sdk/node_modules ./packages/sdk/node_modules
 COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
+COPY --from=deps /app/packages/react/node_modules ./packages/react/node_modules
 COPY . .
 # Stale incremental state makes tsc SKIP declaration emit in a fresh tree —
 # a checked-in tsbuildinfo once shipped shared/dist without its .d.ts files.
@@ -38,6 +39,8 @@ RUN rm -f packages/*/tsconfig.tsbuildinfo api/tsconfig.tsbuildinfo
 # shared's dist — without sdk built first, inference collapses to implicit-any.
 RUN pnpm --filter @nivaro/sdk build
 RUN pnpm --filter @nivaro/shared build
+# admin imports @nivaro/react (Playground's live form preview)
+RUN pnpm --filter @nivaro/react build
 # Inject cloud-only extensions before API build (fail-safe: exits 0 on any error).
 # Set CLOUD_EXTENSIONS_REPO + CLOUD_EXTENSIONS_TOKEN as Railway service env vars.
 # Both are declared as ARGs so Railway passes them in at build time.
