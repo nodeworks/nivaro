@@ -35,3 +35,7 @@ docs/superpowers/
 api/extensions/*
 !api/extensions/tsconfig.json
 !api/extensions/.config.json
+
+# IDE + internal planning docs
+.idea/
+nivaro-cloud-plan.html

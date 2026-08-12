@@ -40,6 +40,9 @@ STRIP_PATHS=(
   .gitlab-ci.yml
   PRODUCT.md
   DESIGN.md
+  .idea
+  .superpowers
+  nivaro-cloud-plan.html
 )
 
 # Strings that must not appear in ANY blob of the cleaned history. Extend as
@@ -99,8 +102,10 @@ echo "✓ mirror clean: $(git rev-list --count HEAD) commits, tip $(git rev-pars
 if [ "${1:-}" = "--push" ]; then
   URL="${2:?usage: publish-github.sh --push <git-url>}"
   git remote add public "$URL"
-  echo "→ force-pushing all branches + tags to $URL"
-  git push --force public --all
+  echo "→ force-pushing main + tags to $URL"
+  # main only — never every local branch (a --all push once dragged dozens of
+  # stale agent worktree branches onto the public repo).
+  git push --force public main
   git push --force public --tags
   echo "✓ published"
 else
