@@ -23,6 +23,9 @@ RUN pnpm install --frozen-lockfile
 # ─── Stage 3: build SDK + API + Admin ────────────────────────────────────────
 FROM base AS build
 WORKDIR /app
+# admin's tsc+vite needs more heap than the default when building in
+# memory-constrained VMs (local Docker Desktop OOM'd at ~2GB)
+ENV NODE_OPTIONS=--max-old-space-size=4096
 # git for cloud extension injection; bash for its script (alpine ships ash)
 RUN apk add --no-cache git bash
 COPY --from=deps /app/node_modules ./node_modules
