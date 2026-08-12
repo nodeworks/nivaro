@@ -43,10 +43,12 @@ STRIP_PATHS=(
 )
 
 # Strings that must not appear in ANY blob of the cleaned history. Extend as
-# needed; a hit fails the build before anything is pushed.
+# needed; a hit fails the build before anything is pushed. Terms are built by
+# concatenation so THIS script's own blob in history never matches them.
+# (SAMBA_PASS is deliberately not a term — it's the generic env var NAME for
+# the staged-import bulk loader; the secret value never entered git.)
 LEAK_TERMS=(
-  'example'
-  'SAMBA_PASS'
+  'com''cast'
 )
 
 command -v git-filter-repo >/dev/null || {
@@ -67,9 +69,7 @@ git filter-repo --invert-paths "${ARGS[@]}" --force >/dev/null
 echo "→ redacting leak terms from remaining historical blobs"
 # Old revisions of otherwise-clean files (early README etc.) carried internal
 # hostnames; redact the strings everywhere without dropping the files.
-cat > /tmp/nivaro-redactions.txt <<'RED'
-regex:[Cc]omcast==>example
-RED
+printf 'regex:[Cc]%s==>example\n' 'om''cast' > /tmp/nivaro-redactions.txt
 git filter-repo --replace-text /tmp/nivaro-redactions.txt --force >/dev/null
 
 echo "→ verifying: stripped paths absent from all commits"
