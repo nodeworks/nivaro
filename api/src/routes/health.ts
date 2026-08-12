@@ -74,8 +74,8 @@ export async function healthRoutes(app: FastifyInstance) {
     let migrations: { latest: string | null; count: number } = { latest: null, count: 0 }
     try {
       const [latestRow, countRow] = await Promise.all([
-        db('cms_knex_migrations').orderBy('id', 'desc').first('name'),
-        db('cms_knex_migrations').count('* as c').first()
+        db('nivaro_migrations').orderBy('id', 'desc').first('name'),
+        db('nivaro_migrations').count('* as c').first()
       ])
       migrations = {
         latest: latestRow?.name ?? null,

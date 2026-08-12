@@ -62,7 +62,13 @@ async function fetchWithTimeout(url: string, ms = 3000): Promise<Response> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), ms)
   try {
-    return await fetch(url, { signal: ctrl.signal })
+    // Self-hosted Inngest gates its REST API behind the signing key; the dev
+    // server ignores the header, so sending it unconditionally is safe.
+    const signingKey = process.env.INNGEST_SIGNING_KEY
+    return await fetch(url, {
+      signal: ctrl.signal,
+      headers: signingKey ? { Authorization: `Bearer ${signingKey}` } : undefined
+    })
   } finally {
     clearTimeout(timer)
   }
