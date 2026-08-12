@@ -300,6 +300,11 @@ export function classicTheme(data: PdfLayoutData): string {
     color: #1a2133; vertical-align: top; overflow-wrap: anywhere;
   }
   .rel-table td:first-child { padding-left: 0; }
+  .rel-total td {
+    font-weight: 700; border-top: 2px solid currentColor; border-bottom: none;
+    padding-top: 5px;
+  }
+  .rel-total-label { text-transform: uppercase; font-size: 8px; letter-spacing: 0.08em; }
   .rel-table tr:last-child td { border-bottom: none; }
   .rel-table tbody tr:nth-child(even) td { background: #f9f9fb; }
 </style>
@@ -538,6 +543,11 @@ export function minimalTheme(data: PdfLayoutData): string {
     color: #111111; vertical-align: top; word-break: break-word;
   }
   .rel-table td:first-child { padding-left: 0; }
+  .rel-total td {
+    font-weight: 700; border-top: 2px solid currentColor; border-bottom: none;
+    padding-top: 5px;
+  }
+  .rel-total-label { text-transform: uppercase; font-size: 8px; letter-spacing: 0.08em; }
   .rel-table tr:last-child td { border-bottom: none; }
   .rel-table tbody tr:nth-child(even) td { background: #f8f8f8; }
 </style>
@@ -805,6 +815,11 @@ export function executiveTheme(data: PdfLayoutData): string {
     color: #b8cce0; vertical-align: top; word-break: break-word; font-weight: 300;
   }
   .rel-table td:first-child { padding-left: 0; }
+  .rel-total td {
+    font-weight: 700; border-top: 2px solid currentColor; border-bottom: none;
+    padding-top: 5px;
+  }
+  .rel-total-label { text-transform: uppercase; font-size: 8px; letter-spacing: 0.08em; }
   .rel-table tr:last-child td { border-bottom: none; }
   .rel-table tbody tr:nth-child(even) td { background: rgba(0,206,255,0.03); }
 </style>

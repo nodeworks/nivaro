@@ -57,12 +57,16 @@ RUN pnpm --filter @nivaro/admin build
 
 # ─── Stage 4: production runner ──────────────────────────────────────────────
 FROM node:22-alpine AS runner
+
+# System chromium for puppeteer (PDF generation) — the puppeteer-downloaded
+# Chrome is glibc-linked and cannot run on musl/Alpine at all.
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 WORKDIR /app
 
 # Upgrade Alpine packages to pick up security patches (busybox etc.)
 RUN apk upgrade --no-cache
 # Required for sharp (image processing) native binaries on Alpine
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat chromium nss freetype harfbuzz ca-certificates ttf-freefont
 RUN corepack enable pnpm
 
 # Install production deps only

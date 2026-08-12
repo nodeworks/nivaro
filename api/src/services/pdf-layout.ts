@@ -224,21 +224,35 @@ async function enrichRelationValues(
           .filter((lf) => !lf.field.startsWith('__') && !lf.group_key?.startsWith('__'))
           .map((lf) => {
             let colLabel: string | null = null
+            let ovOptions: Record<string, unknown> | null = null
             if (lf.overrides) {
               try {
-                colLabel =
-                  ((JSON.parse(lf.overrides) as Record<string, unknown>).label as string | null) ??
-                  null
+                const ov = JSON.parse(lf.overrides) as Record<string, unknown>
+                colLabel = (ov.label as string | null) ?? null
+                if (ov.options && typeof ov.options === 'object')
+                  ovOptions = ov.options as Record<string, unknown>
               } catch {
                 /* noop */
               }
             }
             const fm = metaMap.get(lf.field)
+            // Layout-assignment option overrides (format, aggregate, …) merge
+            // over the field's global options — same rule the form renderer uses.
+            let mergedOptions: string | null = fm?.options ?? null
+            if (ovOptions) {
+              let base: Record<string, unknown> = {}
+              try {
+                base = fm?.options ? (JSON.parse(fm.options) as Record<string, unknown>) : {}
+              } catch {
+                /* noop */
+              }
+              mergedOptions = JSON.stringify({ ...base, ...ovOptions })
+            }
             return {
               field: lf.field,
               label: colLabel ?? lf.label_override ?? fm?.label ?? toLabel(lf.field),
               type: fm?.type ?? 'string',
-              options: fm?.options ?? null
+              options: mergedOptions
             }
           })
       }
@@ -320,8 +334,33 @@ async function enrichRelationValues(
           return `<tr>${cells}</tr>`
         })
         .join('')
+      // Totals row — any column whose options carry aggregate:'sum' sums across
+      // rows and renders with the same formatting (currency etc.).
+      let footRow = ''
+      const aggCols = columns.map((c) => {
+        try {
+          const o = c.options ? (JSON.parse(c.options) as Record<string, unknown>) : {}
+          return o.aggregate === 'sum' ? o : null
+        } catch {
+          return null
+        }
+      })
+      if (aggCols.some(Boolean)) {
+        const cells = columns
+          .map((c, i) => {
+            const o = aggCols[i]
+            if (!o) return i === 0 ? '<td class="rel-total-label">Total</td>' : '<td></td>'
+            const sum = (childRows as Record<string, unknown>[]).reduce(
+              (acc, row) => acc + (Number(row[c.field]) || 0),
+              0
+            )
+            return `<td>${escHtml(renderFieldValue(c.type, Math.round(sum * 100) / 100, o))}</td>`
+          })
+          .join('')
+        footRow = `<tfoot><tr class="rel-total">${cells}</tr></tfoot>`
+      }
       o2mHtml[f] =
-        `<table class="rel-table"><thead><tr>${thRow}</tr></thead><tbody>${bodyRows}</tbody></table>`
+        `<table class="rel-table"><thead><tr>${thRow}</tr></thead><tbody>${bodyRows}</tbody>${footRow}</table>`
       enrichedItem[f] = '' // placeholder; o2mHtml takes precedence
     }
   }
@@ -580,7 +619,12 @@ export async function generatePdfFromLayout(params: {
               : (o2mHtml[a.field] ??
                 renderFieldValue(meta?.type ?? 'string', enrichedItem[a.field], fieldOpts))
           return {
-            label: hideLabel ? '' : (ovLabel ?? a.label_override ?? meta?.label ?? a.field),
+            label: hideLabel
+              ? ''
+              : (ovLabel ??
+                a.label_override ??
+                meta?.label ??
+                a.field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())),
             value: rawHtml
               ? rawValue
               : renderFieldValue(meta?.type ?? 'string', enrichedItem[a.field], fieldOpts),
