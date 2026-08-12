@@ -10,6 +10,8 @@ export interface PdfLayoutData {
   coverEnabled: boolean
   sections: Array<{
     label: string
+    /** Start this section on a fresh page (set for child-table sections). */
+    pageBreak?: boolean
     fields: Array<{ label: string; value: string; colSpan?: number; rawHtml?: boolean; hideLabel?: boolean }>
   }>
 }
@@ -86,7 +88,7 @@ export function classicTheme(data: PdfLayoutData): string {
 </div>` : ''
 
   const sectionsHtml = data.sections.map(s => `
-<div class="section">
+<div class="section${s.pageBreak ? ' section-break' : ''}">
   <div class="section-header">
     <h2 class="section-title">${escHtml(s.label)}</h2>
     <div class="section-rule"></div>
@@ -243,6 +245,7 @@ export function classicTheme(data: PdfLayoutData): string {
     page-break-after: avoid;
     display: flex; align-items: baseline; gap: 12px;
   }
+  .section-break { break-before: page; }
   .section-title {
     font-family: Georgia, 'Times New Roman', serif;
     font-size: 15pt; font-weight: 400; color: #0c1829;
@@ -365,7 +368,7 @@ export function minimalTheme(data: PdfLayoutData): string {
 </div>` : ''
 
   const sectionsHtml = data.sections.map(s => `
-<div class="section">
+<div class="section${s.pageBreak ? ' section-break' : ''}">
   <div class="section-header">
     <div class="section-marker"></div>
     <h2 class="section-title">${escHtml(s.label)}</h2>
@@ -491,6 +494,7 @@ export function minimalTheme(data: PdfLayoutData): string {
     width: 10px; height: 10px; background: #00ceff;
     border-radius: 2px; flex-shrink: 0;
   }
+  .section-break { break-before: page; }
   .section-title {
     font-size: 13pt; font-weight: 800; color: #111111;
     letter-spacing: -0.025em; line-height: 1;
@@ -614,7 +618,7 @@ export function executiveTheme(data: PdfLayoutData): string {
 </div>` : ''
 
   const sectionsHtml = data.sections.map(s => `
-<div class="section">
+<div class="section${s.pageBreak ? ' section-break' : ''}">
   <div class="section-header">
     <h2 class="section-title">${escHtml(s.label)}</h2>
     <div class="section-rule"></div>
@@ -758,6 +762,7 @@ export function executiveTheme(data: PdfLayoutData): string {
     margin-bottom: 5mm;
     page-break-after: avoid;
   }
+  .section-break { break-before: page; }
   .section-title {
     font-family: Georgia, 'Times New Roman', serif;
     font-size: 14pt; font-weight: 400; color: #00ceff;

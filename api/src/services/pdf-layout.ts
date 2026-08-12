@@ -633,9 +633,13 @@ export async function generatePdfFromLayout(params: {
             hideLabel
           }
         })
-      return { label: group.label, fields: groupFields }
+      // Child-record tables get their own page — a table starting mid-page
+      // and immediately breaking reads badly; the first section never breaks.
+      const hasChildTable = groupFields.some((f) => f.rawHtml && String(f.value).startsWith('<table'))
+      return { label: group.label, pageBreak: hasChildTable, fields: groupFields }
     })
     .filter((s) => s.fields.length > 0)
+    .map((s, i) => ({ ...s, pageBreak: s.pageBreak && i > 0 }))
 
   const effectiveSections =
     sections.length > 0
