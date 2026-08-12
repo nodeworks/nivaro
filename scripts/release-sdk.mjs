@@ -34,11 +34,7 @@ run(['tag', tag]);
 run(['push', 'origin', 'HEAD']);
 run(['push', 'origin', tag]);
 
-const publicCheck = spawnSync('git', ['remote', 'get-url', 'public'], { encoding: 'utf8' });
-if (publicCheck.status === 0) {
-  console.log('Pushing to public remote...');
-  run(['push', 'public', 'HEAD']);
-  run(['push', 'public', tag]);
-}
+// NOTE: never push to the `public` remote here — the public GitHub repo
+// only receives the FILTERED history via scripts/publish-github.sh.
 
 console.log(`\n✓ @nivaro/sdk@${newVersion} tagged as ${tag} and pushed`);
