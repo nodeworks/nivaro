@@ -23,6 +23,9 @@ jobs:
           VERSION="${GITHUB_REF_NAME#@app-}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3 # TODO: pin SHA
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3 # TODO: pin SHA — gh api repos/docker/setup-buildx-action/git/ref/tags/v3 --jq '.object.sha'
 
@@ -37,6 +40,8 @@ jobs:
         with:
           context: .
           file: Dockerfile.release
+          # arm64 too — Apple-silicon dev machines and Graviton/ARM hosts
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             nodeworks/nivaro:${{ steps.meta.outputs.version }}
