@@ -66,7 +66,7 @@ import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
 import { pickerExclusionRoutes } from './picker-exclusions.js'
 import { pipelinesRoutes } from './pipelines.js'
-import { buildScript, presenceAdminRoutes } from './presence.js'
+import { buildScript, presenceAdminRoutes, presenceOnlineRoutes } from './presence.js'
 import { presetsRoutes } from './presets.js'
 import { queuesRoutes } from './queues.js'
 import { recordTemplatesRoutes } from './record-templates.js'
@@ -167,6 +167,7 @@ export async function registerRoutes(app: FastifyInstance) {
     return reply.send(buildScript(pingInterval))
   })
   await app.register(presenceAdminRoutes, { prefix: '/presence' })
+  await app.register(presenceOnlineRoutes, { prefix: '/presence' })
   await app.register(externalApisRoutes, { prefix: '/external-apis' })
   await app.register(webhooksRoutes, { prefix: '/webhooks' })
   await app.register(commentsRoutes, { prefix: '/comments' })

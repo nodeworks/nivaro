@@ -670,3 +670,71 @@ export async function describeUserScopes(userId: string): Promise<{
     restricted
   }
 }
+
+/**
+ * Restriction labels per user, for display surfaces (the chat/online list's
+ * "restricted zone/region" line).
+ *
+ * Batched by construction: one query for every listed user's scope rows, then
+ * ONE lookup per dimension for the labels — never per user. Only RESTRICT-mode
+ * rows are reported; defaults are a personal filter preference, not a
+ * statement about who someone is.
+ */
+export async function resolveScopeLabelsForUsers(
+  userIds: string[],
+  dimensionNames: string[]
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>()
+  if (userIds.length === 0 || dimensionNames.length === 0) return out
+
+  const dims = (await listScopeDimensions()).filter((d) => dimensionNames.includes(d.name))
+  if (dims.length === 0) return out
+
+  const rows = (await db('nivaro_user_scopes')
+    .whereIn('user', userIds)
+    .where({ mode: 'restrict' })
+    .whereIn(
+      'dimension',
+      dims.map((d) => d.name)
+    )
+    .select('user', 'dimension', 'values')) as Array<Record<string, unknown>>
+  if (rows.length === 0) return out
+
+  // Collect every referenced target id per dimension, then resolve labels once.
+  const idsByDim = new Map<string, Set<string>>()
+  const parsed: Array<{ user: string; dimension: string; ids: string[] }> = []
+  for (const r of rows) {
+    const ids = (parseJson<Array<string | number>>(r.values) ?? []).map(String)
+    if (ids.length === 0) continue
+    parsed.push({ user: String(r.user), dimension: String(r.dimension), ids })
+    const set = idsByDim.get(String(r.dimension)) ?? new Set<string>()
+    for (const id of ids) set.add(id)
+    idsByDim.set(String(r.dimension), set)
+  }
+
+  const labelsByDim = new Map<string, Map<string, string>>()
+  for (const dim of dims) {
+    const ids = idsByDim.get(dim.name)
+    if (!ids || ids.size === 0) continue
+    const field = dim.display_field ?? 'name'
+    try {
+      const targets = (await db(dim.target_collection)
+        .whereIn('id', [...ids])
+        .select('id', field)) as Array<Record<string, unknown>>
+      labelsByDim.set(
+        dim.name,
+        new Map(targets.map((t) => [String(t.id), String(t[field] ?? t.id)]))
+      )
+    } catch {
+      // A renamed display column must not take the online list down.
+    }
+  }
+
+  for (const p of parsed) {
+    const labels = labelsByDim.get(p.dimension)
+    const values = p.ids.map((id) => labels?.get(id) ?? id)
+    const existing = out.get(p.user) ?? []
+    out.set(p.user, [...existing, ...values])
+  }
+  return out
+}

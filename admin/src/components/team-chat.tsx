@@ -100,6 +100,8 @@ export function AdminChatProvider({ children }: { children: React.ReactNode }) {
           navigate={(url) => navigate(url)}
           entityUrl={entityUrl}
           recordUrl={(collection, id) => `/collections/${collection}/${id}`}
+          // Admin owns the replay page — deep-link straight to the recording.
+          sessionUrl={(recordingId) => `/session-replays?recording=${recordingId}`}
         >
           {children}
         </ChatProvider>

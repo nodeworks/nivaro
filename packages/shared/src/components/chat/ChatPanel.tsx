@@ -10,13 +10,16 @@ import {
   LogOut,
   MessageCircle,
   Plus,
+  PlayCircle,
   Search,
   Send,
   Settings,
   X
 } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useItemEditAuth, useNivaroClient } from '../../context'
+import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
+import { get } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import {
   CHAT_DEFAULTS,
@@ -107,6 +110,7 @@ export interface ChatProviderProps {
   entityUrl?: ChatConfig['entityUrl']
   roomLabel?: ChatConfig['roomLabel']
   recordUrl?: ChatConfig['recordUrl']
+  sessionUrl?: ChatConfig['sessionUrl']
   realtime?: ChatConfig['realtime']
   subscribeRooms?: ChatConfig['subscribeRooms']
   setTypingRoom?: ChatConfig['setTypingRoom']
@@ -126,6 +130,7 @@ export function ChatProvider({
   entityUrl = () => null,
   roomLabel,
   recordUrl,
+  sessionUrl,
   realtime,
   subscribeRooms,
   setTypingRoom,
@@ -142,6 +147,7 @@ export function ChatProvider({
       entityUrl,
       roomLabel,
       recordUrl,
+      sessionUrl,
       realtime,
       subscribeRooms,
       me,
@@ -1113,6 +1119,62 @@ export function ChatChannelBrowser({
   )
 }
 
+/**
+ * Extras the online list shows under a name — resolved SERVER-side so every
+ * host agrees (role, restricted scope labels, live page, live session id) and
+ * so which of them appear is instance config, not per-app code.
+ *
+ * Merged onto the host's online list by user id rather than replacing it: the
+ * host still owns who counts as online.
+ */
+interface PresenceExtra {
+  user_id: string
+  role_name?: string | null
+  current_path?: string | null
+  scopes?: string[]
+  recording_id?: string | null
+}
+
+function usePresenceExtras(): {
+  byUser: Map<string, PresenceExtra>
+  fields: string[]
+} {
+  const client = useNivaroClient()
+  const { data } = useQuery({
+    queryKey: ['presence-online'],
+    queryFn: () =>
+      client.request<{ data: PresenceExtra[]; config?: { fields?: string[] } }>(
+        get('/presence/online')
+      ),
+    // Matches the presence heartbeat cadence — the page someone is on should
+    // track them around the app, not lag a minute behind.
+    refetchInterval: 15_000,
+    staleTime: 5_000
+  })
+  const byUser = useMemo(() => {
+    const m = new Map<string, PresenceExtra>()
+    for (const r of data?.data ?? []) m.set(String(r.user_id).toUpperCase(), r)
+    return m
+  }, [data])
+  return { byUser, fields: data?.config?.fields ?? ['role', 'page'] }
+}
+
+/** "/records/workflows/312100" → "Workflows › 312100" — the raw route is an
+ *  implementation detail nobody reading a chat sidebar cares about. */
+function prettyPath(path: string | null | undefined): string | null {
+  if (!path) return null
+  const parts = path.split('/').filter(Boolean)
+  if (parts.length === 0) return 'Home'
+  const skip = new Set(['records', 'collections', 'p'])
+  const kept = parts.filter((p) => !skip.has(p))
+  if (kept.length === 0) return 'Home'
+  return kept
+    .map((p, i) =>
+      i === 0 ? p.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : p
+    )
+    .join(' › ')
+}
+
 export function ChatPanel({
   open,
   onClose,
@@ -1138,6 +1200,11 @@ export function ChatPanel({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const { rooms, totalUnread } = useChatRooms()
   const users = cfg.onlineUsers
+  const presenceExtras = usePresenceExtras()
+  const { isAdmin } = useItemEditAuth()
+  // NavigationContext always supplies navigate (its default is a plain hop),
+  // so hosts that mount a router keep the SPA intact for free.
+  const { navigate } = useNavigation()
 
   const openDm = (u: ChatOnlineUser) => {
     if (!me) return
@@ -1242,10 +1309,54 @@ export function ChatPanel({
                       {u.display_name ?? 'Unknown user'}
                     </span>
                     <span className='block truncate text-[11px] text-slate-400'>
-                      {[humanLabel(u.role_name), u.current_path].filter(Boolean).join(' · ') ||
-                        'Online'}
+                      {(() => {
+                        const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                        // Instance config decides which parts appear and in
+                        // what order; the live page comes from the presence
+                        // heartbeat, so it tracks people as they navigate.
+                        const parts = presenceExtras.fields
+                          .map((f) => {
+                            if (f === 'role') return humanLabel(x?.role_name ?? u.role_name)
+                            if (f === 'scopes') return (x?.scopes ?? []).join(', ') || null
+                            if (f === 'page') return prettyPath(x?.current_path ?? u.current_path)
+                            return null
+                          })
+                          .filter(Boolean)
+                        return parts.join(' · ') || 'Online'
+                      })()}
                     </span>
                   </span>
+                  {(() => {
+                    // Admin-only: jump straight into this person's live session
+                    // replay. Hidden unless a recording exists AND the host has
+                    // a replay route.
+                    const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                    if (!isAdmin || !x?.recording_id) return null
+                    const href = cfg.sessionUrl
+                      ? cfg.sessionUrl(x.recording_id, String(u.user_id))
+                      : `/session-replays?recording=${x.recording_id}`
+                    if (!href) return null
+                    return (
+                      <span
+                        role='link'
+                        tabIndex={0}
+                        title='Watch this session'
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          navigate(href)
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.stopPropagation()
+                            navigate(href)
+                          }
+                        }}
+                        className='shrink-0 rounded p-1 text-slate-300 transition-colors hover:bg-slate-100 hover:text-nvr-cyan dark:hover:bg-muted'
+                      >
+                        <PlayCircle className='h-4 w-4' strokeWidth={1.8} />
+                      </span>
+                    )
+                  })()}
                   <MessageCircle className='h-4 w-4 shrink-0 text-slate-300' strokeWidth={1.8} />
                 </button>
               ))

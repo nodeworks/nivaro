@@ -307,6 +307,91 @@ export async function presencePublicRoutes(app: FastifyInstance) {
   })
 }
 
+/**
+ * GET /online — the enriched online list the chat panels render.
+ *
+ * Presence rows themselves stay dumb (a heartbeat writes name/path); everything
+ * shown UNDER a name is resolved here so admin, efp-new and any other host
+ * agree without each re-implementing it:
+ *   role    — the user's role name
+ *   scopes  — their RESTRICTED user-scope values per dimension, as labels
+ *             ("Zone 1"), which is what "restricted zone/region" means
+ *   page    — a human label for current_path, not the raw route
+ * Which of those appear is instance config (nivaro_settings.presence_display).
+ * `recording_id` is attached for ADMINS only — the live session recording, so
+ * an admin can jump from the online list straight into session replay.
+ */
+export async function presenceOnlineRoutes(app: FastifyInstance) {
+  app.get('/online', { preHandler: requireAuth }, async (req, reply) => {
+    const windowMs = 60_000
+    const since = new Date(Date.now() - windowMs)
+    const rows = (await db('user_presence')
+      .where('last_seen', '>=', since)
+      .orderBy('last_seen', 'desc')
+      .limit(200)) as Array<Record<string, unknown>>
+
+    let cfg: { fields?: string[]; scope_dimensions?: string[] } | null = null
+    try {
+      const settings = (await db('nivaro_settings').where({ id: 1 }).first()) as
+        | Record<string, unknown>
+        | undefined
+      cfg = settings?.presence_display ? JSON.parse(String(settings.presence_display)) : null
+    } catch {
+      cfg = null
+    }
+    const fields = cfg?.fields?.length ? cfg.fields : ['role', 'page']
+    const dimensions = cfg?.scope_dimensions ?? []
+
+    // Scope labels: one query per dimension for every listed user, not per user.
+    const userIds = rows.map((r) => String(r.user_id)).filter(Boolean)
+    const scopesByUser = new Map<string, string[]>()
+    if (fields.includes('scopes') && dimensions.length > 0 && userIds.length > 0) {
+      try {
+        const { resolveScopeLabelsForUsers } = await import('../services/user-scopes.js')
+        const resolved = await resolveScopeLabelsForUsers(userIds, dimensions)
+        for (const [uid, labels] of resolved) scopesByUser.set(uid.toUpperCase(), labels)
+      } catch {
+        // Scope labels are decoration — never fail the online list over them.
+      }
+    }
+
+    // Live recordings, admin only (replay is an admin surface).
+    const recordingByUser = new Map<string, string>()
+    if (req.isAdmin && userIds.length > 0) {
+      try {
+        const recs = (await db('nivaro_session_recordings')
+          .whereIn('user', userIds)
+          .whereNull('ended_at')
+          .orderBy('last_event_at', 'desc')
+          .select('id', 'user')) as Array<{ id: string; user: string }>
+        for (const r of recs) {
+          const key = String(r.user).toUpperCase()
+          if (!recordingByUser.has(key)) recordingByUser.set(key, String(r.id))
+        }
+      } catch {
+        // Recording may be disabled entirely — absence just hides the action.
+      }
+    }
+
+    return reply.send({
+      data: rows.map((r) => {
+        const uid = String(r.user_id ?? '').toUpperCase()
+        return {
+          user_id: r.user_id,
+          display_name: r.display_name,
+          role_name: r.role_name,
+          current_path: r.current_path,
+          last_seen: r.last_seen,
+          typing_room: r.typing_room,
+          scopes: scopesByUser.get(uid) ?? [],
+          recording_id: recordingByUser.get(uid) ?? null
+        }
+      }),
+      config: { fields, scope_dimensions: dimensions }
+    })
+  })
+}
+
 // Admin routes — requireAdmin, registered under strict CORS scope
 export async function presenceAdminRoutes(app: FastifyInstance) {
   // ── GET /sessions ────────────────────────────────────────────────────────

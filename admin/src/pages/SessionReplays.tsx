@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Clapperboard, Play, Trash2, Users } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -283,6 +284,11 @@ export function SessionReplaysPage() {
   const queryClient = useQueryClient()
   const [playing, setPlaying] = useState<Recording | null>(null)
   const [selectedUser, setSelectedUser] = useState<string | null>(null)
+  // ?recording=<id> deep link — the chat online list links straight to
+  // someone's live session, which is worthless if it only opens the list.
+  const [searchParams] = useSearchParams()
+  const deepLinkId = searchParams.get('recording')
+  const deepLinkApplied = useRef(false)
   const [appFilter, setAppFilter] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
@@ -299,6 +305,16 @@ export function SessionReplaysPage() {
     queryFn: () => api.get<{ data: Recording[] }>('/session-recordings/').then((r) => r.data.data),
     refetchInterval: 60_000
   })
+
+  // One-shot: open the linked recording as soon as the list resolves. Guarded
+  // so a later refetch can't yank someone out of what they switched to.
+  useEffect(() => {
+    if (deepLinkApplied.current || !deepLinkId || recordings.length === 0) return
+    const match = recordings.find((r) => String(r.id) === deepLinkId)
+    if (!match) return
+    deepLinkApplied.current = true
+    setPlaying(match)
+  }, [deepLinkId, recordings])
 
   const toggle = useMutation({
     mutationFn: (value: boolean) => api.patch('/settings/', { session_recording_enabled: value }),

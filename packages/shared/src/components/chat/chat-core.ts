@@ -54,6 +54,10 @@ export interface ChatConfig {
    *  admin passes /collections/:c/:id, efp-new /records/:c/:id. Absent = the
    *  admin shape; return null = hide the action. */
   recordUrl?: (collection: string, id: string | number) => string | null
+  /** Host route for a session replay (the online list's admin-only "watch
+   *  session" action). Absent = admin's /session-replays shape; return null =
+   *  hide the action, which is what a host without a replay page wants. */
+  sessionUrl?: (recordingId: string, userId: string) => string | null
   /** Live updates: subscribe to a collection's change feed; return unsubscribe.
    *  Still used for presence/typing, which remain plain /items collections. */
   realtime?: (collection: string, cb: () => void) => () => void
