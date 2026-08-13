@@ -4289,7 +4289,7 @@ export function ItemEditForm({
                     type='button'
                     onClick={() => setAddendumViewDropdownOpen(o => !o)}
                     className={cn(
-                      'flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors',
+                      'flex h-9 items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors',
                       viewingAddendum
                         ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400'
                         : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300'
