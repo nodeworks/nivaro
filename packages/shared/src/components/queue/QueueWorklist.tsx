@@ -1065,6 +1065,25 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     setActiveViewId(v.id)
   }
 
+  // Revert to the base everyone-default: the queue-wide default view when one
+  // exists, else the queue's display_config baseline (CBV 'Default' parity).
+  function resetToDefault() {
+    const queueDefault = views?.data.find((v) => v.is_default)
+    if (queueDefault) {
+      applyView(queueDefault)
+      return
+    }
+    setScope(queue?.display_config?.default_scope ?? 'all')
+    setFilterValues({})
+    setSort('')
+    setGroupBy(null)
+    setVisibleColumns(null)
+    setColumnPins(null)
+    if (queue?.display_config?.default_view) setView(queue.display_config.default_view)
+    setPage(1)
+    setActiveViewId(null)
+  }
+
   // Load gate: wait for display_config AND the viewer's prefs + saved views, then
   // apply the viewer's default saved view (if set and still present), else the
   // queue's general default scope/view. Firing once with the right state avoids a
@@ -2037,6 +2056,21 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
             </button>
           )}
           <div className='ml-auto flex flex-wrap items-center gap-1.5'>
+            {!(views?.data ?? []).some((v) => v.is_default) && (
+              <button
+                type='button'
+                onClick={resetToDefault}
+                title='Revert to the queue default (filters, columns and sort cleared)'
+                className={cn(
+                  'rounded-full border px-2.5 py-1 text-[11px] font-medium',
+                  activeViewId == null
+                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
+                )}
+              >
+                Default
+              </button>
+            )}
             {(views?.data ?? []).map((v) => (
               <span
                 key={v.id}
