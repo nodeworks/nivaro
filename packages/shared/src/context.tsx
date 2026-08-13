@@ -1,7 +1,7 @@
 import type { NivaroClient } from '@nivaro/sdk'
 import { QueryClient, QueryClientContext, QueryClientProvider } from '@tanstack/react-query'
 import type React from 'react'
-import { createContext, useContext, useState } from 'react'
+import { createContext, useCallback, useContext, useState } from 'react'
 
 // ─── Grid flush registry ───────────────────────────────────────────────────
 
@@ -204,6 +204,73 @@ export interface DrilldownContextValue {
 export const DrilldownContext = createContext<DrilldownContextValue | null>(null)
 export function useDrilldown(): DrilldownContextValue | null {
   return useContext(DrilldownContext)
+}
+
+/**
+ * Lets a host put transient overlay state — a drill-down sheet and how deep it
+ * is — into browser history, so Back closes the sheet instead of abandoning the
+ * page underneath it.
+ *
+ * These packages own no router, so they cannot do this themselves, and driving
+ * `history.pushState` directly would be worse than useless: react-router keeps
+ * its own index in `history.state`, and writing behind its back desyncs that and
+ * corrupts ordinary Back navigation. So the host implements this and the
+ * components consume it. Hosts that supply nothing keep local component state
+ * and behave exactly as before.
+ *
+ * Values must be plain and serialisable — they ride in the host's history entry
+ * and are expected to survive a reload.
+ */
+export interface OverlayHistory {
+  /** Current value stored under `key`, or null when the overlay is closed. */
+  get: (key: string) => unknown
+  /** Store `value` under `key` as ONE new history entry. */
+  push: (key: string, value: unknown) => void
+  /** Go back `steps` entries (default 1), undoing that many pushes. */
+  back: (steps?: number) => void
+}
+
+export const OverlayHistoryContext = createContext<OverlayHistory | null>(null)
+
+/**
+ * Overlay state for `key`, held in history when the host provides an
+ * OverlayHistory and in component state otherwise. The two paths share an API,
+ * so a call site does not know or care which it got.
+ */
+export function useOverlayState<T>(key: string): {
+  value: T | null
+  /** Open, or replace the value — one history entry when history-backed. */
+  push: (value: T) => void
+  /** Undo `steps` pushes (default 1). */
+  back: (steps?: number) => void
+} {
+  const history = useContext(OverlayHistoryContext)
+  // Without a host adapter there are no history entries to pop, so the previous
+  // values are kept here and unwound the same way — the two paths stay
+  // behaviourally identical, only one of them is reachable by the Back button.
+  const [locals, setLocals] = useState<T[]>([])
+
+  const value = history
+    ? ((history.get(key) as T | null) ?? null)
+    : (locals[locals.length - 1] ?? null)
+
+  const push = useCallback(
+    (next: T) => {
+      if (history) history.push(key, next)
+      else setLocals((prev) => [...prev, next])
+    },
+    [history, key]
+  )
+
+  const back = useCallback(
+    (steps = 1) => {
+      if (history) history.back(steps)
+      else setLocals((prev) => prev.slice(0, Math.max(0, prev.length - steps)))
+    },
+    [history]
+  )
+
+  return { value, push, back }
 }
 
 // Per-field drill-down config stored in the layout assignment's overrides.

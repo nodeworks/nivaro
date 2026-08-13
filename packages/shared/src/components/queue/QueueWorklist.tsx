@@ -1375,14 +1375,13 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // Drill-down target: clicking a relation extra-field value opens a detail
   // sheet for the related record. Config is per source column (enabled +
   // pinned detail layout); relation paths default to enabled.
-  const [drilldown, setDrilldown] = useState<{
-    collection: string
-    itemId: string
-    layoutId?: number | null
-    rootLayoutSlug?: string | null
-    width?: number | string | null
-    title?: string
-  } | null>(null)
+  // The drill stack lives in the host's overlay history when one is provided,
+  // so the browser's Back button steps down a level instead of abandoning the
+  // worklist behind the sheet. Without a host adapter this is plain state and
+  // behaves exactly as it did.
+  const drill = useOverlayState<DrillEntry[]>('drill.queue')
+  const drillStack = drill.value
+  const setDrilldown = (entry: DrillEntry) => drill.push([entry])
 
   const drilldownConfigFor = (
     path: string
@@ -2506,17 +2505,21 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         />
       )}
 
-      {drilldown && (
+      {drillStack?.length ? (
         <RecordDrilldownSheet
-          collection={drilldown.collection}
-          itemId={drilldown.itemId}
-          layoutId={drilldown.layoutId}
-          rootLayoutSlug={drilldown.rootLayoutSlug}
-          width={drilldown.width}
-          title={drilldown.title}
-          onClose={() => setDrilldown(null)}
+          collection={drillStack[0].collection}
+          itemId={drillStack[0].itemId}
+          layoutId={drillStack[0].layoutId}
+          rootLayoutSlug={drillStack[0].rootLayoutSlug}
+          width={drillStack[0].width}
+          title={drillStack[0].title}
+          stack={drillStack}
+          onPush={(target) => drill.push([...drillStack, target])}
+          onPop={() => drill.back()}
+          // Explicit dismissal unwinds every level in one go.
+          onClose={() => drill.back(drillStack.length)}
         />
-      )}
+      ) : null}
 
       <QueueItemSheet
         item={sheetItem}

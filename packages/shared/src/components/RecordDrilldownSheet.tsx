@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   DrilldownContext,
   type DrilldownTarget,
@@ -40,6 +40,9 @@ export function RecordDrilldownSheet({
   rootLayoutSlug,
   width,
   title,
+  stack: controlledStack,
+  onPush,
+  onPop,
   onClose
 }: {
   collection: string
@@ -52,6 +55,13 @@ export function RecordDrilldownSheet({
   /** Panel width per config: px number or 'NN%' of the viewport; default 640. */
   width?: number | string | null
   title?: string
+  /** Controlled drill stack. Supply it (with onPush/onPop) to own the depth —
+   *  a host backing it with history makes the browser's Back button step down a
+   *  level instead of abandoning the page. Omit it and the sheet keeps the
+   *  stack itself, which is the original behaviour. */
+  stack?: DrilldownTarget[]
+  onPush?: (target: DrilldownTarget) => void
+  onPop?: () => void
   onClose: () => void
 }) {
   const qc = useQueryClient()
@@ -60,14 +70,28 @@ export function RecordDrilldownSheet({
 
   // Nested drilling: relation fields inside the sheet push onto this stack;
   // Back pops. The initial target comes from the props.
-  const [stack, setStack] = useState<DrilldownTarget[]>([
+  const [ownStack, setOwnStack] = useState<DrilldownTarget[]>([
     { collection, itemId, layoutId, width, title }
   ])
+  const controlled = controlledStack != null
+  // An empty controlled stack would leave nothing to render; the host unmounts
+  // the sheet in that case, but fall back rather than crash if it lags a tick.
+  const stack = controlled && controlledStack.length ? controlledStack : ownStack
   const current = stack[stack.length - 1]
-  const drillCtx = useMemo(
-    () => ({ open: (target: DrilldownTarget) => setStack((prev) => [...prev, target]) }),
-    []
+
+  const pushDrill = useCallback(
+    (target: DrilldownTarget) => {
+      if (controlled) onPush?.(target)
+      else setOwnStack((prev) => [...prev, target])
+    },
+    [controlled, onPush]
   )
+  const popDrill = useCallback(() => {
+    if (controlled) onPop?.()
+    else setOwnStack((prev) => prev.slice(0, -1))
+  }, [controlled, onPop])
+
+  const drillCtx = useMemo(() => ({ open: pushDrill }), [pushDrill])
 
   // The root record can render a pinned grouped layout (rootLayoutSlug) instead
   // of a resolved detail layout; nested drills always resolve detail layouts.
@@ -96,6 +120,18 @@ export function RecordDrilldownSheet({
       <SheetContent
         className='flex flex-col gap-0 overflow-hidden p-0'
         style={{ width: current.width ?? width ?? 640, maxWidth: '96vw' }}
+        // Escape means the same as Back: step down one level. Letting Radix
+        // close the sheet outright would discard every level at once, which is
+        // never what someone three drills deep intended. The X button and the
+        // overlay stay explicit dismissals and still close the lot.
+        onEscapeKeyDown={
+          stack.length > 1
+            ? (e) => {
+                e.preventDefault()
+                popDrill()
+              }
+            : undefined
+        }
       >
         {/* Slim breadcrumb strip — the record title itself renders in
             ItemEditForm's own header below, so repeating it here is noise. */}
@@ -106,7 +142,7 @@ export function RecordDrilldownSheet({
                 <button
                   type='button'
                   aria-label='Back'
-                  onClick={() => setStack((prev) => prev.slice(0, -1))}
+                  onClick={popDrill}
                   className='shrink-0 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200'
                 >
                   <ArrowLeft className='h-4 w-4' />

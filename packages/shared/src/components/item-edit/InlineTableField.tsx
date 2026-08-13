@@ -884,7 +884,9 @@ function RowBulkActionButton({
         const changes: Record<string, unknown> = {}
         for (const [field, formula] of Object.entries(config.set)) {
           const val = evalClientFormula(formula, ctx)
-          if (val != null) changes[field] = val
+          // Round to cents: 400 - 275.04 is 124.95999999999998 in binary
+          // floating point, and that dust would be written to the record.
+          if (val != null) changes[field] = Math.round(val * 100) / 100
         }
         if (Object.keys(changes).length === 0) {
           skipped++
