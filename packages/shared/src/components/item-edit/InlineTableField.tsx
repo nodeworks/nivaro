@@ -3291,7 +3291,32 @@ export function InlineTableField({
               (showLineNumbers ? 1 : 0) +
               (isPendingMode ? 1 : 0) +
               effectiveCols.length + 1
-            if (!entry || entry.rows.length === 0) return (
+            // Field untouched by this addendum → show the record's CURRENT rows
+            // read-only, so the form stays complete in addendum view. Only an
+            // entry that exists but is EMPTY means "addendum proposes no rows".
+            if (!entry) {
+              if (rows.length === 0) return (
+                <tr>
+                  <td colSpan={colCount} className='px-3 py-8 text-center text-[11px] text-slate-400'>
+                    No rows
+                  </td>
+                </tr>
+              )
+              return rows.map((row, ri) => (
+                <tr key={ri} className='border-b border-slate-100'>
+                  {enableReorder && (rowOrderField || isPendingMode) && <td className='w-6' />}
+                  {showLineNumbers && <td className='w-8 px-2 align-middle text-[11px] text-slate-400 select-none'>{ri + 1}</td>}
+                  {isPendingMode && <td className='w-20' />}
+                  {effectiveCols.map((c) => (
+                    <td key={c.field} className='px-2 py-1.5 text-[11px] text-slate-700'>
+                      {isSummaryCol(c) ? summaryCellContent(c, row) : renderCell(c, row[c.field], row.id != null ? String(row.id) : undefined)}
+                    </td>
+                  ))}
+                  <td className='w-20' />
+                </tr>
+              ))
+            }
+            if (entry.rows.length === 0) return (
               <tr>
                 <td colSpan={colCount} className='px-3 py-8 text-center text-[11px] text-amber-500'>
                   No proposed rows in this addendum

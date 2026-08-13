@@ -440,7 +440,27 @@ export function InlineGridField({
           {/* Addendum view rows */}
           {!isNew && activeView !== 'original' && (() => {
             const entry = addendumO2MEntries.find(e => e.addendumId === activeView)
-            if (!entry || entry.rows.length === 0) return (
+            // Untouched field → current rows read-only (form stays complete)
+            if (!entry) {
+              if (rows.length === 0) return (
+                <tr>
+                  <td colSpan={displayCols.length + 1} className='px-3 py-4 text-center text-[11px] text-slate-400'>
+                    No rows
+                  </td>
+                </tr>
+              )
+              return rows.map((row, ri) => (
+                <tr key={ri} className='border-b border-slate-100'>
+                  {displayCols.map((c) => (
+                    <td key={c.field} className='px-3 py-1.5 text-[11px] text-slate-700'>
+                      {renderCell(c, row[c.field])}
+                    </td>
+                  ))}
+                  <td className='px-2 py-1.5' />
+                </tr>
+              ))
+            }
+            if (entry.rows.length === 0) return (
               <tr>
                 <td colSpan={displayCols.length + 1} className='px-3 py-4 text-center text-[11px] text-amber-500'>
                   No proposed rows in this addendum
