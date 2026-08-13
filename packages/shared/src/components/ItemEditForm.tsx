@@ -3825,8 +3825,9 @@ export function ItemEditForm({
             )}
             {isLast && !isNew && showPipeline && (
               <PipelineTransitionButtons
-                collection={collection}
-                item={itemId}
+                key={`${pipelineCollection}:${pipelineItem}`}
+                collection={pipelineCollection}
+                item={pipelineItem}
                 onBeforeTransition={() => {
                   if (!validateAll()) return false
                   if (isDirty) {
@@ -4281,10 +4282,58 @@ export function ItemEditForm({
                   </Button>
                 </div>
               )}
-              {!isNew && showPipeline && !isStepsMode && (
+              {!isNew && addendumEnabled && addendumData.length > 0 && (
+                <div className='relative'>
+                  <button
+                    type='button'
+                    onClick={() => setAddendumViewDropdownOpen(o => !o)}
+                    className={cn(
+                      'flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors',
+                      viewingAddendum
+                        ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300'
+                    )}
+                    title='Choose which version the form and actions apply to'
+                  >
+                    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', viewingAddendum ? 'bg-amber-400' : 'bg-slate-400')} />
+                    <span className='max-w-[160px] truncate'>
+                      {viewingAddendum
+                        ? (addendumData.find(a => a.id === addendumViewId)?.title ?? 'Addendum')
+                        : 'Viewing: Original'}
+                    </span>
+                    <ChevronDown className='h-3 w-3 opacity-60' />
+                  </button>
+                  {addendumViewDropdownOpen && (
+                    <div className='absolute right-0 top-full z-30 mt-1 min-w-[240px] rounded-md border border-slate-200 bg-white py-0.5 shadow-lg dark:border-border dark:bg-card'>
+                      <button
+                        type='button'
+                        onClick={() => { setAddendumViewId('original'); setAddendumViewDropdownOpen(false) }}
+                        className={cn('flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.04]', addendumViewId === 'original' && 'font-semibold text-slate-900 dark:text-slate-100')}
+                      >
+                        <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400' />
+                        Original
+                      </button>
+                      {addendumData.map(a => (
+                        <button
+                          key={a.id}
+                          type='button'
+                          onClick={() => { setAddendumViewId(a.id); setAddendumViewDropdownOpen(false) }}
+                          className={cn('flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-amber-50 dark:hover:bg-amber-500/10', addendumViewId === a.id && 'font-semibold text-amber-900 dark:text-amber-300')}
+                        >
+                          <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', a.status === 'approved' ? 'bg-emerald-400' : a.status === 'rejected' ? 'bg-red-400' : 'bg-amber-400')} />
+                          <span className='flex-1 truncate'>{a.title}</span>
+                          <span className='text-[10px] capitalize text-slate-400'>{a.status}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!isNew && showPipeline && (!isStepsMode || viewingAddendum) && (
                 <PipelineTransitionButtons
-                  collection={collection}
-                  item={itemId}
+                  key={`${pipelineCollection}:${pipelineItem}`}
+                  collection={pipelineCollection}
+                  item={pipelineItem}
                   onBeforeTransition={() => {
                     if (!validateAll()) return false
                     if (isDirty) {
@@ -4327,7 +4376,7 @@ export function ItemEditForm({
                       <WidgetSlot
                         widgetId={w.widgetId}
                         inputBindings={w.inputBindings}
-                        itemDraft={draft}
+                        itemDraft={effectiveDraft}
                         itemCollection={collection}
                         label={w.label ?? undefined}
                         compact={true}
@@ -4377,7 +4426,7 @@ export function ItemEditForm({
                 // source SummaryPanel uses). Without this every M2M header
                 // field renders '—' regardless of how many links exist.
                 const aliasState = m2mAliasFieldStates[f.field]
-                const raw = aliasState ? aliasState.ids : draft[f.field]
+                const raw = aliasState ? aliasState.ids : effectiveDraft[f.field]
                 const hColorClass = f.color === 'cyan' ? 'text-nvr-cyan' : f.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : f.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : f.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : f.color === 'red' ? 'text-red-600 dark:text-red-400' : f.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-900 dark:text-slate-100'
                 const hWeightClass = f.weight === 'bold' ? 'font-bold' : f.weight === 'semibold' ? 'font-semibold' : f.weight === 'medium' ? 'font-medium' : 'font-semibold'
                 const textCls = `${hColorClass} ${hWeightClass}`
@@ -4478,50 +4527,6 @@ export function ItemEditForm({
                 takingOver={takingOver}
                 isAdmin={isAdmin}
               />
-            )}
-            {!isNew && addendumEnabled && activeAddendums.length > 0 && (
-              <div className='relative mb-3 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5'>
-                <span className='mr-2 shrink-0 text-[11px] text-slate-400'>Viewing:</span>
-                <button
-                  type='button'
-                  onClick={() => setAddendumViewDropdownOpen(o => !o)}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
-                    addendumViewId === 'original'
-                      ? 'text-slate-600 hover:text-slate-900'
-                      : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
-                  )}
-                >
-                  <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', addendumViewId === 'original' ? 'bg-slate-400' : 'bg-amber-400')} />
-                  {addendumViewId === 'original'
-                    ? 'Original'
-                    : (activeAddendums.find(a => a.id === addendumViewId)?.title ?? 'Addendum')}
-                  <ChevronDown className='h-3 w-3 opacity-60' />
-                </button>
-                {addendumViewDropdownOpen && (
-                  <div className='absolute left-3 top-full z-20 mt-0.5 min-w-[220px] rounded-md border border-slate-200 bg-white shadow-lg py-0.5'>
-                    <button
-                      type='button'
-                      onClick={() => { setAddendumViewId('original'); setAddendumViewDropdownOpen(false) }}
-                      className={cn('flex w-full items-center px-3 py-1.5 text-[11px] text-left hover:bg-slate-50 transition-colors', addendumViewId === 'original' && 'font-semibold text-slate-900')}
-                    >
-                      Original
-                    </button>
-                    {activeAddendums.map(a => (
-                      <button
-                        key={a.id}
-                        type='button'
-                        onClick={() => { setAddendumViewId(a.id); setAddendumViewDropdownOpen(false) }}
-                        className={cn('flex w-full items-center gap-2 px-3 py-1.5 text-[11px] text-left hover:bg-amber-50 transition-colors', addendumViewId === a.id && 'font-semibold text-amber-900')}
-                      >
-                        <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />
-                        <span className='flex-1'>{a.title}</span>
-                        <span className='capitalize text-[10px] text-amber-400'>{a.status}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
             )}
             {hasTabs ? (isStepsMode ? renderStepsMode() : renderTabMode()) : renderSectionMode()}
             {extraBottomContent}

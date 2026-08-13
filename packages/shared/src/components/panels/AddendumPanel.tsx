@@ -806,7 +806,10 @@ function AddendumCard({
   // list render "current → proposed" with a +/- delta instead of a bare value.
   const scalarChanged = changedFields.filter((a) => {
     const v = proposedData[a.field]
-    return v == null || typeof v !== 'object'
+    if (v != null && typeof v === 'object') return false
+    // Alias fields (O2M/M2M) have no physical column — naming one in an
+    // explicit readOne fields= is a 500, not an empty value.
+    return !relations.some((r) => r.one_collection === parentCollection && r.one_field === a.field)
   })
   const { data: currentRecord } = useQuery<Record<string, unknown> | null>({
     queryKey: ['addendum-current', parentCollection, parentId, scalarChanged.map((a) => a.field).join(',')],
