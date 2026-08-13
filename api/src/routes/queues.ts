@@ -815,7 +815,8 @@ export async function queuesRoutes(app: FastifyInstance) {
       await db('nivaro_queue_column_prefs').insert({
         queue_id: id,
         user: req.user!.id,
-        visible_columns: toJsonStr(null),
+        // Legacy NOT NULL column (unread since 2026-07-10) — '[]' placeholder
+        visible_columns: '[]',
         default_view_id: viewId
       })
     }

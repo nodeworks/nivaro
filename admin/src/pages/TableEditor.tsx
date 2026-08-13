@@ -8833,6 +8833,18 @@ function FieldSettingsPopover({
   const [gridLayoutSlug, setGridLayoutSlug] = useState<string | null>(null)
   const [gridLayoutId, setGridLayoutId] = useState<number | null>(null)
   const [gridShowTotals, setGridShowTotals] = useState(false)
+  const [dateMode, setDateMode] = useState<string>(() => {
+    try {
+      const o = settings.options
+        ? ((typeof settings.options === 'string'
+            ? JSON.parse(settings.options)
+            : settings.options) as Record<string, unknown>)
+        : {}
+      return o.date_mode === 'date' ? 'date' : 'datetime'
+    } catch {
+      return 'datetime'
+    }
+  })
   const [optionSort, setOptionSort] = useState<string>(() => {
     try {
       const o = settings.options
@@ -9333,7 +9345,9 @@ function FieldSettingsPopover({
       iface === 'file-image' ||
       iface === 'files-m2m' ||
       iface === 'relation-grouped' ||
-      ((isM2O || isM2M) && optionSort.trim() !== '')
+      ((isM2O || isM2M) && optionSort.trim() !== '') ||
+      abstractType === 'datetime' ||
+      iface === 'datetime'
     if (needsOptionsPatch) {
       try {
         const existing = settings.options
@@ -9438,13 +9452,18 @@ function FieldSettingsPopover({
               ? { option_sort: optionSort.trim() }
               : { option_sort: undefined }
             : {}
+        const dateModeOpts =
+          abstractType === 'datetime' || iface === 'datetime'
+            ? { date_mode: dateMode === 'date' ? 'date' : undefined }
+            : {}
         optionsPatch = JSON.stringify({
           ...existing,
           ...o2mOpts,
           ...fileOpts,
           ...formatOpts,
           ...groupedOpts,
-          ...pickerSortOpts
+          ...pickerSortOpts,
+          ...dateModeOpts
         })
       } catch {
         optionsPatch = JSON.stringify({
@@ -9752,6 +9771,25 @@ function FieldSettingsPopover({
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* ── Date display (datetime fields) ── */}
+            {(abstractType === 'datetime' || iface === 'datetime') && (
+              <div className='space-y-2'>
+                <SectionHeader label='Date display' />
+                <Sel
+                  value={dateMode}
+                  onChange={setDateMode}
+                  options={[
+                    { value: 'datetime', label: 'Date & time' },
+                    { value: 'date', label: 'Date only' }
+                  ]}
+                />
+                <p className='text-[10.5px] leading-relaxed text-slate-400'>
+                  Date only hides the time from the picker and every display — for fields like a
+                  requested delivery date where the time carries no meaning.
+                </p>
               </div>
             )}
 
@@ -15282,6 +15320,7 @@ function FieldGroupsTab({
     'sort_field',
     'sort_dir',
     'section_group_by',
+    'date_mode',
     'catalog_mode',
     'picker_facets',
     'option_sort',

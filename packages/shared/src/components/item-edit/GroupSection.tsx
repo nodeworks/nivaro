@@ -242,7 +242,8 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
 
   const s = String(value)
 
-  // ISO datetime → locale string
+  // ISO datetime → locale string. Date-only when the value carries no time,
+  // or the field is configured date-only (options.date_mode: 'date').
   if (
     iface === 'datetime' ||
     iface === 'date' ||
@@ -250,7 +251,21 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
     /^\d{4}-\d{2}-\d{2}$/.test(s)
   ) {
     try {
-      return new Date(s).toLocaleString()
+      let dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(s) || iface === 'date'
+      if (!dateOnly && field?.options) {
+        try {
+          const o = typeof field.options === 'string' ? JSON.parse(field.options) : field.options
+          if (o && (o as Record<string, unknown>).date_mode === 'date') dateOnly = true
+        } catch {
+          /* noop */
+        }
+      }
+      // Bare yyyy-mm-dd parses as UTC midnight — render it timezone-proof.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        const [y, m, d] = s.split('-').map(Number)
+        return new Date(y, m - 1, d).toLocaleDateString()
+      }
+      return dateOnly ? new Date(s).toLocaleDateString() : new Date(s).toLocaleString()
     } catch {
       /* noop */
     }

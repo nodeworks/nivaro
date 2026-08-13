@@ -340,6 +340,20 @@ export function FieldRenderer({
   }
 
   if (field.type === 'datetime' || iface === 'datetime') {
+    // A datetime column may be configured date-only (options.date_mode:
+    // 'date') — delivery dates etc. carry no meaningful time. Stored as the
+    // bare yyyy-mm-dd (local midnight server-side, no tz shifting).
+    const dtOpts = parseJson<{ date_mode?: string }>(field.options)
+    if (dtOpts?.date_mode === 'date') {
+      return (
+        <Input
+          type='date'
+          value={strVal.slice(0, 10)}
+          onChange={(e) => onChange(e.target.value || null)}
+          placeholder={field.placeholder ?? undefined}
+        />
+      )
+    }
     return (
       <Input
         type='datetime-local'
