@@ -4475,7 +4475,15 @@ export function ItemEditForm({
                 // field renders '—' regardless of how many links exist.
                 const aliasState = m2mAliasFieldStates[f.field]
                 const raw = aliasState ? aliasState.ids : effectiveDraft[f.field]
-                const hColorClass = f.color === 'cyan' ? 'text-nvr-cyan' : f.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : f.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : f.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : f.color === 'red' ? 'text-red-600 dark:text-red-400' : f.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-900 dark:text-slate-100'
+                // Addendum view: a header value the addendum CHANGES reads amber,
+                // matching the proposed-change styling everywhere else.
+                const changedByAddendum =
+                  viewingAddendum &&
+                  !aliasState &&
+                  addendumViewData != null &&
+                  f.field in addendumViewData &&
+                  String(draft[f.field] ?? '') !== String(addendumViewData[f.field] ?? '')
+                const hColorClass = changedByAddendum ? 'text-amber-600 dark:text-amber-400' : f.color === 'cyan' ? 'text-nvr-cyan' : f.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : f.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : f.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : f.color === 'red' ? 'text-red-600 dark:text-red-400' : f.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-900 dark:text-slate-100'
                 const hWeightClass = f.weight === 'bold' ? 'font-bold' : f.weight === 'semibold' ? 'font-semibold' : f.weight === 'medium' ? 'font-medium' : 'font-semibold'
                 const textCls = `${hColorClass} ${hWeightClass}`
                 const isPill = f.displayAs === 'pill'
