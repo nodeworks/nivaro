@@ -2428,12 +2428,21 @@ export function ItemEditForm({
   const pdfFilenameTemplate = pdfSlotOverrides?.filename_template as string | null ?? null
   const pdfGroupKey = pdfSlot?.group_key ?? null
   const pdfInGroup = !!(pdfGroupKey && groups.some((g) => g.key === pdfGroupKey))
-  const handleGenerateAndAttach = async () => {
-    if (pdfAttaching || !pdfAttachField || !layoutId) return
+  const pdfSourceLayoutId = (pdfSlotOverrides?.source_layout_id as number | null) ?? null
+  const pdfAutoGenerate = !!pdfSlotOverrides?.auto_generate_on_save
+  const pdfOverwrite = pdfSlotOverrides?.overwrite_generated !== false
+
+  const handleGenerateAndAttach = async (opts?: { itemId?: string; silent?: boolean }) => {
+    const targetItem = opts?.itemId ?? itemId
+    // source_layout_id names a dedicated PDF (file-type) layout to render —
+    // the document's design is rarely the edit form's design. Falls back to
+    // the layout being edited.
+    const renderLayoutId = pdfSourceLayoutId ?? layoutId
+    if (pdfAttaching || !pdfAttachField || !renderLayoutId || !targetItem) return
     setPdfAttaching(true)
     try {
       const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
-      const resp = await fetch(`${fetchCfg.apiBase}/collection-layouts/${layoutId}/generate-and-attach`, {
+      const resp = await fetch(`${fetchCfg.apiBase}/collection-layouts/${renderLayoutId}/generate-and-attach`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2441,14 +2450,25 @@ export function ItemEditForm({
           ...(workspace ? { 'x-workspace': workspace } : {}),
         },
         credentials: fetchCfg.credentials,
-        body: JSON.stringify({ collection, item_id: itemId, attach_field: pdfAttachField, filename_template: pdfFilenameTemplate }),
+        body: JSON.stringify({
+          collection,
+          item_id: targetItem,
+          attach_field: pdfAttachField,
+          filename_template: pdfFilenameTemplate,
+          replace_generated: pdfOverwrite
+        }),
       })
       if (!resp.ok) throw new Error(await resp.text())
-      toast.success('PDF generated and attached')
+      // An automatic regeneration is a side effect of saving, not its own
+      // event — announcing it every time would be noise.
+      if (!opts?.silent) toast.success('PDF generated and attached')
       qc.invalidateQueries({ queryKey: ['m2m-items'] })
       qc.invalidateQueries({ queryKey: ['items', collection, itemId] })
     } catch {
-      toast.error('Failed to generate and attach PDF')
+      // A failed regeneration must not read as a failed SAVE — the record is
+      // already persisted at this point.
+      if (opts?.silent) console.warn('[pdf] automatic regeneration failed')
+      else toast.error('Failed to generate and attach PDF')
     } finally {
       setPdfAttaching(false)
     }
@@ -3136,6 +3156,14 @@ export function ItemEditForm({
       setPendingO2MRows(new Map())
       qc.invalidateQueries({ queryKey: ['item', collection] })
       qc.invalidateQueries({ queryKey: ['m2m-items'] })
+      // Refresh the attached document so it reflects what was just saved.
+      // Fire-and-forget: the save is already committed and the record must not
+      // appear to fail because a PDF could not be produced.
+      if (pdfAutoGenerate && pdfAttachField) {
+        void handleGenerateAndAttach({ itemId: String(id), silent: true }).then(() => {
+          qc.invalidateQueries({ queryKey: ['m2m-items'] })
+        })
+      }
       // Auto-close dialog after brief success display
       setTimeout(() => {
         setSaveDialogOpen(false)
@@ -3267,7 +3295,7 @@ export function ItemEditForm({
         <div key='__pdf__' className='flex items-center gap-2 px-1'>
           <button
             type='button'
-            onClick={handleGenerateAndAttach}
+            onClick={() => void handleGenerateAndAttach()}
             disabled={pdfAttaching || notConfigured}
             title={notConfigured ? 'Configure PDF field in Data Model → Layouts' : undefined}
             className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
@@ -3506,7 +3534,7 @@ export function ItemEditForm({
             <div className='mt-4 flex items-center gap-2'>
               <button
                 type='button'
-                onClick={handleGenerateAndAttach}
+                onClick={() => void handleGenerateAndAttach()}
                 disabled={pdfAttaching || !pdfAttachField}
                 title={!pdfAttachField ? 'Configure PDF field in Data Model → Layouts' : undefined}
                 className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
@@ -3652,6 +3680,15 @@ export function ItemEditForm({
             addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
             canCreate={addendumCanCreate}
             onActiveCountChange={setActiveAddendumCount}
+            onApplied={() => {
+              // An approved addendum rewrites the record, so the attached
+              // document is now stale — regenerate it the same way a save does.
+              if (pdfAutoGenerate && pdfAttachField) {
+                void handleGenerateAndAttach({ silent: true }).then(() => {
+                  qc.invalidateQueries({ queryKey: ['m2m-items'] })
+                })
+              }
+            }}
           />
         )}
       </div>
@@ -3708,7 +3745,7 @@ export function ItemEditForm({
                 <div key='__pdf__' style={{ gridColumn: `span ${span}` }}>
                   <button
                     type='button'
-                    onClick={handleGenerateAndAttach}
+                    onClick={() => void handleGenerateAndAttach()}
                     disabled={pdfAttaching || notConfigured}
                     title={notConfigured ? 'Configure PDF field in Data Model → Layouts' : undefined}
                     className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
@@ -3829,6 +3866,15 @@ export function ItemEditForm({
             addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
             canCreate={addendumCanCreate}
             onActiveCountChange={setActiveAddendumCount}
+            onApplied={() => {
+              // An approved addendum rewrites the record, so the attached
+              // document is now stale — regenerate it the same way a save does.
+              if (pdfAutoGenerate && pdfAttachField) {
+                void handleGenerateAndAttach({ silent: true }).then(() => {
+                  qc.invalidateQueries({ queryKey: ['m2m-items'] })
+                })
+              }
+            }}
           />
         )}
       </div>
@@ -3959,6 +4005,15 @@ export function ItemEditForm({
             addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
             canCreate={addendumCanCreate}
             onActiveCountChange={setActiveAddendumCount}
+            onApplied={() => {
+              // An approved addendum rewrites the record, so the attached
+              // document is now stale — regenerate it the same way a save does.
+              if (pdfAutoGenerate && pdfAttachField) {
+                void handleGenerateAndAttach({ silent: true }).then(() => {
+                  qc.invalidateQueries({ queryKey: ['m2m-items'] })
+                })
+              }
+            }}
           />
         )}
         {stepNav}

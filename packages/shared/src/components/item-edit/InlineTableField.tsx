@@ -73,6 +73,7 @@ import { NestedRelationEditor } from './NestedRelationEditor'
 import { RelationCombobox } from './RelationCombobox'
 import { applyDisplayTemplate, EMPTY_NESTED_OPS, parseJson, SENTINEL_FIELDS } from './helpers'
 import type { CMSField, CMSRelation, NestedOps } from './types'
+import { toast } from 'sonner'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
 // Oracle/Fusion wrap a JSON fragment ("o:errorDetails": [{ detail: … }]) in an
@@ -166,6 +167,41 @@ const NON_DISPLAY_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation',
 // Built-in preset sentinel: shows every displayCols entry, no relation summary columns.
 // Not a real ColumnPreset — never appears in columnPresets, only in activePreset/default_preset.
 const ALL_PRESET_SENTINEL = '__all__'
+
+/**
+ * A one-click rewrite of every row in the grid, driven by an aggregate of a
+ * related collection.
+ *
+ * EFP's "Close Out Lines" is one instance of this shape: for each REQ line,
+ * sum `open_unbilled_amount` across the PO lines pointing at it and, where the
+ * line covers that remainder, subtract it. Expressed as config rather than
+ * EFP code so any collection can do the same:
+ *
+ *   {label:'Close Out Lines', relation:'po_line_items',
+ *    aggregate:{field:'open_unbilled_amount', op:'sum'},
+ *    guard:'{{amount}} >= {{__agg__}}',
+ *    set:{amount:'{{amount}} - {{__agg__}}'}}
+ *
+ * `{{__agg__}}` is the aggregate for that row (same token match-agg-column
+ * uses); every other `{{field}}` reads the row's current value. Rows failing
+ * the guard are left exactly as they are.
+ *
+ * Writes go through the SAME paths a manual cell edit uses, so a staged grid
+ * (new record, addendum, save_mode 'pending') stages the change and an
+ * immediate grid PATCHes it — the action never invents its own persistence.
+ */
+export interface RowBulkActionConfig {
+  label: string
+  /** O2M alias on the ROW's collection pointing at the rows to aggregate. */
+  relation: string
+  aggregate: { field: string; op?: 'sum' | 'count' | 'min' | 'max' }
+  /** Optional per-row condition; rows that fail are skipped untouched. */
+  guard?: string
+  /** field → formula. */
+  set: Record<string, string>
+  confirm?: string
+  variant?: 'default' | 'danger'
+}
 
 export function evalClientFormula(formula: string, row: Record<string, unknown>): number | null {
   // Handles both `item.fieldname` and `{{fieldname}}` token syntax
@@ -748,6 +784,165 @@ function AllocateDrawer({
  *  quantity, walk candidate records in sort order and create/increment
  *  allocation rows until the requirement is met or candidates run dry.
  *  Live writes only (same posture as matched drawer relations). */
+/**
+ * Toolbar button for a RowBulkActionConfig. Aggregates in ONE query for the
+ * whole grid (never one per row), then applies each row's new values through
+ * the caller-supplied writer so staging vs immediate stays the grid's call.
+ */
+function RowBulkActionButton({
+  config,
+  rows,
+  relatedCollection,
+  applyRow
+}: {
+  config: RowBulkActionConfig
+  rows: Record<string, unknown>[]
+  relatedCollection: string
+  applyRow: (row: Record<string, unknown>, changes: Record<string, unknown>) => void | Promise<void>
+}) {
+  const client = useNivaroClient()
+  const [busy, setBusy] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+
+  const run = async () => {
+    setConfirming(false)
+    setBusy(true)
+    try {
+      // Resolve the alias once: which collection holds the rows to aggregate,
+      // and which column points back at this grid's rows.
+      const meta = await client
+        .request<{ data: { relations?: CMSRelation[] } }>(get(`/collections/${relatedCollection}`))
+        .then((r) => r.data)
+      const rel = (meta?.relations ?? []).find(
+        (r) => r.one_collection === relatedCollection && r.one_field === config.relation
+      )
+      if (!rel?.many_collection || !rel?.many_field) {
+        toast.error(`${config.label}: "${config.relation}" is not a relation on ${relatedCollection}`)
+        return
+      }
+
+      const ids = rows.map((r) => r.id).filter((id) => id != null)
+      if (ids.length === 0) {
+        toast.message(`${config.label}: no saved rows to update`)
+        return
+      }
+      const children = await client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${rel.many_collection}`, {
+            filter: JSON.stringify({ [rel.many_field]: { _in: ids } }),
+            fields: `id,${rel.many_field},${config.aggregate.field}`,
+            limit: '2000'
+          })
+        )
+        .then((r) => r.data ?? [])
+
+      const op = config.aggregate.op ?? 'sum'
+      const byParent = new Map<string, number[]>()
+      for (const c of children) {
+        const key = String(c[rel.many_field!] ?? '')
+        const n = Number(c[config.aggregate.field])
+        if (!key || Number.isNaN(n)) continue
+        byParent.set(key, [...(byParent.get(key) ?? []), n])
+      }
+      const aggFor = (rowId: unknown) => {
+        const vals = byParent.get(String(rowId)) ?? []
+        if (op === 'count') return vals.length
+        if (vals.length === 0) return 0
+        if (op === 'min') return Math.min(...vals)
+        if (op === 'max') return Math.max(...vals)
+        return vals.reduce((a, b) => a + b, 0)
+      }
+
+      let changed = 0
+      let skipped = 0
+      for (const row of rows) {
+        const ctx = { ...row, __agg__: aggFor(row.id) }
+        if (config.guard) {
+          // The guard is a comparison, which evalClientFormula (arithmetic
+          // only) can't evaluate — reduce it to `left - right >= 0` style by
+          // splitting on the operator.
+          const m = config.guard.match(/^(.*?)(>=|<=|>|<|==)(.*)$/)
+          if (m) {
+            const left = evalClientFormula(m[1].trim(), ctx)
+            const right = evalClientFormula(m[3].trim(), ctx)
+            if (left == null || right == null) {
+              skipped++
+              continue
+            }
+            const ok =
+              m[2] === '>=' ? left >= right
+              : m[2] === '<=' ? left <= right
+              : m[2] === '>' ? left > right
+              : m[2] === '<' ? left < right
+              : left === right
+            if (!ok) {
+              skipped++
+              continue
+            }
+          }
+        }
+        const changes: Record<string, unknown> = {}
+        for (const [field, formula] of Object.entries(config.set)) {
+          const val = evalClientFormula(formula, ctx)
+          if (val != null) changes[field] = val
+        }
+        if (Object.keys(changes).length === 0) {
+          skipped++
+          continue
+        }
+        await applyRow(row, changes)
+        changed++
+      }
+      toast.success(
+        `${config.label}: ${changed} row${changed === 1 ? '' : 's'} updated` +
+          (skipped > 0 ? `, ${skipped} unchanged` : '')
+      )
+    } catch {
+      toast.error(`${config.label} failed`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (confirming) {
+    return (
+      <span className='inline-flex items-center gap-1.5 text-[11px]'>
+        <span className='text-slate-600 dark:text-slate-300'>{config.confirm ?? 'Apply to all rows?'}</span>
+        <button
+          type='button'
+          onClick={() => void run()}
+          className='rounded border border-red-200 px-1.5 py-0.5 font-medium text-red-600 hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-900/20'
+        >
+          Yes
+        </button>
+        <button
+          type='button'
+          onClick={() => setConfirming(false)}
+          className='rounded border border-slate-200 px-1.5 py-0.5 text-slate-500 hover:bg-slate-50 dark:border-border'
+        >
+          Cancel
+        </button>
+      </span>
+    )
+  }
+
+  return (
+    <button
+      type='button'
+      disabled={busy}
+      onClick={() => (config.confirm ? setConfirming(true) : void run())}
+      className={cn(
+        'rounded px-2 py-0.5 text-[11px] font-medium disabled:opacity-50',
+        config.variant === 'danger'
+          ? 'border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-900/20'
+          : 'border border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-border dark:hover:bg-muted'
+      )}
+    >
+      {busy ? 'Working…' : config.label}
+    </button>
+  )
+}
+
 function AutoAllocateButton({
   config,
   matchCfg,
@@ -926,6 +1121,7 @@ export function InlineTableField({
   rowDefaults,
   allocateDrawer,
   autoAllocate,
+  rowBulkActions,
   uploadTemplate,
   submissionErrors,
   prefillParentId,
@@ -967,6 +1163,10 @@ export function InlineTableField({
   /** EFP-style allocate drawer: browse all eligible options, type amounts. */
   allocateDrawer?: AllocateDrawerConfig
   autoAllocate?: AutoAllocateConfig
+  /** Toolbar buttons that rewrite EVERY row in one go from an aggregate of a
+   *  related collection — the generic form of EFP's "Close Out Lines" (reduce
+   *  each REQ line by the open unbilled amount across its PO lines). */
+  rowBulkActions?: RowBulkActionConfig[]
   /** Import template NAME — renders that template's upload button in this
    *  grid's toolbar (existing records; wired to ItemEditForm's reimport flow). */
   uploadTemplate?: string
@@ -2689,6 +2889,38 @@ export function InlineTableField({
             />
           )
         })()}
+        {(rowBulkActions ?? []).map((action) => (
+          <RowBulkActionButton
+            key={action.label}
+            config={action}
+            // Staged rows count: an addendum's grid is entirely PREFILLED
+            // pending rows (they keep their source id), and those are exactly
+            // the rows the action is meant to rewrite.
+            rows={[
+              ...rows,
+              ...pendingRows.map((r, i) => ({ ...r, __pendingIndex: i }))
+            ]}
+            relatedCollection={relatedCollection}
+            applyRow={async (row, changes) => {
+              const pendingIndex = (row as Record<string, unknown>).__pendingIndex
+              if (typeof pendingIndex === 'number' && staging) {
+                staging.updateRow(relatedCollection, manyField, pendingIndex, changes)
+                return
+              }
+              const rowId = String(row.id)
+              // Otherwise reuse the grid's own write paths: a pending-mode grid
+              // queues the edit for the parent save, an immediate grid PATCHes.
+              if (isPendingMode && staging) {
+                staging.queueEdit(relatedCollection, manyField, rowId, changes)
+                return
+              }
+              await client.request(patch(`/items/${relatedCollection}/${rowId}`, changes))
+              await qc.invalidateQueries({
+                queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
+              })
+            }}
+          />
+        ))}
         {uploadTemplate && !isNew && !readOnly && reimportHandler && parentCollection && (
           <ImportFromFileButton
             collection={parentCollection}

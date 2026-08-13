@@ -1026,6 +1026,7 @@ export function AddendumPanel({
   addendumLayoutId,
   canCreate = true,
   onActiveCountChange,
+  onApplied,
   defaultExpanded = true,
 }: {
   collection: string
@@ -1033,6 +1034,10 @@ export function AddendumPanel({
   addendumLayoutId?: number | null
   canCreate?: boolean
   onActiveCountChange?: (count: number) => void
+  /** Fired after an addendum is approved/rejected/submitted — i.e. whenever the
+   *  parent record may now read differently. ItemEditForm uses it to refresh a
+   *  generated PDF so the attached document matches the amended record. */
+  onApplied?: () => void
   defaultExpanded?: boolean
 }) {
   const client = useNivaroClient()
@@ -1114,6 +1119,7 @@ export function AddendumPanel({
   const handleRefresh = () => {
     qc.invalidateQueries({ queryKey: ['addendums', collection, item] })
     refetch()
+    onApplied?.()
   }
 
   const configuredFields = assignments.filter(

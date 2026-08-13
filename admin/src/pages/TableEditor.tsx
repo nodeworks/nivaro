@@ -15321,6 +15321,7 @@ function FieldGroupsTab({
     'sort_dir',
     'section_group_by',
     'date_mode',
+    'row_bulk_actions',
     'catalog_mode',
     'picker_facets',
     'option_sort',

@@ -525,6 +525,9 @@ export function FieldRenderer({
           opts.auto_allocate && typeof opts.auto_allocate === 'object'
             ? (opts.auto_allocate as import('./InlineTableField').AutoAllocateConfig)
             : undefined
+        const rowBulkActions = Array.isArray(opts.row_bulk_actions)
+          ? (opts.row_bulk_actions as import('./InlineTableField').RowBulkActionConfig[])
+          : undefined
         const uploadTemplate =
           typeof opts.upload_template === 'string' && opts.upload_template
             ? opts.upload_template
@@ -553,7 +556,7 @@ export function FieldRenderer({
           )
         }
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} columnPresets={columnPresets} defaultPreset={defaultPreset} drawerRelations={drawerRelations} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} sectionGroupBy={sectionGroupBy} rowFilter={rowFilter} rowDefaults={rowDefaults} allocateDrawer={allocateDrawer} autoAllocate={autoAllocate} uploadTemplate={uploadTemplate} submissionErrors={submissionErrors} prefillParentId={prefillParentId} parentFieldKey={field.field} readOnly={field.readonly} />
+          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} columnPresets={columnPresets} defaultPreset={defaultPreset} drawerRelations={drawerRelations} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} sectionGroupBy={sectionGroupBy} rowFilter={rowFilter} rowDefaults={rowDefaults} allocateDrawer={allocateDrawer} autoAllocate={autoAllocate} rowBulkActions={rowBulkActions} uploadTemplate={uploadTemplate} submissionErrors={submissionErrors} prefillParentId={prefillParentId} parentFieldKey={field.field} readOnly={field.readonly} />
         )
       }
     }

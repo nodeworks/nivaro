@@ -596,8 +596,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // Generates PDF for an item and attaches it to a file M2M/O2M field on the item.
   app.post('/:id/generate-and-attach', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const { collection, item_id, attach_field, filename_template } = req.body as {
+    const { collection, item_id, attach_field, filename_template, replace_generated } = req.body as {
       collection: string; item_id: string | number; attach_field: string; filename_template?: string | null
+      /** Detach (and delete) PDFs this layout generated before for the same
+       *  record, so re-saving refreshes the document instead of stacking a new
+       *  copy every time. Only ever removes files THIS endpoint created — a
+       *  user-uploaded attachment is never touched. */
+      replace_generated?: boolean
     }
 
     if (!collection || item_id == null || !attach_field) {
@@ -680,6 +685,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       uploaded_by: req.user!.id,
       uploaded_on: new Date(),
       filesize: pdfBuffer.length,
+      // Provenance, so a later replace_generated run can tell its own output
+      // apart from a file a person uploaded.
+      generated_by_layout: Number(id),
     }
     await db('nivaro_files').insert(fileRow)
 
@@ -703,6 +711,35 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     //   junction_field  = junction column pointing to the related files record
     if (!targetJr.junction_field) {
       return reply.code(400).send({ error: `Relation '${attach_field}' does not link to nivaro_files` })
+    }
+    if (replace_generated) {
+      // Identify prior generations by the marker stamped on the file row, not
+      // by filename — a user-uploaded file that happens to share a name must
+      // survive.
+      try {
+        const priorJunctions = (await db(targetJr.many_collection)
+          .where({ [targetJr.many_field]: item_id })
+          .select('id', targetJr.junction_field)) as Array<Record<string, unknown>>
+        const priorFileIds = priorJunctions
+          .map((j) => j[targetJr.junction_field as string])
+          .filter((v): v is string => typeof v === 'string' && v !== fileId)
+        if (priorFileIds.length > 0) {
+          const generated = (await db('nivaro_files')
+            .whereIn('id', priorFileIds)
+            .where({ generated_by_layout: Number(id) })
+            .select('id')) as Array<{ id: string }>
+          const generatedIds = new Set(generated.map((g) => String(g.id)))
+          if (generatedIds.size > 0) {
+            await db(targetJr.many_collection)
+              .where({ [targetJr.many_field]: item_id })
+              .whereIn(targetJr.junction_field as string, [...generatedIds])
+              .del()
+            await db('nivaro_files').whereIn('id', [...generatedIds]).del()
+          }
+        }
+      } catch {
+        // Cleanup is best-effort — never block the new attachment over it.
+      }
     }
     try {
       await db(targetJr.many_collection).insert({
