@@ -1138,14 +1138,16 @@ interface PresenceExtra {
 function usePresenceExtras(): {
   byUser: Map<string, PresenceExtra>
   fields: string[]
+  adminUrl: string | null
 } {
   const client = useNivaroClient()
   const { data } = useQuery({
     queryKey: ['presence-online'],
     queryFn: () =>
-      client.request<{ data: PresenceExtra[]; config?: { fields?: string[] } }>(
-        get('/presence/online')
-      ),
+      client.request<{
+        data: PresenceExtra[]
+        config?: { fields?: string[]; admin_url?: string | null }
+      }>(get('/presence/online')),
     // Matches the presence heartbeat cadence — the page someone is on should
     // track them around the app, not lag a minute behind.
     refetchInterval: 15_000,
@@ -1156,7 +1158,11 @@ function usePresenceExtras(): {
     for (const r of data?.data ?? []) m.set(String(r.user_id).toUpperCase(), r)
     return m
   }, [data])
-  return { byUser, fields: data?.config?.fields ?? ['role', 'page'] }
+  return {
+    byUser,
+    fields: data?.config?.fields ?? ['role', 'page'],
+    adminUrl: data?.config?.admin_url ?? null
+  }
 }
 
 /** "/records/workflows/312100" → "Workflows › 312100" — the raw route is an
@@ -1205,6 +1211,12 @@ export function ChatPanel({
   // NavigationContext always supplies navigate (its default is a plain hop),
   // so hosts that mount a router keep the SPA intact for free.
   const { navigate } = useNavigation()
+  /** Replay may live on another origin (the admin SPA the API serves), which
+   *  the host router cannot handle — send those to a new tab. */
+  const openSession = (href: string) => {
+    if (/^https?:\/\//i.test(href)) window.open(href, '_blank', 'noopener')
+    else navigate(href)
+  }
 
   const openDm = (u: ChatOnlineUser) => {
     if (!me) return
@@ -1332,9 +1344,10 @@ export function ChatPanel({
                     // a replay route.
                     const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
                     if (!isAdmin || !x?.recording_id) return null
+                    const base = presenceExtras.adminUrl?.replace(/\/$/, '') ?? ''
                     const href = cfg.sessionUrl
                       ? cfg.sessionUrl(x.recording_id, String(u.user_id))
-                      : `/session-replays?recording=${x.recording_id}`
+                      : `${base}/session-replays?recording=${x.recording_id}`
                     if (!href) return null
                     return (
                       <span
@@ -1343,12 +1356,12 @@ export function ChatPanel({
                         title='Watch this session'
                         onClick={(e) => {
                           e.stopPropagation()
-                          navigate(href)
+                          openSession(href)
                         }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
                             e.stopPropagation()
-                            navigate(href)
+                            openSession(href)
                           }
                         }}
                         className='shrink-0 rounded p-1 text-slate-300 transition-colors hover:bg-slate-100 hover:text-nvr-cyan dark:hover:bg-muted'

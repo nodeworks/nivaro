@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { config } from '../config.js'
 
 const KEY_PREFIX = 'presence:session:'
 
@@ -387,7 +388,15 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           recording_id: recordingByUser.get(uid) ?? null
         }
       }),
-      config: { fields, scope_dimensions: dimensions }
+      config: {
+        fields,
+        scope_dimensions: dimensions,
+        // Where session replay lives. A headless host is served from its own
+        // origin, so a relative link would hit ITS router and 404 — the admin
+        // SPA is served by the API, so hand back an absolute URL and any host
+        // can offer the action without hardcoding an environment.
+        admin_url: config.ADMIN_URL ?? null
+      }
     })
   })
 }
