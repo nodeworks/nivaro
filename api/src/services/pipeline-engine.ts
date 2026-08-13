@@ -510,6 +510,39 @@ export async function resolveStateOwnersBatch(
   const withGroups = requests.filter((r) => (groupsByState.get(r.stateId) ?? []).length > 0)
   const withoutGroups = requests.filter((r) => (groupsByState.get(r.stateId) ?? []).length === 0)
 
+  // Owner fallback: a column on the record naming a user who owns it when (or
+  // as well as) the owner groups. Keyed per request because the field is a
+  // property of the binding, and one state can be reached from several.
+  const fallbackFieldByKey = new Map<string, string>()
+  if (stateIds.length > 0) {
+    const stateRows = (await selectInChunks(stateIds, 2000, (chunk) =>
+      database('nivaro_workflow_states').whereIn('id', chunk).select('id', 'template')
+    )) as Array<{ id: string; template: string }>
+    const templateByState = new Map(stateRows.map((r) => [String(r.id).toUpperCase(), r.template]))
+    const allBindings = (await database('nivaro_workflow_bindings')
+      .whereIn('collection', [...new Set(requests.map((r) => r.collection))])
+      .select('collection', 'template', 'owner_fallback_field')) as Array<{
+      collection: string
+      template: string
+      owner_fallback_field: string | null
+    }>
+    const bindingRows = allBindings.filter(
+      (b): b is typeof b & { owner_fallback_field: string } =>
+        typeof b.owner_fallback_field === 'string' && b.owner_fallback_field.trim() !== ''
+    )
+    if (bindingRows.length > 0) {
+      const byCollectionTemplate = new Map(
+        bindingRows.map((b) => [`${b.collection}::${String(b.template).toUpperCase()}`, b.owner_fallback_field])
+      )
+      for (const req of requests) {
+        const template = templateByState.get(String(req.stateId).toUpperCase())
+        if (!template) continue
+        const field = byCollectionTemplate.get(`${req.collection}::${String(template).toUpperCase()}`)
+        if (field) fallbackFieldByKey.set(req.key, field)
+      }
+    }
+  }
+
   // Dotted filter fields used by the groups each collection's requests can hit —
   // pre-resolved in batch so M2M and multi-hop M2O dimensions actually match.
   const dottedFieldsByCollection = new Map<string, Set<string>>()
@@ -530,10 +563,15 @@ export async function resolveStateOwnersBatch(
   const recordsByCollectionAndId = new Map<string, Map<string, Record<string, unknown>>>()
   const relationsByCollection = new Map<string, RelationInfo[]>()
   const resolvedByCollection = new Map<string, Map<string, Map<string, ResolvedFilterValue>>>()
-  const collections = [...new Set(withGroups.map((r) => r.collection))]
+  // A fallback field is read off the record, so those requests need their row
+  // fetched even when their state has no owner groups at all.
+  const needsRecord = requests.filter(
+    (r) => (groupsByState.get(r.stateId) ?? []).length > 0 || fallbackFieldByKey.has(r.key)
+  )
+  const collections = [...new Set(needsRecord.map((r) => r.collection))]
   for (const collection of collections) {
     const ids = [
-      ...new Set(withGroups.filter((r) => r.collection === collection).map((r) => r.itemId))
+      ...new Set(needsRecord.filter((r) => r.collection === collection).map((r) => r.itemId))
     ]
     let rows: Record<string, unknown>[] = []
     try {
@@ -633,14 +671,43 @@ export async function resolveStateOwnersBatch(
       .map((r) => ({ id: r.id, email: r.email, first_name: r.first_name, last_name: r.last_name }))
   }
 
+  // Resolve every fallback user in one lookup. A field holding something that
+  // isn't a live user id simply yields nobody — a misconfigured field name must
+  // never break owner resolution for the records that do resolve normally.
+  const fallbackIdByKey = new Map<string, string>()
+  for (const req of requests) {
+    const field = fallbackFieldByKey.get(req.key)
+    if (!field) continue
+    const value = recordsByCollectionAndId.get(req.collection)?.get(req.itemId)?.[field]
+    if (typeof value === 'string' && value.trim() !== '') fallbackIdByKey.set(req.key, value)
+  }
+  const fallbackOwnerById = new Map<string, ResolvedOwner>()
+  if (fallbackIdByKey.size > 0) {
+    const rows = (await selectInChunks([...new Set(fallbackIdByKey.values())], 2000, (chunk) =>
+      database('nivaro_users')
+        .whereIn('id', chunk)
+        .select('id', 'email', 'first_name', 'last_name')
+    )) as ResolvedOwner[]
+    for (const row of rows) fallbackOwnerById.set(String(row.id).toUpperCase(), row)
+  }
+  const fallbackOwnersFor = (req: OwnerResolutionRequest): ResolvedOwner[] => {
+    const id = fallbackIdByKey.get(req.key)
+    if (!id) return []
+    const owner = fallbackOwnerById.get(id.toUpperCase())
+    return owner ? [owner] : []
+  }
+
   const combinedByKey = new Map<string, ResolvedOwner[]>()
   for (const req of withoutGroups) {
-    combinedByKey.set(req.key, dedupeOwners(instanceOwnersFor(req)))
+    combinedByKey.set(req.key, dedupeOwners([...instanceOwnersFor(req), ...fallbackOwnersFor(req)]))
   }
   for (const req of withGroups) {
     const winning = winningGroupsByKey.get(req.key) ?? []
     const baseOwners = winning.flatMap((g) => groupUsersByGroup.get(g.id) ?? [])
-    combinedByKey.set(req.key, dedupeOwners([...baseOwners, ...instanceOwnersFor(req)]))
+    combinedByKey.set(
+      req.key,
+      dedupeOwners([...baseOwners, ...instanceOwnersFor(req), ...fallbackOwnersFor(req)])
+    )
   }
 
   // Delegation substitution only ever applied to withGroups requests — see the

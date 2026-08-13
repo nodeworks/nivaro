@@ -1444,9 +1444,22 @@ export function ChatPanel({
                     const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
                     if (!isAdmin || !x?.recording_id) return null
                     const base = presenceExtras.adminUrl?.replace(/\/$/, '') ?? ''
+                    // The app that OWNS /session-replays supplies its own
+                    // sessionUrl, so the default below is only ever used by a
+                    // headless host. There, a base that is empty or resolves to
+                    // this very origin cannot reach the replay page — it lands
+                    // the viewer back in their own router (a dashboard, not an
+                    // error), which reads as the feature being broken. Hide the
+                    // action instead of opening a tab that goes nowhere.
+                    const reachable =
+                      !!base &&
+                      (typeof window === 'undefined' ||
+                        new URL(base, window.location.origin).origin !== window.location.origin)
                     const href = cfg.sessionUrl
                       ? cfg.sessionUrl(x.recording_id, String(u.user_id))
-                      : `${base}/session-replays?recording=${x.recording_id}`
+                      : reachable
+                        ? `${base}/session-replays?recording=${x.recording_id}`
+                        : null
                     if (!href) return null
                     return (
                       <span

@@ -2672,7 +2672,11 @@ export function PipelineEditPage() {
       body
     }: {
       bindingId: number
-      body: { auto_start?: boolean; auto_start_state?: string | null }
+      body: {
+        auto_start?: boolean
+        auto_start_state?: string | null
+        owner_fallback_field?: string | null
+      }
     }) => api.patch(`/pipelines/bindings/${bindingId}`, body).then((r) => r.data),
     onSuccess: () => invalidate(),
     onError: () => toast.error('Failed to update binding')
@@ -3279,6 +3283,18 @@ export function PipelineEditPage() {
                           />
                           <span className='text-[12px] text-slate-600'>Auto-start on create</span>
                         </label>
+                        <div className='flex items-center gap-1.5'>
+                          <span className='text-[11px] text-slate-400'>Owner fallback:</span>
+                          <OwnerFallbackInput
+                            value={b.owner_fallback_field ?? ''}
+                            onCommit={(v) =>
+                              updateBinding.mutate({
+                                bindingId: b.id,
+                                body: { owner_fallback_field: v || null }
+                              })
+                            }
+                          />
+                        </div>
                         {b.auto_start && (
                           <div className='flex items-center gap-1.5'>
                             <span className='text-[11px] text-slate-400'>Start in:</span>
@@ -3590,6 +3606,40 @@ function SplitStateChip({
       {selected && <Check className='h-3 w-3' />}
       {state.label}
     </button>
+  )
+}
+
+/**
+ * Names a user column on the bound record whose user counts as an owner, so a
+ * record no owner group matches still has someone accountable for it rather
+ * than falling off every worklist. Commits on blur/Enter — a per-keystroke
+ * PATCH would write a half-typed column name.
+ */
+function OwnerFallbackInput({
+  value,
+  onCommit
+}: {
+  value: string
+  onCommit: (v: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => setDraft(value), [value])
+  const commit = () => {
+    if (draft.trim() !== value.trim()) onCommit(draft.trim())
+  }
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        if (e.key === 'Escape') setDraft(value)
+      }}
+      placeholder='none'
+      title='User column on the record (e.g. user_created) whose user is always an owner'
+      className='w-40 rounded border border-slate-200 px-1.5 py-0.5 font-mono text-[11px] dark:border-border dark:bg-background'
+    />
   )
 }
 

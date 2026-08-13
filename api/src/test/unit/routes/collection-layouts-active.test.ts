@@ -102,11 +102,17 @@ function makeActiveDbMock(opts: {
   const fn = vi.fn((table: string) => {
     if (table === 'nivaro_collection_layouts') {
       return {
-        where: vi.fn((cond: Record<string, unknown>) => {
-          if ('slug' in cond) {
+        where: vi.fn((cond: Record<string, unknown> | ((b: unknown) => unknown)) => {
+          if (typeof cond === 'object' && cond !== null && 'slug' in cond) {
             return { first: vi.fn(() => Promise.resolve(opts.slugRow)) }
           }
-          return { orderByRaw: vi.fn(() => Promise.resolve(opts.layouts)) }
+          // The route narrows to record-form layouts with a second, callback
+          // form of .where() before ordering, so this stage must be chainable.
+          const stage: Record<string, unknown> = {
+            orderByRaw: vi.fn(() => Promise.resolve(opts.layouts))
+          }
+          stage.where = vi.fn(() => stage)
+          return stage
         })
       }
     }

@@ -82,6 +82,7 @@ interface WorkflowBinding {
   state_field_map: string | null
   auto_start: boolean
   auto_start_state: string | null
+  owner_fallback_field: string | null
 }
 
 interface WorkflowInstance {
@@ -681,6 +682,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       state_field_map?: Record<string, unknown> | string | null
       auto_start?: boolean | number
       auto_start_state?: string | null
+      owner_fallback_field?: string | null
     }
     if (!body.collection?.trim()) return reply.code(400).send({ error: 'collection is required' })
 
@@ -704,7 +706,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           auto_start_state:
             body.auto_start_state !== undefined
               ? body.auto_start_state || null
-              : existing.auto_start_state
+              : existing.auto_start_state,
+          owner_fallback_field:
+            body.owner_fallback_field !== undefined
+              ? body.owner_fallback_field?.trim() || null
+              : existing.owner_fallback_field
         })
     } else {
       await db('nivaro_workflow_bindings').insert({
@@ -713,7 +719,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         state_field: body.state_field ?? null,
         state_field_map: toJsonStr(body.state_field_map ?? null),
         auto_start: body.auto_start ? 1 : 0,
-        auto_start_state: body.auto_start_state ?? null
+        auto_start_state: body.auto_start_state ?? null,
+        owner_fallback_field: body.owner_fallback_field?.trim() || null
       })
     }
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
@@ -753,7 +760,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   app.patch('/bindings/:bindingId', { preHandler: requireAdmin }, async (req, reply) => {
     const { bindingId } = req.params as { bindingId: string }
     const body = req.body as Partial<
-      Pick<WorkflowBinding, 'state_field' | 'state_field_map' | 'auto_start' | 'auto_start_state'>
+      Pick<
+        WorkflowBinding,
+        | 'state_field'
+        | 'state_field_map'
+        | 'auto_start'
+        | 'auto_start_state'
+        | 'owner_fallback_field'
+      >
     >
     const existing = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ id: bindingId })
@@ -773,7 +787,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         auto_start_state:
           body.auto_start_state !== undefined
             ? body.auto_start_state || null
-            : existing.auto_start_state
+            : existing.auto_start_state,
+        owner_fallback_field:
+          body.owner_fallback_field !== undefined
+            ? body.owner_fallback_field?.trim() || null
+            : existing.owner_fallback_field
       })
     const updated = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ id: bindingId })

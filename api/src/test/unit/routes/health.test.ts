@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { NIVARO_VERSION } from '../../../version.js'
 
 // Mock config before importing the route
 vi.mock('../../../config.js', () => ({
@@ -52,7 +53,9 @@ describe('GET /health', () => {
     expect(body.status).toBe('ok')
     expect((body.db as Record<string, unknown>).status).toBe('connected')
     expect((body.redis as Record<string, unknown>).status).toBe('connected')
-    expect(body.version).toBe('0.1.0')
+    // Resolved at runtime from the release's package.json (see version.ts), so
+    // pinning a literal here just breaks on every release bump.
+    expect(body.version).toBe(NIVARO_VERSION)
     expect(typeof body.ts).toBe('string')
   })
 

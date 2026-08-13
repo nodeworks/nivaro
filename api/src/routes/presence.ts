@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { config } from '../config.js'
+import { adminBaseUrl } from '../admin-base.js'
 
 const KEY_PREFIX = 'presence:session:'
 
@@ -488,7 +489,7 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
         // origin, so a relative link would hit ITS router and 404 — the admin
         // SPA is served by the API, so hand back an absolute URL and any host
         // can offer the action without hardcoding an environment.
-        admin_url: config.ADMIN_URL ?? null,
+        admin_url: adminBaseUrl(),
         // Human labels so a "Group by" control can offer "Zone" not "division".
         dimensions: dimensionMeta
       }

@@ -793,11 +793,14 @@ function RowBulkActionButton({
   config,
   rows,
   relatedCollection,
+  computedWriteFields,
   applyRow
 }: {
   config: RowBulkActionConfig
   rows: Record<string, unknown>[]
   relatedCollection: string
+  /** Child fields whose value is derived on every write; see run(). */
+  computedWriteFields: Map<string, string>
   applyRow: (row: Record<string, unknown>, changes: Record<string, unknown>) => void | Promise<void>
 }) {
   const client = useNivaroClient()
@@ -806,6 +809,19 @@ function RowBulkActionButton({
 
   const run = async () => {
     setConfirming(false)
+    // A write-computed field is recalculated from its formula on every render
+    // and again server-side on save, so a value written here would be silently
+    // discarded — the row would look untouched and the intended change would be
+    // lost. Refuse, and name the inputs to drive instead.
+    const derived = Object.keys(config.set).filter((f) => computedWriteFields.has(f))
+    if (derived.length > 0) {
+      const f = derived[0]
+      toast.error(
+        `${config.label}: "${f}" is calculated from ${computedWriteFields.get(f)} and cannot be set directly — target those fields instead`,
+        { duration: 12000 }
+      )
+      return
+    }
     setBusy(true)
     try {
       // Resolve the alias once: which collection holds the rows to aggregate,
@@ -886,7 +902,9 @@ function RowBulkActionButton({
           const val = evalClientFormula(formula, ctx)
           // Round to cents: 400 - 275.04 is 124.95999999999998 in binary
           // floating point, and that dust would be written to the record.
-          if (val != null) changes[field] = Math.round(val * 100) / 100
+          // Non-finite means the formula divided by a zero or missing field —
+          // writing Infinity/NaN would corrupt the row, so leave it alone.
+          if (val != null && Number.isFinite(val)) changes[field] = Math.round(val * 100) / 100
         }
         if (Object.keys(changes).length === 0) {
           skipped++
@@ -1511,6 +1529,16 @@ export function InlineTableField({
   // Relation-path columns ('purchase_order.workflow.workflow_id'): read-only
   // values resolved server-side in one bulk call and merged into each row for
   // display. Never editable, never saved.
+  /** field -> formula, for every child field the server recomputes on write. */
+  const computedWriteFields = useMemo(
+    () =>
+      new Map(
+        cols
+          .filter((c) => c.computed_type === 'write' && !!c.computed_formula)
+          .map((c) => [c.field, String(c.computed_formula)])
+      ),
+    [cols]
+  )
   const relationPathCols = useMemo(
     () => cols.filter((c) => c.interface === 'relation-path' && c.field.includes('.')).map((c) => c.field),
     [cols]
@@ -2903,6 +2931,7 @@ export function InlineTableField({
               ...pendingRows.map((r, i) => ({ ...r, __pendingIndex: i }))
             ]}
             relatedCollection={relatedCollection}
+            computedWriteFields={computedWriteFields}
             applyRow={async (row, changes) => {
               const pendingIndex = (row as Record<string, unknown>).__pendingIndex
               if (typeof pendingIndex === 'number' && staging) {
@@ -3557,8 +3586,16 @@ export function InlineTableField({
                 </td>
               </tr>
             )
-            return entry.rows.map((row, ri) => {
-              const origRow = rows.find(r => String(r.id) === String(row.id))
+            return entry.rows.map((rawRow, ri) => {
+              // Derived columns must be recomputed on BOTH sides before the
+              // diff. An addendum that changes a quantity changes the line's
+              // money too, and a reviewer reading a stale stored total would
+              // approve a figure the save then recalculates to something else.
+              const row = applyComputedFields({ ...rawRow } as Record<string, unknown>)
+              const rawOrig = rows.find(r => String(r.id) === String(row.id))
+              const origRow = rawOrig
+                ? applyComputedFields({ ...rawOrig } as Record<string, unknown>)
+                : undefined
               const isNewRow = !origRow
               const changedFields = new Set(
                 isNewRow ? displayCols.map(c => c.field) :
