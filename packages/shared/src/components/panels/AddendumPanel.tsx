@@ -580,46 +580,10 @@ function AddendumDetails({ addendum }: { addendum: Addendum }) {
       ? new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
       : null
 
-  const n = Number(addendum.cost_impact)
-  const hasCost = addendum.cost_impact != null && !Number.isNaN(n) && n !== 0
   const createdBy = nameOf(addendum.created_by)
   const approvedBy = nameOf(addendum.approved_by)
 
   const cells: Array<{ label: string; value: ReactNode }> = []
-  const prevAmt = addendum.previous_amount
-  const newAmt = addendum.new_amount
-  if (prevAmt != null && !Number.isNaN(Number(prevAmt)))
-    cells.push({
-      label: 'Previous amount',
-      value: (
-        <span className='font-mono text-[13px] tabular-nums text-slate-600 dark:text-slate-300'>
-          {usd.format(Number(prevAmt))}
-        </span>
-      )
-    })
-  if (newAmt != null && !Number.isNaN(Number(newAmt)))
-    cells.push({
-      label: 'New amount',
-      value: (
-        <span className='font-mono text-[13px] font-semibold tabular-nums text-slate-800 dark:text-slate-100'>
-          {usd.format(Number(newAmt))}
-        </span>
-      )
-    })
-  if (hasCost)
-    cells.push({
-      label: n > 0 ? 'Cost increase' : 'Cost decrease',
-      value: (
-        <span
-          className={cn(
-            'font-mono text-[13px] font-semibold tabular-nums',
-            n > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
-          )}
-        >
-          {n > 0 ? '+' : '−'}{usd.format(Math.abs(n))}
-        </span>
-      )
-    })
   if (addendum.timeline_impact_days != null && Number(addendum.timeline_impact_days) !== 0)
     cells.push({
       label: 'Timeline impact',
@@ -879,10 +843,43 @@ function AddendumCard({
       {expanded && (
         <div className='border-t border-slate-100 dark:border-border'>
           <AddendumDetails addendum={addendum} />
-          {changedFields.length > 0 && (
+          {(changedFields.length > 0 || addendum.previous_amount != null || addendum.new_amount != null) && (
             <div className='px-4 py-3'>
               <p className='mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>Proposed changes</p>
               <div className='space-y-1.5'>
+                {changedFields.length === 0 && (addendum.previous_amount != null || addendum.new_amount != null) && (() => {
+                  const prev = addendum.previous_amount != null ? Number(addendum.previous_amount) : null
+                  const next = addendum.new_amount != null ? Number(addendum.new_amount) : null
+                  const delta = prev != null && next != null ? next - prev : null
+                  return (
+                    <div className='flex items-baseline gap-2 text-[12px]'>
+                      <span className='min-w-[80px] shrink-0 text-slate-500 dark:text-slate-400'>Amount</span>
+                      <span className='font-mono text-[11px] text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-muted/50 rounded px-1.5 py-0.5'>
+                        <span className='inline-flex flex-wrap items-baseline gap-1.5'>
+                          {prev != null && prev !== next && (
+                            <>
+                              <span className='tabular-nums text-slate-400 line-through dark:text-slate-500'>{usd.format(prev)}</span>
+                              <span className='text-slate-400'>→</span>
+                            </>
+                          )}
+                          <span className='tabular-nums font-semibold'>{next != null ? usd.format(next) : '—'}</span>
+                          {delta != null && delta !== 0 && (
+                            <span
+                              className={cn(
+                                'rounded-full px-1.5 py-px text-[10px] font-medium tabular-nums',
+                                delta > 0
+                                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+                                  : 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
+                              )}
+                            >
+                              {delta > 0 ? '+' : '−'}{usd.format(Math.abs(delta))}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                    </div>
+                  )
+                })()}
                 {changedFields.map((a) => {
                   const rawVal = proposedData[a.field]
                   let displayVal: ReactNode

@@ -609,7 +609,7 @@ export function M2MSingleSelectCombobox({
           <button
             type='button'
             className={cn(
-              'w-full h-9 px-3 text-[12px] border rounded-md bg-white text-left flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors',
+              'w-full h-9 px-3 text-[12px] border rounded-md bg-white text-left flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors disabled:pointer-events-none disabled:opacity-50',
               isSingleStale
                 ? 'border-amber-300 dark:border-amber-600'
                 : isPendingChange

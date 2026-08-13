@@ -180,7 +180,7 @@ export function RelationGroupedCombobox({
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-slate-50 disabled:opacity-50',
+          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-50',
           isStale ? 'border-amber-300 dark:border-amber-600' : 'border-input'
         )}
       >
