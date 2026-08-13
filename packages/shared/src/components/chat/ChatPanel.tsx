@@ -1139,9 +1139,10 @@ function usePresenceExtras(): {
   byUser: Map<string, PresenceExtra>
   fields: string[]
   adminUrl: string | null
+  loaded: boolean
 } {
   const client = useNivaroClient()
-  const { data } = useQuery({
+  const { data, isFetched } = useQuery({
     queryKey: ['presence-online'],
     queryFn: () =>
       client.request<{
@@ -1161,7 +1162,8 @@ function usePresenceExtras(): {
   return {
     byUser,
     fields: data?.config?.fields ?? ['role', 'page'],
-    adminUrl: data?.config?.admin_url ?? null
+    adminUrl: data?.config?.admin_url ?? null,
+    loaded: isFetched
   }
 }
 
@@ -1205,8 +1207,14 @@ export function ChatPanel({
   } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const { rooms, totalUnread } = useChatRooms()
-  const users = cfg.onlineUsers
   const presenceExtras = usePresenceExtras()
+  // The host's online list is an unscoped read of the presence collection; the
+  // server decides who this viewer may SEE (restricted users see only people
+  // restricted the same way, plus admins). Defer to it once it has answered —
+  // before that, show nothing rather than briefly leaking the full list.
+  const users = presenceExtras.loaded
+    ? cfg.onlineUsers.filter((u) => presenceExtras.byUser.has(String(u.user_id).toUpperCase()))
+    : []
   const { isAdmin } = useItemEditAuth()
   // NavigationContext always supplies navigate (its default is a plain hop),
   // so hosts that mount a router keep the SPA intact for free.

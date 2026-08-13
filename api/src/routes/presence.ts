@@ -331,6 +331,86 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       .orderBy('last_seen', 'desc')
       .limit(200)) as Array<Record<string, unknown>>
 
+    // ── Who this viewer may see ──────────────────────────────────────────
+    // A restricted user sees only people restricted the SAME way, plus admins
+    // (who are visible to everyone). Each dimension the VIEWER restricts must
+    // overlap: a Zone-1 viewer sees Zone-1 people; a Zone-1 + BLT viewer sees
+    // only people who are both. Someone with NO restriction on a dimension the
+    // viewer restricts is broader than the viewer and is therefore not shown —
+    // that is what makes more restrictions mean a narrower view.
+    //
+    // Enforced here rather than in the client: this is a visibility boundary.
+    // (The raw user_presence collection is still readable through /items for
+    // anyone with read permission — sealing that needs a row filter on the
+    // collection, which this does not attempt.)
+    const viewerRestrictions = new Map<string, Set<string>>()
+    if (!req.isAdmin) {
+      const own = (await db('nivaro_user_scopes')
+        .where({ user: req.user!.id, mode: 'restrict' })
+        .select('dimension', 'values')) as Array<Record<string, unknown>>
+      for (const r of own) {
+        let vals: string[] = []
+        try {
+          const parsed = r.values ? JSON.parse(String(r.values)) : []
+          vals = Array.isArray(parsed) ? parsed.map(String) : []
+        } catch {
+          vals = []
+        }
+        if (vals.length > 0) viewerRestrictions.set(String(r.dimension), new Set(vals))
+      }
+    }
+
+    let visibleRows = rows
+    if (viewerRestrictions.size > 0) {
+      const listedIds = rows.map((r) => String(r.user_id)).filter(Boolean)
+      const [adminRows, scopeRows] = await Promise.all([
+        db('nivaro_users as u')
+          .join('nivaro_roles as ro', 'ro.id', 'u.role')
+          .whereIn('u.id', listedIds)
+          .where('ro.admin_access', true)
+          .select('u.id') as Promise<Array<{ id: string }>>,
+        db('nivaro_user_scopes')
+          .whereIn('user', listedIds)
+          .where({ mode: 'restrict' })
+          .select('user', 'dimension', 'values') as Promise<Array<Record<string, unknown>>>
+      ])
+      const admins = new Set(adminRows.map((a) => String(a.id).toUpperCase()))
+      const theirs = new Map<string, Map<string, Set<string>>>()
+      for (const r of scopeRows) {
+        let vals: string[] = []
+        try {
+          const parsed = r.values ? JSON.parse(String(r.values)) : []
+          vals = Array.isArray(parsed) ? parsed.map(String) : []
+        } catch {
+          vals = []
+        }
+        const key = String(r.user).toUpperCase()
+        const perDim = theirs.get(key) ?? new Map<string, Set<string>>()
+        perDim.set(String(r.dimension), new Set(vals))
+        theirs.set(key, perDim)
+      }
+      visibleRows = rows.filter((row) => {
+        const uid = String(row.user_id ?? '').toUpperCase()
+        if (uid === String(req.user!.id).toUpperCase()) return true
+        if (admins.has(uid)) return true
+        const perDim = theirs.get(uid)
+        if (!perDim) return false
+        for (const [dim, allowed] of viewerRestrictions) {
+          const mine = perDim.get(dim)
+          if (!mine || mine.size === 0) return false
+          let overlaps = false
+          for (const v of mine) {
+            if (allowed.has(v)) {
+              overlaps = true
+              break
+            }
+          }
+          if (!overlaps) return false
+        }
+        return true
+      })
+    }
+
     let cfg: { fields?: string[]; scope_dimensions?: string[] } | null = null
     try {
       const settings = (await db('nivaro_settings').where({ id: 1 }).first()) as
@@ -344,7 +424,7 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
     const dimensions = cfg?.scope_dimensions ?? []
 
     // Scope labels: one query per dimension for every listed user, not per user.
-    const userIds = rows.map((r) => String(r.user_id)).filter(Boolean)
+    const userIds = visibleRows.map((r) => String(r.user_id)).filter(Boolean)
     const scopesByUser = new Map<string, string[]>()
     if (fields.includes('scopes') && dimensions.length > 0 && userIds.length > 0) {
       try {
@@ -375,7 +455,7 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
     }
 
     return reply.send({
-      data: rows.map((r) => {
+      data: visibleRows.map((r) => {
         const uid = String(r.user_id ?? '').toUpperCase()
         return {
           user_id: r.user_id,
