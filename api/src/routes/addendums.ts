@@ -73,7 +73,8 @@ function formatAddendum(row: Record<string, unknown>) {
   return {
     ...row,
     fields_schema: parseJsonSafe(row.fields_schema),
-    data: parseJsonSafe(row.data)
+    data: parseJsonSafe(row.data),
+    attachments: parseJsonSafe(row.attachments)
   }
 }
 

@@ -2011,6 +2011,12 @@ export function ItemEditForm({
     [draft, addendumViewData]
   )
 
+  // While viewing an addendum, the pipeline panel operates on the ADDENDUM's
+  // own workflow — switch back to Original and it acts on the record again.
+  const viewingAddendum = addendumViewId !== 'original'
+  const pipelineCollection = viewingAddendum ? 'nivaro_addendums' : collection
+  const pipelineItem = viewingAddendum ? addendumViewId : itemId
+
   const addendumO2MMap = useMemo<AddendumO2MMap>(() => {
     const map: AddendumO2MMap = {}
     for (const a of addendumData) {
@@ -3124,13 +3130,14 @@ export function ItemEditForm({
       return (
         <PipelinePanel
           key='__pipeline__'
-          collection={collection}
-          item={itemId}
+          collection={pipelineCollection}
+          item={pipelineItem}
           title={pipelineSlot?.label_override ?? undefined}
           defaultExpanded={pipelineSlot?.default_expanded ?? false}
           showApprovalChain={!!(pipelineSlot as unknown as Record<string, unknown>)?.show_approval_chain}
           onBeforeTransition={validateAll}
-          addendumPending={activeAddendumCount > 0 && !!colMeta?.addendums_enabled}
+          addendumPending={!viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled}
+          addendumView={viewingAddendum}
         />
       )
     }
@@ -3574,7 +3581,7 @@ export function ItemEditForm({
           return <div key={key ?? i}>{renderSectionItem(item)}</div>
         })}
         {!pipelineSlot && showPipeline && (
-          <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} addendumPending={activeAddendumCount > 0 && !!colMeta?.addendums_enabled} />
+          <PipelinePanel collection={pipelineCollection} item={pipelineItem} onBeforeTransition={validateAll} addendumPending={!viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled} addendumView={viewingAddendum} />
         )}
         {!tasksSlot && effectiveShowTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
         {!commentsSlot && effectiveShowComments && (
@@ -3751,7 +3758,7 @@ export function ItemEditForm({
           .filter((item) => typeof item === 'string' && item !== '__ungrouped__')
           .map((item) => renderSentinel(item as string))}
         {!pipelineSlot && showPipeline && (
-          <PipelinePanel collection={collection} item={itemId} onBeforeTransition={validateAll} addendumPending={activeAddendumCount > 0 && !!colMeta?.addendums_enabled} />
+          <PipelinePanel collection={pipelineCollection} item={pipelineItem} onBeforeTransition={validateAll} addendumPending={!viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled} addendumView={viewingAddendum} />
         )}
         {!tasksSlot && effectiveShowTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
         {!commentsSlot && effectiveShowComments && (
@@ -3878,7 +3885,7 @@ export function ItemEditForm({
           return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | string)}</div>
         })}
         {!pipelineSlot && showPipeline && (
-          <PipelinePanel collection={collection} item={itemId} defaultExpanded={false} onBeforeTransition={validateAll} addendumPending={activeAddendumCount > 0 && !!colMeta?.addendums_enabled} />
+          <PipelinePanel collection={pipelineCollection} item={pipelineItem} defaultExpanded={false} onBeforeTransition={validateAll} addendumPending={!viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled} addendumView={viewingAddendum} />
         )}
         {!tasksSlot && effectiveShowTasks && (
           <TaskPanel collection={collection} item={itemId} defaultExpanded={false} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />

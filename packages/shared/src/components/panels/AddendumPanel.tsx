@@ -8,7 +8,7 @@ import { FieldRenderer } from '../item-edit/FieldRenderer'
 import { O2MStagingContext } from '../item-edit/O2MStagingContext'
 import type { O2MStagingCtx } from '../item-edit/O2MStagingContext'
 import type { CMSField, CMSRelation } from '../item-edit/types'
-import { ChevronDown, FileDiff } from 'lucide-react'
+import { ChevronDown, FileDiff, Paperclip } from 'lucide-react'
 import { Button } from '../ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { Input } from '../ui/input'
@@ -46,9 +46,38 @@ interface Addendum {
   created_by: string | null
   approved_by: string | null
   approved_at: string | null
+  previous_amount: number | null
+  new_amount: number | null
+  attachments: string[] | null
 }
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
+
+/** Minimal HTML sanitizer for stored rich-text: drops active elements,
+ *  on* handlers and javascript: URLs. Rich text here is internal-authored,
+ *  but the create form's plain textarea also feeds description — never
+ *  render that raw. */
+function sanitizeHtml(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  for (const el of doc.querySelectorAll('script, style, iframe, object, embed, form, link, meta')) {
+    el.remove()
+  }
+  for (const el of doc.body.querySelectorAll('*')) {
+    for (const attr of [...el.attributes]) {
+      const name = attr.name.toLowerCase()
+      if (name.startsWith('on')) el.removeAttribute(attr.name)
+      else if (
+        (name === 'href' || name === 'src' || name === 'xlink:href') &&
+        /^\s*javascript:/i.test(attr.value)
+      )
+        el.removeAttribute(attr.name)
+    }
+  }
+  return doc.body.innerHTML
+}
+
+const stripTags = (s: string) =>
+  s.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
 
 function costImpactChip(v: number | null | undefined) {
   const n = Number(v)
@@ -557,6 +586,26 @@ function AddendumDetails({ addendum }: { addendum: Addendum }) {
   const approvedBy = nameOf(addendum.approved_by)
 
   const cells: Array<{ label: string; value: ReactNode }> = []
+  const prevAmt = addendum.previous_amount
+  const newAmt = addendum.new_amount
+  if (prevAmt != null && !Number.isNaN(Number(prevAmt)))
+    cells.push({
+      label: 'Previous amount',
+      value: (
+        <span className='font-mono text-[13px] tabular-nums text-slate-600 dark:text-slate-300'>
+          {usd.format(Number(prevAmt))}
+        </span>
+      )
+    })
+  if (newAmt != null && !Number.isNaN(Number(newAmt)))
+    cells.push({
+      label: 'New amount',
+      value: (
+        <span className='font-mono text-[13px] font-semibold tabular-nums text-slate-800 dark:text-slate-100'>
+          {usd.format(Number(newAmt))}
+        </span>
+      )
+    })
   if (hasCost)
     cells.push({
       label: n > 0 ? 'Cost increase' : 'Cost decrease',
@@ -591,9 +640,12 @@ function AddendumDetails({ addendum }: { addendum: Addendum }) {
   return (
     <div className='px-4 py-3'>
       {cells.length > 0 && (
-        <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border sm:grid-cols-4'>
+        <div className='flex flex-wrap gap-1.5'>
           {cells.map((c) => (
-            <div key={c.label} className='bg-white px-3 py-2 dark:bg-card'>
+            <div
+              key={c.label}
+              className='min-w-[130px] rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'
+            >
               <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
                 {c.label}
               </p>
@@ -603,10 +655,71 @@ function AddendumDetails({ addendum }: { addendum: Addendum }) {
         </div>
       )}
       {addendum.description && (
-        <p className='mt-2.5 whitespace-pre-wrap text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300'>
-          {addendum.description}
-        </p>
+        <div className='mt-2.5'>
+          <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+            Reason
+          </p>
+          {/^\s*</.test(addendum.description) ? (
+            <div
+              className='nvr-addendum-reason text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300 [&_a]:text-nvr-cyan [&_a]:underline [&_li]:ml-4 [&_ol]:list-decimal [&_p]:mb-1 [&_ul]:list-disc'
+              // biome-ignore lint/security/noDangerouslySetInnerHtml: internal rich-text (Tiptap/converted legacy HTML), same trust level as the rich_text editor rendering it
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(addendum.description) }}
+            />
+          ) : (
+            <p className='whitespace-pre-wrap text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300'>
+              {addendum.description}
+            </p>
+          )}
+        </div>
       )}
+      <AddendumAttachments ids={addendum.attachments} />
+    </div>
+  )
+}
+
+function AddendumAttachments({ ids }: { ids: string[] | null }) {
+  const client = useNivaroClient()
+  const fileIds = Array.isArray(ids) ? ids.filter(Boolean) : []
+  const { data: metas = [] } = useQuery<Array<{ id: string; filename: string | null; size: number | null }>>({
+    queryKey: ['addendum-files', ...fileIds],
+    queryFn: () =>
+      Promise.all(
+        fileIds.map((id) =>
+          client
+            .request<{ data: { id: string; filename_download?: string; filename?: string; title?: string; filesize?: number } }>(
+              get(`/files/${id}/meta`)
+            )
+            .then((r) => ({
+              id,
+              filename: r.data?.filename_download ?? r.data?.filename ?? r.data?.title ?? null,
+              size: r.data?.filesize ?? null
+            }))
+            .catch(() => ({ id, filename: null, size: null }))
+        )
+      ),
+    enabled: fileIds.length > 0,
+    staleTime: 300_000
+  })
+  if (fileIds.length === 0) return null
+  return (
+    <div className='mt-2.5'>
+      <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+        Attachments
+      </p>
+      <div className='flex flex-wrap gap-1.5'>
+        {metas.map((m) => (
+          <a
+            key={m.id}
+            href={`/api/files/${m.id}`}
+            target='_blank'
+            rel='noreferrer'
+            className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11.5px] text-slate-700 transition-colors hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:bg-muted/40 dark:text-slate-300 dark:hover:text-nvr-cyan'
+          >
+            <Paperclip className='h-3 w-3 shrink-0 text-slate-400' />
+            <span className='max-w-[220px] truncate'>{m.filename ?? `File ${m.id.slice(0, 8)}…`}</span>
+          </a>
+        ))}
+      </div>
     </div>
   )
 }
@@ -689,6 +802,42 @@ function AddendumCard({
 
   const changedFields = configuredFields.filter((a) => proposedData[a.field] !== undefined)
 
+  // Current parent values for the changed SCALAR fields — lets the proposed
+  // list render "current → proposed" with a +/- delta instead of a bare value.
+  const scalarChanged = changedFields.filter((a) => {
+    const v = proposedData[a.field]
+    return v == null || typeof v !== 'object'
+  })
+  const { data: currentRecord } = useQuery<Record<string, unknown> | null>({
+    queryKey: ['addendum-current', parentCollection, parentId, scalarChanged.map((a) => a.field).join(',')],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown> }>(
+          get(`/items/${parentCollection}/${parentId}`, {
+            fields: ['id', ...scalarChanged.map((a) => a.field)].join(',')
+          })
+        )
+        .then((r) => r.data ?? null)
+        .catch(() => null),
+    enabled: expanded && !!parentCollection && !!parentId && scalarChanged.length > 0,
+    staleTime: 15_000
+  })
+
+  const isNumericField = (field: string, v: unknown) => {
+    const t = fieldMap[field]?.type
+    if (t && ['integer', 'bigInteger', 'decimal', 'float', 'number'].includes(t)) return true
+    return v != null && v !== '' && !Array.isArray(v) && !Number.isNaN(Number(v))
+  }
+  const isCurrencyField = (field: string) => {
+    const opts = fieldMap[field]?.options as Record<string, unknown> | null | undefined
+    if (opts && typeof opts === 'object' && opts.format === 'currency') return true
+    return /amount|cost|price|total|budget|spend/i.test(field)
+  }
+  const fmtNum = (field: string, v: unknown) =>
+    isCurrencyField(field)
+      ? usd.format(Number(v))
+      : new Intl.NumberFormat('en-US').format(Number(v))
+
   return (
     <div className={cn(
       'overflow-hidden rounded-lg border bg-white transition-shadow hover:shadow-sm dark:bg-card',
@@ -718,7 +867,7 @@ function AddendumCard({
             {costImpactChip(addendum.cost_impact)}
           </div>
           {addendum.description && (
-            <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400 line-clamp-1'>{addendum.description}</p>
+            <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400 line-clamp-1'>{stripTags(addendum.description)}</p>
           )}
         </div>
         <span className={cn('shrink-0 text-[10px] text-slate-400 transition-transform', expanded && 'rotate-180')}>▾</span>
@@ -733,23 +882,55 @@ function AddendumCard({
               <div className='space-y-1.5'>
                 {changedFields.map((a) => {
                   const rawVal = proposedData[a.field]
-                  const displayVal =
-                    rawVal == null
-                      ? '—'
-                      : typeof rawVal === 'object'
-                        ? Array.isArray(rawVal)
-                          ? (() => {
-                              const origArr = originalO2MMap[a.field]
-                              if (!origArr) return `${rawVal.length} rows`
-                              const changed = rawVal.filter((row: Record<string, unknown>) => {
-                                const orig = origArr.find((o: Record<string, unknown>) => String(o.id) === String(row.id))
-                                if (!orig) return true
-                                return Object.keys(row).some(k => k !== 'id' && String(row[k] ?? '') !== String(orig[k] ?? ''))
-                              }).length
-                              return changed === 0 ? 'no changes' : `${changed} of ${rawVal.length} rows modified`
-                            })()
-                          : JSON.stringify(rawVal).slice(0, 60)
-                        : String(rawVal)
+                  let displayVal: ReactNode
+                  if (rawVal == null) {
+                    displayVal = '—'
+                  } else if (Array.isArray(rawVal)) {
+                    const origArr = originalO2MMap[a.field]
+                    if (!origArr) displayVal = `${rawVal.length} rows`
+                    else {
+                      const changed = rawVal.filter((row: Record<string, unknown>) => {
+                        const orig = origArr.find((o: Record<string, unknown>) => String(o.id) === String(row.id))
+                        if (!orig) return true
+                        return Object.keys(row).some(k => k !== 'id' && String(row[k] ?? '') !== String(orig[k] ?? ''))
+                      }).length
+                      displayVal = changed === 0 ? 'no changes' : `${changed} of ${rawVal.length} rows modified`
+                    }
+                  } else if (typeof rawVal === 'object') {
+                    displayVal = JSON.stringify(rawVal).slice(0, 60)
+                  } else if (isNumericField(a.field, rawVal)) {
+                    const proposed = Number(rawVal)
+                    const cur = currentRecord?.[a.field]
+                    const curNum = cur != null && cur !== '' && !Number.isNaN(Number(cur)) ? Number(cur) : null
+                    const delta = curNum != null ? proposed - curNum : null
+                    displayVal = (
+                      <span className='inline-flex flex-wrap items-baseline gap-1.5'>
+                        {curNum != null && curNum !== proposed && (
+                          <>
+                            <span className='tabular-nums text-slate-400 line-through dark:text-slate-500'>
+                              {fmtNum(a.field, curNum)}
+                            </span>
+                            <span className='text-slate-400'>→</span>
+                          </>
+                        )}
+                        <span className='tabular-nums font-semibold'>{fmtNum(a.field, proposed)}</span>
+                        {delta != null && delta !== 0 && (
+                          <span
+                            className={cn(
+                              'rounded-full px-1.5 py-px text-[10px] font-medium tabular-nums',
+                              delta > 0
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+                                : 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
+                            )}
+                          >
+                            {delta > 0 ? '+' : '−'}{fmtNum(a.field, Math.abs(delta))}
+                          </span>
+                        )}
+                      </span>
+                    )
+                  } else {
+                    displayVal = String(rawVal)
+                  }
                   return (
                     <div key={a.field} className='flex items-baseline gap-2 text-[12px]'>
                       <span className='min-w-[80px] shrink-0 text-slate-500 dark:text-slate-400'>

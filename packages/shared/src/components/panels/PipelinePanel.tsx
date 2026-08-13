@@ -931,7 +931,8 @@ export function PipelinePanel({
   title,
   showApprovalChain,
   onBeforeTransition,
-  addendumPending
+  addendumPending,
+  addendumView
 }: {
   collection: string
   item: string
@@ -940,10 +941,12 @@ export function PipelinePanel({
   showApprovalChain?: boolean
   onBeforeTransition?: () => boolean
   addendumPending?: boolean
+  addendumView?: boolean
 }) {
   if (item === 'new') return null
   return (
     <PipelinePanelInner
+      key={`${collection}:${item}`}
       collection={collection}
       item={item}
       defaultExpanded={defaultExpanded}
@@ -951,6 +954,7 @@ export function PipelinePanel({
       showApprovalChain={showApprovalChain}
       onBeforeTransition={onBeforeTransition}
       addendumPending={addendumPending}
+      addendumView={addendumView}
     />
   )
 }
@@ -962,7 +966,8 @@ function PipelinePanelInner({
   title,
   showApprovalChain,
   onBeforeTransition,
-  addendumPending
+  addendumPending,
+  addendumView
 }: {
   collection: string
   item: string
@@ -971,6 +976,7 @@ function PipelinePanelInner({
   showApprovalChain?: boolean
   onBeforeTransition?: () => boolean
   addendumPending?: boolean
+  addendumView?: boolean
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
@@ -1251,7 +1257,7 @@ function PipelinePanelInner({
 
   return (
     <>
-      <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border'>
+      <div className={`overflow-hidden rounded-xl border bg-white dark:bg-card ${addendumView ? 'border-amber-300 dark:border-amber-600/50' : 'border-slate-200 dark:border-border'}`}>
         <div
           role='button'
           tabIndex={0}
@@ -1264,6 +1270,11 @@ function PipelinePanelInner({
             {title || 'Pipeline'}
           </span>
           <div className='flex items-center gap-1.5'>
+            {addendumView && (
+              <span className='flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'>
+                Addendum workflow
+              </span>
+            )}
             {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
             {addendumPending && (
               <span className='flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
