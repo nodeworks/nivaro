@@ -1,3 +1,4 @@
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { type ApprovalChainStep, resolveStepApprovers } from '../routes/approvals.js'
 import {
@@ -1369,18 +1370,64 @@ export async function resolveCollectionSource(
     .first() as Promise<{ id: number; template: string } | undefined>
   bindingPromise.catch(() => {})
 
+  // Needed BEFORE the ids query so a state filter can go into SQL (below), which
+  // is worth the lost concurrency many times over: without it a state-scoped
+  // queue over an 85k-row collection fetched every id, then every instance row,
+  // to keep a few hundred — 13 of a 22-second response.
+  const binding = await bindingPromise
+  const stateMode: 'include' | 'exclude' = source.state_mode === 'exclude' ? 'exclude' : 'include'
+  const listedStates = (stateValues ?? []).filter((v) => v !== NO_STATE_SENTINEL)
+  const listsStateless = (stateValues ?? []).includes(NO_STATE_SENTINEL)
+  // Every shape below was checked against stateFilterKeep over the real data and
+  // returns an identical id set — EXCEPT include-with-"(No state)", whose
+  // `EXISTS(...) OR NOT EXISTS(...)` plan scans instead of seeking and blew the
+  // 15s statement timeout on a 32k-row collection. That one case keeps the
+  // fetch-then-filter path, which is what every case did before.
+  const pushedDownState =
+    !!binding &&
+    listedStates.length > 0 &&
+    !(stateMode === 'include' && listsStateless)
+
   let ids: string[]
   try {
     const q = db(source.collection).select('id')
     applyQueueConditions(q as unknown as ConditionBuilder, conditions)
+    if (pushedDownState) {
+      // EXISTS/NOT EXISTS expresses what a WHERE on the joined state key cannot:
+      // "has no instance at all" is a real, keepable case in both modes, and it
+      // is exactly what stateFilterKeep() decides in JS — kept identical here so
+      // the two paths cannot drift.
+      const collection = source.collection
+      const inListedState = function (this: Knex.QueryBuilder) {
+        void this.select(db.raw('1'))
+          .from('nivaro_workflow_instances as wi')
+          .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
+          .where('wi.collection', collection)
+          .whereRaw('wi.item = CAST(??.id AS NVARCHAR(255))', [collection])
+          .whereIn('s.key', listedStates)
+      }
+      const hasAnyInstance = function (this: Knex.QueryBuilder) {
+        void this.select(db.raw('1'))
+          .from('nivaro_workflow_instances as wi')
+          .where('wi.collection', collection)
+          .whereRaw('wi.item = CAST(??.id AS NVARCHAR(255))', [collection])
+      }
+      if (stateMode === 'include') {
+        q.whereExists(inListedState)
+      } else {
+        q.whereNotExists(inListedState)
+        // Exclude-mode "(No state)" drops the stateless, i.e. keeps only items
+        // that have an instance. An AND of two subqueries, unlike the include
+        // side's OR, plans fine.
+        if (listsStateless) q.whereExists(hasAnyInstance)
+      }
+    }
     const rows = (await q) as Array<{ id: string | number }>
     ids = rows.map((r) => String(r.id))
   } catch {
     return empty
   }
   if (ids.length === 0) return empty
-
-  const binding = await bindingPromise
 
   type InstanceRow = {
     instance_id: string
@@ -1394,27 +1441,14 @@ export async function resolveCollectionSource(
   let instances: InstanceRow[] = []
 
   if (binding) {
-    const mode = source.state_mode === 'exclude' ? 'exclude' : 'include'
-    // An include-list of real state keys is expressible in SQL, so push it into
-    // the join instead of fetching every instance in the collection and
-    // discarding the misses in JS — a state-scoped queue over a 30k-row
-    // collection was pulling all 30k instance rows to keep one. Exclude mode
-    // and the "(No state)" sentinel both have to KEEP items that have no
-    // instance row at all, which a WHERE on s.key cannot express, so those
-    // keep the original fetch-then-filter path.
-    const pushdownStates =
-      stateValues?.length && mode === 'include' && !stateValues.includes(NO_STATE_SENTINEL)
-        ? stateValues
-        : null
-
+    // `ids` is already state-filtered when the pushdown ran, so this fetches
+    // instance rows for the MATCHED items (hundreds) rather than the whole
+    // collection (tens of thousands) purely to throw most of them away.
     instances = (await selectInChunks(ids, 2000, (chunk) =>
       db('nivaro_workflow_instances as wi')
         .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
         .whereIn('wi.item', chunk)
         .where('wi.collection', source.collection)
-        .modify((qb) => {
-          if (pushdownStates) qb.whereIn('s.key', pushdownStates)
-        })
         .orderBy('wi.started_at', 'desc')
         .select(
           'wi.id as instance_id',
@@ -1427,15 +1461,13 @@ export async function resolveCollectionSource(
         )
     )) as InstanceRow[]
 
-    if (pushdownStates) {
-      // Every surviving row already matched, so the id list is just the items
-      // that came back — no second JS pass needed.
-      const kept = new Set(instances.map((i) => i.item))
-      ids = ids.filter((id) => kept.has(id))
-    } else if (stateValues?.length) {
+    // Fallback for anything the pushdown did not cover (no binding is the only
+    // case today, and that cannot carry a state filter anyway) — kept so the JS
+    // semantics remain the backstop rather than an unreachable branch.
+    if (!pushedDownState && stateValues?.length) {
       const stateByItem = new Map<string, string | null>()
       for (const i of instances) stateByItem.set(i.item, i.state_key)
-      ids = ids.filter((id) => stateFilterKeep(stateByItem.get(id) ?? null, stateValues, mode))
+      ids = ids.filter((id) => stateFilterKeep(stateByItem.get(id) ?? null, stateValues, stateMode))
       const kept = new Set(ids)
       instances = instances.filter((i) => kept.has(i.item))
     }
