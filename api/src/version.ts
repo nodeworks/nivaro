@@ -10,16 +10,20 @@ import { fileURLToPath } from 'node:url'
  * was built from (api/package.json is never bumped and stayed 0.1.0 forever,
  * which is what every surface used to print).
  *
- * `NIVARO_VERSION` overrides it — the release image can bake the tag in even
- * if package.json is ever absent, and a dev can pin a label for testing.
+ * `NIVARO_VERSION` overrides it ONLY when it is version-shaped. That variable
+ * is already owned by the deployment as the IMAGE TAG (every compose file uses
+ * `nodeworks/nivaro:${NIVARO_VERSION:-latest}`, and the host .env passes it
+ * into the container), so it is frequently the literal `latest` — which is not
+ * a version and must never be reported as one. A pinned numeric tag IS the
+ * running version, so that case is honored.
  *
  * Resolution walks UP from this module: dev runs api/src/version.ts and the
  * build runs api/dist/version.js, both two levels below the repo/app root, but
  * the walk is tolerant rather than assuming a fixed depth.
  */
 function resolveVersion(): string {
-  const explicit = process.env.NIVARO_VERSION?.trim()
-  if (explicit) return explicit.replace(/^v/, '')
+  const explicit = process.env.NIVARO_VERSION?.trim().replace(/^v/, '')
+  if (explicit && /^\d+\.\d+/.test(explicit)) return explicit
 
   let dir = dirname(fileURLToPath(import.meta.url))
   for (let i = 0; i < 5; i++) {
