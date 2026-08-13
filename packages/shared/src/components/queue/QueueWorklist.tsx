@@ -441,6 +441,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // column's own display field.
   const { scopes: myScopes, ready: myScopesReady } = useMyScopes()
   const scopeSeededRef = useRef(false)
+  // The items query is GATED until scope seeding settles — the first fetch
+  // must already carry the seeded restricted filters (CBV precedent), never
+  // an unfiltered flash of everything.
+  const [scopeGateOpen, setScopeGateOpen] = useState(false)
   // Restricted dimensions also NARROW the option lists (main filter rail AND
   // the column filter row share these defs) — a Zone-restricted user must not
   // even see other zones as choices. Keyed by extra path → allowed display values.
@@ -451,7 +455,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     const metas = (queue.extra_field_meta ?? []).filter(
       (m) => m.kind === 'relation' && m.target_collection && m.display_field
     )
-    if (metas.length === 0 || !myScopes) return
+    if (metas.length === 0 || !myScopes) {
+      setScopeGateOpen(true)
+      return
+    }
     void (async () => {
       const patch: Record<string, string[]> = {}
       const allowed: Record<string, string[]> = {}
@@ -491,6 +498,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       }
       if (Object.keys(allowed).length > 0) setAllowedValuesByPath(allowed)
       if (Object.keys(patch).length > 0) setFilterValues((prev) => ({ ...prev, ...patch }))
+      setScopeGateOpen(true)
     })()
   }, [myScopesReady, myScopes, queue])
 
@@ -652,9 +660,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           ...(view === 'table' && !groupBy ? { page, limit } : {})
         })
       ),
-    // Wait for display_config so the first fetch uses the configured default
-    // scope/view instead of firing once with the hard-coded initial state.
-    enabled: !!queueId && displayReady,
+    // Wait for display_config AND scope seeding so the first fetch uses the
+    // configured defaults and already carries the viewer's restricted filters.
+    enabled: !!queueId && displayReady && scopeGateOpen,
     // Keep the previous page rendered while a sort/filter/page change refetches —
     // swapping to skeletons collapsed the table height and jittered the page.
     placeholderData: (prev) => prev
@@ -1676,6 +1684,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           placeholder: aliasFor(`extra.${f}`, formatColumnHeader(f)),
           type: 'combobox' as const,
           multi: true,
+          restricted: Boolean(allowedValuesByPath[f]?.length),
           loadOptions: makeRelationLoader(meta)
         }
       }

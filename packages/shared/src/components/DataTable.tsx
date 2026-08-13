@@ -47,6 +47,8 @@ export interface FilterDef {
   loadOptions?: (search: string) => Promise<{ label: string; value: string }[]>
   /** 'combobox' only: allow selecting multiple values (filter matches ANY of them). */
   multi?: boolean
+  /** Options are narrowed to the viewer's restricted scope — renders an amber badge. */
+  restricted?: boolean
 }
 
 export interface DataTableProps<T = Record<string, unknown>> {
@@ -310,6 +312,14 @@ export function FilterControl({
 }) {
   const stacked = layout === 'stacked'
   const cell = layout === 'cell'
+  const restrictedBadge = def.restricted ? (
+    <span
+      title='Options limited to your restricted scope'
+      className='pointer-events-none absolute -top-1.5 right-1 z-[1] rounded bg-amber-500/15 px-1 text-[8.5px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300'
+    >
+      restricted
+    </span>
+  ) : null
   const currentVal = typeof value === 'string' ? value : ''
   const widthCls = stacked || cell ? 'w-full' : 'w-40'
   const heightCls = cell ? 'h-7 text-[12px]' : 'text-[13px]'
@@ -388,11 +398,27 @@ export function FilterControl({
     )
   }
 
-  if (!stacked) return <>{control}</>
+  if (!stacked)
+    return restrictedBadge ? (
+      <div className='relative'>
+        {restrictedBadge}
+        {control}
+      </div>
+    ) : (
+      <>{control}</>
+    )
   return (
     <div className='space-y-1'>
-      <span className='block text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
+      <span className='flex items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
         {filterDefLabel(def)}
+        {def.restricted && (
+          <span
+            title='Options limited to your restricted scope'
+            className='rounded bg-amber-500/15 px-1 text-[8.5px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300'
+          >
+            restricted
+          </span>
+        )}
       </span>
       {control}
     </div>
