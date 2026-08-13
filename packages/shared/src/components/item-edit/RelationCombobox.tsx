@@ -349,12 +349,13 @@ export function RelationCombobox({
   }
 
   return (
-    <div ref={rootRef} className='relative'>
+    // Stale tooltip binds on the WRAPPER: a disabled trigger button swallows
+    // mouse events, so a locked-but-stale field would never show the hint.
+    <div ref={rootRef} className='relative' {...staleTip.bind}>
       <button
         type='button'
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
-        {...staleTip.bind}
         className={cn(
           'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-slate-50 disabled:opacity-50',
           isStale ? 'border-amber-300 dark:border-amber-600' : 'border-input'

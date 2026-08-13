@@ -668,7 +668,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     placeholderData: (prev) => prev
   })
 
-  const showLoading = (isLoading && !data) || !displayReady
+  const showLoading = (isLoading && !data) || !displayReady || (!scopeGateOpen && !data)
   // True while a sort/filter/page change is in flight over kept-previous data —
   // the table dims slightly instead of unmounting (no layout shift).
   const isRefetching = (isFetching && !isLoading) || (isPlaceholderData && isFetching)
@@ -2179,7 +2179,12 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                   .map((def) => (
                     <span
                       key={def.key}
-                      className='flex items-center overflow-hidden rounded-md border border-slate-200 bg-white text-[12px] dark:border-border dark:bg-card'
+                      title={def.restricted ? 'Options limited to your restricted scope' : undefined}
+                      className={`flex items-center overflow-hidden rounded-md border text-[12px] ${
+                        def.restricted
+                          ? 'border-amber-400 bg-amber-50/50 dark:border-amber-500/60 dark:bg-amber-500/5'
+                          : 'border-slate-200 bg-white dark:border-border dark:bg-card'
+                      }`}
                     >
                       <button
                         type='button'

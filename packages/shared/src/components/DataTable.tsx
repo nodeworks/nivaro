@@ -312,14 +312,7 @@ export function FilterControl({
 }) {
   const stacked = layout === 'stacked'
   const cell = layout === 'cell'
-  const restrictedBadge = def.restricted ? (
-    <span
-      title='Options limited to your restricted scope'
-      className='pointer-events-none absolute -top-1.5 right-1 z-[1] rounded bg-amber-500/15 px-1 text-[8.5px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300'
-    >
-      restricted
-    </span>
-  ) : null
+
   const currentVal = typeof value === 'string' ? value : ''
   const widthCls = stacked || cell ? 'w-full' : 'w-40'
   const heightCls = cell ? 'h-7 text-[12px]' : 'text-[13px]'
@@ -399,9 +392,13 @@ export function FilterControl({
   }
 
   if (!stacked)
-    return restrictedBadge ? (
-      <div className='relative'>
-        {restrictedBadge}
+    // Restricted scope in the compact layouts = amber outline on the control
+    // itself (a floating chip overflows the tight header cells).
+    return def.restricted ? (
+      <div
+        title='Options limited to your restricted scope'
+        className='[&_button]:!border-amber-400 [&_input]:!border-amber-400 dark:[&_button]:!border-amber-500/60 dark:[&_input]:!border-amber-500/60'
+      >
         {control}
       </div>
     ) : (

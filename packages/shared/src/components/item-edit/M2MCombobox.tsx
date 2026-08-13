@@ -597,7 +597,7 @@ export function M2MSingleSelectCombobox({
   }
 
   return (
-    <div>
+    <div {...singleStaleTip.bind}>
       <Popover
         open={open}
         onOpenChange={(o) => {
@@ -608,7 +608,6 @@ export function M2MSingleSelectCombobox({
         <PopoverTrigger asChild>
           <button
             type='button'
-            {...singleStaleTip.bind}
             className={cn(
               'w-full h-9 px-3 text-[12px] border rounded-md bg-white text-left flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors',
               isSingleStale
