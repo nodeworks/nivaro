@@ -50,6 +50,7 @@ import type { PendingTask } from './panels/TaskPanel'
 import { Button } from './ui/button'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 import { Skeleton } from './ui/skeleton'
+import { TipLayer } from './TipLayer'
 
 function parseSummaryFields(raw: string[] | string | null | undefined): SummaryEntry[] | undefined {
   if (!raw) return undefined
@@ -2556,6 +2557,14 @@ export function ItemEditForm({
       .filter(Boolean) as Array<{ value: string; color?: string; weight?: string; display_as?: string }>
   }, [subtitleConfig, isNew, itemData, draft, autoIdSubtitleMeta, autoIdSubtitlePreview])
 
+  // Full subtitle text for the hover tip + the copy button — the rendered row
+  // is capped at 350px and ellipsised, so this is the only place the whole
+  // value is available.
+  const subtitleFullText = useMemo(
+    () => subtitleParts.map((p) => p.value).join(subtitleConfig?.separator ?? ' | '),
+    [subtitleParts, subtitleConfig]
+  )
+
   const headerFields = useMemo(() => (activeLayoutData?.assignments ?? [])
     .filter((a) => (a.field === '__owners__' || !a.field.startsWith('__')) && (a.group_key ?? null) === '__header__')
     .map((a) => {
@@ -4042,6 +4051,10 @@ export function ItemEditForm({
     <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>
     <O2MStagingContext.Provider value={o2mStagingCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
+      {/* Instant tooltips for truncated header values. Self-deduplicating —
+          only the first live instance listens, so a form rendered inside a
+          collection browser doesn't double up. */}
+      <TipLayer />
       <SaveProgressDialog
         open={saveDialogOpen}
         steps={saveSteps}
@@ -4136,7 +4149,14 @@ export function ItemEditForm({
                 )}
               </div>
               {subtitleParts.length > 0 && (
-                <div className='group/subtitle mt-0.5 flex flex-wrap items-center gap-1'>
+                <div className='group/subtitle mt-0.5 flex items-center gap-1'>
+                  {/* Capped to 350px on one line — a long subtitle used to wrap
+                      and push the whole header taller. The full text rides in
+                      data-tip, so hovering shows it instantly (TipLayer). */}
+                  <div
+                    data-tip={subtitleFullText}
+                    className='max-w-[350px] overflow-hidden text-ellipsis whitespace-nowrap'
+                  >
                   {subtitleParts.map((p, i) => {
                     const weightClass = p.weight === 'bold' ? 'font-bold' : p.weight === 'semibold' ? 'font-semibold' : p.weight === 'medium' ? 'font-medium' : 'font-normal'
                     const colorClass = p.color === 'cyan' ? 'text-nvr-cyan' : p.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : p.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : p.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : p.color === 'red' ? 'text-red-600 dark:text-red-400' : p.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-500 dark:text-slate-400'
@@ -4144,7 +4164,7 @@ export function ItemEditForm({
                     const isTag = p.display_as === 'tag'
                     const sep = subtitleConfig?.separator ?? ' | '
                     return (
-                      <span key={i} className='flex items-center gap-1'>
+                      <span key={i} className='inline-flex items-center gap-1 align-middle'>
                         {i > 0 && !isPill && !isTag && <span className='text-[11px] text-slate-300 dark:text-slate-600'>{sep}</span>}
                         <span className={[
                           'text-[12px]',
@@ -4158,6 +4178,7 @@ export function ItemEditForm({
                       </span>
                     )
                   })}
+                  </div>
                   {copiedHeaderField === '__subtitle__'
                     ? <Check className='h-3 w-3 shrink-0 text-emerald-500' />
                     : (
@@ -4165,9 +4186,7 @@ export function ItemEditForm({
                         type='button'
                         className='cursor-pointer opacity-0 transition-opacity group-hover/subtitle:opacity-100'
                         onClick={() => {
-                          const sep = subtitleConfig?.separator ?? ' | '
-                          const text = subtitleParts.map((p) => p.value).join(sep)
-                          navigator.clipboard.writeText(text).catch(() => {})
+                          navigator.clipboard.writeText(subtitleFullText).catch(() => {})
                           setCopiedHeaderField('__subtitle__')
                           setTimeout(() => setCopiedHeaderField((prev) => prev === '__subtitle__' ? null : prev), 1500)
                         }}

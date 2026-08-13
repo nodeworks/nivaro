@@ -16,6 +16,7 @@ import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
 import { RevisionsPanel } from './panels'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
+import { TipLayer } from './TipLayer'
 
 /**
  * CollectionBrowserView — the admin `/collections/:collection` browser as an
@@ -354,53 +355,6 @@ function RelationLabel({ relatedCollection, id }: { relatedCollection: string; i
 }
 
 // ─── Cell renderer (admin CellValue port, same precedence) ────────────────────
-
-/** One instant tooltip for every `[data-tip]` cell — a single window
- *  mouseover listener + one portal node; native title has an OS delay. */
-function TipLayer() {
-  const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
-  const tipRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const over = (e: MouseEvent) => {
-      const el = (e.target as HTMLElement)?.closest?.('[data-tip]')
-      const text = el?.getAttribute('data-tip')
-      if (!el || !text) {
-        setTip((t) => (t ? null : t))
-        return
-      }
-      const r = el.getBoundingClientRect()
-      setTip({ x: r.left, y: r.bottom + 4, text })
-    }
-    const clear = () => setTip(null)
-    window.addEventListener('mouseover', over)
-    window.addEventListener('scroll', clear, true)
-    return () => {
-      window.removeEventListener('mouseover', over)
-      window.removeEventListener('scroll', clear, true)
-    }
-  }, [])
-  React.useLayoutEffect(() => {
-    if (!tip) return
-    const el = tipRef.current
-    if (!el) return
-    const r = el.getBoundingClientRect()
-    let { x, y } = tip
-    if (r.right > window.innerWidth - 8) x = Math.max(8, window.innerWidth - r.width - 8)
-    if (r.bottom > window.innerHeight - 8) y = Math.max(8, tip.y - r.height - 30)
-    if (x !== tip.x || y !== tip.y) setTip({ ...tip, x, y })
-  }, [tip])
-  if (!tip) return null
-  return createPortal(
-    <div
-      ref={tipRef}
-      style={{ position: 'fixed', left: tip.x, top: tip.y, zIndex: 70 }}
-      className='pointer-events-none max-w-[340px] rounded-md bg-slate-900 px-2 py-1 text-[11px] font-medium leading-snug text-white shadow-lg dark:bg-slate-700'
-    >
-      {tip.text}
-    </div>,
-    document.body
-  )
-}
 
 /** Per-row Actions menu — labeled trigger (people know what "Actions" means),
  *  portal menu clamped to the viewport, with live pipeline transitions
