@@ -3997,7 +3997,11 @@ export function ItemEditForm({
         <AccessDeniedPanel
           collection={collection}
           itemId={String(itemId)}
-          onBack={() => window.history.back()}
+          // Prefer the host's back action: it knows the app's history and a
+          // sane fallback route. Raw history.back() is the last resort, and on
+          // a cold direct load (denied link pasted into a new tab) it would
+          // leave the SPA entirely or no-op against an empty stack.
+          onBack={onBack ?? (() => window.history.back())}
         />
       </div>
     )
@@ -4102,9 +4106,10 @@ export function ItemEditForm({
               <button
                 type='button'
                 onClick={onBack}
+                aria-label='Back'
                 className='shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
               >
-                <ArrowLeft className='h-4 w-4' />
+                <ArrowLeft aria-hidden className='h-4 w-4' />
               </button>
             )}
             <div className='flex min-w-0 flex-col'>
