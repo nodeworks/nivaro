@@ -2320,6 +2320,53 @@ export function ItemEditForm({
     // biome-ignore lint/correctness/useExhaustiveDependencies: setActiveTab is a stable helper
   }, [hasTabs, allSteps, activeTab])
 
+  // Start-skip: a steps-mode group may name fields (skip_if_filled) that, when
+  // already populated on an EXISTING record, skip it as the INITIAL step — the
+  // form opens on the first step still needing input (an IR with its Unit
+  // chosen opens past Unit Selection). One-shot per mount; only advances when
+  // the CURRENT step is one being skipped, so a user's later step never yanks.
+  const startSkipApplied = useRef(false)
+  useEffect(() => {
+    if (startSkipApplied.current || isNew || !itemData || groups.length === 0) return
+    const parseSkip = (v: unknown): string[] => {
+      if (Array.isArray(v)) return v.map(String)
+      if (typeof v === 'string' && v.trim()) {
+        try { const p = JSON.parse(v); return Array.isArray(p) ? p.map(String) : [] } catch { return [] }
+      }
+      return []
+    }
+    const skipSatisfied = (g: FieldGroup | undefined) => {
+      const fields = parseSkip(g?.skip_if_filled)
+      if (fields.length === 0) return false
+      return fields.every((f) => {
+        const v = itemData[f]
+        return v != null && v !== '' && v !== false
+      })
+    }
+    startSkipApplied.current = true
+    // Global steps mode
+    if (isStepsMode && allSteps.length > 0) {
+      if (skipSatisfied(tabGroups.find((x) => x.key === activeTab))) {
+        const next = allSteps.find((st) => !skipSatisfied(tabGroups.find((x) => x.key === st.key)))
+        if (next && next.key !== activeTab) setActiveTab(next.key)
+      }
+    }
+    // Container steps (the attached-track wizard, e.g. IR layouts): seed each
+    // steps container's tab past its skip-satisfied leading steps.
+    for (const c of groups.filter((g) => g.type === 'container' && g.tab_mode === 'steps')) {
+      const children = groups
+        .filter((g) => g.type === 'tab' && g.container_id === c.id)
+        .sort((a, b) => a.sort - b.sort)
+      if (children.length === 0) continue
+      const current = containerTabs.get(c.id) ?? children[0]?.key
+      const currentGroup = children.find((g) => g.key === current)
+      if (!skipSatisfied(currentGroup)) continue
+      const next = children.find((g) => !skipSatisfied(g))
+      if (next && next.key !== current) setContainerTabs((prev) => new Map(prev).set(c.id, next.key))
+    }
+    // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot after data load
+  }, [isNew, isStepsMode, itemData, allSteps, tabGroups, activeTab, groups, containerTabs])
+
   const completedSteps = useMemo(() => {
     const out = new Set<string>()
     for (const s of allSteps) {

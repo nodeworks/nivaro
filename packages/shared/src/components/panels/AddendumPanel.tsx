@@ -772,8 +772,14 @@ function AddendumCard({
     const v = proposedData[a.field]
     if (v != null && typeof v === 'object') return false
     // Alias fields (O2M/M2M) have no physical column — naming one in an
-    // explicit readOne fields= is a 500, not an empty value.
-    return !relations.some((r) => r.one_collection === parentCollection && r.one_field === a.field)
+    // explicit readOne fields= is a 500, not an empty value. Covers both the
+    // named-alias form (one_field) and the child-table-name form
+    // (many_collection === field, one_field null — e.g. workflows_files).
+    return !relations.some(
+      (r) =>
+        r.one_collection === parentCollection &&
+        (r.one_field === a.field || r.many_collection === a.field)
+    )
   })
   const { data: currentRecord } = useQuery<Record<string, unknown> | null>({
     queryKey: ['addendum-current', parentCollection, parentId, scalarChanged.map((a) => a.field).join(',')],
@@ -786,7 +792,7 @@ function AddendumCard({
         )
         .then((r) => r.data ?? null)
         .catch(() => null),
-    enabled: expanded && !!parentCollection && !!parentId && scalarChanged.length > 0,
+    enabled: !!parentCollection && !!parentId && scalarChanged.length > 0,
     staleTime: 15_000
   })
 
@@ -805,6 +811,22 @@ function AddendumCard({
       ? usd.format(Number(v))
       : new Intl.NumberFormat('en-US').format(Number(v))
 
+  // Collapsed-bar ± chip for data addendums (cost_impact only exists on
+  // imports): first changed currency field's proposed − current.
+  const barDelta = useMemo(() => {
+    if (addendum.cost_impact != null && Number(addendum.cost_impact) !== 0) return null
+    if (!currentRecord) return null
+    for (const a of scalarChanged) {
+      if (!isCurrencyField(a.field)) continue
+      const proposed = Number(proposedData[a.field])
+      const cur = Number(currentRecord[a.field])
+      if (!Number.isNaN(proposed) && !Number.isNaN(cur) && proposed !== cur) return proposed - cur
+    }
+    return null
+    // biome-ignore lint/correctness/useExhaustiveDependencies: helpers are stable per render
+  }, [addendum.cost_impact, currentRecord, scalarChanged, proposedData])
+
+
   return (
     <div className={cn(
       'overflow-hidden rounded-lg border bg-white transition-shadow hover:shadow-sm dark:bg-card',
@@ -821,17 +843,15 @@ function AddendumCard({
         <div className='flex-1 min-w-0'>
           <div className='flex items-center gap-2 flex-wrap'>
             <span className='text-[13px] font-semibold text-slate-800 dark:text-slate-100 truncate'>{addendum.title}</span>
-            {!addendum.workflow_template_id && (
-              <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium', styles.badge)}>
-                {addendum.status}
-              </span>
-            )}
+            <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium', styles.badge)}>
+              {addendum.status}
+            </span>
             {changedFields.length > 0 && (
               <span className='text-[11px] text-slate-400 dark:text-slate-500'>
                 {changedFields.length} field{changedFields.length !== 1 ? 's' : ''} changed
               </span>
             )}
-            {costImpactChip(addendum.cost_impact)}
+            {costImpactChip(addendum.cost_impact) ?? costImpactChip(barDelta)}
           </div>
           {addendum.description && (
             <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400 line-clamp-1'>{stripTags(addendum.description)}</p>

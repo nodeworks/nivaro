@@ -5511,6 +5511,7 @@ interface FieldGroup {
   container_id?: number | null
   tab_mode?: 'tabs' | 'steps' | null
   hide_when_empty?: boolean | number
+  skip_if_filled?: string | null
   visibility_mode?: 'always' | 'new_only' | 'existing_only'
   summary_fields?: string | null
   summary_hide_empty?: boolean | number
@@ -11629,6 +11630,7 @@ function SortableGroupCard({
         | 'summary_fields'
         | 'summary_hide_empty'
         | 'swap_config'
+        | 'skip_if_filled'
       >
     >
   ) => void
@@ -11820,6 +11822,33 @@ function SortableGroupCard({
                     />
                     Hide when all fields are empty
                   </label>
+                  {group.type === 'tab' && (
+                    <div>
+                      <Label className='mb-1 block text-[11px]'>Skip as initial step when filled</Label>
+                      <p className='mb-1.5 text-[10px] text-slate-400'>
+                        Comma-separated field names — an existing record with all of them filled opens
+                        on the next step instead of this one
+                      </p>
+                      {/* Popover-hosted input: commit onChange — blur never
+                          fires when Radix unmounts the content on close. */}
+                      <Input
+                        defaultValue={(() => {
+                          try {
+                            const p = JSON.parse(group.skip_if_filled ?? '[]')
+                            return Array.isArray(p) ? p.join(', ') : ''
+                          } catch { return '' }
+                        })()}
+                        placeholder='e.g. unit'
+                        className='h-7 text-[12px]'
+                        onChange={(e) => {
+                          const list = e.target.value.split(',').map((x) => x.trim()).filter(Boolean)
+                          onGroupSettings(group.id, {
+                            skip_if_filled: list.length ? JSON.stringify(list) : null
+                          })
+                        }}
+                      />
+                    </div>
+                  )}
                   <div>
                     <Label className='mb-1 block text-[11px]'>Collapsed summary fields</Label>
                     <p className='mb-1.5 text-[10px] text-slate-400'>Shown in the collapsed bar</p>

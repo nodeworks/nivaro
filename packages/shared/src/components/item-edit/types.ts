@@ -64,6 +64,7 @@ export interface FieldGroup {
   summary_fields?: string[] | string | null
   summary_hide_empty?: boolean | number
   swap_config?: string | null
+  skip_if_filled?: string[] | string | null
 }
 
 export interface SlotAssignment {

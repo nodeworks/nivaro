@@ -25,7 +25,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
 
     let q = db('nivaro_field_groups')
       .where({ collection })
-      .select('id', 'collection', 'key', 'label', 'type', 'icon', 'sort', 'is_collapsed', 'layout_id', 'container_id', 'tab_mode', 'hide_when_empty', 'visibility_mode', 'summary_fields', 'summary_hide_empty', 'swap_config')
+      .select('id', 'collection', 'key', 'label', 'type', 'icon', 'sort', 'is_collapsed', 'layout_id', 'container_id', 'tab_mode', 'hide_when_empty', 'visibility_mode', 'summary_fields', 'summary_hide_empty', 'swap_config', 'skip_if_filled')
       .orderBy('sort', 'asc')
 
     if (targetLayoutId !== null) {
@@ -103,6 +103,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
       summary_fields: string | null
       summary_hide_empty: boolean
       swap_config: string | null
+      skip_if_filled: string | null
     }>
 
     const patch: Record<string, unknown> = {}
@@ -119,6 +120,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
     if ('container_id' in body) patch.container_id = (body as Record<string,unknown>).container_id ?? null
     if ('tab_mode' in body) patch.tab_mode = (body as Record<string,unknown>).tab_mode ?? null
     if ('swap_config' in body) patch.swap_config = body.swap_config ?? null
+    if ('skip_if_filled' in body) patch.skip_if_filled = body.skip_if_filled ?? null
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 
