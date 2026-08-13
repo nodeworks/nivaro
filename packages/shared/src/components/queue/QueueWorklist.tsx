@@ -31,7 +31,14 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useItemEditAuth, useItemNavigation, useNavigation, useNivaroClient } from '../../context'
+import {
+  type DrilldownTarget,
+  useItemEditAuth,
+  useItemNavigation,
+  useNavigation,
+  useNivaroClient,
+  useOverlayState
+} from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { RowActionsMenu } from '../CollectionBrowserView'
@@ -62,6 +69,9 @@ import { QueueBulkBar } from './QueueBulkBar'
 import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
 import { QueueWorkloadView } from './QueueWorkloadView'
+
+/** Root drill entry may pin a grouped layout; nested levels never do. */
+type DrillEntry = DrilldownTarget & { rootLayoutSlug?: string | null }
 
 // ─── Props ──────────────────────────────────────────────────────────────────
 
