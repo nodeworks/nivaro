@@ -2095,7 +2095,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                     <Pin className={cn('h-3 w-3', v.is_default && 'fill-current')} />
                   </button>
                 )}
-                {v.user === userId && activeViewId === v.id && (
+                {(v.user === userId || isAdmin) && activeViewId === v.id && (
                   <button
                     type='button'
                     onClick={() => updateViewMut.mutate(v)}
@@ -2129,6 +2129,23 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-[240px] p-3' align='end'>
+                {(() => {
+                  const active = views?.data.find((v) => v.id === activeViewId)
+                  if (!active || (active.user !== userId && !isAdmin)) return null
+                  return (
+                    <button
+                      type='button'
+                      disabled={updateViewMut.isPending}
+                      onClick={() => {
+                        updateViewMut.mutate(active)
+                        setSaveOpen(false)
+                      }}
+                      className='mb-2 w-full rounded-md border border-nvr-cyan/40 bg-nvr-cyan/5 px-2 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 disabled:opacity-50 dark:text-nvr-cyan'
+                    >
+                      Update “{active.name}” with current view
+                    </button>
+                  )
+                })()}
                 <input
                   value={saveName}
                   onChange={(e) => setSaveName(e.target.value)}
