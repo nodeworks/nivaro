@@ -2108,14 +2108,19 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
         .where({ collection })
         .first()
-      if (!binding) return reply.send({ data: null })
 
       const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
         .where({ collection, item })
         .first()
 
+      // No collection binding is fine when the record has its OWN instance —
+      // addendum workflows start from the layout's template (nivaro_addendums
+      // is never bound), and the chain resolves from the instance's template.
+      const templateId = binding?.template ?? instance?.template
+      if (!templateId) return reply.send({ data: null })
+
       const states = await db<WorkflowState>('nivaro_workflow_states')
-        .where({ template: binding.template })
+        .where({ template: templateId })
         .orderBy('sort')
 
       // Skip prediction needs the record row (field_compare/lookup_compare
@@ -2148,7 +2153,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const onPath = new Set<string>()
       try {
         const transitions = (await db<WorkflowTransition>('nivaro_workflow_transitions')
-          .where({ template: binding.template })
+          .where({ template: templateId })
           .whereNotNull('from_state')
           .select('from_state', 'to_state', 'condition_rules')) as Array<{
           from_state: string

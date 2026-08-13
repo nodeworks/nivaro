@@ -1309,7 +1309,9 @@ function PipelinePanelInner({
                 Start
               </Button>
             )}
-            {showApprovalChain && data?.binding && (
+            {/* Instance-only workflows (addendums) have no collection binding —
+                the chain resolves from the instance's template server-side. */}
+            {showApprovalChain && (data?.binding || data?.instance) && (
               <ApprovalChainView
                 collection={collection}
                 item={item}
