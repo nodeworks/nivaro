@@ -20,6 +20,7 @@ import {
   Flame,
   GripVertical,
   PanelLeftClose,
+  Pin,
   Play,
   RefreshCw,
   Rows3,
@@ -134,6 +135,7 @@ interface QueueMeta {
   id: string
   name: string
   description: string | null
+  owner?: string | null
   materialized: boolean
   claims_enabled: boolean
   column_aliases?: Record<string, string>
@@ -161,6 +163,7 @@ interface QueueView {
   name: string
   user: string
   is_shared: boolean
+  is_default?: boolean
   state: {
     scope?: Scope
     filters?: Record<string, string>
@@ -1046,6 +1049,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const [saveOpen, setSaveOpen] = useState(false)
   const [saveName, setSaveName] = useState('')
   const [saveShared, setSaveShared] = useState(false)
+  const [saveAsDefault, setSaveAsDefault] = useState(false)
 
   function applyView(v: QueueView) {
     const s = v.state ?? {}
@@ -1071,8 +1075,13 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     if (columnPrefs === undefined || views === undefined) return
     const defId = columnPrefs.data.default_view_id
     const defView = defId != null ? views.data.find((v) => v.id === defId) : undefined
+    const queueDefault = views.data.find((v) => v.is_default)
     if (defView) {
       applyView(defView)
+    } else if (queueDefault) {
+      // Queue-wide default (CBV is_default parity) — the base every viewer
+      // gets until they pick their own default.
+      applyView(queueDefault)
     } else {
       setView(queue.display_config.default_view)
       setScope(queue.display_config.default_scope)
@@ -1080,12 +1089,25 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     setDisplayReady(true)
   }, [queue, columnPrefs, views, displayReady])
 
+  const { isAdmin } = useItemEditAuth()
+  const canManageQueueDefault = isAdmin || (queue?.owner != null && queue.owner === userId)
+  const setQueueDefaultMut = useMutation({
+    mutationFn: ({ viewId, on }: { viewId: number; on: boolean }) =>
+      client.request(patch(`/queues/views/${viewId}`, { is_default: on })),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['queue-views', queueId] })
+      toast.success('Queue default view updated')
+    },
+    onError: () => toast.error('Could not update the queue default view')
+  })
+
   const saveViewMut = useMutation({
     mutationFn: () =>
       client.request<{ data: { id: number } }>(
         post(`/queues/${queueId}/views`, {
           name: saveName.trim(),
-          is_shared: saveShared,
+          is_shared: saveShared || saveAsDefault,
+          is_default: saveAsDefault,
           state: {
             scope,
             filters: filterValues,
@@ -1101,6 +1123,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       setSaveOpen(false)
       setSaveName('')
       setSaveShared(false)
+      setSaveAsDefault(false)
       setActiveViewId(res.data.id)
       qc.invalidateQueries({ queryKey: ['queue-views', queueId] })
       toast.success('View saved')
@@ -2046,8 +2069,32 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 </button>
                 <button type='button' onClick={() => applyView(v)}>
                   {v.name}
-                  {v.is_shared && <span className='ml-1 text-slate-400'>· shared</span>}
+                  {v.is_default ? (
+                    <span className='ml-1 text-nvr-navy/60 dark:text-nvr-cyan/70'>· default</span>
+                  ) : (
+                    v.is_shared && <span className='ml-1 text-slate-400'>· shared</span>
+                  )}
                 </button>
+                {canManageQueueDefault && (
+                  <button
+                    type='button'
+                    onClick={() => setQueueDefaultMut.mutate({ viewId: v.id, on: !v.is_default })}
+                    title={
+                      v.is_default
+                        ? 'Queue default — click to unset'
+                        : 'Set as the default view for everyone on this queue'
+                    }
+                    className={cn(
+                      'shrink-0',
+                      v.is_default
+                        ? 'text-nvr-cyan'
+                        : 'hidden text-slate-300 hover:text-nvr-cyan group-hover:inline dark:text-slate-600'
+                    )}
+                    aria-label={v.is_default ? 'Unset queue default' : 'Set queue default'}
+                  >
+                    <Pin className={cn('h-3 w-3', v.is_default && 'fill-current')} />
+                  </button>
+                )}
                 {v.user === userId && activeViewId === v.id && (
                   <button
                     type='button'
@@ -2090,11 +2137,21 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 />
                 <label className='mb-2 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
                   <Checkbox
-                    checked={saveShared}
+                    checked={saveShared || saveAsDefault}
+                    disabled={saveAsDefault}
                     onCheckedChange={(c) => setSaveShared(c === true)}
                   />
                   Share with everyone
                 </label>
+                {canManageQueueDefault && (
+                  <label className='mb-2 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+                    <Checkbox
+                      checked={saveAsDefault}
+                      onCheckedChange={(c) => setSaveAsDefault(c === true)}
+                    />
+                    Set as queue default (everyone starts here)
+                  </label>
+                )}
                 <button
                   type='button'
                   disabled={!saveName.trim() || saveViewMut.isPending}

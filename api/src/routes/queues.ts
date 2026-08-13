@@ -555,6 +555,7 @@ export async function queuesRoutes(app: FastifyInstance) {
       data: rows.map((r) => ({
         ...r,
         is_shared: !!r.is_shared,
+        is_default: !!r.is_default,
         state: parseJson(r.state as string)
       }))
     })
@@ -574,16 +575,27 @@ export async function queuesRoutes(app: FastifyInstance) {
       state?: unknown
       is_shared?: boolean
       role?: string | null
+      is_default?: boolean
     }
     if (!body.name?.trim()) return reply.code(400).send({ error: 'name is required' })
+
+    // Queue-wide default: owner/admin only, forced shared, single per queue
+    const wantsDefault = !!body.is_default
+    if (wantsDefault && !req.isAdmin && queue.owner !== req.user!.id) {
+      return reply.code(403).send({ error: 'Only the queue owner can set the default view' })
+    }
+    if (wantsDefault) {
+      await db('nivaro_queue_views').where({ queue_id: id, is_default: true }).update({ is_default: false })
+    }
 
     const [row] = (await db('nivaro_queue_views')
       .insert({
         queue_id: id,
         name: body.name.trim(),
         user: req.user!.id,
-        is_shared: !!body.is_shared,
+        is_shared: wantsDefault || !!body.is_shared,
         role: body.role ?? null,
+        is_default: wantsDefault,
         state: toJsonStr(body.state),
         created_at: new Date()
       })
@@ -598,9 +610,14 @@ export async function queuesRoutes(app: FastifyInstance) {
       req
     })
 
-    return reply
-      .code(201)
-      .send({ data: { ...row, is_shared: !!row.is_shared, state: parseJson(row.state as string) } })
+    return reply.code(201).send({
+      data: {
+        ...row,
+        is_shared: !!row.is_shared,
+        is_default: !!row.is_default,
+        state: parseJson(row.state as string)
+      }
+    })
   })
 
   // PATCH /views/:viewId — overwrite a view's state/name/sharing (owner or admin).
@@ -609,20 +626,47 @@ export async function queuesRoutes(app: FastifyInstance) {
     const { viewId } = req.params as { viewId: string }
     const view = (await db('nivaro_queue_views')
       .where({ id: Number(viewId) })
-      .first()) as { id: number; user: string } | undefined
+      .first()) as { id: number; user: string; queue_id: string } | undefined
     if (!view) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && view.user !== req.user!.id) {
+
+    const body = req.body as { name?: string; is_shared?: boolean; state?: unknown; is_default?: boolean }
+    const queueForDefault = body.is_default !== undefined
+      ? ((await db<QueueRow>('nivaro_queues').where({ id: view.queue_id }).first()) as QueueRow | undefined)
+      : undefined
+    const canEditView = req.isAdmin || view.user === req.user!.id
+    const canSetDefault = req.isAdmin || (queueForDefault && queueForDefault.owner === req.user!.id)
+    // Setting the queue default on a SHARED view someone else authored is a
+    // queue-owner action, not a view edit — allow either authority.
+    if (body.is_default !== undefined) {
+      if (!canSetDefault) return reply.code(403).send({ error: 'Only the queue owner can set the default view' })
+    } else if (!canEditView) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
-    const body = req.body as { name?: string; is_shared?: boolean; state?: unknown }
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) {
+      if (!canEditView) return reply.code(403).send({ error: 'Forbidden' })
       if (!body.name.trim()) return reply.code(400).send({ error: 'name cannot be empty' })
       patch.name = body.name.trim()
     }
-    if (body.is_shared !== undefined) patch.is_shared = !!body.is_shared
-    if (body.state !== undefined) patch.state = toJsonStr(body.state)
+    if (body.is_shared !== undefined) {
+      if (!canEditView) return reply.code(403).send({ error: 'Forbidden' })
+      patch.is_shared = !!body.is_shared
+    }
+    if (body.state !== undefined) {
+      if (!canEditView) return reply.code(403).send({ error: 'Forbidden' })
+      patch.state = toJsonStr(body.state)
+    }
+    if (body.is_default !== undefined) {
+      patch.is_default = !!body.is_default
+      if (body.is_default) {
+        patch.is_shared = true
+        await db('nivaro_queue_views')
+          .where({ queue_id: view.queue_id, is_default: true })
+          .whereNot({ id: Number(viewId) })
+          .update({ is_default: false })
+      }
+    }
     if (Object.keys(patch).length === 0) {
       return reply.code(400).send({ error: 'nothing to update' })
     }
@@ -640,9 +684,14 @@ export async function queuesRoutes(app: FastifyInstance) {
 
     const updated = (await db('nivaro_queue_views')
       .where({ id: Number(viewId) })
-      .first()) as { id: number; name: string; is_shared: boolean; state: string | null }
+      .first()) as { id: number; name: string; is_shared: boolean; is_default?: boolean; state: string | null }
     return reply.send({
-      data: { ...updated, is_shared: !!updated.is_shared, state: parseJson(updated.state) }
+      data: {
+        ...updated,
+        is_shared: !!updated.is_shared,
+        is_default: !!updated.is_default,
+        state: parseJson(updated.state)
+      }
     })
   })
 
