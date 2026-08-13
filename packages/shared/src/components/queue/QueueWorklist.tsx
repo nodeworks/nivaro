@@ -39,6 +39,7 @@ import { buildGroups } from '../../lib/queue-grouping'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { cn, formatDate, formatDateTime, formatNumber } from '../../lib/utils'
+import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import {
   type Column,
   DataTable,
@@ -412,6 +413,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
   const [sort, setSort] = useState('')
   const [filterValues, setFilterValues] = useState<Record<string, string | string[]>>({})
+
   // Single serializable value so Phase 3 saved views can persist it without rework.
   const [groupBy, setGroupBy] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
@@ -430,6 +432,67 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       client.request<{ data: QueueMeta }>(get(`/queues/${queueId}`)).then((r) => r.data),
     enabled: !!queueId
   })
+
+  // Seed relation extra-column filters from the user's scope defaults /
+  // restrictions — same behavior CollectionBrowserView has: a Zone-restricted
+  // user opens the queue already narrowed to their zone. Runs once, never
+  // overrides values a saved view or the user already set. Queue filters
+  // compare resolved DISPLAY values, so seed ids translate through the
+  // column's own display field.
+  const { scopes: myScopes, ready: myScopesReady } = useMyScopes()
+  const scopeSeededRef = useRef(false)
+  // Restricted dimensions also NARROW the option lists (main filter rail AND
+  // the column filter row share these defs) — a Zone-restricted user must not
+  // even see other zones as choices. Keyed by extra path → allowed display values.
+  const [allowedValuesByPath, setAllowedValuesByPath] = useState<Record<string, string[]>>({})
+  useEffect(() => {
+    if (scopeSeededRef.current || !myScopesReady || !queue) return
+    scopeSeededRef.current = true
+    const metas = (queue.extra_field_meta ?? []).filter(
+      (m) => m.kind === 'relation' && m.target_collection && m.display_field
+    )
+    if (metas.length === 0 || !myScopes) return
+    void (async () => {
+      const patch: Record<string, string[]> = {}
+      const allowed: Record<string, string[]> = {}
+      const displayValuesFor = async (m: (typeof metas)[number], ids: Array<string | number>) => {
+        const res = await client.request<{ data: Array<Record<string, unknown>> }>(
+          get(`/items/${m.target_collection}`, {
+            filter: JSON.stringify({ id: { _in: ids } }),
+            fields: `id,${m.display_field}`,
+            limit: '200'
+          })
+        )
+        return [...new Set(
+          (res.data ?? []).map((r) => String(r[m.display_field as string] ?? '')).filter(Boolean)
+        )]
+      }
+      for (const m of metas) {
+        const dim = matchScopeDimension(myScopes, { collection: m.target_collection })
+        if (!dim) continue
+        const key = `extra.${m.path}`
+        try {
+          // Narrowing: the RESTRICTED set (not defaults) bounds what's pickable
+          const restrictedIds = myScopes.restricted[dim.name] ?? []
+          if (restrictedIds.length > 0) {
+            const vals = await displayValuesFor(m, restrictedIds)
+            if (vals.length > 0) allowed[key.slice('extra.'.length)] = vals
+          }
+          // Seeding: defaults ∩ restriction pre-fill the filter once
+          const ids = effectiveScopeSeedIds(myScopes, dim.name)
+          if (ids.length === 0) continue
+          const existing = filterValues[key]
+          if (existing && (Array.isArray(existing) ? existing.length > 0 : existing !== '')) continue
+          const vals = ids.length ? await displayValuesFor(m, ids) : []
+          if (vals.length > 0) patch[key] = vals
+        } catch {
+          /* scope seeding is best-effort — an unreadable target just skips */
+        }
+      }
+      if (Object.keys(allowed).length > 0) setAllowedValuesByPath(allowed)
+      if (Object.keys(patch).length > 0) setFilterValues((prev) => ({ ...prev, ...patch }))
+    })()
+  }, [myScopesReady, myScopes, queue])
 
   // Import-from-file entry point targets the first collection-type source —
   // same rule the item_layout builder list uses (admin/src/pages/Queues.tsx).
@@ -1509,6 +1572,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       // values); only the label formats, so date/number columns offer readable
       // options instead of raw ISO strings.
       const fmt = formatConfigFor(meta.path)
+      const allowedSet = allowedValuesByPath[meta.path]
+        ? new Set(allowedValuesByPath[meta.path])
+        : null
       const seen = new Set<string>()
       const out: { label: string; value: string }[] = []
       for (const row of rows) {
@@ -1516,6 +1582,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         if (v == null || v === '') continue
         const str = String(v)
         if (seen.has(str)) continue
+        if (allowedSet && !allowedSet.has(str)) continue
         seen.add(str)
         out.push({ label: fmt ? formatMultiValue(str, fmt) : str, value: str })
       }

@@ -1,8 +1,9 @@
 import type { ImportParseResponse, ImportTemplateSummary } from '@nivaro/sdk'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileDown, Loader2, Save, Trash2 } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileDown, Loader2, Save, Trash2, Wrench } from 'lucide-react'
 import { CloneDialog } from './item-edit/CloneDialog'
 import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './item-edit/ChangeReasonDialog'
+import { RawEditSheet } from './item-edit/RawEditSheet'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
 import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
@@ -719,6 +720,7 @@ export function ItemEditForm({
   // Change-reason challenge: a 422 from the items service pauses the save
   // until the user supplies a justification, then retries with _change_reason
   const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
+  const [rawEditOpen, setRawEditOpen] = useState(false)
   const changeReasonRef = useRef<string | null>(null)
   const [isDirty, setIsDirty] = useState(false)
 
@@ -4172,6 +4174,30 @@ export function ItemEditForm({
                       saveMut.mutate()
                     }}
                   />
+                  {isAdmin && !isNew && itemId && (
+                    <>
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='sm'
+                        onClick={() => setRawEditOpen(true)}
+                        title='Edit every field with conditional logic bypassed (admin)'
+                        className='gap-1.5'
+                      >
+                        <Wrench className='h-3.5 w-3.5' />
+                        Raw edit
+                      </Button>
+                      <RawEditSheet
+                        collection={collection}
+                        itemId={String(itemId)}
+                        open={rawEditOpen}
+                        onClose={() => setRawEditOpen(false)}
+                        onSaved={() => {
+                          qc.invalidateQueries({ queryKey: ['item', collection, String(itemId)] })
+                        }}
+                      />
+                    </>
+                  )}
                   {effectiveShowClone && !isNew && isAdmin && (
                     <CloneDialog
                       collection={collection}

@@ -27,7 +27,11 @@
     "purge:ephemeral-audit": "tsx src/scripts/purge-ephemeral-audit.ts",
     "promote:config": "tsx extensions/efp-ops/scripts/promote-config.ts",
     "refresh:rehearsal": "tsx extensions/efp-ops/scripts/refresh-db-from-prod.ts",
-    "sync:business-schema": "tsx extensions/efp-ops/scripts/sync-business-schema.ts"
+    "sync:business-schema": "tsx extensions/efp-ops/scripts/sync-business-schema.ts",
+    "convert:editorjs": "tsx extensions/efp-ops/scripts/convert-editorjs-richtext.ts",
+    "seed:sequences": "tsx extensions/efp-ops/scripts/seed-sequences.ts",
+    "golive:convert": "tsx extensions/efp-ops/scripts/run-golive-conversions.ts",
+    "convert:addendums": "tsx extensions/efp-ops/scripts/convert-addendums.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.101.0",

@@ -125,6 +125,16 @@ engine.registerFilter('editorjs_text', (v: unknown) => {
       .replace(/\s+/g, ' ')
       .trim()
   } catch {
+    // Post-conversion notes are HTML — strip to plain text the same way an
+    // EditorJS doc's inline markup was stripped.
+    if (/^\s*</.test(raw)) {
+      return raw
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/\s+/g, ' ')
+        .trim()
+    }
     return raw
   }
 })
