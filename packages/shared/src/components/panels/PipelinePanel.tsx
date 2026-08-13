@@ -1066,6 +1066,7 @@ function PipelinePanelInner({
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
+      if (collection === 'nivaro_addendums') queryClient.invalidateQueries({ queryKey: ['addendums'] })
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
@@ -1503,6 +1504,7 @@ function PipelineTransitionButtonsInner({
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
+      if (collection === 'nivaro_addendums') queryClient.invalidateQueries({ queryKey: ['addendums'] })
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)

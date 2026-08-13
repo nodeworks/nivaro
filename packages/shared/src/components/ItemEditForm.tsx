@@ -603,12 +603,13 @@ export function ItemEditForm({
     queryKey: ['file-layouts', collection],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: number; name: string; layout_type?: string; pdf_button_label?: string | null }> }>(
+        .request<{ data: Array<{ id: number; name: string; layout_type?: string; is_active?: boolean | number; pdf_button_label?: string | null }> }>(
           get('/collection-layouts', { collection, type: 'file' })
         )
         // The list route ignores the type param — filter here or every layout
-        // on the collection would grow a PDF button.
-        .then((r) => (r.data ?? []).filter((l) => l.layout_type === 'file')),
+        // on the collection would grow a PDF button. Inactive file layouts get
+        // no header button (that's how a PDF export is retired).
+        .then((r) => (r.data ?? []).filter((l) => l.layout_type === 'file' && !!l.is_active)),
     enabled: !!collection && !isNew,
     staleTime: 60_000,
   })
@@ -4304,7 +4305,7 @@ export function ItemEditForm({
                     <ChevronDown className='h-3 w-3 opacity-60' />
                   </button>
                   {addendumViewDropdownOpen && (
-                    <div className='absolute right-0 top-full z-30 mt-1 min-w-[240px] rounded-md border border-slate-200 bg-white py-0.5 shadow-lg dark:border-border dark:bg-card'>
+                    <div className='absolute right-0 top-full z-30 mt-1 max-h-[320px] min-w-[240px] overflow-y-auto rounded-md border border-slate-200 bg-white py-0.5 shadow-lg dark:border-border dark:bg-card'>
                       <button
                         type='button'
                         onClick={() => { setAddendumViewId('original'); setAddendumViewDropdownOpen(false) }}
