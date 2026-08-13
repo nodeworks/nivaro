@@ -452,6 +452,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // the column filter row share these defs) — a Zone-restricted user must not
   // even see other zones as choices. Keyed by extra path → allowed display values.
   const [allowedValuesByPath, setAllowedValuesByPath] = useState<Record<string, string[]>>({})
+  // The seeded scope filters survive view switches: 'Default' resets back to
+  // these, never to a truly empty filter set (that would drop the user's
+  // default/restricted dimensions).
+  const seededFiltersRef = useRef<Record<string, string[]>>({})
   useEffect(() => {
     if (scopeSeededRef.current || !myScopesReady || !queue) return
     scopeSeededRef.current = true
@@ -500,7 +504,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         }
       }
       if (Object.keys(allowed).length > 0) setAllowedValuesByPath(allowed)
-      if (Object.keys(patch).length > 0) setFilterValues((prev) => ({ ...prev, ...patch }))
+      if (Object.keys(patch).length > 0) {
+        seededFiltersRef.current = patch
+        setFilterValues((prev) => ({ ...prev, ...patch }))
+      }
       setScopeGateOpen(true)
     })()
   }, [myScopesReady, myScopes, queue])
@@ -608,7 +615,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     !v || (Array.isArray(v) && v.length === 0)
 
   function clearAllTileFilters() {
-    setFilterValues({})
+    setFilterValues({ ...seededFiltersRef.current })
     setScope('all')
     setPage(1)
   }
@@ -1054,7 +1061,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   function applyView(v: QueueView) {
     const s = v.state ?? {}
     setScope(s.scope ?? 'all')
-    setFilterValues(s.filters ?? {})
+    setFilterValues({ ...seededFiltersRef.current, ...(s.filters ?? {}) })
     setSort(s.sort ?? '')
     setGroupBy(s.group_by ?? null)
     // Full snapshot: a view without saved columns resets to the queue default.
@@ -1074,7 +1081,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       return
     }
     setScope(queue?.display_config?.default_scope ?? 'all')
-    setFilterValues({})
+    setFilterValues({ ...seededFiltersRef.current })
     setSort('')
     setGroupBy(null)
     setVisibleColumns(null)
@@ -2326,7 +2333,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 <button
                   type='button'
                   onClick={() => {
-                    setFilterValues({})
+                    setFilterValues({ ...seededFiltersRef.current })
                     setPage(1)
                   }}
                   className='px-1.5 py-1 text-[11px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
@@ -2350,7 +2357,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                         <button
                           type='button'
                           onClick={() => {
-                            setFilterValues({})
+                            setFilterValues({ ...seededFiltersRef.current })
                             setPage(1)
                           }}
                           className='text-[11px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
