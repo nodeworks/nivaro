@@ -65,7 +65,7 @@ import {
   Zap
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useApiFetchConfig } from '../context'
+import { useApiFetchConfig, useDrilldown } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { Button } from './ui/button'
 import {
@@ -1035,6 +1035,70 @@ export function WidgetSlot({
     if (v == null || typeof v !== 'object') draftScalars[k] = v
   }
   const inputs = { ...draftScalars, ...resolveInputs(inputBindings, itemDraft) }
+
+  // Config-driven drill-down: a widget may declare which record its numbers
+  // describe, making the whole cell clickable into the standard record sheet.
+  // `id_input` names the resolved input carrying the id; when that input holds
+  // a HUMAN id (project_id, workflow_id …) rather than a PK, `match_field`
+  // says which column to look it up by.
+  const drilldown = (widget?.config as Record<string, unknown> | undefined)?.drilldown as
+    | {
+        collection?: string
+        id_input?: string
+        match_field?: string
+        layout_id?: number | null
+        width?: number | string | null
+        title?: string
+      }
+    | undefined
+  const drill = useDrilldown()
+  const drillValue = drilldown?.id_input ? inputs[drilldown.id_input] : null
+  const canDrill = !!drill && !!drilldown?.collection && drillValue != null && drillValue !== ''
+
+  const openDrilldown = async () => {
+    if (!canDrill || !drilldown?.collection) return
+    const raw = String(drillValue)
+    let itemId: string | null = null
+    // The same widget can be bound to a PK on one layout and to a HUMAN id on
+    // another (workflows binds project → FK; the projects layout binds the
+    // project_id string), so resolve tolerantly instead of trusting one shape:
+    // try the configured lookup column, then fall back to treating the value
+    // as a primary key. Silent on failure — an unresolvable id means no sheet,
+    // never a broken-looking error in a header cell.
+    const req = (path: string) =>
+      fetch(`${apiBase}${path}`, {
+        credentials: fetchCfg.credentials,
+        headers: fetchCfg.authHeaders
+      })
+    try {
+      if (drilldown.match_field) {
+        const res = await req(
+          `/items/${drilldown.collection}?filter=${encodeURIComponent(
+            JSON.stringify({ [drilldown.match_field]: { _eq: raw } })
+          )}&fields=id&limit=1`
+        )
+        if (res.ok) {
+          const body = (await res.json()) as { data?: Array<{ id?: unknown }> }
+          const found = body?.data?.[0]?.id
+          if (found != null) itemId = String(found)
+        }
+      }
+      if (itemId == null) {
+        const res = await req(`/items/${drilldown.collection}/${encodeURIComponent(raw)}?fields=id`)
+        if (res.ok) itemId = raw
+      }
+    } catch {
+      return
+    }
+    if (itemId == null) return
+    drill?.open({
+      collection: drilldown.collection,
+      itemId,
+      layoutId: drilldown.layout_id ?? null,
+      width: drilldown.width ?? '75%',
+      title: drilldown.title
+    })
+  }
   // A record-scoped widget (review_list / rollup) hard-requires `record_id` and
   // 400s without it, but every `__widget_N__` slot assignment in the wild has
   // `overrides = null` — no binding was ever configured, so nothing supplied it.
@@ -1223,14 +1287,31 @@ export function WidgetSlot({
           </div>
         )
       }
-      return (
-        <StripDisplay
-          data={renderLoading ? null : (renderData ?? null)}
-          label={label || widget!.name}
-          loading={renderLoading}
-          widgetConfig={widget!.config}
-        />
-      )
+      {
+        const strip = (
+          <StripDisplay
+            data={renderLoading ? null : (renderData ?? null)}
+            label={label || widget!.name}
+            loading={renderLoading}
+            widgetConfig={widget!.config}
+          />
+        )
+        // Clickable only when the widget declares what record it describes and
+        // a host provides the drill-down sheet — otherwise it stays inert text.
+        return canDrill ? (
+          <button
+            type='button'
+            onClick={() => void openDrilldown()}
+            title={drilldown?.title ?? 'Open details'}
+            className='h-full w-full cursor-pointer text-left transition-colors hover:bg-nvr-cyan/5'
+            data-nvr-widget-drill={drilldown?.collection}
+          >
+            {strip}
+          </button>
+        ) : (
+          strip
+        )
+      }
     }
 
     if (isPill) {
@@ -1242,15 +1323,30 @@ export function WidgetSlot({
           />
         )
       }
-      return (
-        <PillDisplay
-          data={renderLoading ? null : (renderData ?? null)}
-          label={label || widget!.name}
-          style={compactStyle as 'pill-dark' | 'pill-light'}
-          loading={renderLoading}
-          widgetConfig={widget!.config}
-        />
-      )
+      {
+        const pill = (
+          <PillDisplay
+            data={renderLoading ? null : (renderData ?? null)}
+            label={label || widget!.name}
+            style={compactStyle as 'pill-dark' | 'pill-light'}
+            loading={renderLoading}
+            widgetConfig={widget!.config}
+          />
+        )
+        return canDrill ? (
+          <button
+            type='button'
+            onClick={() => void openDrilldown()}
+            title={drilldown?.title ?? 'Open details'}
+            className='cursor-pointer text-left'
+            data-nvr-widget-drill={drilldown?.collection}
+          >
+            {pill}
+          </button>
+        ) : (
+          pill
+        )
+      }
     }
 
     // Default compact style — show label skeleton while def loads, value skeleton while rendering
