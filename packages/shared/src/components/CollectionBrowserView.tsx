@@ -3,7 +3,13 @@ import { ChevronDown, ChevronsLeft, ChevronsRight, Pin, RotateCw, Search } from 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
-import { useItemEditAuth, useItemNavigation, useNivaroClient } from '../context'
+import {
+  type DrilldownTarget,
+  useItemEditAuth,
+  useItemNavigation,
+  useNivaroClient,
+  useOverlayState
+} from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { del, get, patch, post } from '../lib/commands'
 import { effectiveScopeSeedIds, matchScopeDimension, translateScopeValues, useMyScopes } from '../lib/use-my-scopes'
@@ -2535,7 +2541,13 @@ export function CollectionBrowserView({
   // the chip's "default" badge so the seeding is visible, not silent.
   const [scopeSeededKeys, setScopeSeededKeys] = useState<ReadonlySet<string>>(new Set())
   const [colFilters, setColFilters] = useState<Record<string, ColFilterVal>>({})
-  const [drill, setDrill] = useState<{ collection: string; id: string } | null>(null)
+  // The whole drill stack lives in the host's overlay history when one is
+  // provided, so the browser's Back button steps down a level instead of
+  // abandoning the browser behind the sheet. Without a host adapter this is
+  // plain state and behaves exactly as it did. Named apart from the per-cell
+  // `drill` (a resolved column target) further down, which it would shadow.
+  const recordDrill = useOverlayState<DrilldownTarget[]>('drill.browser')
+  const drillStack = recordDrill.value
   const [auditId, setAuditId] = useState<string | null>(null)
   const [colsOpen, setColsOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Array<string | number>>([])
@@ -2570,7 +2582,9 @@ export function CollectionBrowserView({
     setAppliedQuick({})
     setColFilters({})
     setLinkConds([])
-    setDrill(null)
+    // A sheet left open would be showing a record from the old collection.
+    // Closing it is now an unwind of every level, not a single clear.
+    if (drillStack?.length) recordDrill.back(drillStack.length)
     setAuditId(null)
     defaultAppliedRef.current = false
   }, [collection])
@@ -4299,7 +4313,7 @@ export function CollectionBrowserView({
                                   id={id}
                                   hasPipeline={hasPipeline}
                                   onOpen={() => openRow(id)}
-                                  onPeek={() => setDrill({ collection, id: String(id) })}
+                                  onPeek={() => recordDrill.push([{ collection, itemId: String(id) }])}
                                   onAudit={() => setAuditId(String(id))}
                                   urlFor={urlFor}
                                   onDeleted={() => deleteRow.mutate(id)}
@@ -4345,7 +4359,7 @@ export function CollectionBrowserView({
                                     type='button'
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      setDrill({ collection: drill.target, id: drill.id })
+                                      recordDrill.push([{ collection: drill.target, itemId: drill.id }])
                                     }}
                                     data-tip={resolvedFor(id, key) ?? undefined}
                                     className='block max-w-[260px] truncate text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
@@ -4373,10 +4387,12 @@ export function CollectionBrowserView({
                                   type='button'
                                   onClick={(e) => {
                                     e.stopPropagation()
-                                    setDrill({
-                                      collection: m2oRel.one_collection as string,
-                                      id: String(row[key])
-                                    })
+                                    recordDrill.push([
+                                      {
+                                        collection: m2oRel.one_collection as string,
+                                        itemId: String(row[key])
+                                      }
+                                    ])
                                   }}
                                   className='text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
                                 >
@@ -4466,14 +4482,18 @@ export function CollectionBrowserView({
 
       {/* Drill-down sheet — 85% panel; detail layout when the target
           collection has one, read-only grouped layout otherwise */}
-      {drill && (
+      {drillStack?.length ? (
         <RecordDrilldownSheet
-          collection={drill.collection}
-          itemId={drill.id}
+          collection={drillStack[0].collection}
+          itemId={drillStack[0].itemId}
           width='85%'
-          onClose={() => setDrill(null)}
+          stack={drillStack}
+          onPush={(target) => recordDrill.push([...drillStack, target])}
+          onPop={() => recordDrill.back()}
+          // Explicit dismissal unwinds every level in one go.
+          onClose={() => recordDrill.back(drillStack.length)}
         />
-      )}
+      ) : null}
 
       {/* Audit log sheet (revision history for one row) */}
       {auditId && (

@@ -1132,6 +1132,8 @@ interface PresenceExtra {
   role_name?: string | null
   current_path?: string | null
   scopes?: string[]
+  /** dimension -> labels, e.g. {division: ['Zone 1'], region: ['BLT']} */
+  scopes_by_dimension?: Record<string, string[]>
   recording_id?: string | null
 }
 
@@ -1139,6 +1141,7 @@ function usePresenceExtras(): {
   byUser: Map<string, PresenceExtra>
   fields: string[]
   adminUrl: string | null
+  dimensions: Array<{ name: string; label: string }>
   loaded: boolean
 } {
   const client = useNivaroClient()
@@ -1147,7 +1150,11 @@ function usePresenceExtras(): {
     queryFn: () =>
       client.request<{
         data: PresenceExtra[]
-        config?: { fields?: string[]; admin_url?: string | null }
+        config?: {
+          fields?: string[]
+          admin_url?: string | null
+          dimensions?: Array<{ name: string; label: string }>
+        }
       }>(get('/presence/online')),
     // Matches the presence heartbeat cadence — the page someone is on should
     // track them around the app, not lag a minute behind.
@@ -1163,6 +1170,7 @@ function usePresenceExtras(): {
     byUser,
     fields: data?.config?.fields ?? ['role', 'page'],
     adminUrl: data?.config?.admin_url ?? null,
+    dimensions: data?.config?.dimensions ?? [],
     loaded: isFetched
   }
 }
@@ -1207,6 +1215,39 @@ export function ChatPanel({
   } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const { rooms, totalUnread } = useChatRooms()
+  /** Online people split into sections by the chosen attribute. Someone with
+   *  several values (three zones, say) appears under each — they genuinely
+   *  belong to all of them, and hiding them from the others would misrepresent
+   *  who is around. '' = one unlabeled section, i.e. no grouping. */
+  const buildOnlineSections = (
+    list: typeof cfg.onlineUsers,
+    by: string,
+    extras: Map<string, PresenceExtra>
+  ): Array<{ key: string; label: string | null; users: typeof cfg.onlineUsers }> => {
+    if (!by) return [{ key: 'all', label: null, users: list }]
+    const buckets = new Map<string, typeof cfg.onlineUsers>()
+    for (const u of list) {
+      const x = extras.get(String(u.user_id).toUpperCase())
+      const values =
+        by === '__role__'
+          ? [humanLabel(x?.role_name ?? u.role_name) || 'No role']
+          : (x?.scopes_by_dimension?.[by]?.length ? x.scopes_by_dimension[by] : ['Unassigned'])
+      for (const v of values) buckets.set(v, [...(buckets.get(v) ?? []), u])
+    }
+    return [...buckets.entries()]
+      .sort((a, b) => {
+        // Unassigned last; everything else alphabetical.
+        if (a[0] === 'Unassigned') return 1
+        if (b[0] === 'Unassigned') return -1
+        return a[0].localeCompare(b[0])
+      })
+      .map(([label, users]) => ({ key: label, label, users }))
+  }
+
+  const [groupBy, setGroupBy] = useState<string>(() => {
+    if (typeof window === 'undefined') return ''
+    return localStorage.getItem('nvr_chat_group_by') ?? ''
+  })
   const presenceExtras = usePresenceExtras()
   // The host's online list is an unscoped read of the presence collection; the
   // server decides who this viewer may SEE (restricted users see only people
@@ -1215,6 +1256,12 @@ export function ChatPanel({
   const users = presenceExtras.loaded
     ? cfg.onlineUsers.filter((u) => presenceExtras.byUser.has(String(u.user_id).toUpperCase()))
     : []
+  const onlineSections = useMemo(
+    () => buildOnlineSections(users, groupBy, presenceExtras.byUser),
+    // biome-ignore lint/correctness/useExhaustiveDependencies: builder is pure
+    [users, groupBy, presenceExtras.byUser]
+  )
+
   const { isAdmin } = useItemEditAuth()
   // NavigationContext always supplies navigate (its default is a plain hop),
   // so hosts that mount a router keep the SPA intact for free.
@@ -1307,12 +1354,49 @@ export function ChatPanel({
 
         {tab === 'online' ? (
           <div className='min-h-0 flex-1 overflow-y-auto p-2' data-chat-online>
+            {/* Group by an attribute of the people listed — role, or any scope
+                dimension the instance tracks (Zone, Region…). Purely a view
+                preference, remembered per browser. */}
+            {users.length > 0 && (
+              <div className='mb-1.5 flex items-center gap-1.5 px-1'>
+                <span className='text-[11px] text-slate-400'>Group by</span>
+                <select
+                  value={groupBy}
+                  onChange={(e) => {
+                    setGroupBy(e.target.value)
+                    try {
+                      localStorage.setItem('nvr_chat_group_by', e.target.value)
+                    } catch {
+                      /* private mode — the preference just won't persist */
+                    }
+                  }}
+                  className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+                  data-chat-group-by
+                >
+                  <option value=''>No grouping</option>
+                  <option value='__role__'>Role</option>
+                  {presenceExtras.dimensions.map((d) => (
+                    <option key={d.name} value={d.name}>
+                      {d.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             {users.length === 0 ? (
               <p className='px-3 py-8 text-center text-[12px] text-slate-400'>
                 No one else is online right now.
               </p>
             ) : (
-              users.map((u) => (
+              onlineSections.map((section) => (
+                <div key={section.key} data-chat-online-group={section.key}>
+                  {section.label !== null && (
+                    <div className='sticky top-0 z-[1] flex items-center gap-1.5 bg-white/95 px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 backdrop-blur dark:bg-card/95'>
+                      {section.label}
+                      <span className='font-normal normal-case text-slate-300'>{section.users.length}</span>
+                    </div>
+                  )}
+                  {section.users.map((u) => (
                 <button
                   key={u.user_id}
                   type='button'
@@ -1380,6 +1464,8 @@ export function ChatPanel({
                   })()}
                   <MessageCircle className='h-4 w-4 shrink-0 text-slate-300' strokeWidth={1.8} />
                 </button>
+                  ))}
+                </div>
               ))
             )}
           </div>

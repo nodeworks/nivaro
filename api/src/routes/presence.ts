@@ -422,15 +422,26 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
     }
     const fields = cfg?.fields?.length ? cfg.fields : ['role', 'page']
     const dimensions = cfg?.scope_dimensions ?? []
+    let dimensionMeta: Array<{ name: string; label: string }> = []
+    if (dimensions.length > 0) {
+      try {
+        const { listScopeDimensions } = await import('../services/user-scopes.js')
+        dimensionMeta = (await listScopeDimensions())
+          .filter((d) => dimensions.includes(d.name))
+          .map((d) => ({ name: d.name, label: d.label }))
+      } catch {
+        dimensionMeta = dimensions.map((n) => ({ name: n, label: n }))
+      }
+    }
 
     // Scope labels: one query per dimension for every listed user, not per user.
     const userIds = visibleRows.map((r) => String(r.user_id)).filter(Boolean)
-    const scopesByUser = new Map<string, string[]>()
+    const scopesByUser = new Map<string, Map<string, string[]>>()
     if (fields.includes('scopes') && dimensions.length > 0 && userIds.length > 0) {
       try {
         const { resolveScopeLabelsForUsers } = await import('../services/user-scopes.js')
         const resolved = await resolveScopeLabelsForUsers(userIds, dimensions)
-        for (const [uid, labels] of resolved) scopesByUser.set(uid.toUpperCase(), labels)
+        for (const [uid, perDim] of resolved) scopesByUser.set(uid.toUpperCase(), perDim)
       } catch {
         // Scope labels are decoration — never fail the online list over them.
       }
@@ -464,7 +475,9 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           current_path: r.current_path,
           last_seen: r.last_seen,
           typing_room: r.typing_room,
-          scopes: scopesByUser.get(uid) ?? [],
+          // Flat list for the subtitle line, keyed map for grouping.
+          scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),
+          scopes_by_dimension: Object.fromEntries(scopesByUser.get(uid) ?? []),
           recording_id: recordingByUser.get(uid) ?? null
         }
       }),
@@ -475,7 +488,9 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
         // origin, so a relative link would hit ITS router and 404 — the admin
         // SPA is served by the API, so hand back an absolute URL and any host
         // can offer the action without hardcoding an environment.
-        admin_url: config.ADMIN_URL ?? null
+        admin_url: config.ADMIN_URL ?? null,
+        // Human labels so a "Group by" control can offer "Zone" not "division".
+        dimensions: dimensionMeta
       }
     })
   })

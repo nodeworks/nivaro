@@ -72,7 +72,12 @@ const catAxisProps = (count: number) => ({
   tickFormatter: compactCatTick,
   minTickGap: 4
 })
-import { DrilldownContext, useDrilldown, useNivaroClient } from '../context'
+import {
+  type DrilldownTarget,
+  useDrilldown,
+  useNivaroClient,
+  useOverlayState
+} from '../context'
 import { effectiveScopeSeedIds, matchScopeDimension, translateScopeValues, useMyScopes } from '../lib/use-my-scopes'
 import { cn } from '../lib/utils'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
@@ -1636,13 +1641,16 @@ export function ReportView({
 }: ReportViewProps) {
   const client = useNivaroClient()
   const outerDrill = useDrilldown()
-  const [drill, setDrill] = useState<{ collection: string; itemId: string; title?: string } | null>(
-    null
-  )
+  // The drill stack lives in the host's overlay history when one is provided,
+  // so the browser's Back button steps down a level instead of abandoning the
+  // report behind the sheet. Without a host adapter this is plain state and
+  // behaves exactly as it did.
+  const drill = useOverlayState<DrilldownTarget[]>('drill.report')
+  const drillStack = drill.value
   const openDrill = useCallback(
     (t: { collection: string; itemId: string; title?: string }) =>
-      outerDrill ? outerDrill.open(t) : setDrill(t),
-    [outerDrill]
+      outerDrill ? outerDrill.open(t) : drill.push([t]),
+    [outerDrill, drill.push]
   )
   // Applied state drives the widget queries; draft state is what the bar edits
   // until Apply is pressed (EFP GlobalFilterBar model).
@@ -2004,17 +2012,19 @@ export function ReportView({
             ))}
         </div>
       )}
-      {!outerDrill && drill && (
-        <DrilldownContext.Provider value={{ open: (t) => setDrill(t) }}>
-          <RecordDrilldownSheet
-            collection={drill.collection}
-            itemId={drill.itemId}
-            title={drill.title}
-            width='72%'
-            onClose={() => setDrill(null)}
-          />
-        </DrilldownContext.Provider>
-      )}
+      {!outerDrill && drillStack?.length ? (
+        <RecordDrilldownSheet
+          collection={drillStack[0].collection}
+          itemId={drillStack[0].itemId}
+          title={drillStack[0].title}
+          width='72%'
+          stack={drillStack}
+          onPush={(target) => drill.push([...drillStack, target])}
+          onPop={() => drill.back()}
+          // Explicit dismissal unwinds every level in one go.
+          onClose={() => drill.back(drillStack.length)}
+        />
+      ) : null}
     </div>
   )
 }

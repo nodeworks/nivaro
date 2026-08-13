@@ -7,7 +7,8 @@ import {
   type DrilldownTarget,
   useDrilldown,
   useItemNavigation,
-  useNivaroClient
+  useNivaroClient,
+  useOverlayState
 } from '../context'
 import { get, post } from '../lib/commands'
 import {
@@ -1411,7 +1412,13 @@ export interface PageRendererProps {
 export function PageRenderer({ slug, hideHeader, className }: PageRendererProps) {
   const client = useNivaroClient()
   const outerDrill = useDrilldown()
-  const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
+  // The stack for the sheet PageRenderer hosts itself (see the outerDrill guard
+  // below). It lives in the host's overlay history when one is provided, so the
+  // browser's Back button steps down a drill level instead of abandoning the
+  // page behind the sheet; without a host adapter this is plain state and
+  // behaves exactly as it did.
+  const drill = useOverlayState<DrilldownTarget[]>('drill.page')
+  const drillStack = drill.value
   const { data: page, isLoading, error } = useQuery<PageRendererPage>({
     queryKey: ['page-renderer', slug],
     queryFn: () => client.request<{ data: PageRendererPage }>(get(`/pages/${slug}`)).then((r) => r.data),
@@ -1539,17 +1546,21 @@ export function PageRenderer({ slug, hideHeader, className }: PageRendererProps)
   // Host a drill sheet when the consumer didn't provide one.
   if (outerDrill) return body
   return (
-    <DrilldownContext.Provider value={{ open: (t) => setDrilldown(t) }}>
-      {drilldown && (
+    <DrilldownContext.Provider value={{ open: (t) => drill.push([t]) }}>
+      {drillStack?.length ? (
         <RecordDrilldownSheet
-          collection={drilldown.collection}
-          itemId={drilldown.itemId}
-          layoutId={drilldown.layoutId}
-          width={drilldown.width}
-          title={drilldown.title}
-          onClose={() => setDrilldown(null)}
+          collection={drillStack[0].collection}
+          itemId={drillStack[0].itemId}
+          layoutId={drillStack[0].layoutId}
+          width={drillStack[0].width}
+          title={drillStack[0].title}
+          stack={drillStack}
+          onPush={(target) => drill.push([...drillStack, target])}
+          onPop={() => drill.back()}
+          // Explicit dismissal unwinds every level in one go.
+          onClose={() => drill.back(drillStack.length)}
         />
-      )}
+      ) : null}
       {body}
     </DrilldownContext.Provider>
   )

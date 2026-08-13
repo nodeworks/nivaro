@@ -683,8 +683,10 @@ export async function describeUserScopes(userId: string): Promise<{
 export async function resolveScopeLabelsForUsers(
   userIds: string[],
   dimensionNames: string[]
-): Promise<Map<string, string[]>> {
-  const out = new Map<string, string[]>()
+): Promise<Map<string, Map<string, string[]>>> {
+  // user -> dimension -> labels. Keeping the dimension key (rather than one
+  // flat list) is what lets a UI GROUP by zone or region, not just print them.
+  const out = new Map<string, Map<string, string[]>>()
   if (userIds.length === 0 || dimensionNames.length === 0) return out
 
   const dims = (await listScopeDimensions()).filter((d) => dimensionNames.includes(d.name))
@@ -733,8 +735,9 @@ export async function resolveScopeLabelsForUsers(
   for (const p of parsed) {
     const labels = labelsByDim.get(p.dimension)
     const values = p.ids.map((id) => labels?.get(id) ?? id)
-    const existing = out.get(p.user) ?? []
-    out.set(p.user, [...existing, ...values])
+    const perUser = out.get(p.user) ?? new Map<string, string[]>()
+    perUser.set(p.dimension, [...(perUser.get(p.dimension) ?? []), ...values])
+    out.set(p.user, perUser)
   }
   return out
 }
