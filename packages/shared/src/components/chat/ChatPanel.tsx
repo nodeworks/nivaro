@@ -1215,10 +1215,14 @@ export function ChatPanel({
   } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const { rooms, totalUnread } = useChatRooms()
-  /** Online people split into sections by the chosen attribute. Someone with
-   *  several values (three zones, say) appears under each — they genuinely
-   *  belong to all of them, and hiding them from the others would misrepresent
-   *  who is around. '' = one unlabeled section, i.e. no grouping. */
+  /** Online people split into sections by the chosen attribute.
+   *
+   *  Each person appears EXACTLY ONCE. Someone covering three zones is grouped
+   *  under their whole set ("Zone 1, Zone 2, Zone 3") rather than repeated in
+   *  each zone: repeating them made one person render as three rows under an
+   *  "Online · 1" header, which reads as three different people. Their full
+   *  list is on the row itself either way, so nothing is hidden.
+   *  '' = one unlabeled section, i.e. no grouping. */
   const buildOnlineSections = (
     list: typeof cfg.onlineUsers,
     by: string,
@@ -1232,7 +1236,10 @@ export function ChatPanel({
         by === '__role__'
           ? [humanLabel(x?.role_name ?? u.role_name) || 'No role']
           : (x?.scopes_by_dimension?.[by]?.length ? x.scopes_by_dimension[by] : ['Unassigned'])
-      for (const v of values) buckets.set(v, [...(buckets.get(v) ?? []), u])
+      // Sorted so people with the same set land in the same bucket regardless
+      // of the order their scope rows happened to come back in.
+      const key = [...new Set(values)].sort((a, b) => a.localeCompare(b)).join(', ')
+      buckets.set(key, [...(buckets.get(key) ?? []), u])
     }
     return [...buckets.entries()]
       .sort((a, b) => {
