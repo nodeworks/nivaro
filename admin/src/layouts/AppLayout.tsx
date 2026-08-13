@@ -83,6 +83,7 @@ import { useSessionRecorder } from '@/lib/use-session-recorder'
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
+import { ApiUpdateBanner } from '@nivaro/shared'
 
 const SIDEBAR_KEY = 'nivaro-sidebar-collapsed'
 const CATEGORY_KEY = 'nivaro-nav-category'
@@ -495,7 +496,11 @@ export function AppLayout() {
         .map((Comp, i) => (
           <Comp key={`cloud-${i}`} />
         ))}
-      <div className='flex h-screen overflow-hidden bg-secondary'>
+      <div className='flex h-screen flex-col overflow-hidden bg-secondary'>
+        {/* API redeploy notice — clears itself once this tab reloads onto the
+            new build (see the shared api-version watcher). */}
+        <ApiUpdateBanner appName='Nivaro' />
+        <div className='flex min-h-0 flex-1 overflow-hidden'>
         <a
           href='#main-content'
           className='sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:rounded focus:bg-nvr-cyan focus:px-3 focus:py-1.5 focus:text-xs focus:font-semibold focus:text-white'
@@ -690,6 +695,7 @@ export function AppLayout() {
             </Suspense>
           </PageErrorBoundary>
         </main>
+        </div>
       </div>
       <CommandPalette />
       <KeyboardShortcuts />

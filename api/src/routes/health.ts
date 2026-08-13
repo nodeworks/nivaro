@@ -5,6 +5,18 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { NIVARO_VERSION } from '../version.js'
 
 export async function healthRoutes(app: FastifyInstance) {
+  // GET /version — the cheapest possible "what build is running" probe: no DB,
+  // no Redis, no auth. Clients poll this to notice a deploy (see the shared
+  // api-version watcher); /health does I/O on every call and must not be used
+  // for that. `environment` lets a client name which environment moved.
+  app.get('/version', async (_req, reply) => {
+    return reply.send({
+      version: NIVARO_VERSION,
+      environment: config.NODE_ENV,
+      cloud: !!process.env.CLOUD_META_DB_URL
+    })
+  })
+
   app.get('/health', async (_req, reply) => {
     const [dbOk, redisOk] = await Promise.all([
       db
