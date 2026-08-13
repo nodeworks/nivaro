@@ -860,7 +860,13 @@ export function QueryTable({
                   }
                   return cells
                 })()}
-                {rowActions && <th rowSpan={2} aria-label='Actions' />}
+                {rowActions && (
+                  <th
+                    rowSpan={2}
+                    aria-label='Actions'
+                    className={`border-b border-slate-200 dark:border-border ${sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : ''}`}
+                  />
+                )}
               </tr>
               <tr>
                 {columns.map((c, i) =>
@@ -910,7 +916,12 @@ export function QueryTable({
                   )}
                 </th>
               ))}
-              {rowActions && <th aria-label='Actions' />}
+              {rowActions && (
+                <th
+                  aria-label='Actions'
+                  className={sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : undefined}
+                />
+              )}
             </tr>
           )}
         </thead>
