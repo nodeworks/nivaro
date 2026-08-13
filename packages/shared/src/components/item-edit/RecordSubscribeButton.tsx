@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, BellRing, Loader2 } from 'lucide-react'
+import { Bell, BellRing, Info, Loader2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -54,6 +54,22 @@ export function RecordSubscribeButton({
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<SubscribeMode>('all')
+
+  // Ways this user ALREADY gets notified without a subscription (creator,
+  // current pipeline owner) — surfaced as an info strip so they don't
+  // double-subscribe out of uncertainty.
+  const { data: implicitReasons = [] } = useQuery<string[]>({
+    queryKey: ['record-subscription-implicit', collection, itemId],
+    queryFn: () =>
+      client
+        .request<{ data: { reasons: string[] } }>(
+          get(`/notification-subscriptions/implicit/${collection}/${itemId}`)
+        )
+        .then((r) => r.data?.reasons ?? [])
+        .catch(() => []),
+    enabled: open,
+    staleTime: 60_000
+  })
 
   const { data: subs = [], isLoading } = useQuery<SubRow[]>({
     queryKey: ['record-subscriptions', collection, itemId],
@@ -170,6 +186,24 @@ export function RecordSubscribeButton({
               changes. Notifications arrive in-app and by email.
             </DialogDescription>
           </DialogHeader>
+          {implicitReasons.length > 0 && (
+            <p className='flex items-start gap-2 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-2 text-[11.5px] leading-snug text-sky-800 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300'>
+              <Info className='mt-0.5 h-3.5 w-3.5 shrink-0' />
+              <span>
+                You already receive notifications for this record —{' '}
+                {implicitReasons
+                  .map((r) =>
+                    r === 'creator'
+                      ? 'you created it'
+                      : r === 'owner'
+                        ? 'you are a current pipeline owner'
+                        : r
+                  )
+                  .join(' and ')}
+                . Owner and creator emails arrive on workflow state changes without a subscription.
+              </span>
+            </p>
+          )}
           <div className='space-y-2 py-1'>
             {(
               [

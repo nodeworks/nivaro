@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { resolveStateOwners } from '../services/pipeline-engine.js'
 import type { QueueRow } from '../services/queues.js'
 import { canReadQueue } from './queues.js'
 
@@ -36,6 +37,42 @@ function serialize(row: Record<string, unknown>) {
 
 export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
+
+  // GET /implicit/:collection/:item — why this user ALREADY gets notified for a
+  // record without any subscription: they created it, or they're a current
+  // pipeline owner (owner-notification flows + the daily digest cover both).
+  // Feeds the record subscribe-bell dialog's info strip.
+  app.get('/implicit/:collection/:item', async (req, reply) => {
+    const { collection, item } = req.params as { collection: string; item: string }
+    if (/^nivaro_/i.test(collection) || !/^[a-zA-Z0-9_]+$/.test(collection)) {
+      return reply.code(400).send({ error: 'Invalid collection' })
+    }
+    const userId = String(req.user!.id).toUpperCase()
+    const reasons: string[] = []
+    try {
+      const row = (await db(collection).where({ id: item }).first()) as
+        | Record<string, unknown>
+        | undefined
+      if (row) {
+        for (const col of ['user_created', 'creator', 'created_by']) {
+          if (col in row && row[col] != null && String(row[col]).toUpperCase() === userId) {
+            reasons.push('creator')
+            break
+          }
+        }
+      }
+      const instance = (await db('nivaro_workflow_instances')
+        .where({ collection, item })
+        .first()) as { id: string; current_state: string } | undefined
+      if (instance?.current_state) {
+        const owners = await resolveStateOwners(instance.current_state, instance.id, collection, item)
+        if (owners.some((o) => String(o.id).toUpperCase() === userId)) reasons.push('owner')
+      }
+    } catch {
+      // best-effort — an unreadable record just means no implicit reasons
+    }
+    return reply.send({ data: { reasons } })
+  })
 
   // GET / — list current user's subscriptions (or ?user= for admin)
   app.get('/', async (req, reply) => {
