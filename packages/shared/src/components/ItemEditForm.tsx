@@ -4,6 +4,7 @@ import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, 
 import { CloneDialog } from './item-edit/CloneDialog'
 import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './item-edit/ChangeReasonDialog'
 import { RawEditSheet } from './item-edit/RawEditSheet'
+import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
 import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
@@ -4128,6 +4129,9 @@ export function ItemEditForm({
                   getLabel={(t) => t.reimport?.button_label ?? t.button_label}
                   onParsed={handleReimportParsed}
                 />
+              )}
+              {!isNew && itemId && (
+                <RecordSubscribeButton collection={collection} itemId={String(itemId)} />
               )}
               {showItemActions && !isNew && (
                 <ItemActionButtons collection={collection} itemId={String(itemId)} />

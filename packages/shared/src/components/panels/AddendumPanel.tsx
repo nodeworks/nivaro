@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback, memo, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -41,6 +41,30 @@ interface Addendum {
   data: Record<string, unknown> | null
   workflow_template_id: string | null
   created_at: string
+  cost_impact: number | null
+  timeline_impact_days: number | null
+  created_by: string | null
+  approved_by: string | null
+  approved_at: string | null
+}
+
+const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
+
+function costImpactChip(v: number | null | undefined) {
+  const n = Number(v)
+  if (!v || Number.isNaN(n) || n === 0) return null
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full px-2 py-0.5 font-mono text-[11px] font-medium tabular-nums',
+        n > 0
+          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+          : 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
+      )}
+    >
+      {n > 0 ? '+' : '−'}{usd.format(Math.abs(n))}
+    </span>
+  )
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -494,6 +518,99 @@ function AddendumCreateSheet({
   )
 }
 
+// ─── AddendumDetails ───────────────────────────────────────────────────────────
+// Impact figures + audit trail for the expanded card. This is the ONLY body an
+// imported legacy addendum has (data/fields_schema are null there), so it must
+// carry the story on its own: net cost, timeline, full description, who/when.
+
+function AddendumDetails({ addendum }: { addendum: Addendum }) {
+  const client = useNivaroClient()
+  const userIds = [addendum.created_by, addendum.approved_by].filter(Boolean) as string[]
+  const { data: users = {} } = useQuery<Record<string, string>>({
+    queryKey: ['addendum-users', ...userIds.sort()],
+    queryFn: async () => {
+      const rows = await client
+        .request<{ data: Array<{ id: string; first_name: string | null; last_name: string | null }> }>(
+          get(`/items/nivaro_users`, {
+            filter: JSON.stringify({ id: { _in: userIds } }),
+            fields: 'id,first_name,last_name'
+          })
+        )
+        .then((r) => r.data ?? [])
+      return Object.fromEntries(
+        rows.map((u) => [String(u.id).toUpperCase(), [u.first_name, u.last_name].filter(Boolean).join(' ')])
+      )
+    },
+    enabled: userIds.length > 0,
+    staleTime: 300_000
+  })
+  const nameOf = (id: string | null) => (id ? users[String(id).toUpperCase()] || null : null)
+
+  const fmtDate = (d: string | null) =>
+    d
+      ? new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+      : null
+
+  const n = Number(addendum.cost_impact)
+  const hasCost = addendum.cost_impact != null && !Number.isNaN(n) && n !== 0
+  const createdBy = nameOf(addendum.created_by)
+  const approvedBy = nameOf(addendum.approved_by)
+
+  const cells: Array<{ label: string; value: ReactNode }> = []
+  if (hasCost)
+    cells.push({
+      label: n > 0 ? 'Cost increase' : 'Cost decrease',
+      value: (
+        <span
+          className={cn(
+            'font-mono text-[13px] font-semibold tabular-nums',
+            n > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+          )}
+        >
+          {n > 0 ? '+' : '−'}{usd.format(Math.abs(n))}
+        </span>
+      )
+    })
+  if (addendum.timeline_impact_days != null && Number(addendum.timeline_impact_days) !== 0)
+    cells.push({
+      label: 'Timeline impact',
+      value: `${addendum.timeline_impact_days > 0 ? '+' : ''}${addendum.timeline_impact_days} days`
+    })
+  if (addendum.created_at)
+    cells.push({
+      label: 'Created',
+      value: [fmtDate(addendum.created_at), createdBy && `by ${createdBy}`].filter(Boolean).join(' ')
+    })
+  if (addendum.status === 'approved' && (addendum.approved_at || approvedBy))
+    cells.push({
+      label: 'Approved',
+      value: [fmtDate(addendum.approved_at), approvedBy && `by ${approvedBy}`].filter(Boolean).join(' ')
+    })
+
+  if (cells.length === 0 && !addendum.description) return null
+  return (
+    <div className='px-4 py-3'>
+      {cells.length > 0 && (
+        <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border sm:grid-cols-4'>
+          {cells.map((c) => (
+            <div key={c.label} className='bg-white px-3 py-2 dark:bg-card'>
+              <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+                {c.label}
+              </p>
+              <p className='mt-0.5 text-[12.5px] text-slate-700 dark:text-slate-200'>{c.value}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {addendum.description && (
+        <p className='mt-2.5 whitespace-pre-wrap text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300'>
+          {addendum.description}
+        </p>
+      )}
+    </div>
+  )
+}
+
 // ─── AddendumCard ──────────────────────────────────────────────────────────────
 
 function AddendumCard({
@@ -598,6 +715,7 @@ function AddendumCard({
                 {changedFields.length} field{changedFields.length !== 1 ? 's' : ''} changed
               </span>
             )}
+            {costImpactChip(addendum.cost_impact)}
           </div>
           {addendum.description && (
             <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400 line-clamp-1'>{addendum.description}</p>
@@ -608,6 +726,7 @@ function AddendumCard({
 
       {expanded && (
         <div className='border-t border-slate-100 dark:border-border'>
+          <AddendumDetails addendum={addendum} />
           {changedFields.length > 0 && (
             <div className='px-4 py-3'>
               <p className='mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>Proposed changes</p>

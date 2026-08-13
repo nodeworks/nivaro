@@ -90,6 +90,11 @@ export const notificationSubscriptionsGuide: DocSection = {
       type: 'p',
       text: 'Notification Subscriptions let users opt into notifications for collection-level events (create, update, delete) with optional field-value filters. Unlike Field Watches (which track specific field changes), subscriptions fire on any matching event.'
     },
+    { type: 'h3', text: 'Subscribing to a single record' },
+    {
+      type: 'p',
+      text: 'Every record page has a bell button in the header. Click it to watch that specific record — choose "State changes only" (notify when the record moves to a new workflow state) or "All changes" (every edit, deletion, and state change). The bell fills in when you are subscribed; open it again to switch modes or unsubscribe. Record subscriptions are ordinary notification subscriptions scoped to the record id, so they also appear on the Notification Subscriptions page.'
+    },
     { type: 'h3', text: 'Creating a subscription' },
     {
       type: 'p',
