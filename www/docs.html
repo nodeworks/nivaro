@@ -7308,6 +7308,8 @@ const { data: created } = await cms.request(
           <!-- SYNC:notification-subscriptions-guide -->
           <h1 class="doc-h1" id="notification-subscriptions-guide">Notification Subscriptions</h1>
           <p class="doc-p">Notification Subscriptions let users opt into notifications for collection-level events (create, update, delete) with optional field-value filters. Unlike Field Watches (which track specific field changes), subscriptions fire on any matching event.</p>
+          <h3 class="doc-h3">Subscribing to a single record</h3>
+          <p class="doc-p">Every record page has a bell button in the header. Click it to watch that specific record — choose "State changes only" (notify when the record moves to a new workflow state) or "All changes" (every edit, deletion, and state change). The bell fills in when you are subscribed; open it again to switch modes or unsubscribe. Record subscriptions are ordinary notification subscriptions scoped to the record id, so they also appear on the Notification Subscriptions page.</p>
           <h3 class="doc-h3">Creating a subscription</h3>
           <p class="doc-p">Navigate to Monitoring → Notification Subscriptions. Users manage their own subscriptions; admins can view all subscriptions.</p>
           <div class="doc-table-wrap"><table class="doc-table">
