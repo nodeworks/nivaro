@@ -18,6 +18,7 @@ import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
 import { registerSlaHooks, setApp as setSlaApp } from './hooks/sla.js'
 import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
+import { NIVARO_VERSION } from './version.js'
 
 async function main() {
   // Hook registrations query the DB immediately at startup — skip in cloud mode.
@@ -89,7 +90,7 @@ async function main() {
   }
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' })
-  app.log.info(`Nivaro API listening on port ${config.PORT}`)
+  app.log.info(`Nivaro API v${NIVARO_VERSION} listening on port ${config.PORT}`)
 
   // Graceful shutdown — stop accepting connections, let in-flight requests
   // drain (fastify close), then release DB pools.

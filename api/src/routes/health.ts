@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { NIVARO_VERSION } from '../version.js'
 
 export async function healthRoutes(app: FastifyInstance) {
   app.get('/health', async (_req, reply) => {
@@ -21,7 +22,7 @@ export async function healthRoutes(app: FastifyInstance) {
 
     return reply.code(code).send({
       status,
-      version: '0.1.0',
+      version: NIVARO_VERSION,
       environment: config.NODE_ENV,
       cloud: !!process.env.CLOUD_META_DB_URL,
       db: {
@@ -101,6 +102,7 @@ export async function healthRoutes(app: FastifyInstance) {
         migrations,
         sockets: { connections },
         uptime_s: Math.round(process.uptime()),
+        version: NIVARO_VERSION,
         node_version: process.version,
         memory_mb: Math.round(process.memoryUsage().rss / (1024 * 1024))
       }

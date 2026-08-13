@@ -10,6 +10,7 @@ interface DetailedHealth {
   migrations: { latest: string | null; count: number }
   sockets: { connections: number | null }
   uptime_s: number
+  version?: string
   node_version: string
   memory_mb: number
 }
@@ -162,6 +163,7 @@ export function HealthDashboardPage() {
             <InfoCard icon={Activity} title='Uptime' value={formatUptime(data.uptime_s)} />
             <InfoCard icon={Cpu} title='Memory (RSS)' value={`${data.memory_mb} MB`} />
             <InfoCard icon={Cpu} title='Node.js' value={data.node_version} />
+            <InfoCard icon={Activity} title='Nivaro version' value={data.version ?? '—'} />
           </div>
         )}
       </div>

@@ -34,6 +34,7 @@ import { registerDigestCrons } from './services/digest.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { callExternalApi } from './services/external-apis.js'
+import { NIVARO_VERSION } from './version.js'
 
 export async function buildServer() {
   const app = fastify({
@@ -51,6 +52,13 @@ export async function buildServer() {
     },
     ajv: { customOptions: { strict: false } },
     pluginTimeout: 30000
+  })
+
+  // Every response names the running build — the fastest way to tell which
+  // release a deployed instance is actually serving (no auth, no /health call).
+  app.addHook('onSend', async (_req, reply, payload) => {
+    reply.header('X-Nivaro-Version', NIVARO_VERSION)
+    return payload
   })
 
   // ─── Cloud multi-tenant: resolve tenant DB per request ────────────────────
