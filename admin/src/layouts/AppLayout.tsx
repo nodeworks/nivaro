@@ -346,7 +346,13 @@ function WorkspaceSwitcher() {
  *
  * Stored on the user's own preferences, so it follows them between machines.
  */
-function FavoritesSection() {
+/**
+ * Pin control for the current page. The favourites themselves live in their own
+ * rail category — they cut across categories, so listing them inside one was
+ * always the wrong shape — and this is just the way to add and remove the page
+ * you are looking at.
+ */
+function FavoritePinButton() {
   const { user, refetch } = useAuth()
   const location = useLocation()
   const [saving, setSaving] = useState(false)
@@ -374,6 +380,7 @@ function FavoritesSection() {
     try {
       await api.patch('/users/me/preferences', { nav_favorites: next })
       await refetch()
+      toast.success(pinned ? 'Removed from favourites' : 'Added to favourites')
     } catch {
       toast.error('Could not save favourites')
     } finally {
@@ -381,62 +388,27 @@ function FavoritesSection() {
     }
   }
 
-  const pinHere = () => {
-    // Name it what the page calls itself; the route is a poor label and the
-    // user can rename nothing here, so getting this right matters.
+  const toggle = () => {
+    if (pinned) return void save(favorites.filter((f) => f.path !== here))
+    // Name it what the page calls itself; a route is a poor label and there is
+    // nowhere here to rename it afterwards.
     const heading = document.querySelector('h1')?.textContent?.trim()
     const label = (heading || document.title.split('|')[0].trim() || here).slice(0, 60)
     void save([...favorites, { label, path: here }])
   }
 
-  if (favorites.length === 0 && here === '/') return null
+  if (here === '/') return null
 
   return (
-    // Set apart from the category nav below: these are the reader's OWN
-    // shortcuts, not part of the app's structure, and without a break they
-    // read as just more nav items in a different order.
-    <div className='mb-3 border-b border-white/10 pb-3'>
-      <div className='flex items-center justify-between px-4 pb-1.5'>
-        <span className='flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-nvr-cyan/70'>
-          <Star className='h-3 w-3' strokeWidth={2.5} />
-          Favourites
-        </span>
-        <button
-          type='button'
-          disabled={saving}
-          onClick={() => (pinned ? void save(favorites.filter((f) => f.path !== here)) : pinHere())}
-          title={pinned ? 'Remove this page from favourites' : 'Add this page to favourites'}
-          className='rounded p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-nvr-cyan disabled:opacity-50 dark:hover:bg-muted'
-        >
-          <Star className={cn('h-3.5 w-3.5', pinned && 'fill-nvr-cyan text-nvr-cyan')} strokeWidth={2} />
-        </button>
-      </div>
-      {favorites.length === 0 ? (
-        <p className='px-4 pb-1 text-[11px] leading-snug text-slate-400'>
-          Star a page to keep it here.
-        </p>
-      ) : (
-        <div className='space-y-0.5'>
-          {favorites.map((f: { label: string; path: string }) => (
-            <div key={f.path} className='group relative'>
-              <PanelNavItem icon={Star} label={f.label} to={f.path} />
-              <button
-                type='button'
-                onClick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  void save(favorites.filter((x) => x.path !== f.path))
-                }}
-                title='Remove from favourites'
-                className='absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-300 opacity-0 transition-opacity hover:text-red-500 group-hover:opacity-100'
-              >
-                <XIcon className='h-3 w-3' />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <button
+      type='button'
+      disabled={saving}
+      onClick={toggle}
+      title={pinned ? 'Remove this page from favourites' : 'Add this page to favourites'}
+      className='rounded p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-nvr-cyan disabled:opacity-50'
+    >
+      <Star className={cn('h-3.5 w-3.5', pinned && 'fill-nvr-cyan text-nvr-cyan')} strokeWidth={2} />
+    </button>
   )
 }
 
@@ -564,6 +536,32 @@ export function AppLayout() {
 
   const disabledPaths = useUiPermissions()
 
+  // The reader's own shortcuts get their own place in the rail rather than
+  // sitting on top of one category's nav — they cut across categories, so
+  // living inside one of them was always the wrong shape.
+  const navFavorites = useMemo<Array<{ label: string; path: string }>>(() => {
+    const prefs = (user as { preferences?: { nav_favorites?: unknown } } | null)?.preferences
+    const list = prefs?.nav_favorites
+    return Array.isArray(list)
+      ? (list as Array<{ label?: unknown; path?: unknown }>)
+          .filter(
+            (f: { label?: unknown; path?: unknown }) =>
+              f && typeof f.path === 'string' && typeof f.label === 'string'
+          )
+          .map((f: { label?: unknown; path?: unknown }) => ({
+            label: String(f.label),
+            path: String(f.path)
+          }))
+      : []
+  }, [user])
+
+  const favoritesCategory: NavCategory = {
+    id: 'favorites',
+    icon: Star,
+    label: 'Favourites',
+    items: navFavorites.map((f) => ({ icon: Star, label: f.label, to: f.path }))
+  }
+
   const visibleCategories = navCategories
     .map((cat) => ({
       ...cat,
@@ -571,10 +569,14 @@ export function AppLayout() {
     }))
     .filter((cat) => cat.items.length > 0)
 
-  const activeCat = visibleCategories.find((c) => c.id === activeCategory) ?? visibleCategories[0]
+  const railCategories = [favoritesCategory, ...visibleCategories]
+  const activeCat =
+    railCategories.find((c) => c.id === activeCategory) ?? visibleCategories[0] ?? favoritesCategory
 
   const panelItems: NavItem[] =
-    activeCategory === 'system'
+    activeCategory === 'favorites'
+      ? favoritesCategory.items
+      : activeCategory === 'system'
       ? [
           ...(activeCat?.items ?? []),
           ...extensionNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href })),
@@ -643,7 +645,7 @@ export function AppLayout() {
               className='flex min-h-0 w-full flex-1 flex-col gap-0.5 overflow-y-auto pb-3'
               aria-label='Navigation categories'
             >
-              {visibleCategories.map((cat) => {
+              {railCategories.map((cat) => {
                 const hasActive = cat.items.some((item) =>
                   isActiveRoute(item.to, location.pathname)
                 )
@@ -759,13 +761,16 @@ export function AppLayout() {
           >
             <div className='flex h-full w-[168px] flex-col'>
               {/* Panel header */}
-              <div className='flex h-14 shrink-0 flex-col justify-center border-b border-white/[0.07] px-4'>
-                <p className='truncate text-[11px] font-medium leading-tight text-slate-500'>
-                  {projectName}
-                </p>
-                <p className='truncate text-[13.5px] font-semibold leading-tight tracking-[-0.01em] text-white'>
-                  {t(`nav.${activeCat.label}`, activeCat.label)}
-                </p>
+              <div className='flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/[0.07] px-4'>
+                <div className='min-w-0'>
+                  <p className='truncate text-[11px] font-medium leading-tight text-slate-500'>
+                    {projectName}
+                  </p>
+                  <p className='truncate text-[13.5px] font-semibold leading-tight tracking-[-0.01em] text-white'>
+                    {t(`nav.${activeCat.label}`, activeCat.label)}
+                  </p>
+                </div>
+                <FavoritePinButton />
               </div>
 
               {/* Nav items — no horizontal padding so active rows span full width */}
@@ -773,7 +778,11 @@ export function AppLayout() {
                 className='min-h-0 flex-1 overflow-y-auto py-3'
                 aria-label={`${activeCat.label} navigation`}
               >
-                <FavoritesSection />
+                {activeCategory === 'favorites' && panelItems.length === 0 && (
+                  <p className='px-4 py-2 text-[11px] leading-snug text-slate-400'>
+                    Star a page with the ☆ beside its category name to keep it here.
+                  </p>
+                )}
                 <div className='space-y-0.5'>
                   {panelItems.map((item) => (
                     <PanelNavItem key={item.to} {...item} />
