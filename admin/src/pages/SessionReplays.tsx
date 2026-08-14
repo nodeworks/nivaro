@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clapperboard, Play, Trash2, Users } from 'lucide-react'
+import { Clapperboard, Code2, Play, Trash2, Users } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -53,6 +53,31 @@ const SPEEDS = [1, 2, 4, 8]
  * broken build — its bundle never constructs a Replayer — so the controls
  * live here: play/pause, scrubber, speed, auto-scaled viewport.)
  */
+
+/**
+ * Hands back a Playwright script that re-drives this session in a real browser
+ * — the point being to WATCH a reported problem happen rather than read a
+ * description of it. Downloaded rather than run here: the replay belongs on the
+ * operator's machine, pointed at whichever environment they choose.
+ */
+async function downloadReplayScript(recordingId: string) {
+  try {
+    const res = await api.get(`/session-recordings/${recordingId}/playwright`, {
+      responseType: 'text'
+    })
+    const blob = new Blob([res.data as string], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `replay-${recordingId.slice(0, 8)}.spec.ts`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('Replay script downloaded — run it with: npx playwright test --headed')
+  } catch {
+    toast.error('Could not build a replay script for this recording')
+  }
+}
+
 function ReplayPlayer({ recordingId }: { recordingId: string }) {
   const frameRef = useRef<HTMLDivElement>(null)
   const replayerRef = useRef<{
@@ -593,6 +618,17 @@ export function SessionReplaysPage() {
                             <Trash2 className='h-3.5 w-3.5' />
                           </button>
                         )}
+                        <button
+                          type='button'
+                          title='Download a Playwright script that replays this session'
+                          className='p-1 text-slate-300 opacity-0 transition-opacity hover:text-nvr-cyan group-hover:opacity-100'
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void downloadReplayScript(rec.id)
+                          }}
+                        >
+                          <Code2 className='h-3.5 w-3.5' />
+                        </button>
                       </div>
                     ))}
                   </div>

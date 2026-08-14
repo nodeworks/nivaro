@@ -3,6 +3,9 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { buildReplayPlan, renderPlaywrightScript } from '../services/session-replay-script.js'
+
+type RrwebEventLike = { type: number; timestamp: number; data?: Record<string, unknown> }
 
 /**
  * Session recording (rrweb) — opt-in, privacy-conscious screen replay.
@@ -151,6 +154,60 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       if (req.query.user) q.where('r.user', req.query.user)
       const rows = await q.offset((page - 1) * limit).limit(limit)
       return reply.send({ data: rows, page })
+    }
+  )
+
+  /**
+   * The same recording as a runnable Playwright script — watch a reported
+   * problem happen in a real browser instead of reading a description of it.
+   * Admin-only, like every other read here: a recording is someone's session.
+   */
+  app.get<{ Params: { id: string } }>(
+    '/:id/playwright',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const rec = (await db('nivaro_session_recordings as r')
+        .leftJoin('nivaro_users as u', 'u.id', 'r.user')
+        .where('r.id', req.params.id)
+        .first('r.id', 'r.started_at', 'u.first_name', 'u.last_name', 'u.email')) as
+        | Record<string, unknown>
+        | undefined
+      if (!rec) return reply.code(404).send({ error: 'Not found' })
+
+      const chunks = (await db('nivaro_session_events')
+        .where({ recording: req.params.id })
+        .orderBy('seq', 'asc')
+        .select('events')) as Array<{ events: string }>
+      const events: RrwebEventLike[] = []
+      for (const c of chunks) {
+        try {
+          events.push(...(JSON.parse(c.events) as RrwebEventLike[]))
+        } catch {
+          /* skip corrupt chunk — a partial replay beats none */
+        }
+      }
+      if (events.length === 0) return reply.code(404).send({ error: 'No events' })
+
+      const plan = buildReplayPlan(events)
+      const who =
+        [rec.first_name, rec.last_name].filter(Boolean).join(' ') || (rec.email as string) || null
+      const script = renderPlaywrightScript(plan, {
+        id: String(rec.id),
+        user: who,
+        startedAt: rec.started_at ? new Date(rec.started_at as string).toISOString() : null
+      })
+      await logActivity({
+        action: 'session-recording-export',
+        collection: 'nivaro_session_recordings',
+        item: String(rec.id),
+        user: req.user?.id,
+        comment: `playwright script: ${plan.steps.length} step(s), ${plan.maskedInputs} masked input(s)`,
+        req
+      })
+      return reply
+        .header('content-type', 'text/plain; charset=utf-8')
+        .header('content-disposition', `attachment; filename="replay-${String(rec.id).slice(0, 8)}.spec.ts"`)
+        .send(script)
     }
   )
 
