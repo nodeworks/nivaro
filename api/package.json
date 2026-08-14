@@ -20,6 +20,7 @@
     "sync:legacy-states": "tsx extensions/efp-ops/scripts/sync-legacy-states.ts",
     "sync:legacy-scopes": "tsx extensions/efp-ops/scripts/sync-legacy-scopes.ts",
     "fix:file-fks": "tsx extensions/efp-ops/scripts/repoint-file-fks.ts",
+    "fix:user-fks": "tsx extensions/efp-ops/scripts/repoint-user-fks.ts",
     "fix:junction-fields": "tsx extensions/efp-ops/scripts/fix-junction-fields.ts",
     "migrate:legacy-history": "tsx extensions/efp-ops/scripts/migrate-legacy-history.ts",
     "migrate:forecast-revisions": "tsx extensions/efp-ops/scripts/migrate-forecast-revisions.ts",
