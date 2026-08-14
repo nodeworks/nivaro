@@ -3020,16 +3020,42 @@ export function InlineTableField({
             </button>
           </div>
         </div>
+        {/* Derived values are what this row COMPUTES TO, not something to fill
+            in — as inputs' neighbours they read like fields left blank. They
+            get their own strip above the form, the way a record's header
+            summarises it. */}
+        {effectiveCols.some((c) => isPanelReadOnly(c)) && (
+          <div className='mb-3 flex flex-wrap items-stretch gap-x-6 gap-y-2 rounded-md bg-slate-50/80 px-3 py-2 dark:bg-muted/40'>
+            {effectiveCols.filter(isPanelReadOnly).map((c) => {
+              const label = c.label || titleCase(c.field)
+              const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+              return (
+                <div key={c.field} className='flex min-w-0 flex-col justify-start'>
+                  <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>
+                    {label}
+                  </span>
+                  <span className='mt-0.5 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                    {isComputedWrite
+                      ? renderCell(
+                          c,
+                          evalClientFormula(c.computed_formula as string, args.draft) ?? args.draft[c.field]
+                        )
+                      : isSummaryCol(c)
+                        ? summaryCellValue(c, args.draft, true)
+                        : renderCell(c, args.draft[c.field], args.rowId)}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
         <div
           className='grid items-start gap-x-4 gap-y-3'
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}
         >
-          {/* What you can change comes first; derived and read-only values are
-              reference material and collect at the end, in their table order. */}
-          {[...effectiveCols]
-            .map((c, i) => ({ c, i }))
-            .sort((a, b) => Number(isPanelReadOnly(a.c)) - Number(isPanelReadOnly(b.c)) || a.i - b.i)
-            .map(({ c }) => {
+          {effectiveCols
+            .filter((c) => !isPanelReadOnly(c))
+            .map((c) => {
             const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
             // A raw column name (LINE_TYPE, SUPPLIER_ITEM) is the table's
             // shorthand; a labelled form should read like prose.
