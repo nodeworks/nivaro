@@ -278,6 +278,12 @@ export interface ItemEditFormProps {
    *  outside the draft, so a caller deep-linking a prefilled record (generate
    *  a workflow from a PO, say) has no other way to hand them over. */
   initialLinks?: Record<string, unknown[]>
+  /** Seed staged child rows on a NEW record, keyed
+   *  `<child collection>.<foreign key field>`. Same reason as initialLinks:
+   *  o2m rows are queued outside the draft, so a caller generating a record
+   *  from another one (workflow lines from a purchase order's lines) cannot
+   *  hand them over through initialValues. */
+  initialRows?: Record<string, Array<Record<string, unknown>>>
 }
 
 export interface HeaderWidgetInfo {
@@ -537,7 +543,8 @@ export function ItemEditForm({
   onHeaderWidgets,
   initialImportResult,
   initialValues,
-  initialLinks
+  initialLinks,
+  initialRows
 }: ItemEditFormProps) {
   const client = useNivaroClient()
   const fetchCfg = useApiFetchConfig()
@@ -1422,7 +1429,12 @@ export function ItemEditForm({
   // common values", AI hand-offs). Keys the user already edited win.
   const appliedInitialValuesRef = useRef(false)
   useEffect(() => {
-    if (!isNew || (!initialValues && !initialLinks) || appliedInitialValuesRef.current) return
+    if (
+      !isNew ||
+      (!initialValues && !initialLinks && !initialRows) ||
+      appliedInitialValuesRef.current
+    )
+      return
     appliedInitialValuesRef.current = true
     if (initialValues) {
       setDraft((d) => ({ ...initialValues, ...d }))
@@ -1439,8 +1451,19 @@ export function ItemEditForm({
         return next
       })
     }
+    if (initialRows) {
+      // Queued like rows the user added by hand, so the grid renders them and
+      // the normal save path writes them against the new record's id.
+      setPendingO2MRows((prev) => {
+        const next = new Map(prev)
+        for (const [key, rows] of Object.entries(initialRows)) {
+          if (!next.has(key) && rows.length) next.set(key, [...rows])
+        }
+        return next
+      })
+    }
     setIsDirty(true)
-  }, [isNew, initialValues, initialLinks])
+  }, [isNew, initialValues, initialLinks, initialRows])
 
   useEffect(() => {
     if (!isNew || !initialImportResult || appliedInitialImportRef.current) return
