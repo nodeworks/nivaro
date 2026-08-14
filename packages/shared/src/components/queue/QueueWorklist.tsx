@@ -16,12 +16,14 @@ import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
+  ChevronDown,
   Filter,
   Flame,
   GripVertical,
   PanelLeftClose,
   Pin,
   Play,
+  Plus,
   RefreshCw,
   Rows3,
   Save,
@@ -46,7 +48,7 @@ import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-valu
 import { buildGroups } from '../../lib/queue-grouping'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { RowHighlightLegend } from '../RowHighlightLegend'
-import { cn, formatDate, formatDateTime, formatNumber } from '../../lib/utils'
+import { titleCase, cn, formatDate, formatDateTime, formatNumber } from '../../lib/utils'
 import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import {
   type Column,
@@ -525,6 +527,22 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // Import-from-file entry point targets the first collection-type source —
   // same rule the item_layout builder list uses (admin/src/pages/Queues.tsx).
   const importCollection = queue?.sources?.find((s) => s.type === 'collection')?.collection ?? null
+
+  // Collections this queue draws from, so someone can add work to it without
+  // leaving for the collection browser. Curation, not security — the same
+  // posture as the browser's own New button: the items service still enforces
+  // create permission on save.
+  const creatableCollections = useMemo(() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const src of queue?.sources ?? []) {
+      if (src.type !== 'collection' || !src.collection) continue
+      if (seen.has(src.collection)) continue
+      seen.add(src.collection)
+      out.push(src.collection)
+    }
+    return out
+  }, [queue?.sources])
 
   // Every queue defaults to priority order — the table's default order IS the
   // triage order. Materialized queues serve priority sorts from a narrow scan
@@ -2284,6 +2302,57 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 <Play className='h-3 w-3 fill-current' />
                 Work Next
               </button>
+            )}
+            {creatableCollections.length === 1 && (
+              <button
+                type='button'
+                onClick={() =>
+                  itemNav.open({
+                    collection: creatableCollections[0],
+                    itemId: 'new',
+                    // Open a new record on the same layout the queue opens
+                    // existing ones with, so creating and reviewing match.
+                    layoutSlug: displayConfig?.item_layout ?? null
+                  })
+                }
+                className='flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted'
+              >
+                <Plus className='h-3.5 w-3.5' />
+                New {titleCase(creatableCollections[0])}
+              </button>
+            )}
+            {creatableCollections.length > 1 && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type='button'
+                    className='flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted'
+                  >
+                    <Plus className='h-3.5 w-3.5' />
+                    New
+                    <ChevronDown className='h-3 w-3 opacity-60' />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align='end' className='w-56 p-1'>
+                  {creatableCollections.map((c) => (
+                    <button
+                      key={c}
+                      type='button'
+                      onClick={() =>
+                        itemNav.open({
+                          collection: c,
+                          itemId: 'new',
+                          layoutSlug: displayConfig?.item_layout ?? null
+                        })
+                      }
+                      className='flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
+                    >
+                      <Plus className='h-3 w-3 opacity-60' />
+                      {titleCase(c)}
+                    </button>
+                  ))}
+                </PopoverContent>
+              </Popover>
             )}
             {importCollection && navigate && (
               <ImportFromFileButton
