@@ -41,7 +41,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     return reply.send({ data: { enabled: await recordingEnabled() } })
   })
 
-  app.post<{ Body: { app?: string } }>(
+  app.post<{ Body: { app?: string; origin?: string } }>(
     '/start',
     { preHandler: requireAuth },
     async (req, reply) => {
@@ -50,10 +50,26 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       }
       const id = randomUUID()
       const appLabel = typeof req.body?.app === 'string' ? req.body.app.slice(0, 100) : null
+      // Where this happened. Taken from the client's own origin, falling back
+      // to the request's host — a recording whose environment is unknown is
+      // hard to act on, and the referer is the closest thing we have.
+      const claimed = typeof req.body?.origin === 'string' ? req.body.origin.slice(0, 255) : ''
+      const referer = typeof req.headers.referer === 'string' ? req.headers.referer : ''
+      const origin =
+        claimed ||
+        (() => {
+          try {
+            return referer ? new URL(referer).origin : ''
+          } catch {
+            return ''
+          }
+        })() ||
+        null
       await db('nivaro_session_recordings').insert({
         id,
         user: req.user!.id,
         app: appLabel,
+        origin,
         started_at: new Date(),
         last_event_at: new Date()
       })
@@ -141,6 +157,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           'r.id',
           'r.user',
           'r.app',
+          'r.origin',
           'r.started_at',
           'r.ended_at',
           'r.last_event_at',

@@ -62,7 +62,11 @@ export function useSessionRecorder() {
 
     async function start() {
       try {
-        const r = await api.post<{ data: { id: string } }>('/session-recordings/start')
+        // Tell the server where this is happening — a replay list that cannot
+        // distinguish production from a developer's laptop is hard to act on.
+        const r = await api.post<{ data: { id: string } }>('/session-recordings/start', {
+          origin: window.location.origin
+        })
         if (cancelled) return
         state.recordingId = r.data.data.id
         const { record } = await import('rrweb')

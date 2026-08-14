@@ -21,6 +21,7 @@ interface Recording {
   id: string
   user: string
   app: string | null
+  origin: string | null
   user_name: string | null
   started_at: string
   ended_at: string | null
@@ -76,6 +77,52 @@ async function downloadReplayScript(recordingId: string) {
   } catch {
     toast.error('Could not build a replay script for this recording')
   }
+}
+
+
+/**
+ * Which environment a session happened on. The list is otherwise a wall of
+ * near-identical rows, and this is the fact that decides whether a recording
+ * explains a production report or someone poking about locally — it also picks
+ * the target for the replay script.
+ *
+ * The host is shown on hover: "production" is an inference from the name, and
+ * the reader should be able to check it.
+ */
+function EnvironmentBadge({ origin }: { origin: string | null }) {
+  if (!origin) {
+    return (
+      <span
+        title='Recorded before the environment was captured'
+        className='shrink-0 rounded border border-dashed border-slate-200 px-1.5 py-px text-[10.5px] text-slate-400 dark:border-border'
+      >
+        unknown
+      </span>
+    )
+  }
+  let host = origin
+  try {
+    host = new URL(origin).host
+  } catch {
+    /* keep the raw value — it is still more use than nothing */
+  }
+  const lower = host.toLowerCase()
+  const env = /localhost|127\.0\.0\.1|\[::1\]/.test(lower)
+    ? 'local'
+    : /(^|[.-])(staging|stage|uat|test|dev)([.-]|$)/.test(lower)
+      ? 'staging'
+      : 'production'
+  const tone =
+    env === 'production'
+      ? 'border-red-200 text-red-600 dark:border-red-900/40 dark:text-red-400'
+      : env === 'staging'
+        ? 'border-amber-200 text-amber-700 dark:border-amber-900/40 dark:text-amber-400'
+        : 'border-slate-200 text-slate-500 dark:border-border'
+  return (
+    <span title={host} className={`shrink-0 rounded border px-1.5 py-px text-[10.5px] ${tone}`}>
+      {env}
+    </span>
+  )
 }
 
 function ReplayPlayer({ recordingId }: { recordingId: string }) {
@@ -584,6 +631,7 @@ export function SessionReplaysPage() {
                         <span className='shrink-0 rounded border border-slate-200 px-1.5 py-px text-[10.5px] text-slate-500 dark:border-border'>
                           {rec.app ?? 'admin'}
                         </span>
+                        <EnvironmentBadge origin={rec.origin} />
                         {rec.truncated && (
                           <span className='shrink-0 text-[10.5px] text-amber-600'>truncated</span>
                         )}

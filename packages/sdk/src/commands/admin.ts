@@ -608,9 +608,21 @@ export function sessionRecordingEnabled(): Command<{ data: { enabled: boolean } 
   return cmd('GET', '/session-recordings/enabled')
 }
 
-/** Open a recording. `app` labels which frontend it came from. */
-export function startSessionRecording(app?: string): Command<{ data: { id: UUID } }> {
-  return cmd('POST', '/session-recordings/start', undefined, app ? { app } : {})
+/**
+ * Open a recording. `app` labels which frontend it came from; `origin` says
+ * which environment, so a replay list can tell production apart from a
+ * developer's laptop. The server falls back to the request's referer when a
+ * caller omits it.
+ */
+export function startSessionRecording(
+  app?: string,
+  origin?: string
+): Command<{ data: { id: UUID } }> {
+  const body: Record<string, string> = {}
+  if (app) body.app = app
+  const resolved = origin ?? (typeof window !== 'undefined' ? window.location.origin : undefined)
+  if (resolved) body.origin = resolved
+  return cmd('POST', '/session-recordings/start', undefined, body)
 }
 
 /** Append an ordered chunk of rrweb events to an open recording. */
