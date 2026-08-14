@@ -1,4 +1,5 @@
 import { readItems } from '@nivaro/sdk'
+import { toast } from 'sonner'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from 'react'
 import { useNivaroClient } from '../../context'
@@ -483,14 +484,54 @@ export function useCreateChannel() {
   })
 }
 
-/** Chirp when total unread grows (module-level watermark — mount once). */
+/**
+ * Chirp and toast when unread grows (module-level watermarks — mount once).
+ *
+ * A sound alone says only "something happened": the person still has to open
+ * the panel to learn what, which is the same work as not being told. Passing
+ * the rooms lets the toast name the sender or channel, so it can be ignored on
+ * sight when it does not matter.
+ *
+ * Per-room watermarks rather than a total, because two rooms each gaining one
+ * message is indistinguishable from one gaining two if you only track the sum —
+ * and the toast has to name a room. Muted rooms are excluded here exactly as
+ * they are from the badge.
+ */
 let prevUnread = 0
-export function useUnreadChirp(totalUnread: number) {
+const prevByRoom = new Map<string, number>()
+export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
   const cfg = useChatConfig()
   useEffect(() => {
-    if (cfg.sound && totalUnread > prevUnread) playChirp()
+    const grew = totalUnread > prevUnread
+    if (cfg.sound && grew) playChirp()
+
+    if (rooms) {
+      // First pass seeds the watermarks; toasting then would announce every
+      // unread that already existed when the app loaded.
+      const seeded = prevByRoom.size > 0
+      for (const r of rooms) {
+        const before = prevByRoom.get(r.room) ?? 0
+        if (seeded && !r.muted && r.unread > before) {
+          const last = r.lastMessage
+          const who = last?.sender_name ? String(last.sender_name).trim() : null
+          toast(
+            r.kind === 'dm'
+              ? `New message from ${who || r.label}`
+              : `New message in ${r.label}${who ? ` — ${who}` : ''}`,
+            {
+              description: last?.message
+                ? String(last.message).replace(/<[^>]*>/g, '').slice(0, 90)
+                : undefined,
+              duration: 4000
+            }
+          )
+        }
+        prevByRoom.set(r.room, r.unread)
+      }
+    }
+
     prevUnread = totalUnread
-  }, [totalUnread, cfg.sound])
+  }, [totalUnread, cfg.sound, rooms])
 }
 
 // ── Read watermarks ──────────────────────────────────────────────────────────

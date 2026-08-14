@@ -118,8 +118,8 @@ function DockInner() {
     name?: string
     nonce: number
   } | null>(null)
-  const { totalUnread } = useChatRooms()
-  useUnreadChirp(totalUnread)
+  const { totalUnread, rooms } = useChatRooms()
+  useUnreadChirp(totalUnread, rooms)
 
   // UserChip "Send message" → open the slide-over on that DM. The dock is
   // mounted app-wide, so the action works from any page.
