@@ -272,6 +272,12 @@ export interface ItemEditFormProps {
    *  values (deep-link prefill, "create from common values", AI hand-offs).
    *  User edits made before the seed applies win over seeded keys. */
   initialValues?: Record<string, unknown>
+  /** Seed staged m2m links on a NEW record, keyed
+   *  `<junction collection>.<junction field>` — the same staging key the save
+   *  path resolves. initialValues cannot express these: m2m links are held
+   *  outside the draft, so a caller deep-linking a prefilled record (generate
+   *  a workflow from a PO, say) has no other way to hand them over. */
+  initialLinks?: Record<string, unknown[]>
 }
 
 export interface HeaderWidgetInfo {
@@ -530,7 +536,8 @@ export function ItemEditForm({
   extraBottomContent,
   onHeaderWidgets,
   initialImportResult,
-  initialValues
+  initialValues,
+  initialLinks
 }: ItemEditFormProps) {
   const client = useNivaroClient()
   const fetchCfg = useApiFetchConfig()
@@ -1415,12 +1422,25 @@ export function ItemEditForm({
   // common values", AI hand-offs). Keys the user already edited win.
   const appliedInitialValuesRef = useRef(false)
   useEffect(() => {
-    if (!isNew || !initialValues || appliedInitialValuesRef.current) return
+    if (!isNew || (!initialValues && !initialLinks) || appliedInitialValuesRef.current) return
     appliedInitialValuesRef.current = true
-    setDraft((d) => ({ ...initialValues, ...d }))
-    draftRef.current = { ...initialValues, ...draftRef.current }
+    if (initialValues) {
+      setDraft((d) => ({ ...initialValues, ...d }))
+      draftRef.current = { ...initialValues, ...draftRef.current }
+    }
+    if (initialLinks) {
+      // Staged like any user-made selection, so the fields render populated and
+      // the normal save path writes the junction rows.
+      setM2mLinks((prev) => {
+        const next = new Map(prev)
+        for (const [key, ids] of Object.entries(initialLinks)) {
+          if (!next.has(key) && ids.length) next.set(key, [...ids])
+        }
+        return next
+      })
+    }
     setIsDirty(true)
-  }, [isNew, initialValues])
+  }, [isNew, initialValues, initialLinks])
 
   useEffect(() => {
     if (!isNew || !initialImportResult || appliedInitialImportRef.current) return
