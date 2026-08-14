@@ -20,3 +20,24 @@ export const O2MStagingContext = createContext<O2MStagingCtx | null>(null)
 export function useO2MStaging() {
   return useContext(O2MStagingContext)
 }
+
+/**
+ * Lets a grid publish the rows it is CURRENTLY showing (saved rows merged with
+ * staged edits, deletes and new rows, with write-computed fields applied) so a
+ * parent-level rollup can be recomputed live — see live-rollups.ts.
+ *
+ * Publishing rather than reading: the grid already owns this merge, and its
+ * react-query key varies per grid (row filters are part of it), so reaching in
+ * from outside would be guesswork. A grid that is not mounted publishes
+ * nothing, and the rollup falls back to the stored value.
+ */
+export interface LiveRowsCtx {
+  report: (relatedCollection: string, fkField: string, rows: Record<string, unknown>[] | null) => void
+  rows: Map<string, Record<string, unknown>[]>
+}
+
+export const LiveRowsContext = createContext<LiveRowsCtx | null>(null)
+
+export function useLiveRows() {
+  return useContext(LiveRowsContext)
+}

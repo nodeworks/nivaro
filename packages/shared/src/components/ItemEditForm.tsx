@@ -29,7 +29,14 @@ import { useAutoIdPreview } from './item-edit/AutoIdPreviewField'
 import { m2aWriteMeta } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import { AddendumFieldContext, AddendumO2MContext, AddendumViewContext, type AddendumFieldMap, type AddendumO2MMap } from './item-edit/AddendumFieldContext'
-import { O2MStagingContext, type O2MStagingCtx } from './item-edit/O2MStagingContext'
+import {
+  LiveRowsContext,
+  type LiveRowsCtx,
+  O2MStagingContext,
+  type O2MStagingCtx
+} from './item-edit/O2MStagingContext'
+import { computeLiveRollup, parseRollupSources } from './item-edit/live-rollups'
+import { evalClientFormula } from './item-edit/InlineTableField'
 import { StepsBar } from './item-edit/StepsBar'
 import { SummaryPanel } from './item-edit/SummaryPanel'
 import type {
@@ -2050,6 +2057,132 @@ export function ItemEditForm({
     if (!a?.data) return null
     return Object.fromEntries(Object.entries(a.data).filter(([, v]) => !Array.isArray(v)))
   }, [addendumViewId, addendumData])
+
+  // Live rollups: a grid publishes the rows it is showing, and a header field
+  // whose value is a rollup over those rows recomputes as they change — so a
+  // total agrees with the lines under it before the save round-trip that makes
+  // the server recalculate it. Display only; nothing is written from here.
+  const [liveRowsByRelation, setLiveRowsByRelation] = useState<Map<string, Record<string, unknown>[]>>(
+    new Map()
+  )
+  // Which child fields any rollup actually reads, per relation — the signature
+  // below is built from these alone, so an unrelated edit (a note, a date)
+  // cannot churn the live total.
+  const rollupFieldsByRelation = useMemo(() => {
+    const out = new Map<string, string[]>()
+    for (const f of fieldConfig ?? []) {
+      if (f.computed_type !== 'rollup' || !f.computed_formula) continue
+      for (const src of parseRollupSources(f.computed_formula)) {
+        const key = `${src.related_collection}.${src.fk_field}`
+        const wanted = new Set(out.get(key) ?? ['id'])
+        if (src.value_field) wanted.add(src.value_field)
+        for (const k of Object.keys(src.filter ?? {})) wanted.add(k)
+        for (const m of (src.value_formula ?? '').matchAll(/\{\{([\w.]+)\}\}/g)) {
+          wanted.add(String(m[1]).split('.')[0])
+        }
+        out.set(key, [...wanted])
+      }
+    }
+    return out
+  }, [fieldConfig])
+  const rollupFieldsRef = useRef(rollupFieldsByRelation)
+  rollupFieldsRef.current = rollupFieldsByRelation
+  const liveRowsSigRef = useRef(new Map<string, string>())
+
+  /**
+   * Compare by CONTENT, not identity: a grid rebuilds its merged row array on
+   * every render, so an identity check would re-set state forever (React's
+   * "Maximum update depth exceeded"). Signing only the rollup-relevant fields
+   * means an unchanged grid costs one string compare and sets no state at all,
+   * which is what terminates the loop.
+   */
+  const reportLiveRows = useCallback<LiveRowsCtx['report']>((relatedCollection, fkField, rows) => {
+    const key = `${relatedCollection}.${fkField}`
+    if (rows === null) {
+      if (!liveRowsSigRef.current.has(key)) return
+      liveRowsSigRef.current.delete(key)
+      setLiveRowsByRelation((prev) => {
+        if (!prev.has(key)) return prev
+        const next = new Map(prev)
+        next.delete(key)
+        return next
+      })
+      return
+    }
+    const wanted = rollupFieldsRef.current.get(key)
+    // No rollup reads this relation — publishing it would be pure churn.
+    if (!wanted) return
+    const sig = rows.map((r) => wanted.map((k) => String(r[k] ?? '')).join('\u0001')).join('\u0002')
+    if (liveRowsSigRef.current.get(key) === sig) return
+    liveRowsSigRef.current.set(key, sig)
+    setLiveRowsByRelation((prev) => new Map(prev).set(key, rows))
+  }, [])
+  const liveRowsCtx = useMemo<LiveRowsCtx>(
+    () => ({ rows: liveRowsByRelation, report: reportLiveRows }),
+    [liveRowsByRelation, reportLiveRows]
+  )
+
+  // A grid only publishes rows while it is mounted, so on a tabbed form the
+  // total would stay blank until the user visited the lines tab. On a NEW
+  // record we do not need the grid at all: every child row is staged right
+  // here. (A SAVED record needs no fallback — its stored value is the server's
+  // own rollup and is already correct.)
+  const stagedRollupRelations = useMemo(() => {
+    if (!isNew) return [] as Array<{ key: string; collection: string; rows: Record<string, unknown>[] }>
+    const out: Array<{ key: string; collection: string; rows: Record<string, unknown>[] }> = []
+    for (const key of rollupFieldsByRelation.keys()) {
+      if (liveRowsByRelation.has(key)) continue
+      const rows = pendingO2MRows.get(key) ?? []
+      if (rows.length === 0) continue
+      out.push({ key, collection: key.split('.')[0], rows })
+    }
+    return out
+  }, [isNew, rollupFieldsByRelation, liveRowsByRelation, pendingO2MRows])
+
+  // Child field config, only for those relations — a staged row carries what
+  // the user entered, not what the server derives from it (amount = price x
+  // quantity), and summing the raw rows would report a total of zero.
+  const stagedChildConfigs = useQueries({
+    queries: stagedRollupRelations.map((r) => ({
+      queryKey: ['field-config', r.collection, null],
+      queryFn: () =>
+        client.request<{ data: CMSField[] }>(get(`/field-config/${r.collection}`)).then((res) => res.data ?? []),
+      staleTime: 60_000
+    }))
+  })
+
+  const stagedRowsByRelation = useMemo(() => {
+    const out = new Map<string, Record<string, unknown>[]>()
+    stagedRollupRelations.forEach((rel, idx) => {
+      const cfg = stagedChildConfigs[idx]?.data
+      if (!cfg) return
+      const writes = cfg.filter((f) => f.computed_type === 'write' && !!f.computed_formula)
+      out.set(
+        rel.key,
+        rel.rows.map((row) => {
+          const next = { ...row }
+          for (const f of writes) {
+            const v = evalClientFormula(String(f.computed_formula), next)
+            if (v !== null) next[f.field] = v
+          }
+          return next
+        })
+      )
+    })
+    return out
+  }, [stagedRollupRelations, stagedChildConfigs])
+
+  const liveRollupValues = useMemo(() => {
+    const out = new Map<string, number>()
+    for (const f of fieldConfig ?? []) {
+      if (f.computed_type !== 'rollup' || !f.computed_formula) continue
+      const merged = new Map(liveRowsByRelation)
+      for (const [k, v] of stagedRowsByRelation) if (!merged.has(k)) merged.set(k, v)
+      const value = computeLiveRollup(parseRollupSources(f.computed_formula), merged)
+      if (value !== null) out.set(f.field, value)
+    }
+    return out
+  }, [fieldConfig, liveRowsByRelation, stagedRowsByRelation])
 
   const effectiveDraft = useMemo(
     () => addendumViewData ? { ...draft, ...addendumViewData } : draft,
@@ -4148,6 +4281,7 @@ export function ItemEditForm({
     <ParentDraftContext.Provider value={{ draft: parentDraftWithAliases, collection, dirtyFields: userTouchedRef.current }}>
     <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>
     <O2MStagingContext.Provider value={o2mStagingCtx}>
+    <LiveRowsContext.Provider value={liveRowsCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
       {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a
@@ -4596,7 +4730,13 @@ export function ItemEditForm({
                 // source SummaryPanel uses). Without this every M2M header
                 // field renders '—' regardless of how many links exist.
                 const aliasState = m2mAliasFieldStates[f.field]
-                const raw = aliasState ? aliasState.ids : effectiveDraft[f.field]
+                // A rollup header reads the live total while its grid is on
+                // screen; otherwise the stored value, which is what the server
+                // will recalculate to anyway.
+                const liveRollup = liveRollupValues.get(f.field)
+                const raw = aliasState
+                  ? aliasState.ids
+                  : (liveRollup ?? effectiveDraft[f.field])
                 // Addendum view: a header value the addendum CHANGES reads amber,
                 // matching the proposed-change styling everywhere else.
                 const changedByAddendum =
@@ -4782,6 +4922,7 @@ export function ItemEditForm({
         </div>
       </div>
     </M2MStagingContext.Provider>
+    </LiveRowsContext.Provider>
     </O2MStagingContext.Provider>
     </GridFlushContext.Provider>
     </ParentDraftContext.Provider>

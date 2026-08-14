@@ -65,7 +65,7 @@ import {
   SheetHeader,
   SheetTitle
 } from '../ui/sheet'
-import { useO2MStaging } from './O2MStagingContext'
+import { type LiveRowsCtx, useLiveRows, useO2MStaging } from './O2MStagingContext'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
@@ -202,6 +202,10 @@ export interface RowBulkActionConfig {
   confirm?: string
   variant?: 'default' | 'danger'
 }
+
+/** Rows a grid loads for one parent. Also the point past which a live rollup
+ *  refuses to sum, since the set on screen is no longer the whole set. */
+const O2M_ROW_LIMIT = 200
 
 export function evalClientFormula(formula: string, row: Record<string, unknown>): number | null {
   // Handles both `item.fieldname` and `{{fieldname}}` token syntax
@@ -1204,6 +1208,7 @@ export function InlineTableField({
   const drill = useDrilldown()
   const qc = useQueryClient()
   const staging = useO2MStaging()
+  const liveRows = useLiveRows()
   const addendumO2MEntries = useAddendumO2M()[parentFieldKey ?? ''] ?? []
   const isNew = parentId === 'new'
   const parentDraftCtx = useParentDraft()
@@ -1273,7 +1278,7 @@ export function InlineTableField({
     client.request<{ data: Record<string, unknown>[] }>(
       get(`/items/${relatedCollection}`, {
         filter: JSON.stringify({ [manyField]: { _eq: prefillParentId } }),
-        limit: 200
+        limit: O2M_ROW_LIMIT
       })
     ).then((r) => {
       for (const row of r.data ?? []) staging.queueRow(relatedCollection, manyField, { __prefilled: true, ...row })
@@ -1523,6 +1528,7 @@ export function InlineTableField({
 
   const isPendingMode = saveMode === 'pending'
   const pendingRows = staging ? staging.getPendingRows(relatedCollection, manyField) : []
+
   const pendingEdits = isPendingMode && staging ? staging.getPendingEdits(relatedCollection, manyField) : new Map<string, Record<string, unknown>>()
   const pendingDeletes = isPendingMode && staging ? staging.getPendingDeletes(relatedCollection, manyField) : new Set<string>()
 
@@ -1782,6 +1788,72 @@ export function InlineTableField({
       junctionOtherField: companion.many_field
     }
   }
+  // Rows exactly as shown: saved rows minus staged deletes, with staged edits
+  // merged, plus staged new rows — each through applyComputedFields so a
+  // derived column (amount = price x quantity) reflects an in-flight edit.
+  // Staged state is small (only what the user has touched), so stringifying it
+  // per render is cheap — and it is what makes the memo below stable.
+  const stagedSignature =
+    JSON.stringify([...pendingEdits.entries()]) +
+    '|' +
+    [...pendingDeletes].sort().join(',') +
+    '|' +
+    JSON.stringify(pendingRows)
+
+  const effectiveRowsForRollup = useMemo(() => {
+    const base = [
+      ...(rows ?? [])
+        .filter((r) => !pendingDeletes.has(String(r.id)))
+        .map((r) => {
+          const rid = String(r.id)
+          const merged = pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
+          return applyComputedFields(merged as Record<string, unknown>)
+        }),
+      ...pendingRows.map((r) => applyComputedFields(r as Record<string, unknown>))
+    ]
+    // Fold in the row being typed into RIGHT NOW, so a total tracks the number
+    // under the cursor instead of waiting for the edit to be committed — which
+    // is what "live" means to someone watching both figures at once.
+    if (editState) {
+      const draft = applyComputedFields({ ...editState.draft })
+      const pendingIdx = editState.rowId.startsWith('pending:')
+        ? Number(editState.rowId.slice('pending:'.length))
+        : -1
+      const at =
+        pendingIdx >= 0
+          ? base.length - pendingRows.length + pendingIdx
+          : base.findIndex((r) => String(r.id) === editState.rowId)
+      if (at >= 0 && at < base.length) base[at] = draft
+    }
+    return base
+    // biome-ignore lint/correctness/useExhaustiveDependencies: staged state rides in via stagedSignature; the getters return fresh objects each render
+  }, [rows, stagedSignature, editState])
+
+  // The grid fetches at most O2M_ROW_LIMIT rows. Past that it holds a PARTIAL
+  // set, and a total summed from it would be confidently wrong — worse than the
+  // stored figure it would replace. Withhold rows instead.
+  const rowsTruncated = rawRows.length >= O2M_ROW_LIMIT
+
+  const reportLiveRows = liveRows?.report
+  useEffect(() => {
+    if (!reportLiveRows) return
+    // No cleanup here on purpose. An effect's cleanup runs before EVERY re-run,
+    // not just on unmount, so withdrawing the rows here made this alternate
+    // set -> delete -> set and never settle ("Maximum update depth exceeded").
+    // Withdrawal belongs to the unmount-only effect below.
+    if (rowsTruncated || rowsLoading) {
+      reportLiveRows(relatedCollection, manyField, null)
+      return
+    }
+    reportLiveRows(relatedCollection, manyField, effectiveRowsForRollup)
+  }, [reportLiveRows, relatedCollection, manyField, effectiveRowsForRollup, rowsTruncated, rowsLoading])
+
+  // Unmount only (a tab closed, the field hidden): stop contributing, so a
+  // rollup falls back to the stored value instead of a stale snapshot.
+  const withdrawRef = useRef<() => void>(() => {})
+  withdrawRef.current = () => reportLiveRows?.(relatedCollection, manyField, null)
+  useEffect(() => () => withdrawRef.current(), [])
+
   const displayCols = cols.filter(
     (c) =>
       !c.hidden &&
