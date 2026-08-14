@@ -1,6 +1,7 @@
 import { Liquid } from 'liquidjs'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
+import { changeSignature, type PushWhen, shouldPush } from './erp-push-gate.js'
 import { callExternalApi } from './external-apis.js'
 import { evalConditionRule, type ConditionRule } from './workflow-conditions.js'
 
@@ -86,6 +87,9 @@ interface TransitionActionDef {
    *  = "has an MWF id from either source"). OR-semantics counterpart to guard's
    *  AND rules. */
   skip_unless_any?: string[]
+  /** When to push at all — see services/erp-push-gate.ts. Absent = every
+   *  transition, which is how this behaved before the option existed. */
+  push_when?: PushWhen
   // create_record type only:
   target_collection?: string
   skip_if_exists?: { match_field: string; value_template: string }
@@ -482,6 +486,49 @@ export async function runTransitionActions(opts: {
       })
       if (!anySet) continue
     }
+    // Change gate: does this integration care about what just happened?
+    const signature = changeSignature(record, action.push_when?.fields)
+    if (action.push_when) {
+      let lastSignature: string | null | undefined
+      try {
+        const prior = (await db('nivaro_erp_submissions')
+          .where({ collection, item: String(item) })
+          .whereIn('status', ['accepted', 'pending'])
+          .orderBy('created_at', 'desc')
+          .first('change_signature', 'payload')) as
+          | { change_signature: string | null; payload: string | null }
+          | undefined
+        // Same endpoint only — two integrations on one record must not read as
+        // each other's history.
+        const samePath = prior?.payload
+          ? (() => {
+              try {
+                return (
+                  (JSON.parse(prior.payload) as { endpoint_path?: string }).endpoint_path ===
+                  action.endpoint_path
+                )
+              } catch {
+                return false
+              }
+            })()
+          : false
+        lastSignature = samePath ? prior?.change_signature : null
+      } catch {
+        // No history readable — treat as a first push rather than skipping.
+        lastSignature = null
+      }
+      if (
+        !shouldPush({
+          pushWhen: action.push_when,
+          stateChanged: !!opts.newStateObj,
+          signature,
+          lastSignature
+        })
+      ) {
+        continue
+      }
+    }
+
     const scope = {
       record,
       context,
@@ -557,7 +604,10 @@ export async function runTransitionActions(opts: {
       body,
       status,
       error,
-      responseBody
+      responseBody,
+      // Only a push that LANDED defines "what they already know" — recording a
+      // signature for a failure would suppress the retry that fixes it.
+      status === 'failed' ? null : signature
     )
 
     const postScope = { ...scope, response: responseBody, responses, error }
@@ -745,7 +795,8 @@ async function recordSubmission(
   body: Record<string, unknown> | null,
   status: 'pending' | 'accepted' | 'failed',
   error: string | null,
-  responseBody?: unknown
+  responseBody?: unknown,
+  signature?: string | null
 ): Promise<void> {
   try {
     const now = new Date()
@@ -759,6 +810,7 @@ async function recordSubmission(
       last_error: error,
       payload: JSON.stringify({ endpoint_path: endpointPath, body }),
       response: serializeResponseBody(responseBody),
+      change_signature: signature ?? null,
       created_at: now,
       updated_at: now
     })
