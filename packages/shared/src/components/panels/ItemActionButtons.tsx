@@ -48,6 +48,12 @@ export function ItemActionButtons({
       toast.success((res as { data?: { message?: string } })?.data?.message ?? 'Action completed')
       void qc.invalidateQueries({ queryKey: ['item', collection, String(itemId)] })
       void qc.invalidateQueries({ queryKey: ['erp-submissions', collection, String(itemId)] })
+      // An action can change the record's CHILDREN too — Push to Fusion stamps
+      // the requisition id onto every line — and those live in their own
+      // queries, so refreshing the record alone left the grid showing stale
+      // values until a manual page reload.
+      void qc.invalidateQueries({ queryKey: ['o2m-rows'] })
+      void qc.invalidateQueries({ queryKey: ['pipeline-instance', collection, String(itemId)] })
     },
     onError: (err, action) => {
       // SDK attaches the parsed error body as `response` — show the full
