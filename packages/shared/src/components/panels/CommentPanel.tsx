@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, MessageSquare, Pencil, Trash2, X } from 'lucide-react'
 import type React from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
@@ -213,6 +213,57 @@ function MentionTextarea({
   )
 }
 
+/** A note recorded elsewhere on the record. Never editable here: it belongs to
+ *  the transition, change or addendum that captured it. */
+interface RelatedNote {
+  id: string
+  source: 'transition' | 'change_reason' | 'addendum'
+  label: string
+  text: string
+  context: string | null
+  user_name: string | null
+  created_at: string
+}
+
+/**
+ * A note the system recorded rather than a comment someone posted here: the
+ * text is the person's, but it lives with the transition, change or addendum
+ * that captured it — so it reads as part of the thread while being visibly not
+ * a comment, and carries no edit or delete affordance.
+ */
+function RecordedNote({ note }: { note: RelatedNote }) {
+  const tone =
+    note.source === 'transition'
+      ? 'border-nvr-cyan/30 bg-nvr-cyan/[0.06] text-nvr-navy dark:text-nvr-cyan'
+      : note.source === 'addendum'
+        ? 'border-amber-200 bg-amber-50/60 text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-400'
+        : 'border-slate-200 bg-slate-50/80 text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'
+  return (
+    <div className='flex gap-3' data-recorded-note={note.source}>
+      <div className='mt-1 h-8 w-8 shrink-0' aria-hidden />
+      <div className='min-w-0 flex-1'>
+        <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
+          <span className={`rounded border px-1.5 py-px text-[10px] font-medium ${tone}`}>
+            {note.label}
+          </span>
+          {note.user_name && (
+            <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+              {note.user_name}
+            </span>
+          )}
+          {note.context && (
+            <span className='truncate text-[11px] text-slate-400'>{note.context}</span>
+          )}
+          <span className='text-[11px] text-slate-400'>{formatRelative(note.created_at)}</span>
+        </div>
+        <p className='mt-1 whitespace-pre-wrap break-words text-[13px] leading-snug text-slate-600 dark:text-slate-300'>
+          {note.text}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export function CommentPanel({
   collection,
   item,
@@ -256,6 +307,32 @@ export function CommentPanel({
   })
 
   const comments: Comment[] = data ?? []
+
+  // Everything else anyone wrote about this record — transition comments,
+  // change reasons (including ones left on child rows, like a forecast's
+  // justification) and addendum reasons. They belong in the same thread: a
+  // reader looking for "what did people say about this" should not have to
+  // know which panel each note happened to be typed into.
+  const { data: relatedData } = useQuery<RelatedNote[]>({
+    queryKey: ['comments-related', collection, String(item)],
+    queryFn: () =>
+      client
+        .request<{ data: RelatedNote[] }>(get('/comments/related', { collection, item }))
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    enabled: !isNew,
+    staleTime: 30_000
+  })
+  const related: RelatedNote[] = relatedData ?? []
+
+  /** One time-ordered thread: written comments and recorded notes together. */
+  const threadEntries = useMemo(() => {
+    const own = comments.map((c) => ({ kind: 'comment' as const, at: c.created_at, comment: c }))
+    const rel = related.map((r) => ({ kind: 'related' as const, at: r.created_at, note: r }))
+    return [...own, ...rel].sort(
+      (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()
+    )
+  }, [comments, related])
 
   const create = useMutation({
     mutationFn: (text: string) => client.request(post('/comments', { collection, item, text })),
@@ -392,11 +469,15 @@ export function CommentPanel({
                 <p className='py-6 text-center text-[12px] text-red-500'>
                   Failed to load comments.
                 </p>
-              ) : comments.length === 0 ? (
-                <p className='py-6 text-center text-[12px] text-slate-400'>No comments yet.</p>
+              ) : threadEntries.length === 0 ? (
+                <p className='py-6 text-center text-[12px] text-slate-400'>No notes yet.</p>
               ) : (
                 <div className='space-y-4'>
-                  {comments.map((c) => {
+                  {threadEntries.map((entry) => {
+                    if (entry.kind === 'related') {
+                      return <RecordedNote key={entry.note.id} note={entry.note} />
+                    }
+                    const c = entry.comment
                     const isOwn = userId === c.user.id
                     const isEditing = editingId === c.id
                     return (

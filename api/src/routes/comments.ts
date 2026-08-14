@@ -7,6 +7,43 @@ import { logActivity } from '../services/activity.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
 import { can } from '../services/permissions.js'
 
+/**
+ * Comment strings written by MACHINERY, not people: the legacy import stamped
+ * every row it carried across, the reforecast proc marks its own writes, and
+ * the forecast-revision converter tags absorbed rows. They are provenance, and
+ * putting them in a notes thread buries the handful of real notes under
+ * hundreds of identical markers.
+ */
+const MACHINE_COMMENT_EXACT = new Set(['legacy-import', 'reforecast', 'legacy-state-sync'])
+const MACHINE_COMMENT_PREFIXES = ['forecast-import:', 'invoice-decision:']
+
+function isHumanNote(text: string | null | undefined): boolean {
+  const t = String(text ?? '').trim()
+  if (t === '') return false
+  if (MACHINE_COMMENT_EXACT.has(t.toLowerCase())) return false
+  return !MACHINE_COMMENT_PREFIXES.some((p) => t.toLowerCase().startsWith(p))
+}
+
+
+/** Addendum reasons are rich text; the thread shows plain prose. */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function titleCase(s: string): string {
+  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface CommentRow {
@@ -147,6 +184,191 @@ export async function commentsRoutes(app: FastifyInstance) {
   })
 
   // Create comment
+  /**
+   * Read-only note-like entries from elsewhere on the record, so the notes
+   * thread shows everything anyone wrote about this item in one place rather
+   * than scattering it across the pipeline panel, the addendum list and the
+   * change history.
+   *
+   * Three sources, all things a PERSON typed:
+   *  - the comment on a workflow transition
+   *  - a change reason (migration 189) on this record or on a child row that
+   *    requires one — a forecast's justification belongs on the workflow it
+   *    is forecasting, not only on the forecast row
+   *  - the reason written on an addendum
+   *
+   * Never editable: these belong to the thing that recorded them. Gated on
+   * read permission for the parent collection, same as the comments list.
+   */
+  app.get<{ Querystring: { collection?: string; item?: string } }>(
+    '/related',
+    async (req, reply) => {
+      const { collection, item } = req.query
+      if (!collection || !item) {
+        return reply.code(400).send({ error: 'collection and item are required' })
+      }
+      if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+
+      const CAP = 200
+      type Entry = {
+        id: string
+        source: 'transition' | 'change_reason' | 'addendum'
+        label: string
+        text: string
+        user: string | null
+        created_at: string | Date
+        context: string | null
+      }
+
+      const instances = (await db('nivaro_workflow_instances')
+        .where({ collection, item: String(item) })
+        .select('id')) as Array<{ id: string }>
+
+      const [transitions, ownReasons, addendums] = await Promise.all([
+        instances.length
+          ? (db('nivaro_workflow_history as h')
+              .leftJoin('nivaro_workflow_states as fs', 'h.from_state', 'fs.id')
+              .leftJoin('nivaro_workflow_states as ts', 'h.to_state', 'ts.id')
+              .whereIn('h.instance', instances.map((i) => i.id))
+              .whereNotNull('h.comment')
+              .orderBy('h.timestamp', 'desc')
+              .limit(CAP)
+              .select('h.id', 'h.user', 'h.timestamp', 'h.comment', 'fs.label as from_label', 'ts.label as to_label')
+              .catch(() => []) as Promise<Array<Record<string, unknown>>>)
+          : Promise.resolve([]),
+        db('nivaro_activity')
+          .where({ collection, item: String(item) })
+          .whereNotNull('comment')
+          .orderBy('timestamp', 'desc')
+          .limit(CAP)
+          .select('id', 'user', 'timestamp', 'comment', 'action')
+          .catch(() => []) as Promise<Array<Record<string, unknown>>>,
+        // `description` IS the addendum's reason text — there is no `reason`
+        // column; rejection_reason is a different thing entirely.
+        db('nivaro_addendums')
+          .where({ parent_collection: collection, parent_id: String(item) })
+          .whereNotNull('description')
+          .orderBy('created_at', 'desc')
+          .limit(CAP)
+          .select('id', 'title', 'description', 'status', 'created_by', 'created_at')
+          .catch(() => [] as Array<Record<string, unknown>>) as Promise<
+          Array<Record<string, unknown>>
+        >
+      ])
+
+      // Change reasons written on CHILD rows (a forecast's justification, say).
+      // Only collections that actually require a reason are considered, so this
+      // is a couple of cheap queries rather than a sweep of every relation.
+      const childReasons: Array<Record<string, unknown>> = []
+      try {
+        const reasonCollections = (await db('nivaro_collections')
+          .whereNotNull('change_reason_config')
+          .select('collection')) as Array<{ collection: string }>
+        for (const rc of reasonCollections) {
+          if (rc.collection === collection) continue
+          const rels = (await db('nivaro_relations')
+            .where({ many_collection: rc.collection, one_collection: collection })
+            .select('many_field')) as Array<{ many_field: string }>
+          if (rels.length === 0) continue
+          const childIds = (await db(rc.collection)
+            .where((qb) => {
+              for (const r of rels) void qb.orWhere(r.many_field, item)
+            })
+            .limit(1000)
+            .pluck('id')) as Array<string | number>
+          if (childIds.length === 0) continue
+          const rows = (await db('nivaro_activity')
+            .where({ collection: rc.collection })
+            .whereIn('item', childIds.map(String))
+            .whereNotNull('comment')
+            .orderBy('timestamp', 'desc')
+            .limit(CAP)
+            .select('id', 'user', 'timestamp', 'comment')) as Array<Record<string, unknown>>
+          for (const r of rows) childReasons.push({ ...r, child: rc.collection })
+        }
+      } catch {
+        // A missing child table or relation must not take down the thread.
+      }
+
+      const entries: Entry[] = [
+        ...transitions.map((h) => ({
+          id: `transition:${h.id}`,
+          source: 'transition' as const,
+          label: 'State change',
+          text: String(h.comment ?? ''),
+          user: (h.user as string) ?? null,
+          created_at: h.timestamp as string,
+          context: [h.from_label, h.to_label].filter(Boolean).join(' → ') || null
+        })),
+        // A transition writes its own activity row ("A → B via Approve"); the
+        // transition entry above already says that, better.
+        ...ownReasons
+          .filter((a) => !String(a.action ?? '').toLowerCase().includes('transition'))
+          .map((a) => ({
+          id: `reason:${a.id}`,
+          source: 'change_reason' as const,
+          label: 'Change reason',
+          text: String(a.comment ?? ''),
+          user: (a.user as string) ?? null,
+          created_at: a.timestamp as string,
+          context: null
+        })),
+        ...childReasons.map((a) => ({
+          id: `reason:${a.child}:${a.id}`,
+          source: 'change_reason' as const,
+          label: 'Change reason',
+          text: String(a.comment ?? ''),
+          user: (a.user as string) ?? null,
+          created_at: a.timestamp as string,
+          context: titleCase(String(a.child))
+        })),
+        ...addendums.map((ad) => ({
+          id: `addendum:${ad.id}`,
+          source: 'addendum' as const,
+          label: 'Addendum',
+          text: stripHtml(String(ad.description ?? '')),
+          user: (ad.created_by as string) ?? null,
+          created_at: ad.created_at as string,
+          context:
+            [
+              String(ad.title ?? '').trim() === stripHtml(String(ad.description ?? '')).trim()
+                ? null
+                : ad.title,
+              ad.status
+            ]
+              .filter(Boolean)
+              .join(' · ') || null
+        }))
+      ].filter((e) => isHumanNote(e.text))
+
+      const userIds = [...new Set(entries.map((e) => e.user).filter((u): u is string => !!u))]
+      const users = userIds.length
+        ? ((await db('nivaro_users')
+            .whereIn('id', userIds)
+            .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>)
+        : []
+      const byUser = new Map(users.map((u) => [String(u.id).toUpperCase(), u]))
+
+      entries.sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      )
+
+      return reply.send({
+        data: entries.map((e) => {
+          const u = e.user ? byUser.get(e.user.toUpperCase()) : null
+          return {
+            ...e,
+            user_name: u
+              ? `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || String(u.email ?? '')
+              : null
+          }
+        })
+      })
+    }
+  )
+
   app.post<{ Body: { collection: string; item: string; text: string } }>(
     '/',
     async (req, reply) => {
