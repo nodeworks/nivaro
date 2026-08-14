@@ -3,7 +3,7 @@ import { AlertTriangle, Check, ChevronDown, Loader2, Search, X } from 'lucide-re
 import type { CSSProperties } from 'react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNivaroClient } from '../../context'
+import { useNivaroClient, useStaleFieldReporter } from '../../context'
 import { get } from '../../lib/commands'
 import { ACTIVE_USER_OPTION_FILTER, cn } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
@@ -60,7 +60,8 @@ export function RelationCombobox({
   autoSelectSingle,
   optionSort,
   requiredParent,
-  facets
+  facets,
+  fieldKey
 }: {
   collection: string
   value: unknown
@@ -77,6 +78,8 @@ export function RelationCombobox({
   /** Option ordering: 'column' | '-column' (server sort) | 'label' | '-label' (display-label sort). Default: label ascending. */
   optionSort?: string
   requiredParent?: string
+  /** Field name, so staleness can be reported to the form by name. */
+  fieldKey?: string
   /** In-picker filter facets: M2O fields ON THE TARGET COLLECTION rendered as
    *  small pickers inside the dropdown. Ephemeral — they only narrow the
    *  option list, nothing is written to the form. */
@@ -334,6 +337,15 @@ export function RelationCombobox({
   const selectedLabel = value && selected ? applyDisplayTemplate(tmpl, selected) : null
   const showLoader = !!value && isLoadingSelected && !selected
   const staleTip = useStaleTip(isStale)
+
+  // Report upward. Deliberately AFTER availability has resolved: reporting
+  // `false` while the probe is in flight would clear a real flag on every
+  // re-render.
+  const reportStale = useStaleFieldReporter()
+  useEffect(() => {
+    if (!reportStale || !fieldKey || availabilityData === undefined) return
+    reportStale(fieldKey, isStale)
+  }, [reportStale, fieldKey, isStale, availabilityData])
 
   if (requiredParent) {
     return (

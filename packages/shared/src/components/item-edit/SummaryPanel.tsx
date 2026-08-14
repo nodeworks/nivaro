@@ -305,6 +305,8 @@ export function SummaryPanel({
   itemId,
   staging,
   errors,
+  staleFields,
+  aliasEmptiness,
   onFieldClick
 }: {
   allSteps: StepDef[]
@@ -317,6 +319,11 @@ export function SummaryPanel({
   itemId: string
   staging: M2MStagingCtx | null
   errors?: Record<string, string>
+  /** Fields whose stored value no longer resolves to an available option. */
+  staleFields?: Set<string>
+  /** Emptiness for alias fields the draft cannot answer for: true/false, or
+   *  null while the junction state is still settling. */
+  aliasEmptiness?: Record<string, boolean | null>
   onFieldClick: (stepKey: string, fieldKey: string) => void
 }) {
   const [copiedField, setCopiedField] = useState<string | null>(null)
@@ -378,13 +385,33 @@ export function SummaryPanel({
             const val = draft[f.field]
             const label = f.label ?? titleCase(f.field)
             const hasError = !!errors?.[f.field]
+            // Required but empty: the summary is where someone checks whether a
+            // record is finished, so the fields standing between them and a save
+            // have to be visible without opening every tab. Distinct from an
+            // error — nothing is wrong yet, it is simply not done.
+            const aliasEmpty = aliasEmptiness?.[f.field]
+            const isEmpty =
+              aliasEmpty !== undefined
+                ? aliasEmpty === true
+                : val === null ||
+                  val === undefined ||
+                  (typeof val === 'string' && val.trim() === '') ||
+                  (Array.isArray(val) && val.length === 0)
+            // While an alias is still resolving, claim nothing.
+            const undecided = aliasEmpty === null
+            const needsValue = !!f.required && isEmpty && !hasError && !undecided
+            const isStale = staleFields?.has(f.field) ?? false
             return (
               <div
                 key={f.field}
                 className={cn(
                   'group/row flex items-stretch',
                   fi < fields.length - 1 && 'border-b border-slate-100 dark:border-border/60',
-                  hasError ? 'bg-red-50 dark:bg-red-900/10' : ''
+                  hasError
+                    ? 'bg-red-50 dark:bg-red-900/10'
+                    : needsValue || isStale
+                      ? 'bg-amber-50/70 dark:bg-amber-900/10'
+                      : ''
                 )}
               >
                 <button
@@ -397,11 +424,30 @@ export function SummaryPanel({
                       : 'hover:bg-slate-50 dark:hover:bg-white/[0.03]'
                   )}
                 >
-                  <span className={cn(
-                    'text-[10px] font-medium truncate',
-                    hasError ? 'text-red-500 dark:text-red-400' : 'text-slate-400 dark:text-slate-500'
-                  )}>
-                    {label}
+                  <span
+                    className={cn(
+                      'flex items-center gap-1 text-[10px] font-medium truncate',
+                      hasError
+                        ? 'text-red-500 dark:text-red-400'
+                        : needsValue || isStale
+                          ? 'text-amber-700 dark:text-amber-400'
+                          : 'text-slate-400 dark:text-slate-500'
+                    )}
+                  >
+                    <span className='truncate'>{label}</span>
+                    {needsValue && (
+                      <span className='shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'>
+                        required
+                      </span>
+                    )}
+                    {isStale && (
+                      <span
+                        title='This value is no longer one of the available options'
+                        className='shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                      >
+                        unavailable
+                      </span>
+                    )}
                   </span>
                   <span
                     ref={(el) => { valueRefs.current.set(f.field, el) }}

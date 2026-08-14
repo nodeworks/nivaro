@@ -299,3 +299,20 @@ export const RelationPathDataContext = createContext<Record<
   string,
   { ids: string[]; target_collection: string | null }
 > | null>(null)
+
+
+/**
+ * Lets a field picker tell the form that its stored value no longer appears in
+ * its own filtered option set, so the summary can flag it too.
+ *
+ * The picker is the ONLY place that knows this: staleness depends on the
+ * field's resolved option filter (cascade parents, $parent tokens, picker
+ * filters), and a second implementation would drift from it — the same way a
+ * duplicated owner resolver silently returned nobody for months. So the
+ * component that already computed the answer reports it, rather than the
+ * summary asking a similar-but-different question.
+ */
+export const StaleFieldReportContext = createContext<
+  ((field: string, stale: boolean) => void) | null
+>(null)
+export const useStaleFieldReporter = () => useContext(StaleFieldReportContext)

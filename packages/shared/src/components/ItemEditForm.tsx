@@ -19,7 +19,7 @@ import {
 } from 'react'
 import { toast } from 'sonner'
 import { applyValidationRule } from '../lib/validation-rules'
-import { GridFlushContext, type GridFlushContextValue, ItemEditAuthContext, ParentDraftContext, ReimportHandlerContext, useApiFetchConfig, useNivaroClient, RelationPathDataContext } from '../context'
+import { StaleFieldReportContext, GridFlushContext, type GridFlushContextValue, ItemEditAuthContext, ParentDraftContext, ReimportHandlerContext, useApiFetchConfig, useNivaroClient, RelationPathDataContext } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { FieldRow } from './item-edit/FieldRow'
@@ -2172,6 +2172,24 @@ export function ItemEditForm({
     return out
   }, [stagedRollupRelations, stagedChildConfigs])
 
+  // Fields whose stored value no longer appears in their own filtered option
+  // set. This is NOT re-derived here: the picker already resolves the field's
+  // effective filter (cascade parents, $parent tokens, picker filters) and
+  // flags the value amber, so it reports what it found and the summary shows
+  // the same verdict. Asking a similar-but-different question here — "does the
+  // record still exist?" — answered "yes" for exactly the case the user cares
+  // about, a record that exists but is no longer a valid choice.
+  const [staleFields, setStaleFields] = useState<Set<string>>(() => new Set())
+  const reportStaleField = useCallback((field: string, stale: boolean) => {
+    setStaleFields((prev) => {
+      if (prev.has(field) === stale) return prev
+      const next = new Set(prev)
+      if (stale) next.add(field)
+      else next.delete(field)
+      return next
+    })
+  }, [])
+
   const liveRollupValues = useMemo(() => {
     const out = new Map<string, number>()
     for (const f of fieldConfig ?? []) {
@@ -4300,6 +4318,7 @@ export function ItemEditForm({
     <AddendumFieldContext.Provider value={addendumFieldMap}>
     <ParentDraftContext.Provider value={{ draft: parentDraftWithAliases, collection, dirtyFields: userTouchedRef.current }}>
     <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>
+    <StaleFieldReportContext.Provider value={reportStaleField}>
     <O2MStagingContext.Provider value={o2mStagingCtx}>
     <LiveRowsContext.Provider value={liveRowsCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
@@ -4773,6 +4792,7 @@ export function ItemEditForm({
                 return (
                   <div
                     key={f.field}
+                    data-header-field={f.field}
                     className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
                   >
                     <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>{f.label}</span>
@@ -4897,6 +4917,17 @@ export function ItemEditForm({
                     itemId={itemId}
                     staging={m2mStagingCtx}
                     errors={validationErrors}
+                    staleFields={staleFields}
+                    // M2M alias values never live in the draft, so the panel
+                    // cannot judge them empty on its own — it would mark a
+                    // populated field "required". Hand it the state the form
+                    // already tracks, and say nothing while it is unsettled.
+                    aliasEmptiness={Object.fromEntries(
+                      Object.entries(m2mAliasFieldStates).map(([field, st]) => [
+                        field,
+                        st.known ? st.ids.length === 0 : null
+                      ])
+                    )}
                     onFieldClick={(stepKey, fieldKey) => {
                       if (hasContainers) {
                         const ownerContainer = containerGroups.find((c) =>
@@ -4912,9 +4943,13 @@ export function ItemEditForm({
                         setActiveTab(stepKey)
                       }
                       setTimeout(() => {
-                        const el = document.querySelector(
-                          `[data-field="${fieldKey}"]`
-                        ) as HTMLElement | null
+                        // A field pinned to the item header has no row in the
+                        // body to scroll to; flash it where it actually lives
+                        // rather than doing nothing at all.
+                        const el = (document.querySelector(`[data-field="${fieldKey}"]`) ??
+                          document.querySelector(
+                            `[data-header-field="${fieldKey}"]`
+                          )) as HTMLElement | null
                         if (el) {
                           el.scrollIntoView({ behavior: 'smooth', block: 'center' })
                           el.classList.add('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md')
@@ -4944,6 +4979,7 @@ export function ItemEditForm({
     </M2MStagingContext.Provider>
     </LiveRowsContext.Provider>
     </O2MStagingContext.Provider>
+    </StaleFieldReportContext.Provider>
     </GridFlushContext.Provider>
     </ParentDraftContext.Provider>
     </AddendumFieldContext.Provider>

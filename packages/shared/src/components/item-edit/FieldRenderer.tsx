@@ -163,6 +163,7 @@ export function FieldRenderer({
       : cascadeFilter
     const combobox = (
       <RelationCombobox
+        fieldKey={field.field}
         collection={m2oRel.one_collection}
         value={value}
         onChange={onChange}
