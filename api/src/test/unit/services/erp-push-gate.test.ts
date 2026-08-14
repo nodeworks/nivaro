@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { changeSignature, shouldPush } from '../../../services/erp-push-gate.js'
+import { changeSignature, payloadSignature, shouldPush } from '../../../services/erp-push-gate.js'
 
 const RECORD = { efp_state: 'approved', requisition_id: 'REQ-1', po_number: null, nested: { a: 1 } }
 
@@ -84,6 +84,42 @@ describe('shouldPush', () => {
         stateChanged: true,
         signature: sig,
         lastSignature: sig
+      })
+    ).toBe(true)
+  })
+})
+
+describe('payloadSignature — the MWF case', () => {
+  const base = { token: 't', workflow_id: 'B1', efp_state: 'Waiting on Manager Approval', requisition_id: 'CR26-1' }
+
+  it('ignores key order — the same payload rendered differently is the same payload', () => {
+    expect(payloadSignature(base)).toBe(
+      payloadSignature({ requisition_id: 'CR26-1', efp_state: 'Waiting on Manager Approval', workflow_id: 'B1', token: 't' })
+    )
+  })
+
+  it('changes when the state label changes', () => {
+    expect(payloadSignature({ ...base, efp_state: 'Approved' })).not.toBe(payloadSignature(base))
+  })
+
+  it('changes when a purchase order is linked — the case no record field can see', () => {
+    expect(payloadSignature({ ...base, po_number: '4500123' })).not.toBe(payloadSignature(base))
+  })
+
+  it('suppresses a transition that produced an identical payload', () => {
+    const sig = payloadSignature(base)
+    expect(
+      shouldPush({ pushWhen: { state_change: false, payload: true }, stateChanged: true, signature: sig, lastSignature: sig })
+    ).toBe(false)
+  })
+
+  it('pushes when the payload moved, without naming any field', () => {
+    expect(
+      shouldPush({
+        pushWhen: { state_change: false, payload: true },
+        stateChanged: true,
+        signature: payloadSignature({ ...base, po_number: '4500123' }),
+        lastSignature: payloadSignature(base)
       })
     ).toBe(true)
   })

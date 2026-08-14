@@ -20,6 +20,36 @@ import { createHash } from 'node:crypto'
 export interface PushWhen {
   state_change?: boolean
   fields?: string[]
+  /**
+   * Compare the RENDERED payload instead of naming record fields. This is what
+   * you want when the thing that changed is not a column: a linked purchase
+   * order lives in a junction and reaches the payload through a context query,
+   * so no record field moves when it is attached. The payload is also the
+   * honest definition of "they already know this" — if the bytes are the same,
+   * the receiver learns nothing from being told again.
+   */
+  payload?: boolean
+}
+
+/** Stable fingerprint of a rendered payload: key order must not matter. */
+export function payloadSignature(body: unknown): string | null {
+  if (body === null || body === undefined) return null
+  const canonical = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(canonical)
+    if (v && typeof v === 'object') {
+      return Object.fromEntries(
+        Object.entries(v as Record<string, unknown>)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, val]) => [k, canonical(val)])
+      )
+    }
+    return v
+  }
+  try {
+    return createHash('sha256').update(JSON.stringify(canonical(body))).digest('hex').slice(0, 64)
+  } catch {
+    return null
+  }
 }
 
 /** Stable fingerprint of the watched values. Order-independent, null-safe. */
@@ -54,8 +84,9 @@ export function shouldPush(args: {
   const onState = pushWhen.state_change !== false
   if (onState && stateChanged) return true
 
+  const watchesPayload = pushWhen.payload === true
   const fields = pushWhen.fields ?? []
-  if (fields.length === 0) return onState ? stateChanged : false
+  if (fields.length === 0 && !watchesPayload) return onState ? stateChanged : false
 
   // Nothing to compare against (first push, or history predates the column):
   // send it. Suppressing here would mean an integration never hears about a

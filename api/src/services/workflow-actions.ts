@@ -1,7 +1,7 @@
 import { Liquid } from 'liquidjs'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
-import { changeSignature, type PushWhen, shouldPush } from './erp-push-gate.js'
+import { changeSignature, payloadSignature, type PushWhen, shouldPush } from './erp-push-gate.js'
 import { callExternalApi } from './external-apis.js'
 import { evalConditionRule, type ConditionRule } from './workflow-conditions.js'
 
@@ -486,8 +486,44 @@ export async function runTransitionActions(opts: {
       })
       if (!anySet) continue
     }
+    const scope = {
+      record,
+      context,
+      state: opts.newStateObj,
+      responses,
+      response: responses[responses.length - 1] ?? null
+    }
+
+    let body: Record<string, unknown>
+    try {
+      const rendered = await engine.parseAndRender(action.payload_template, scope)
+      body = JSON.parse(rendered) as Record<string, unknown>
+    } catch (err) {
+
+      await recordSubmission(
+        collection,
+        item,
+        apiId,
+        action.endpoint_path,
+        null,
+        'failed',
+        `payload template error: ${err instanceof Error ? err.message : String(err)}`
+      )
+      await applyWriteback(collection, item, action.on_failure?.set, {
+        ...scope,
+        error: String(err)
+      })
+      continue
+    }
+
     // Change gate: does this integration care about what just happened?
-    const signature = changeSignature(record, action.push_when?.fields)
+    // Gated AFTER rendering, so a payload comparison can see what would
+    // actually be sent — a linked purchase order reaches the payload through a
+    // context query, not a record field, and is invisible before this point.
+    const signature =
+      action.push_when?.payload === true
+        ? payloadSignature(body)
+        : changeSignature(record, action.push_when?.fields)
     if (action.push_when) {
       let lastSignature: string | null | undefined
       try {
@@ -527,35 +563,6 @@ export async function runTransitionActions(opts: {
       ) {
         continue
       }
-    }
-
-    const scope = {
-      record,
-      context,
-      state: opts.newStateObj,
-      responses,
-      response: responses[responses.length - 1] ?? null
-    }
-
-    let body: Record<string, unknown>
-    try {
-      const rendered = await engine.parseAndRender(action.payload_template, scope)
-      body = JSON.parse(rendered) as Record<string, unknown>
-    } catch (err) {
-      await recordSubmission(
-        collection,
-        item,
-        apiId,
-        action.endpoint_path,
-        null,
-        'failed',
-        `payload template error: ${err instanceof Error ? err.message : String(err)}`
-      )
-      await applyWriteback(collection, item, action.on_failure?.set, {
-        ...scope,
-        error: String(err)
-      })
-      continue
     }
 
     let status: 'pending' | 'accepted' | 'failed' = 'failed'
