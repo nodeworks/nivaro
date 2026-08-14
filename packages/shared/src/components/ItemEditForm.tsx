@@ -597,7 +597,14 @@ export function ItemEditForm({
         .request<{ data: CMSField[] }>(get(`/field-config/${collection}`, layoutId ? { layout_id: String(layoutId) } : undefined))
         .then((r) => r.data ?? []),
     staleTime: 60_000,
-    enabled: !layoutSlug || activeLayoutData !== undefined
+    // Wait for the layout either way, not just when a slug pins one. Without
+    // this the field config fetched immediately with layoutId = null — the
+    // LAYOUT-LESS default field set — painted that, then refetched under a new
+    // key once the layout arrived: a visible flash of the wrong form on the
+    // way to the right one. `catch(() => null)` on the layout query means it
+    // always settles, so this cannot hang; undefined is strictly "still
+    // asking".
+    enabled: activeLayoutData !== undefined
   })
 
   const { data: relations = [], isFetched: relationsFetched } = useQuery<CMSRelation[]>({
