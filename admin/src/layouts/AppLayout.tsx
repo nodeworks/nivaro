@@ -561,11 +561,27 @@ export function AppLayout() {
       : []
   }, [user])
 
+  // Wear the icon of the page you point at: a column of identical stars tells
+  // the reader nothing, and these are the same destinations they already know
+  // from the nav. Longest-prefix match so a record page inherits its list's
+  // icon; the star is only for somewhere the nav has no entry for.
+  const iconForPath = (path: string): React.ElementType => {
+    let best: { len: number; icon: React.ElementType } | null = null
+    for (const cat of navCategories) {
+      for (const item of cat.items) {
+        if (path === item.to || (item.to !== '/' && path.startsWith(`${item.to}/`))) {
+          if (!best || item.to.length > best.len) best = { len: item.to.length, icon: item.icon }
+        }
+      }
+    }
+    return best?.icon ?? Star
+  }
+
   const favoritesCategory: NavCategory = {
     id: 'favorites',
     icon: Star,
     label: 'Favourites',
-    items: navFavorites.map((f) => ({ icon: Star, label: f.label, to: f.path }))
+    items: navFavorites.map((f) => ({ icon: iconForPath(f.path), label: f.label, to: f.path }))
   }
 
   const visibleCategories = navCategories
