@@ -45,13 +45,24 @@ export function useItemLock(
       }, HEARTBEAT_MS)
       return true
     } catch (err: unknown) {
-      const resp = (err as { response?: { status?: number; data?: LockHolder } })?.response
-      if (resp?.status === 409 && resp.data) {
+      // The SDK puts the HTTP code on `err.status` and the PARSED BODY on
+      // `err.response` — not an axios-shaped {response:{status,data}}. Reading
+      // it the axios way found undefined, so the 409 branch never ran and the
+      // second person to open a record was told nothing: no banner, no
+      // read-only, and a save that quietly fought the lock holder. Both shapes
+      // are accepted here because admin passes an axios-backed client.
+      const e = err as {
+        status?: number
+        response?: (LockHolder & { status?: number; data?: LockHolder }) | undefined
+      }
+      const status = e.status ?? e.response?.status
+      const body = (e.response?.data ?? e.response) as LockHolder | undefined
+      if (status === 409 && body?.locked_by) {
         acquiredRef.current = false
         setAcquired(false)
         setLockHolder({
-          locked_by: resp.data.locked_by,
-          locked_by_name: resp.data.locked_by_name ?? null
+          locked_by: body.locked_by,
+          locked_by_name: body.locked_by_name ?? null
         })
       }
       return false

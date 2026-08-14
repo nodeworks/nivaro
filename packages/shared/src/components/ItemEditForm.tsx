@@ -3385,6 +3385,15 @@ export function ItemEditForm({
   // ── Render helpers ─────────────────────────────────────────────────────────
   const visibleFields = new Set<string>()
   const lockedFields = new Set<string>()
+  // Someone else holds the edit lock: every field is locked, not just the ones
+  // with lock conditions. Two render paths draw fields — one consulted
+  // `isReadOnly` directly, the other only this set — so a grouped layout (which
+  // is most of them) showed the "read-only until the lock is released" banner
+  // over a form that was still fully editable. Locking at the source means any
+  // future render path inherits it instead of having to remember.
+  if (isReadOnly) {
+    for (const f of fieldConfig ?? []) lockedFields.add(f.field)
+  }
   if (hasLockConditions) {
     const currentRole = currentUserData?.role ?? null
     const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
