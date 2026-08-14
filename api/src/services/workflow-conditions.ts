@@ -37,8 +37,27 @@ function calendarDaysFromToday(raw: unknown): number | null {
   return Math.round((a - b) / 86_400_000)
 }
 
+/**
+ * Where a related-row COUNT is stored on the resolved record.
+ *
+ * Keyed by field AND filter, because two transitions on the same template
+ * routinely count the same child collection with DIFFERENT filters — "has any
+ * lines" and "has any line still missing a REQ ID" are both
+ * workflow_line_items:workflow. Keyed by field alone, the second resolution
+ * overwrote the first and every rule then read the wrong count: the unfiltered
+ * "has any lines" check silently became "has lines without a REQ ID", so the
+ * transition vanished the moment those ids were filled in.
+ */
+export function relatedCountKey(field: string, filter: unknown): string {
+  return filter == null || filter === '' ? field : `${field}\u0001${String(filter)}`
+}
+
 export function evalConditionRule(rule: ConditionRule, record: Record<string, unknown>): boolean {
-  const recordVal = record[rule.field]
+  const recordVal =
+    rule.op === 'related_some' || rule.op === 'related_none'
+      ? // Fall back to the bare field for records resolved by an older caller.
+        record[relatedCountKey(rule.field, rule.value)] ?? record[rule.field]
+      : record[rule.field]
   switch (rule.op) {
     case 'null':
       return recordVal == null || recordVal === ''
@@ -204,7 +223,7 @@ export async function fetchRecordForConditions(
     for (const r of parseConditionRules(raw ?? null) ?? []) {
       if (typeof r?.field !== 'string') continue
       if (r.op === 'related_some' || r.op === 'related_none') {
-        if (RELATED_FIELD_RE.test(r.field)) related.set(r.field, r)
+        if (RELATED_FIELD_RE.test(r.field)) related.set(relatedCountKey(r.field, r.value), r)
       } else if (r.field.includes('.')) {
         dotted.add(r.field)
       }
@@ -213,7 +232,8 @@ export async function fetchRecordForConditions(
   // Related-row counts: '<child>:<fk>' → COUNT(child WHERE fk = id AND filter),
   // merged under the rule's literal field key for the sync evaluator.
   for (const [key, rule] of related) {
-    const m = RELATED_FIELD_RE.exec(key)
+    // key may carry the filter suffix; the collection/fk come from the rule.
+    const m = RELATED_FIELD_RE.exec(rule.field)
     if (!m) continue
     const [, child, fk] = m
     if (/^nivaro_/i.test(child)) {
