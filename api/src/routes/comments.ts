@@ -7,6 +7,58 @@ import { logActivity } from '../services/activity.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
 import { can } from '../services/permissions.js'
 
+/** How a child row identifies itself, for "which forecast was this about". */
+const CHILD_LABEL_FIELDS = ['year', 'name', 'title', 'label', 'period', 'month', 'key', 'code']
+
+function childRowLabel(row: Record<string, unknown>): string | null {
+  for (const f of CHILD_LABEL_FIELDS) {
+    const v = row[f]
+    if (v !== null && v !== undefined && String(v).trim() !== '') {
+      const text = String(v).trim()
+      return text.length > 40 ? `${text.slice(0, 40)}…` : text
+    }
+  }
+  return row.id != null ? `#${row.id}` : null
+}
+
+/** The columns a revision actually changed — "february, total" says more about
+ *  a forecast edit than the row's name does. */
+function changedFieldNames(delta: unknown): string | null {
+  let parsed: unknown = delta
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed)
+    } catch {
+      return null
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const keys = Object.keys(parsed as Record<string, unknown>).filter((k) => !k.startsWith('_'))
+  if (keys.length === 0) return null
+  const shown = keys.slice(0, 4).map((k) => k.replace(/_/g, ' '))
+  return keys.length > 4 ? `${shown.join(', ')} +${keys.length - 4} more` : shown.join(', ')
+}
+
+const usd = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 0
+})
+
+/** What the amendment proposed, in money terms. */
+function amountChange(previous: unknown, next: unknown, impact: unknown): string | null {
+  const p = Number(previous)
+  const n = Number(next)
+  if (Number.isFinite(p) && Number.isFinite(n) && p !== n) {
+    const diff = n - p
+    return `${usd.format(p)} → ${usd.format(n)} (${diff >= 0 ? '+' : '−'}${usd.format(Math.abs(diff))})`
+  }
+  const i = Number(impact)
+  if (Number.isFinite(i) && i !== 0) return `${i >= 0 ? '+' : '−'}${usd.format(Math.abs(i))}`
+  return null
+}
+
+
 /**
  * Comment strings written by MACHINERY, not people: the legacy import stamped
  * every row it carried across, the reforecast proc marks its own writes, and
@@ -252,11 +304,37 @@ export async function commentsRoutes(app: FastifyInstance) {
           .whereNotNull('description')
           .orderBy('created_at', 'desc')
           .limit(CAP)
-          .select('id', 'title', 'description', 'status', 'created_by', 'created_at')
+          .select(
+            'id',
+            'title',
+            'description',
+            'status',
+            'created_by',
+            'created_at',
+            'cost_impact',
+            'previous_amount',
+            'new_amount'
+          )
           .catch(() => [] as Array<Record<string, unknown>>) as Promise<
           Array<Record<string, unknown>>
         >
       ])
+
+      // What the record's own reasoned changes actually touched.
+      const ownChanged = new Map<string, string>()
+      if (ownReasons.length > 0) {
+        const revs = (await db('nivaro_revisions')
+          .whereIn(
+            'activity',
+            ownReasons.map((a) => a.id as number)
+          )
+          .select('activity', 'delta')
+          .catch(() => [])) as Array<Record<string, unknown>>
+        for (const rev of revs) {
+          const fields = changedFieldNames(rev.delta)
+          if (fields) ownChanged.set(String(rev.activity), fields)
+        }
+      }
 
       // Change reasons written on CHILD rows (a forecast's justification, say).
       // Only collections that actually require a reason are considered, so this
@@ -272,21 +350,48 @@ export async function commentsRoutes(app: FastifyInstance) {
             .where({ many_collection: rc.collection, one_collection: collection })
             .select('many_field')) as Array<{ many_field: string }>
           if (rels.length === 0) continue
-          const childIds = (await db(rc.collection)
+          const childRows = (await db(rc.collection)
             .where((qb) => {
               for (const r of rels) void qb.orWhere(r.many_field, item)
             })
             .limit(1000)
-            .pluck('id')) as Array<string | number>
-          if (childIds.length === 0) continue
+            .select('*')) as Array<Record<string, unknown>>
+          if (childRows.length === 0) continue
+          // "Forecasts" alone does not say WHICH forecast — carry whatever the
+          // row identifies itself by so a reader can place the note.
+          const labelByChildId = new Map(
+            childRows.map((r) => [String(r.id), childRowLabel(r)])
+          )
           const rows = (await db('nivaro_activity')
             .where({ collection: rc.collection })
-            .whereIn('item', childIds.map(String))
+            .whereIn('item', [...labelByChildId.keys()])
             .whereNotNull('comment')
             .orderBy('timestamp', 'desc')
             .limit(CAP)
-            .select('id', 'user', 'timestamp', 'comment')) as Array<Record<string, unknown>>
-          for (const r of rows) childReasons.push({ ...r, child: rc.collection })
+            .select('id', 'user', 'timestamp', 'comment', 'item')) as Array<Record<string, unknown>>
+          // What actually changed, from the revision delta written alongside.
+          const changedByActivity = new Map<string, string>()
+          if (rows.length > 0) {
+            const revs = (await db('nivaro_revisions')
+              .whereIn(
+                'activity',
+                rows.map((r) => r.id as number)
+              )
+              .select('activity', 'delta')
+              .catch(() => [])) as Array<Record<string, unknown>>
+            for (const rev of revs) {
+              const fields = changedFieldNames(rev.delta)
+              if (fields) changedByActivity.set(String(rev.activity), fields)
+            }
+          }
+          for (const r of rows) {
+            childReasons.push({
+              ...r,
+              child: rc.collection,
+              child_label: labelByChildId.get(String(r.item)) ?? null,
+              changed: changedByActivity.get(String(r.id)) ?? null
+            })
+          }
         }
       } catch {
         // A missing child table or relation must not take down the thread.
@@ -313,7 +418,7 @@ export async function commentsRoutes(app: FastifyInstance) {
           text: String(a.comment ?? ''),
           user: (a.user as string) ?? null,
           created_at: a.timestamp as string,
-          context: null
+          context: ownChanged.get(String(a.id)) ?? null
         })),
         ...childReasons.map((a) => ({
           id: `reason:${a.child}:${a.id}`,
@@ -322,7 +427,9 @@ export async function commentsRoutes(app: FastifyInstance) {
           text: String(a.comment ?? ''),
           user: (a.user as string) ?? null,
           created_at: a.timestamp as string,
-          context: titleCase(String(a.child))
+          context: [titleCase(String(a.child)), a.child_label, a.changed]
+            .filter(Boolean)
+            .join(' · ')
         })),
         ...addendums.map((ad) => ({
           id: `addendum:${ad.id}`,
@@ -336,14 +443,32 @@ export async function commentsRoutes(app: FastifyInstance) {
               String(ad.title ?? '').trim() === stripHtml(String(ad.description ?? '')).trim()
                 ? null
                 : ad.title,
-              ad.status
+              ad.status,
+              amountChange(ad.previous_amount, ad.new_amount, ad.cost_impact)
             ]
               .filter(Boolean)
               .join(' · ') || null
         }))
       ].filter((e) => isHumanNote(e.text))
 
-      const userIds = [...new Set(entries.map((e) => e.user).filter((u): u is string => !!u))]
+      // Saving a child with a reason can also stamp the parent with the same
+      // text (an edit that changed nothing on the parent row still records the
+      // reason). That leaves the same sentence twice — once saying what it was
+      // about and once saying nothing. Keep the one that carries context.
+      const contextfulKeys = new Set(
+        entries
+          .filter((e) => !!e.context)
+          .map((e) => `${e.user ?? ''}|${e.text.trim()}|${new Date(e.created_at).toISOString().slice(0, 16)}`)
+      )
+      const deduped = entries.filter(
+        (e) =>
+          !!e.context ||
+          !contextfulKeys.has(
+            `${e.user ?? ''}|${e.text.trim()}|${new Date(e.created_at).toISOString().slice(0, 16)}`
+          )
+      )
+
+      const userIds = [...new Set(deduped.map((e) => e.user).filter((u): u is string => !!u))]
       const users = userIds.length
         ? ((await db('nivaro_users')
             .whereIn('id', userIds)
@@ -351,12 +476,10 @@ export async function commentsRoutes(app: FastifyInstance) {
         : []
       const byUser = new Map(users.map((u) => [String(u.id).toUpperCase(), u]))
 
-      entries.sort(
-        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-      )
+      deduped.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
 
       return reply.send({
-        data: entries.map((e) => {
+        data: deduped.map((e) => {
           const u = e.user ? byUser.get(e.user.toUpperCase()) : null
           return {
             ...e,
