@@ -392,9 +392,13 @@ function FavoritesSection() {
   if (favorites.length === 0 && here === '/') return null
 
   return (
-    <div className='mb-2'>
-      <div className='flex items-center justify-between px-4 pb-1'>
-        <span className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+    // Set apart from the category nav below: these are the reader's OWN
+    // shortcuts, not part of the app's structure, and without a break they
+    // read as just more nav items in a different order.
+    <div className='mb-3 border-b border-white/10 pb-3'>
+      <div className='flex items-center justify-between px-4 pb-1.5'>
+        <span className='flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-nvr-cyan/70'>
+          <Star className='h-3 w-3' strokeWidth={2.5} />
           Favourites
         </span>
         <button
