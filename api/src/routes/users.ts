@@ -163,6 +163,23 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.email_digest = body.email_digest
     }
+    if ('nav_favorites' in body) {
+      // Sidebar shortcuts. Validated rather than trusted: this is rendered as
+      // navigation, so a path must be an in-app absolute route — never an
+      // external or javascript: target — and the list is capped so a preference
+      // blob cannot grow without bound.
+      const raw = Array.isArray(body.nav_favorites) ? body.nav_favorites : null
+      if (!raw) return reply.code(400).send({ error: 'nav_favorites must be an array' })
+      const clean = raw
+        .filter((f): f is { label?: unknown; path?: unknown } => !!f && typeof f === 'object')
+        .map((f) => ({
+          label: String((f as { label?: unknown }).label ?? '').trim().slice(0, 60),
+          path: String((f as { path?: unknown }).path ?? '').trim().slice(0, 500)
+        }))
+        .filter((f) => f.label !== '' && /^\/(?!\/)/.test(f.path))
+        .slice(0, 30)
+      patch.nav_favorites = clean
+    }
     if (Object.keys(patch).length === 0) {
       return reply.code(400).send({ error: 'No supported preference keys in body' })
     }

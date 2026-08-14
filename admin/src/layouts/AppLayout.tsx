@@ -60,9 +60,12 @@ import {
   Users,
   Webhook,
   Wifi,
-  Workflow
+  Star,
+  Workflow,
+  X as XIcon
 } from 'lucide-react'
-import { Component, type ReactNode, Suspense, useEffect, useState } from 'react'
+import { Component, type ReactNode, Suspense, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
 import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
@@ -330,6 +333,106 @@ function WorkspaceSwitcher() {
         </PopoverContent>
       </Popover>
     </Tooltip>
+  )
+}
+
+
+/**
+ * Per-user shortcuts to anywhere in the app. The nav is organised by what
+ * things ARE (collections, monitoring, system), which is the right default and
+ * the wrong shape for someone who lives in three specific screens all day —
+ * this gives them those three, one click away, without reorganising navigation
+ * for everyone else.
+ *
+ * Stored on the user's own preferences, so it follows them between machines.
+ */
+function FavoritesSection() {
+  const { user, refetch } = useAuth()
+  const location = useLocation()
+  const [saving, setSaving] = useState(false)
+  const favorites = useMemo<Array<{ label: string; path: string }>>(() => {
+    const prefs = (user as { preferences?: { nav_favorites?: unknown } } | null)?.preferences
+    const list = prefs?.nav_favorites
+    return Array.isArray(list)
+      ? (list as Array<{ label?: unknown; path?: unknown }>)
+          .filter(
+            (f: { label?: unknown; path?: unknown }) =>
+              f && typeof f.path === 'string' && typeof f.label === 'string'
+          )
+          .map((f: { label?: unknown; path?: unknown }) => ({
+            label: String(f.label),
+            path: String(f.path)
+          }))
+      : []
+  }, [user])
+
+  const here = location.pathname + location.search
+  const pinned = favorites.some((f) => f.path === here)
+
+  const save = async (next: Array<{ label: string; path: string }>) => {
+    setSaving(true)
+    try {
+      await api.patch('/users/me/preferences', { nav_favorites: next })
+      await refetch()
+    } catch {
+      toast.error('Could not save favourites')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const pinHere = () => {
+    // Name it what the page calls itself; the route is a poor label and the
+    // user can rename nothing here, so getting this right matters.
+    const heading = document.querySelector('h1')?.textContent?.trim()
+    const label = (heading || document.title.split('|')[0].trim() || here).slice(0, 60)
+    void save([...favorites, { label, path: here }])
+  }
+
+  if (favorites.length === 0 && here === '/') return null
+
+  return (
+    <div className='mb-2'>
+      <div className='flex items-center justify-between px-4 pb-1'>
+        <span className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+          Favourites
+        </span>
+        <button
+          type='button'
+          disabled={saving}
+          onClick={() => (pinned ? void save(favorites.filter((f) => f.path !== here)) : pinHere())}
+          title={pinned ? 'Remove this page from favourites' : 'Add this page to favourites'}
+          className='rounded p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-nvr-cyan disabled:opacity-50 dark:hover:bg-muted'
+        >
+          <Star className={cn('h-3.5 w-3.5', pinned && 'fill-nvr-cyan text-nvr-cyan')} strokeWidth={2} />
+        </button>
+      </div>
+      {favorites.length === 0 ? (
+        <p className='px-4 pb-1 text-[11px] leading-snug text-slate-400'>
+          Star a page to keep it here.
+        </p>
+      ) : (
+        <div className='space-y-0.5'>
+          {favorites.map((f: { label: string; path: string }) => (
+            <div key={f.path} className='group relative'>
+              <PanelNavItem icon={Star} label={f.label} to={f.path} />
+              <button
+                type='button'
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  void save(favorites.filter((x) => x.path !== f.path))
+                }}
+                title='Remove from favourites'
+                className='absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-300 opacity-0 transition-opacity hover:text-red-500 group-hover:opacity-100'
+              >
+                <XIcon className='h-3 w-3' />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -666,6 +769,7 @@ export function AppLayout() {
                 className='min-h-0 flex-1 overflow-y-auto py-3'
                 aria-label={`${activeCat.label} navigation`}
               >
+                <FavoritesSection />
                 <div className='space-y-0.5'>
                   {panelItems.map((item) => (
                     <PanelNavItem key={item.to} {...item} />
