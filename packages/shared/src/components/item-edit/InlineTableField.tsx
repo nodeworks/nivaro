@@ -1,7 +1,7 @@
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './ChangeReasonDialog'
 import { AlertTriangle, ChevronRight, GripVertical, History, Loader2, X } from 'lucide-react'
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 export interface RowRule {
@@ -2891,6 +2891,131 @@ export function InlineTableField({
     ((isNew || isPendingMode) ? 2 : 1) +
     (rowOrderField || isNew || isPendingMode ? 1 : 0)
 
+  /**
+   * Wide grids are unreadable to edit in place: a dozen columns squeezed into
+   * table cells leaves each input a few characters wide, with the header row as
+   * the only clue to what you are typing into. When a row is being edited it is
+   * lifted out of the table into a full-width panel — every field labelled, at
+   * a workable size, in the row's own space.
+   *
+   * The SAME field components render in both modes, so validation, cascades,
+   * pickers and blur-to-save behave identically; only the container changes.
+   * Narrow grids keep the inline editor, where tabbing across a row is faster
+   * than reading a form.
+   */
+  // Threshold, not configuration: the panel earns its place exactly when a row
+  // stops fitting readably across the table, which is what column count tells
+  // us. Narrow grids keep the inline editor.
+  const rowEditorMode: 'panel' | 'inline' =
+    effectiveCols.filter((c) => !isSummaryCol(c)).length >= 6 ? 'panel' : 'inline'
+
+  /** Short human handle for the row being edited, for the panel header — the
+   *  first text-ish column that has a value, else the row id. */
+  const rowIdentityLabel = (row: Record<string, unknown>): string => {
+    for (const c of effectiveCols) {
+      if (isSummaryCol(c)) continue
+      const v = row[c.field]
+      if (typeof v === 'string' && v.trim() !== '') return v.length > 60 ? `${v.slice(0, 60)}…` : v
+    }
+    return row.id != null ? `#${row.id}` : 'New row'
+  }
+
+  const renderRowEditorPanel = (args: {
+    identity: ReactNode
+    draft: Record<string, unknown>
+    rowId?: string
+    saveLabel: string
+    drawer?: ReactNode
+    onDelete?: (e: React.MouseEvent) => void
+  }) => (
+    <td colSpan={nestedColSpan} className='p-0'>
+      <div
+        className='my-1.5 rounded-lg border border-nvr-cyan/40 bg-white px-4 py-3 shadow-[0_6px_24px_-8px_rgba(15,23,42,0.35)] ring-1 ring-nvr-cyan/15 dark:border-nvr-cyan/30 dark:bg-card'
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className='mb-3 flex items-center justify-between gap-3 border-b border-slate-100 pb-2 dark:border-border'>
+          <div className='min-w-0 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+            {args.identity}
+          </div>
+          <div className='flex shrink-0 items-center gap-1.5'>
+            {args.onDelete && (
+              <button
+                type='button'
+                onClick={args.onDelete}
+                className='rounded px-2 py-1 text-[11px] text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20'
+              >
+                Delete
+              </button>
+            )}
+            <button
+              type='button'
+              onClick={cancelEdit}
+              className='rounded px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 dark:hover:bg-muted'
+            >
+              Cancel
+            </button>
+            <button
+              type='button'
+              disabled={saving}
+              onClick={saveEdit}
+              className='rounded bg-nvr-cyan px-3 py-1 text-[11px] font-medium text-white transition-[filter] hover:brightness-110 disabled:opacity-50'
+            >
+              {saving ? 'Saving…' : args.saveLabel}
+            </button>
+          </div>
+        </div>
+        <div
+          className='grid items-start gap-x-4 gap-y-3'
+          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}
+        >
+          {effectiveCols.map((c) => {
+            const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+            // A raw column name (LINE_TYPE, SUPPLIER_ITEM) is the table's
+            // shorthand; a labelled form should read like prose.
+            const label = c.label || titleCase(c.field)
+            // Interfaces that only ever DISPLAY a derived value: rendering an
+            // input for them offers an edit that goes nowhere.
+            const displayOnlyIface =
+              c.interface === 'formula-column' ||
+              c.interface === 'match-agg-column' ||
+              c.interface === 'relation-path'
+            if (isSummaryCol(c)) {
+              return (
+                <div key={c.field} className='flex min-w-0 flex-col gap-1'>
+                  <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>{label}</span>
+                  <div className='text-[12px] text-slate-500'>{summaryCellValue(c, args.draft, true)}</div>
+                </div>
+              )
+            }
+            return (
+              <div key={c.field} className='flex min-w-0 flex-col gap-1'>
+                <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>{label}</span>
+                {isComputedWrite ? (
+                  <div className='text-[12px] italic text-slate-500'>
+                    {renderCell(c, evalClientFormula(c.computed_formula as string, args.draft) ?? args.draft[c.field])}
+                  </div>
+                ) : displayOnlyIface || c.readonly ? (
+                  <div className='text-[12px] text-slate-500'>{renderCell(c, args.draft[c.field], args.rowId)}</div>
+                ) : (
+                  <FieldRenderer
+                    field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
+                    value={args.draft[c.field] ?? null}
+                    onChange={(v) => setDraftField(c.field, v)}
+                    relations={childRelations}
+                    collection={relatedCollection}
+                    itemId={args.rowId ?? 'new'}
+                    cascadeFilter={fieldCascadeFilters[c.field]}
+                  />
+                )}
+              </div>
+            )
+          })}
+        </div>
+        {args.drawer}
+      </div>
+    </td>
+  )
+
   const isAllPresetActive = activePreset === ALL_PRESET_SENTINEL
   // Stale stored names keep highlighting columnPresets[0] (unchanged prior behavior);
   // the All chip only highlights on the explicit sentinel, never as a fallback.
@@ -3411,7 +3536,15 @@ export function InlineTableField({
                     }
                   </td>
                 )}
-                {effectiveCols.map((c) => {
+                {isEditing && !isPendingDelete && rowEditorMode === 'panel'
+                  ? renderRowEditorPanel({
+                      identity: `${showLineNumbers ? `Line ${ri + 1} · ` : ''}${rowIdentityLabel(displayRow)}`,
+                      draft: editState?.draft ?? displayRow,
+                      rowId: id,
+                      saveLabel: isPendingMode ? 'Queue' : 'Save',
+                      onDelete: (e) => deleteRow(row, e)
+                    })
+                  : effectiveCols.map((c) => {
                   if (isSummaryCol(c)) {
                     return (
                       <td key={c.field} className='px-2 py-1 align-top'>
@@ -3446,6 +3579,7 @@ export function InlineTableField({
                     </td>
                   )
                 })}
+                {!(isEditing && !isPendingDelete && rowEditorMode === 'panel') && (
                 <td className='px-1 py-1 align-middle'>
                   {isEditing && !isPendingDelete ? (
                     <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
@@ -3493,6 +3627,7 @@ export function InlineTableField({
                     </div>
                   )}
                 </td>
+                )}
               </tr>
               {lineError && (
                 <tr>
