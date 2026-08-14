@@ -3391,165 +3391,6 @@ export function InlineTableField({
             </tr>
           )}
 
-          {/* Pending rows (new parent OR pending-save mode) */}
-          {pendingRows.length > 0 && pendingRows.map((row, ri) => {
-            const pendingRowId = `pending:${ri}`
-            const isEditing = editState?.rowId === pendingRowId
-            const isPDragging = dragIdx === ri
-            const isPDropTarget = dropIdx === ri && dragIdx !== ri
-            const isPrefilled = !!row.__prefilled
-            return (
-              <Fragment key={ri}>
-              <tr
-                draggable={enableReorder && !isEditing}
-                onDragStart={() => handleDragStart(ri)}
-                onDragOver={(e) => handleDragOver(e, ri)}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  if (dragIdx !== null && dropIdx !== null && dragIdx !== dropIdx) {
-                    staging?.reorderRows(relatedCollection, manyField, dragIdx, dropIdx)
-                  }
-                  handleDragEnd()
-                }}
-                onDragEnd={handleDragEnd}
-                onClick={() => !isEditing && startPendingEdit(row, ri)}
-                onBlur={(e) => {
-                  if (!isEditing || saving) return
-                  if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return
-                  blurTimerRef.current = setTimeout(() => void saveEdit(), 150)
-                }}
-                onFocus={() => {
-                  if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null }
-                }}
-                className={cn('border-b border-slate-100 transition-colors',
-                  isPDragging ? 'opacity-40' : '',
-                  isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
-                  isEditing
-                    ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
-                    : isPrefilled ? 'hover:bg-slate-50 cursor-pointer' : 'bg-amber-50/40 hover:bg-amber-50/70 cursor-pointer'
-                )}>
-                {enableReorder && (
-                  <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
-                    <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
-                  </td>
-                )}
-                {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{ri + 1}</td>}
-                <td className='px-3 py-1 align-middle w-16'>
-                  {!isEditing && !isPrefilled && (
-                    <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5'>Pending</span>
-                  )}
-                  {!isEditing && isPrefilled && row.id != null && editedPendingIds.has(row.id as string | number) && (
-                    <span className='inline-flex text-[10px] font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5'>Edited</span>
-                  )}
-                </td>
-                {effectiveCols.map((c) => {
-                  if (isSummaryCol(c)) {
-                    return (
-                      <td key={c.field} className='px-2 py-1 align-top'>
-                        <div className='py-0.5 overflow-hidden text-slate-500'>{summaryCellValue(c, isEditing ? editState!.draft : row, true)}</div>
-                      </td>
-                    )
-                  }
-                  const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
-                  const isMM = isM2MIface(c.interface)
-                  const m2mKey = `__m2m_${c.field}`
-                  const m2mTarget = isMM && isEditing ? resolveM2MTarget(c) : null
-                  const displayVal = isComputedWrite
-                    ? (evalClientFormula(c.computed_formula as string, isEditing ? editState!.draft : row) ?? row[c.field])
-                    : (isEditing ? editState!.draft[c.field] : row[c.field])
-                  return (
-                    <td key={c.field} className='px-2 py-1 align-top'>
-                      {isComputedWrite ? (
-                        <div className='py-0.5 overflow-hidden text-slate-500 italic'>{renderCell(c, displayVal)}</div>
-                      ) : isMM && isEditing && m2mTarget ? (
-                        <div onClick={(e) => e.stopPropagation()}>
-                          <RelationCombobox
-                            collection={m2mTarget.targetCollection}
-                            value={editState!.draft[m2mKey] ?? null}
-                            onChange={(v) => setDraftField(m2mKey, v)}
-                            extraFilter={fieldCascadeFilters[c.field]}
-                          />
-                        </div>
-                      ) : isMM ? (
-                        <span className='text-slate-300 text-[11px]'>—</span>
-                      ) : isEditing ? (
-                        <div onClick={(e) => e.stopPropagation()}>
-                          <FieldRenderer
-                            field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
-                            value={editState!.draft[c.field] ?? null}
-                            onChange={(v) => setDraftField(c.field, v)}
-                            relations={childRelations}
-                            collection={relatedCollection}
-                            itemId='new'
-                            cascadeFilter={fieldCascadeFilters[c.field]}
-                          />
-                        </div>
-                      ) : (
-                        <div className='py-0.5 overflow-hidden'>{renderCell(c, row[c.field], String(row.id))}</div>
-                      )}
-                    </td>
-                  )
-                })}
-                <td className='px-1 py-1 align-middle'>
-                  {isEditing ? (
-                    <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
-                      <button type='button' disabled={saving} onClick={saveEdit}
-                        className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'>
-                        {saving ? '…' : 'Save'}
-                      </button>
-                      <button type='button' onClick={cancelEdit}
-                        className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'>
-                        ✕
-                      </button>
-                    </div>
-                  ) : (
-                    <div className='flex items-center justify-end gap-0.5'>
-                      {showRowRevisions && isPrefilled && row.id != null && (
-                        <button type='button' title='Row history'
-                          onClick={(e) => { e.stopPropagation(); setHistoryRow(row) }}
-                          className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'>
-                          <History className='h-3 w-3' />
-                        </button>
-                      )}
-                      <button type='button'
-                        onClick={(e) => { e.stopPropagation(); staging?.removeRow(relatedCollection, manyField, ri) }}
-                        className='rounded p-0.5 text-slate-400 hover:text-red-500'>
-                        <X className='h-3 w-3' />
-                      </button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-              {isEditing && drawerRelations && drawerRelations.length > 0 && (
-                <tr className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
-                  <td colSpan={nestedColSpan} className='px-3 py-2'>
-                    <div className='space-y-2'>
-                      {drawerRelations.map((dr) => {
-                        const relField = typeof dr === 'string' ? dr : dr.field
-                        const relHint = typeof dr === 'string' ? undefined : dr.hint
-                        return (
-                          <NestedRelationEditor
-                            key={relField}
-                            parentCollection={relatedCollection}
-                            relationField={relField}
-                            parentRowId={null}
-                            stagedMembers={
-                              (editState!.draft[`__o2m_${relField}`] as Record<string, unknown>[] | undefined) ?? []
-                            }
-                            onStagedChange={(next) => setDraftField(`__o2m_${relField}`, next)}
-                            parentDraft={editState!.draft}
-                            hint={relHint}
-                          />
-                        )
-                      })}
-                    </div>
-                  </td>
-                </tr>
-              )}
-              </Fragment>
-            )
-          })}
-
           {/* Saved rows */}
           {!isNew && activeView === 'original' && rows.map((row, ri) => {
             const id = String(row.id)
@@ -3927,6 +3768,184 @@ export function InlineTableField({
               )
             })
           })()}
+          {/* Pending rows render AFTER saved ones: a row added to an
+              existing record belongs at the end of the list, not above
+              lines that already exist. */}
+          {/* Pending rows (new parent OR pending-save mode) */}
+          {pendingRows.length > 0 && pendingRows.map((row, ri) => {
+            const pendingRowId = `pending:${ri}`
+            const isEditing = editState?.rowId === pendingRowId
+            const isPDragging = dragIdx === ri
+            const isPDropTarget = dropIdx === ri && dragIdx !== ri
+            const isPrefilled = !!row.__prefilled
+            return (
+              <Fragment key={ri}>
+              <tr
+                draggable={enableReorder && !isEditing}
+                onDragStart={() => handleDragStart(ri)}
+                onDragOver={(e) => handleDragOver(e, ri)}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  if (dragIdx !== null && dropIdx !== null && dragIdx !== dropIdx) {
+                    staging?.reorderRows(relatedCollection, manyField, dragIdx, dropIdx)
+                  }
+                  handleDragEnd()
+                }}
+                onDragEnd={handleDragEnd}
+                onClick={() => !isEditing && startPendingEdit(row, ri)}
+                onBlur={(e) => {
+                  if (!isEditing || saving) return
+                  if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return
+                  blurTimerRef.current = setTimeout(() => void saveEdit(), 150)
+                }}
+                onFocus={() => {
+                  if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null }
+                }}
+                className={cn('border-b border-slate-100 transition-colors',
+                  isPDragging ? 'opacity-40' : '',
+                  isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
+                  isEditing
+                    ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
+                    : isPrefilled ? 'hover:bg-slate-50 cursor-pointer' : 'bg-amber-50/40 hover:bg-amber-50/70 cursor-pointer'
+                )}>
+                {enableReorder && (
+                  <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
+                    <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
+                  </td>
+                )}
+                {/* Continue the sequence rather than restarting: a new row
+                    showed "1" beside the saved row already numbered 1. */}
+                {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{rows.length + ri + 1}</td>}
+                <td className='px-3 py-1 align-middle w-16'>
+                  {!isEditing && !isPrefilled && (
+                    <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5'>Pending</span>
+                  )}
+                  {!isEditing && isPrefilled && row.id != null && editedPendingIds.has(row.id as string | number) && (
+                    <span className='inline-flex text-[10px] font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5'>Edited</span>
+                  )}
+                </td>
+                {isEditing && rowEditorMode === 'panel'
+                  ? renderRowEditorPanel({
+                      identity: `${showLineNumbers ? `Line ${rows.length + ri + 1} · ` : ''}${rowIdentityLabel(isEditing ? editState!.draft : row)}`,
+                      draft: editState?.draft ?? row,
+                      rowId: pendingRowId,
+                      saveLabel: 'Queue',
+                      onDelete: (e) => {
+                        e.stopPropagation()
+                        staging?.removeRow(relatedCollection, manyField, ri)
+                      },
+                      // Grandchild rows for an unsaved row stage against the
+                      // draft, so there is no row id to pass yet.
+                      drawer: renderDrawerRelations(undefined, editState?.draft ?? row)
+                    })
+                  : effectiveCols.map((c) => {
+                  if (isSummaryCol(c)) {
+                    return (
+                      <td key={c.field} className='px-2 py-1 align-top'>
+                        <div className='py-0.5 overflow-hidden text-slate-500'>{summaryCellValue(c, isEditing ? editState!.draft : row, true)}</div>
+                      </td>
+                    )
+                  }
+                  const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+                  const isMM = isM2MIface(c.interface)
+                  const m2mKey = `__m2m_${c.field}`
+                  const m2mTarget = isMM && isEditing ? resolveM2MTarget(c) : null
+                  const displayVal = isComputedWrite
+                    ? (evalClientFormula(c.computed_formula as string, isEditing ? editState!.draft : row) ?? row[c.field])
+                    : (isEditing ? editState!.draft[c.field] : row[c.field])
+                  return (
+                    <td key={c.field} className='px-2 py-1 align-top'>
+                      {isComputedWrite ? (
+                        <div className='py-0.5 overflow-hidden text-slate-500 italic'>{renderCell(c, displayVal)}</div>
+                      ) : isMM && isEditing && m2mTarget ? (
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <RelationCombobox
+                            collection={m2mTarget.targetCollection}
+                            value={editState!.draft[m2mKey] ?? null}
+                            onChange={(v) => setDraftField(m2mKey, v)}
+                            extraFilter={fieldCascadeFilters[c.field]}
+                          />
+                        </div>
+                      ) : isMM ? (
+                        <span className='text-slate-300 text-[11px]'>—</span>
+                      ) : isEditing ? (
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <FieldRenderer
+                            field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
+                            value={editState!.draft[c.field] ?? null}
+                            onChange={(v) => setDraftField(c.field, v)}
+                            relations={childRelations}
+                            collection={relatedCollection}
+                            itemId='new'
+                            cascadeFilter={fieldCascadeFilters[c.field]}
+                          />
+                        </div>
+                      ) : (
+                        <div className='py-0.5 overflow-hidden'>{renderCell(c, row[c.field], String(row.id))}</div>
+                      )}
+                    </td>
+                  )
+                })}
+                <td className='px-1 py-1 align-middle'>
+                  {isEditing ? (
+                    <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
+                      <button type='button' disabled={saving} onClick={saveEdit}
+                        className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'>
+                        {saving ? '…' : 'Save'}
+                      </button>
+                      <button type='button' onClick={cancelEdit}
+                        className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'>
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <div className='flex items-center justify-end gap-0.5'>
+                      {showRowRevisions && isPrefilled && row.id != null && (
+                        <button type='button' title='Row history'
+                          onClick={(e) => { e.stopPropagation(); setHistoryRow(row) }}
+                          className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'>
+                          <History className='h-3 w-3' />
+                        </button>
+                      )}
+                      <button type='button'
+                        onClick={(e) => { e.stopPropagation(); staging?.removeRow(relatedCollection, manyField, ri) }}
+                        className='rounded p-0.5 text-slate-400 hover:text-red-500'>
+                        <X className='h-3 w-3' />
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+              {isEditing && drawerRelations && drawerRelations.length > 0 && (
+                <tr className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
+                  <td colSpan={nestedColSpan} className='px-3 py-2'>
+                    <div className='space-y-2'>
+                      {drawerRelations.map((dr) => {
+                        const relField = typeof dr === 'string' ? dr : dr.field
+                        const relHint = typeof dr === 'string' ? undefined : dr.hint
+                        return (
+                          <NestedRelationEditor
+                            key={relField}
+                            parentCollection={relatedCollection}
+                            relationField={relField}
+                            parentRowId={null}
+                            stagedMembers={
+                              (editState!.draft[`__o2m_${relField}`] as Record<string, unknown>[] | undefined) ?? []
+                            }
+                            onStagedChange={(next) => setDraftField(`__o2m_${relField}`, next)}
+                            parentDraft={editState!.draft}
+                            hint={relHint}
+                          />
+                        )
+                      })}
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
+            )
+          })}
+
         </tbody>
         {activeView === 'original' && (() => {
           const aggCols = effectiveCols.filter(c => {
