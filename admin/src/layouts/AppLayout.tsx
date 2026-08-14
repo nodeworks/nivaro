@@ -505,8 +505,14 @@ export function AppLayout() {
   }, [settings?.project_color])
 
   useEffect(() => {
-    const cat = findCategoryForPath(location.pathname)
-    if (cat) setActiveCategory(cat)
+    // Following a favourite keeps you in Favourites. The panel otherwise jumps
+    // to whichever category owns the destination, which throws away the list
+    // the reader was working from — they chose the shortcut list, so leave
+    // them in it until they pick a category themselves.
+    setActiveCategory((current) => {
+      if (current === 'favorites') return current
+      return findCategoryForPath(location.pathname) ?? current
+    })
   }, [location.pathname])
 
   function handleCategoryClick(catId: string) {
