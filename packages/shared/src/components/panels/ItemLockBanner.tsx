@@ -41,7 +41,33 @@ export function useItemLock(
       setLockHolder(null)
       stopHeartbeat()
       heartbeatRef.current = setInterval(() => {
-        client.request(post(`/item-locks/${collection}/${item}/heartbeat`, {})).catch(() => {})
+        client
+          .request(post(`/item-locks/${collection}/${item}/heartbeat`, {}))
+          .catch((err: unknown) => {
+            // The heartbeat is the ONLY moment a client learns its lock was
+            // taken over. Swallowing the failure left the loser editing a
+            // record someone else now owns, with no banner and no hint — the
+            // two of them overwriting each other on save.
+            const e = err as {
+              status?: number
+              response?: (LockHolder & { status?: number; data?: LockHolder }) | undefined
+            }
+            const status = e.status ?? e.response?.status
+            if (status !== 404 && status !== 409) return
+            const body = (e.response?.data ?? e.response) as LockHolder | undefined
+            stopHeartbeat()
+            acquiredRef.current = false
+            setAcquired(false)
+            if (body?.locked_by) {
+              setLockHolder({
+                locked_by: body.locked_by,
+                locked_by_name: body.locked_by_name ?? null
+              })
+              toast.warning(
+                `${body.locked_by_name ?? 'Another user'} took over editing — your changes are no longer being saved`
+              )
+            }
+          })
       }, HEARTBEAT_MS)
       return true
     } catch (err: unknown) {

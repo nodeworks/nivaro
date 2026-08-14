@@ -229,7 +229,15 @@ export async function itemLocksRoutes(app: FastifyInstance) {
 
       const existing = await getCurrentLock(collection, item)
       if (!existing || existing.user !== me) {
-        return reply.code(404).send({ error: 'You do not hold a lock on this item' })
+        // Say WHO holds it now. A heartbeat is the only moment a client whose
+        // lock was taken over finds out, and without the holder it cannot show
+        // the banner naming them — it would just stop beating and carry on
+        // letting the person edit.
+        return reply.code(404).send({
+          error: 'You do not hold a lock on this item',
+          locked_by: existing?.user ?? null,
+          locked_by_name: existing ? await lockHolderName(existing.user) : null
+        })
       }
 
       const expiresAt = new Date(Date.now() + LOCK_TTL_MS)
