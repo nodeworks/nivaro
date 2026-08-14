@@ -519,12 +519,17 @@ export async function resolveStateOwnersBatch(
       database('nivaro_workflow_states').whereIn('id', chunk).select('id', 'template')
     )) as Array<{ id: string; template: string }>
     const templateByState = new Map(stateRows.map((r) => [String(r.id).toUpperCase(), r.template]))
+    // `select('*')` rather than naming owner_fallback_field: an instance whose
+    // database has not yet run migration 196 would otherwise throw "Invalid
+    // column name" on EVERY owner resolution, taking down queues, panels and
+    // notifications over a feature that is opt-in and null by default. Absent
+    // column reads as undefined, which is exactly "no fallback configured".
     const allBindings = (await database('nivaro_workflow_bindings')
       .whereIn('collection', [...new Set(requests.map((r) => r.collection))])
-      .select('collection', 'template', 'owner_fallback_field')) as Array<{
+      .select('*')) as Array<{
       collection: string
       template: string
-      owner_fallback_field: string | null
+      owner_fallback_field?: string | null
     }>
     const bindingRows = allBindings.filter(
       (b): b is typeof b & { owner_fallback_field: string } =>
