@@ -379,6 +379,8 @@ export type PipelineTransition = {
   required_roles: string[] | null
   actions: unknown[] | null
   auto_trigger?: boolean
+  /** 'none' (act on click) | 'optional' | 'required' — see migration 201. */
+  comment_mode?: string
   sort: number
   group_label: string | null
   condition_rules: ConditionRule[] | null

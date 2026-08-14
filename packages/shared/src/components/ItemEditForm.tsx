@@ -4173,13 +4173,22 @@ export function ItemEditForm({
                 key={`${pipelineCollection}:${pipelineItem}`}
                 collection={pipelineCollection}
                 item={pipelineItem}
-                onBeforeTransition={() => {
+                // One click means one action: save what is on screen, then
+                // transition. Refusing and asking for a separate Save made the
+                // button lie about what it does — the person had already told
+                // us to move the record on.
+                onBeforeTransition={async () => {
                   if (!validateAll()) return false
-                  if (isDirty) {
-                    toast.error('Save changes before transitioning')
+                  if (!isDirty) return true
+                  try {
+                    await saveMut.mutateAsync()
+                    return true
+                  } catch {
+                    // The save reports its own failure; transitioning on top of
+                    // unsaved edits would apply the state change to values the
+                    // record does not have.
                     return false
                   }
-                  return true
                 }}
               />
             )}
@@ -4705,13 +4714,16 @@ export function ItemEditForm({
                   key={`${pipelineCollection}:${pipelineItem}`}
                   collection={pipelineCollection}
                   item={pipelineItem}
-                  onBeforeTransition={() => {
+                  // Same as the header buttons: save first, then transition.
+                  onBeforeTransition={async () => {
                     if (!validateAll()) return false
-                    if (isDirty) {
-                      toast.error('Save changes before transitioning')
+                    if (!isDirty) return true
+                    try {
+                      await saveMut.mutateAsync()
+                      return true
+                    } catch {
                       return false
                     }
-                    return true
                   }}
                 />
               )}

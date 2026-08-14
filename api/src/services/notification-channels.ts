@@ -110,6 +110,24 @@ export async function notifyUser(
   const channels = { inapp: true, email: false, sms: false, ...(opts.channels ?? {}) }
   const now = new Date()
 
+  // Nobody who has left gets told. A suspended account cannot act on the
+  // notification and a redacted one is a person exercising a deletion right —
+  // continuing to mail them is the part that matters legally, and an inbox row
+  // for an account that can never sign in is noise either way.
+  //
+  // Enforced HERE rather than at each caller because everything funnels
+  // through this: digests, SLA, watches, subscriptions, flows, mentions.
+  try {
+    const recipient = (await db('nivaro_users')
+      .where({ id: userId })
+      .first('status', 'is_redacted')) as { status?: string; is_redacted?: boolean | number } | undefined
+    const suspended = String(recipient?.status ?? '').toLowerCase() === 'suspended'
+    const redacted = recipient?.is_redacted === true || recipient?.is_redacted === 1
+    if (suspended || redacted) return
+  } catch {
+    // A lookup failure must not swallow a notification — deliver and move on.
+  }
+
   try {
     if (channels.inapp) {
       const [notif] = await db('nivaro_notifications')

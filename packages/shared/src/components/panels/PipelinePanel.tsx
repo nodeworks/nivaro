@@ -982,7 +982,7 @@ export function PipelinePanel({
   defaultExpanded?: boolean
   title?: string
   showApprovalChain?: boolean
-  onBeforeTransition?: () => boolean
+  onBeforeTransition?: () => boolean | Promise<boolean>
   addendumPending?: boolean
   addendumView?: boolean
 }) {
@@ -1017,7 +1017,7 @@ function PipelinePanelInner({
   defaultExpanded?: boolean
   title?: string
   showApprovalChain?: boolean
-  onBeforeTransition?: () => boolean
+  onBeforeTransition?: () => boolean | Promise<boolean>
   addendumPending?: boolean
   addendumView?: boolean
 }) {
@@ -1035,12 +1035,23 @@ function PipelinePanelInner({
       setExpanded(defaultExpanded)
     }
   }, [defaultExpanded])
-  const trySetPending = (txId: string) => {
+  const trySetPending = async (txId: string) => {
     if (pendingTransition === txId) {
       setPendingTransition(null)
       return
     }
-    if (onBeforeTransition && !onBeforeTransition()) return
+    // The guard may save the form first, so it can be async — awaiting it is
+    // what lets one click mean "save, then transition".
+    if (onBeforeTransition && !(await onBeforeTransition())) return
+    // Most transitions are simply "yes, move it on": a confirm step there is a
+    // second click carrying no information. Only stop and ask when the
+    // transition is configured to want a note.
+    const tx = (transitions ?? []).find((t) => t.id === txId)
+    const mode = String((tx as { comment_mode?: string } | undefined)?.comment_mode ?? 'none')
+    if (mode !== 'optional' && mode !== 'required') {
+      executeTransition.mutate({ transition_id: txId })
+      return
+    }
     setPendingTransition(txId)
   }
   const queryKey = ['pipeline-instance', collection, item]
@@ -1291,7 +1302,13 @@ function PipelinePanelInner({
           type='button'
           size='sm'
           className='h-7 gap-1.5 text-[12px]'
-          disabled={executeTransition.isPending}
+          // A required note that can be skipped is not required.
+          disabled={
+            executeTransition.isPending ||
+            (String((pendingTx as { comment_mode?: string } | undefined)?.comment_mode ?? '') ===
+              'required' &&
+              comment.trim() === '')
+          }
           onClick={() =>
             executeTransition.mutate({
               transition_id: pendingTransition!,
@@ -1501,7 +1518,7 @@ export function PipelineTransitionButtons({
 }: {
   collection: string
   item: string
-  onBeforeTransition?: () => boolean
+  onBeforeTransition?: () => boolean | Promise<boolean>
 }) {
   if (item === 'new') return null
   return (
@@ -1520,19 +1537,30 @@ function PipelineTransitionButtonsInner({
 }: {
   collection: string
   item: string
-  onBeforeTransition?: () => boolean
+  onBeforeTransition?: () => boolean | Promise<boolean>
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
-  const trySetPending = (txId: string) => {
+  const trySetPending = async (txId: string) => {
     if (pendingTransition === txId) {
       setPendingTransition(null)
       return
     }
-    if (onBeforeTransition && !onBeforeTransition()) return
+    // The guard may save the form first, so it can be async — awaiting it is
+    // what lets one click mean "save, then transition".
+    if (onBeforeTransition && !(await onBeforeTransition())) return
+    // Most transitions are simply "yes, move it on": a confirm step there is a
+    // second click carrying no information. Only stop and ask when the
+    // transition is configured to want a note.
+    const tx = (transitions ?? []).find((t) => t.id === txId)
+    const mode = String((tx as { comment_mode?: string } | undefined)?.comment_mode ?? 'none')
+    if (mode !== 'optional' && mode !== 'required') {
+      executeTransition.mutate({ transition_id: txId })
+      return
+    }
     setPendingTransition(txId)
   }
   const queryKey = ['pipeline-instance', collection, item]
@@ -1715,7 +1743,14 @@ function PipelineTransitionButtonsInner({
               type='button'
               size='sm'
               className='h-7 gap-1.5 text-[12px]'
-              disabled={executeTransition.isPending}
+               // Same rule as the panel's confirm: a required note must be
+               // filled in before this commits.
+               disabled={
+                 executeTransition.isPending ||
+                 (String((pendingTx as { comment_mode?: string } | null)?.comment_mode ?? '') ===
+                   'required' &&
+                   comment.trim() === '')
+               }
               onClick={() =>
                 executeTransition.mutate({
                   transition_id: pendingTransition,

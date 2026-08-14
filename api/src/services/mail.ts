@@ -171,6 +171,47 @@ export function applyMailTestMode(
  * routing so staging redirection still wins. Fails open: any error sends
  * normally (losing a digest entry beats losing the email).
  */
+
+/**
+ * Drop addresses belonging to accounts that have left — suspended, or redacted
+ * under a deletion request. A suspended person cannot act on what we send, and
+ * mailing a redacted one is the part that actually matters legally.
+ *
+ * Matched by address because that is all a mail call carries; an address with
+ * no user row is left alone, since plenty of legitimate recipients (vendors,
+ * distribution lists) are not users at all. A lookup failure delivers rather
+ * than silently swallowing the mail.
+ */
+async function dropInactiveRecipients(to: string[]): Promise<string[]> {
+  if (to.length === 0) return to
+  try {
+    const rows = (await db('nivaro_users')
+      .whereIn(
+        db.raw('LOWER(email)') as never,
+        to.map((a) => a.toLowerCase())
+      )
+      .select('email', 'status', 'is_redacted')) as Array<{
+      email: string | null
+      status?: string | null
+      is_redacted?: boolean | number
+    }>
+    const blocked = new Set(
+      rows
+        .filter(
+          (r) =>
+            String(r.status ?? '').toLowerCase() === 'suspended' ||
+            r.is_redacted === true ||
+            r.is_redacted === 1
+        )
+        .map((r) => String(r.email ?? '').toLowerCase())
+    )
+    if (blocked.size === 0) return to
+    return to.filter((a) => !blocked.has(a.toLowerCase()))
+  } catch {
+    return to
+  }
+}
+
 async function applyDigestDeferral(
   recipients: string[],
   subject: string,
@@ -280,7 +321,9 @@ export async function sendMail(opts: MailOptions): Promise<void> {
   const original = (Array.isArray(opts.to) ? opts.to : String(opts.to).split(','))
     .map((s) => s.trim())
     .filter(Boolean)
-  const afterDigest = await applyDigestDeferral(original, opts.subject, html, opts.skipDigest)
+  const active = await dropInactiveRecipients(original)
+  if (active.length === 0) return
+  const afterDigest = await applyDigestDeferral(active, opts.subject, html, opts.skipDigest)
   if (afterDigest.length === 0) return
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (!routed || routed.to.length === 0) {
@@ -331,7 +374,9 @@ export async function sendRawMail(opts: {
   const original = (Array.isArray(opts.to) ? opts.to : String(opts.to).split(','))
     .map((s) => s.trim())
     .filter(Boolean)
-  const afterDigest = await applyDigestDeferral(original, opts.subject, opts.html, opts.skipDigest)
+  const active2 = await dropInactiveRecipients(original)
+  if (active2.length === 0) return
+  const afterDigest = await applyDigestDeferral(active2, opts.subject, opts.html, opts.skipDigest)
   if (afterDigest.length === 0) return
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (!routed || routed.to.length === 0) {

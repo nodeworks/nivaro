@@ -649,6 +649,7 @@ type RouteEntry = {
   required_roles: string[] | null
   requirements: TransitionRequirement[] | null
   auto_trigger: boolean
+  comment_mode: string
   actions: TransitionAction[] | null
   minSort: number
 }
@@ -717,6 +718,7 @@ function groupByLabel(transitions: PipelineTransition[]): LabelGroup[] {
         required_roles: tx.required_roles,
         requirements: tx.requirements,
         auto_trigger: !!tx.auto_trigger,
+        comment_mode: tx.comment_mode ?? 'none',
         actions: (tx.actions as TransitionAction[] | null) ?? null,
         minSort: tx.sort
       })
@@ -1420,6 +1422,7 @@ interface TransitionFormData {
   condition_rules: ConditionRule[] | null
   requirements: TransitionRequirement[] | null
   auto_trigger: boolean
+  comment_mode: string
   actions: TransitionAction[] | null
 }
 
@@ -1715,6 +1718,7 @@ function TransitionForm({
     condition_rules: initial.condition_rules ?? null,
     requirements: initial.requirements ?? null,
     auto_trigger: initial.auto_trigger ?? false,
+    comment_mode: initial.comment_mode ?? 'none',
     actions: initial.actions ?? null
   })
 
@@ -1817,6 +1821,36 @@ function TransitionForm({
         actions={form.actions ?? []}
         onChange={(a) => set('actions', a.length > 0 ? a : null)}
       />
+
+      <div className='rounded-lg border border-slate-200 bg-white px-3 py-2'>
+        <span className='text-[12px] font-medium text-slate-700'>Note on transition</span>
+        <p className='mb-1.5 text-[11px] text-slate-400'>
+          Whether taking this transition stops to ask for a note. Most transitions mean simply "move
+          it on", so the default acts on the click; ask when the reason is worth recording, and
+          require it when the record should never move without one.
+        </p>
+        <div className='flex gap-1'>
+          {[
+            { value: 'none', label: 'No note' },
+            { value: 'optional', label: 'Optional' },
+            { value: 'required', label: 'Required' }
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              type='button'
+              onClick={() => set('comment_mode', opt.value)}
+              className={cn(
+                'rounded-md border px-2 py-1 text-[11px] font-medium transition-colors',
+                (form.comment_mode ?? 'none') === opt.value
+                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy'
+                  : 'border-slate-200 text-slate-600 hover:border-slate-400'
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <label className='flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2'>
         <div>
@@ -2519,6 +2553,7 @@ export function PipelineEditPage() {
         condition_rules: data.condition_rules,
         requirements: data.requirements,
         auto_trigger: data.auto_trigger,
+        comment_mode: data.comment_mode,
         group_label: null,
         actions: data.actions,
         sort: 0
