@@ -115,6 +115,7 @@ import { widgetsInternalRoutes } from './widgets-internal.js'
 import { workflowsRoutes } from './workflows.js'
 import { workspacesRoutes } from './workspaces.js'
 import { zapierRoutes } from './zapier.js'
+import { searchRoutes } from './search.js'
 
 export async function registerRoutes(app: FastifyInstance) {
   // Collection/field metadata is cached in-process (services/collections.ts) to
@@ -170,6 +171,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(presenceOnlineRoutes, { prefix: '/presence' })
   await app.register(externalApisRoutes, { prefix: '/external-apis' })
   await app.register(webhooksRoutes, { prefix: '/webhooks' })
+  await app.register(searchRoutes, { prefix: '/search' })
   await app.register(commentsRoutes, { prefix: '/comments' })
   await app.register(customQueriesRoutes, { prefix: '/custom-queries' })
   await app.register(userScopesRoutes)
