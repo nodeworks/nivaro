@@ -50,7 +50,13 @@ function formatFieldConfig(row: FieldRow) {
     note: row.note ?? null,
     placeholder: row.placeholder ?? null,
     hidden: !!row.hidden,
-    readonly: !!row.readonly,
+    // A derived field is never editable: a rollup is recomputed from its
+    // source rows and a write-computed field from its formula, so anything
+    // typed in is silently discarded on save. Offering an input for it invites
+    // a user to enter a number that quietly does not stick — the exact failure
+    // that made "Close Out Lines" look like it had done nothing. An explicit
+    // per-layout override can still force it editable.
+    readonly: !!row.readonly || row.computed_type === 'rollup' || row.computed_type === 'write',
     required: !!row.required,
     interface: row.interface ?? null,
     display: row.display ?? null,
@@ -245,7 +251,12 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
           label: ov?.label !== undefined ? (ov.label as string | null) : base.label,
           note: ov?.note !== undefined ? (ov.note as string | null) : base.note,
           hidden: ov?.hidden !== undefined ? !!ov.hidden : base.hidden,
-          readonly: ov?.readonly !== undefined ? !!ov.readonly : base.readonly,
+          // base.readonly already carries the derived-field rule. A layout
+          // override cannot switch it back on for a computed field: the layout
+          // editor writes this key wholesale with its defaults, so a `false`
+          // here is serialization, not a decision to make a rollup typable.
+          readonly:
+            base.readonly || (ov?.readonly !== undefined ? !!ov.readonly : base.readonly),
           required: ov?.required !== undefined ? !!ov.required : base.required,
           interface: ov?.interface !== undefined ? (ov.interface as string | null) : base.interface,
           placeholder: ov?.placeholder !== undefined ? (ov.placeholder as string | null) : (base as Record<string, unknown>).placeholder ?? null,
