@@ -367,6 +367,73 @@ async function resolveSetFromTrigger(
  * return the target-field updates that fired. Used by both applyFieldRules
  * (write path) and POST /field-rules/evaluate (live client cascades).
  */
+
+/**
+ * Column types that cannot hold a list. A dynamic rule resolves to an ARRAY
+ * because that is right for an M2M/O2M target (divisions → regions), but the
+ * same machinery also fills scalar columns (billing_location → org_code, an
+ * int) — and handing knex `[14]` for an int column fails the INSERT outright:
+ * "Conversion failed when converting the nvarchar value '[14]' to data type
+ * int", which surfaces as a 500 on save with nothing pointing at the rule.
+ *
+ * Text/JSON columns are deliberately absent: a physical nvarchar column CAN
+ * legitimately store a JSON array (repeater fields do), so narrowing there
+ * would corrupt real values.
+ */
+const ARRAY_HOSTILE_TYPES = new Set([
+  'int',
+  'bigint',
+  'smallint',
+  'tinyint',
+  'decimal',
+  'numeric',
+  'float',
+  'real',
+  'money',
+  'smallmoney',
+  'bit',
+  'date',
+  'datetime',
+  'datetime2',
+  'smalldatetime',
+  'time',
+  'uniqueidentifier'
+])
+
+/**
+ * Narrow a resolved list to a single value when the target column cannot hold
+ * a list. More than one match means the lookup was ambiguous — take the first,
+ * which is what a "default this field from that one" rule means, and say so.
+ */
+async function scalarizeForColumn(
+  database: Knex,
+  collection: string,
+  field: string,
+  value: unknown,
+  logger: Logger
+): Promise<unknown> {
+  if (!Array.isArray(value)) return value
+  let type: string | undefined
+  try {
+    const row = (await database('information_schema.columns')
+      .where({ table_name: collection, column_name: field })
+      .first('data_type')) as { data_type?: string } | undefined
+    type = row?.data_type?.toLowerCase()
+  } catch {
+    return value
+  }
+  // No physical column = an alias target (M2M/O2M); the array is the answer.
+  if (!type || !ARRAY_HOSTILE_TYPES.has(type)) return value
+  if (value.length === 0) return null
+  if (value.length > 1) {
+    logger.warn(
+      { collection, field, matches: value.length },
+      'field-rules: lookup matched several rows for a single-value column — using the first'
+    )
+  }
+  return value[0]
+}
+
 export async function evaluateRulesForTrigger(
   database: Knex,
   collection: string,
@@ -403,7 +470,14 @@ export async function evaluateRulesForTrigger(
       if (rule.target_value !== null) updates[rule.target_field] = rule.target_value
     } else if (rule.target_type === 'set_lookup') {
       const resolved = await resolveSetLookup(database, rule, triggerValue, logger)
-      if (resolved !== undefined) updates[rule.target_field] = resolved
+      if (resolved !== undefined)
+        updates[rule.target_field] = await scalarizeForColumn(
+          database,
+          collection,
+          rule.target_field,
+          resolved,
+          logger
+        )
     } else if (rule.target_type === 'set_from_trigger') {
       const resolved = await resolveSetFromTrigger(
         database,
@@ -413,7 +487,14 @@ export async function evaluateRulesForTrigger(
         rule,
         logger
       )
-      if (resolved !== undefined) updates[rule.target_field] = resolved
+      if (resolved !== undefined)
+        updates[rule.target_field] = await scalarizeForColumn(
+          database,
+          collection,
+          rule.target_field,
+          resolved,
+          logger
+        )
     }
   }
   return updates

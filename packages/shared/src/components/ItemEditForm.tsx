@@ -142,13 +142,22 @@ function SaveStepIcon({ status }: { status: SaveStepStatus }) {
 function SaveProgressDialog({ open, steps, onClose }: { open: boolean; steps: SaveStepItem[]; onClose: () => void }) {
   const allSettled = steps.length > 0 && steps.every(s => s.status === 'done' || s.status === 'error')
   const hasError = steps.some(s => s.status === 'error')
+  // A failed step aborts the rest, so the steps after it stay 'pending' and
+  // never settle — which used to mean the dialog offered no way out at exactly
+  // the moment it was reporting a failure. An error IS an end state.
+  const canClose = allSettled || hasError
   const doneCount = steps.filter(s => s.status === 'done').length
   const totalCount = steps.length
   const overallPct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0
 
   return (
-    <Dialog open={open}>
-      <DialogContent onInteractOutside={(e) => e.preventDefault()} className='max-w-md'>
+    <Dialog open={open} onOpenChange={(next) => { if (!next && canClose) onClose() }}>
+      <DialogContent
+        // Clicking away mid-save would hide work still in flight; once it can
+        // be closed, every normal escape (outside click, Escape, the X) works.
+        onInteractOutside={(e) => { if (!canClose) e.preventDefault() }}
+        className='max-w-md'
+      >
         <DialogHeader>
           <DialogTitle className='flex items-center gap-2 text-[15px]'>
             {!allSettled && <Loader2 className='h-4 w-4 animate-spin text-[#00ceff]' />}
@@ -198,6 +207,9 @@ function SaveProgressDialog({ open, steps, onClose }: { open: boolean; steps: Sa
                         )}>
                           {step.label}
                         </span>
+                        {hasError && step.status === 'pending' && (
+                          <span className='shrink-0 text-[10px] text-slate-400'>not run</span>
+                        )}
                         {step.progress && (
                           <span className='text-[11px] text-slate-400 shrink-0 tabular-nums font-mono'>
                             {step.progress.done}/{step.progress.total}
@@ -225,7 +237,7 @@ function SaveProgressDialog({ open, steps, onClose }: { open: boolean; steps: Sa
             })}
           </div>
         </DialogBody>
-        {allSettled && (
+        {canClose && (
           <DialogFooter>
             <button
               type='button'

@@ -1511,14 +1511,36 @@ export async function readItems(
       ).then((res) => rawRows<{ COLUMN_NAME: string }>(res).map(r => r.COLUMN_NAME)) as Promise<string[]>
     ])
     const actualColSet = new Set(actualCols)
-    const searchable = fieldMeta.filter(
-      (f) => ['string', 'text'].includes(f.type) && actualColSet.has(f.field)
-    )
-    if (searchable.length) {
+    let searchCols = fieldMeta
+      .filter((f) => ['string', 'text'].includes(f.type) && actualColSet.has(f.field))
+      .map((f) => f.field)
+
+    // A collection with NO registered field metadata (nivaro_users is served
+    // from virtual meta, so it has none) produced an empty searchable list and
+    // the clause was skipped entirely — every row came back as though it had
+    // matched, which reads as "search does nothing". Fall back to the table's
+    // own text columns so an unregistered collection is still searchable.
+    if (searchCols.length === 0) {
+      const textCols = (await db
+        .raw(
+          `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns
+             WHERE table_name = ?
+               AND DATA_TYPE IN ('char','nchar','varchar','nvarchar','text','ntext')`,
+          [collection]
+        )
+        .then((res) => rawRows<{ COLUMN_NAME: string }>(res).map((r) => r.COLUMN_NAME))) as string[]
+      // Never search a secret: these are stripped from responses, and matching
+      // on them would let a caller confirm a token by probing for it.
+      searchCols = textCols.filter(
+        (c) => !/password|token|secret|totp|external_id/i.test(c)
+      )
+    }
+
+    if (searchCols.length) {
       const applySearch = (qb: QB) => {
         qb.where((inner) => {
-          for (const f of searchable) {
-            inner.orWhere(db.raw('??', [f.field]), 'like', `%${escapedSearch}%`)
+          for (const f of searchCols) {
+            inner.orWhere(db.raw('??', [f]), 'like', `%${escapedSearch}%`)
           }
         })
       }
