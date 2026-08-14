@@ -266,7 +266,7 @@ export async function commentsRoutes(app: FastifyInstance) {
       const CAP = 200
       type Entry = {
         id: string
-        source: 'transition' | 'change_reason' | 'addendum'
+        source: 'transition' | 'change_reason' | 'addendum' | 'note'
         label: string
         text: string
         user: string | null
@@ -397,6 +397,63 @@ export async function commentsRoutes(app: FastifyInstance) {
         // A missing child table or relation must not take down the thread.
       }
 
+      // Note tables. Some deployments keep human notes as their own child
+      // collection rather than in nivaro_comments — those are notes about this
+      // record by any reasonable definition, and a thread that ignored them
+      // showed nothing while the record plainly had commentary on it.
+      // Recognised by CONVENTION, not by a hardcoded name: a child collection
+      // called notes/comments (singular or plural) carrying a text column.
+      const noteRows: Array<Record<string, unknown>> = []
+      try {
+        const rels = (await db('nivaro_relations')
+          .where({ one_collection: collection })
+          .whereNotNull('many_collection')
+          .select('many_collection', 'many_field')) as Array<{
+          many_collection: string
+          many_field: string
+        }>
+        const noteRels = rels.filter(
+          (r) => /(^|_)(notes?|comments?)$/i.test(r.many_collection) && !!r.many_field
+        )
+        for (const rel of noteRels) {
+          const cols = (await db('information_schema.columns')
+            .where({ table_name: rel.many_collection })
+            .select('column_name')) as Array<{ column_name: string }>
+          const names = new Set(cols.map((c) => String(c.column_name).toLowerCase()))
+          const textCol = ['text', 'note', 'notes', 'comment', 'body', 'message'].find((c) =>
+            names.has(c)
+          )
+          if (!textCol) continue
+          const userCol = ['creator', 'user_created', 'created_by', 'user'].find((c) =>
+            names.has(c)
+          )
+          const dateCol = ['created', 'date_created', 'created_at', 'timestamp'].find((c) =>
+            names.has(c)
+          )
+          const rows = (await db(rel.many_collection)
+            .where(rel.many_field, item)
+            .orderBy(dateCol ?? 'id', 'desc')
+            .limit(CAP)
+            .select('*')) as Array<Record<string, unknown>>
+          for (const r of rows) {
+            const text = r[textCol]
+            if (text === null || text === undefined || String(text).trim() === '') continue
+            noteRows.push({
+              id: `note:${rel.many_collection}:${String(r.id)}`,
+              text: String(text),
+              user: userCol ? (r[userCol] ?? null) : null,
+              created_at: dateCol ? r[dateCol] : null,
+              // A note stamped with the state it was written in says more than
+              // "Note" alone.
+              context: r.type ? titleCase(String(r.type)) : null
+            })
+          }
+        }
+      } catch {
+        // Same posture as the rest of this route: a missing table or column
+        // must never take the whole thread down.
+      }
+
       const entries: Entry[] = [
         ...transitions.map((h) => ({
           id: `transition:${h.id}`,
@@ -448,6 +505,16 @@ export async function commentsRoutes(app: FastifyInstance) {
             ]
               .filter(Boolean)
               .join(' · ') || null
+        })),
+        ...noteRows.map((n) => ({
+          id: String(n.id),
+          source: 'note' as const,
+          label: 'Note',
+          // These are stored as rich text; the thread renders plain text.
+          text: stripHtml(String(n.text ?? '')),
+          user: (n.user as string) ?? null,
+          created_at: (n.created_at as string) ?? new Date(0).toISOString(),
+          context: (n.context as string) ?? null
         }))
       ].filter((e) => isHumanNote(e.text))
 

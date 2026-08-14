@@ -1,15 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  ArrowRight,
-  Check,
-  ChevronDown,
-  GitBranch,
-  Loader2,
-  Search,
-  UserPlus,
-  Users,
-  X
-} from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, GitBranch, Loader2, Minus, Search, UserPlus, Users, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -145,7 +135,8 @@ function StateTrack({
   availableTransitions,
   currentStateId,
   history,
-  onPathIds
+  onPathIds,
+  skippedStates
 }: {
   states: PipelineState[]
   allTransitions: PipelineTransition[]
@@ -155,8 +146,18 @@ function StateTrack({
   /** Server-computed relevant-state ids (condition-aware branch pruning from
    *  /owners/all). null while loading — the client BFS below is the fallback. */
   onPathIds?: Set<string> | null
+  /** State id → why the engine will skip it. null while loading. */
+  skippedStates?: Map<string, string[]> | null
 }) {
   const visitedIds = new Set(history.map((h) => h.to_state))
+  // The initial state is never any transition's destination, so history alone
+  // never marks it — leaving "Started" hollow on a record that plainly
+  // started. Every record passed through it; the only time it is not done is
+  // when the record is sitting in it right now.
+  const initialState = states.find((s) => s.is_initial)
+  if (initialState && initialState.id !== currentStateId) visitedIds.add(initialState.id)
+  const firstFrom = history[0]?.from_state
+  if (firstFrom && firstFrom !== currentStateId) visitedIds.add(firstFrom)
   const relevant = (() => {
     // Server relevance (owners/all on_path) is authoritative when loaded — it
     // is condition-aware and understands skip-jump history edges; the client
@@ -252,6 +253,8 @@ function StateTrack({
           const isCurrent = s.id === currentStateId
           const isVisited = visitedIds.has(s.id)
           const isDone = isVisited && !isCurrent
+          const skipReasons = !isVisited && !isCurrent ? skippedStates?.get(s.id) : undefined
+          const isSkipped = skipReasons !== undefined
           const nodeColor = s.color ?? '#94a3b8'
           const isLast = i === relevant.length - 1
           const nextState = !isLast ? relevant[i + 1] : null
@@ -262,8 +265,12 @@ function StateTrack({
                 <div
                   className='flex h-7 w-7 shrink-0 items-center justify-center rounded-full'
                   style={{
-                    backgroundColor: isCurrent || isDone ? nodeColor : '#f1f5f9',
-                    border: isCurrent || isDone ? 'none' : '1.5px solid #e2e8f0',
+                    backgroundColor: isCurrent || isDone ? nodeColor : isSkipped ? 'transparent' : '#f1f5f9',
+                    border: isCurrent || isDone
+                      ? 'none'
+                      : isSkipped
+                        ? '1.5px dashed #cbd5e1'
+                        : '1.5px solid #e2e8f0',
                     boxShadow: isCurrent ? `0 0 0 3px white, 0 0 0 5px ${nodeColor}` : undefined
                   }}
                 >
@@ -271,10 +278,45 @@ function StateTrack({
                     <Check className='h-3.5 w-3.5 text-white' strokeWidth={2.5} />
                   ) : isCurrent ? (
                     <div className='h-2.5 w-2.5 rounded-full bg-white/80' />
+                  ) : isSkipped ? (
+                    <Minus className='h-3 w-3 text-slate-400' strokeWidth={2.5} />
                   ) : (
                     <div className='h-2 w-2 rounded-full bg-slate-300' />
                   )}
                 </div>
+                {isSkipped ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className='w-full cursor-help break-words text-center leading-snug'
+                        style={{
+                          fontSize: '11px',
+                          color: '#94a3b8',
+                          fontWeight: 400,
+                          wordBreak: 'break-word',
+                          textDecoration: 'line-through',
+                          textDecorationColor: '#cbd5e1'
+                        }}
+                      >
+                        {s.label}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent className='max-w-[260px]'>
+                      <p className='text-[11px] font-medium'>Skipped for this record</p>
+                      {skipReasons.length > 0 ? (
+                        <ul className='mt-1 space-y-0.5 text-[11px] opacity-90'>
+                          {skipReasons.map((r) => (
+                            <li key={r}>{r}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className='mt-1 text-[11px] opacity-90'>
+                          Its skip conditions are met.
+                        </p>
+                      )}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
                 <span
                   className='w-full break-words text-center leading-snug'
                   style={{
@@ -286,6 +328,7 @@ function StateTrack({
                 >
                   {s.label}
                 </span>
+                )}
               </div>
               {!isLast && (
                 <div className='mt-[13px] flex w-10 shrink-0 flex-col items-center gap-1.5'>
@@ -1051,6 +1094,19 @@ function PipelinePanelInner({
     return new Set(entries.filter(([, e]) => e.on_path !== false).map(([id]) => id))
   }, [pathOwners])
 
+  // Which states this record will never enter, with the engine's own reason.
+  // The approval chain already renders these; the track showed them as plain
+  // grey, identical to states still ahead — so "skipped forever" and "coming
+  // next" were indistinguishable.
+  const skippedStates = useMemo(() => {
+    if (!pathOwners) return null
+    const out = new Map<string, string[]>()
+    for (const [id, e] of Object.entries(pathOwners)) {
+      if (e.skipped) out.set(id, e.skip_reasons ?? [])
+    }
+    return out
+  }, [pathOwners])
+
   const startPipeline = useMutation({
     mutationFn: () => client.request(post(`/pipelines/instance/${collection}/${item}/start`, {})),
     onSuccess: () => {
@@ -1371,6 +1427,7 @@ function PipelinePanelInner({
                       currentStateId={instance.current_state}
                       history={history ?? []}
                       onPathIds={onPathIds}
+                      skippedStates={skippedStates}
                     />
                   </div>
                 )}

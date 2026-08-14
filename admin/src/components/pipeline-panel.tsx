@@ -56,6 +56,10 @@ function StateTrack({
   history: PipelineHistoryEntry[]
 }) {
   const visitedIds = new Set(history.map((h) => h.to_state))
+  // Same rule as the shared panel: the initial state is nothing's destination,
+  // so it never appears in history — but every record has been through it.
+  const initialState = states.find((s) => s.is_initial)
+  if (initialState && initialState.id !== currentStateId) visitedIds.add(initialState.id)
 
   const relevant = (() => {
     if (allTransitions.length === 0) {

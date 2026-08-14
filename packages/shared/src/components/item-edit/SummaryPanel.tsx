@@ -105,6 +105,28 @@ function M2MSummaryCount({
   )
 }
 
+/** A collection's display template, cached. Without it a relation renders as
+ *  its raw id — which is what the summary was showing for every M2O. */
+function useDisplayTemplate(collection: string | null | undefined) {
+  const client = useNivaroClient()
+  return useQuery<string | null>({
+    queryKey: ['summary-display-template', collection],
+    queryFn: () =>
+      client
+        .request<{ data: unknown }>(get(`/collections/${collection}`))
+        .then((r) => (r.data as { display_template?: string | null })?.display_template ?? null)
+        .catch(() => null),
+    enabled: !!collection,
+    staleTime: 10 * 60_000
+  }).data
+}
+
+/** M2O value: the related record's label, not its primary key. */
+function M2OSummaryValue({ collection, id }: { collection: string; id: unknown }) {
+  const template = useDisplayTemplate(collection)
+  return <RelatedItemLabel collection={collection} id={id} displayTemplate={template ?? undefined} />
+}
+
 // ─── O2MSummary ───────────────────────────────────────────────────────────────
 
 const O2M_LABEL_FALLBACKS = ['name', 'title', 'label', 'subject', 'description', 'line_number']
@@ -195,19 +217,10 @@ function O2MSummary({
     staleTime: 30_000
   })
 
-  // Display template only. NOT the ['collection-meta', c] key — that one
-  // already resolves to a relations array, and returning a different shape
-  // under it would hand every other consumer the wrong data.
-  const { data: template } = useQuery<string | null>({
-    queryKey: ['summary-o2m-template', relatedCollection],
-    queryFn: () =>
-      client
-        .request<{ data: unknown }>(get(`/collections/${relatedCollection}`))
-        .then((r) => (r.data as { display_template?: string | null })?.display_template ?? null)
-        .catch(() => null),
-    enabled: !!relatedCollection,
-    staleTime: 10 * 60_000
-  })
+  // NOT the ['collection-meta', c] key — that one already resolves to a
+  // relations array, and returning a different shape under it would hand
+  // every other consumer the wrong data.
+  const template = useDisplayTemplate(relatedCollection)
 
   if (isLoading)
     return <Loader2 className='h-3 w-3 animate-spin text-slate-400 dark:text-slate-500' />
@@ -395,7 +408,7 @@ export function SummaryFieldValue({
     (r) => r.many_collection === collection && r.many_field === field.field && !r.junction_field
   )
   if (m2oRel?.one_collection) {
-    return <RelatedItemLabel collection={m2oRel.one_collection} id={val} />
+    return <M2OSummaryValue collection={m2oRel.one_collection} id={val} />
   }
 
   if (field.type === 'datetime' || field.type === 'date') {
@@ -642,11 +655,39 @@ export function SummaryPanel({
             >
               <button
                 type='button'
-                // These collections are not on the layout — that is what put
-                // them in this section — so there is no field to scroll to.
-                // Expanding in place is the one thing the click can honestly
-                // do here.
-                onClick={() => setExpandedRelated((cur) => (cur === fieldKey ? null : fieldKey))}
+                // Prefer the real thing: a grid for this child collection, or
+                // the Notes panel for note-shaped ones. Both may be collapsed,
+                // so open them. Only when the record's form shows this
+                // collection nowhere does the row expand in place instead.
+                onClick={() => {
+                  const child = r.many_collection ?? ''
+                  const isNoteish = /(^|_)(notes?|comments?)$/i.test(child)
+                  const target = (document.querySelector(
+                    `[data-o2m-collection="${child}"]`
+                  ) ??
+                    (isNoteish ? document.querySelector('[data-panel="notes"]') : null)) as
+                    | HTMLElement
+                    | null
+                  if (!target) {
+                    setExpandedRelated((cur) => (cur === fieldKey ? null : fieldKey))
+                    return
+                  }
+                  if (target.getAttribute('data-panel-expanded') === 'false') {
+                    target.querySelector<HTMLElement>('[data-panel-toggle]')?.click()
+                  }
+                  target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                  target.classList.add('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md')
+                  setTimeout(
+                    () =>
+                      target.classList.remove(
+                        'ring-2',
+                        'ring-nvr-cyan',
+                        'ring-offset-2',
+                        'rounded-md'
+                      ),
+                    1500
+                  )
+                }}
                 className='flex flex-1 flex-col px-4 py-2 min-w-0 text-left transition-colors hover:bg-nvr-cyan/5'
               >
                 <span className='flex items-center gap-1 text-[10px] font-medium truncate text-slate-400 dark:text-slate-500'>

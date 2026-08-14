@@ -217,7 +217,7 @@ function MentionTextarea({
  *  the transition, change or addendum that captured it. */
 interface RelatedNote {
   id: string
-  source: 'transition' | 'change_reason' | 'addendum'
+  source: 'transition' | 'change_reason' | 'addendum' | 'note'
   label: string
   text: string
   context: string | null
@@ -372,9 +372,16 @@ export function CommentPanel({
   }
 
   return (
-    <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border'>
+    // Addressable from elsewhere (the summary panel jumps here), which needs
+    // both a handle and whether it is currently open.
+    <div
+      data-panel='notes'
+      data-panel-expanded={expanded ? 'true' : 'false'}
+      className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border'
+    >
       <button
         type='button'
+        data-panel-toggle='notes'
         onClick={() => setExpanded((v) => !v)}
         className='flex w-full items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
       >

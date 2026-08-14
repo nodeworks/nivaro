@@ -3140,7 +3140,10 @@ export function InlineTableField({
   )
 
   return (
-    <div className='space-y-1.5'>
+    // Advertises which child collection this grid holds, so the summary can
+    // jump to it by collection rather than by field name (the two differ for
+    // relations that never got an alias field on the layout).
+    <div className='space-y-1.5' data-o2m-collection={relatedCollection}>
       <ChangeReasonDialog
         challenge={crChallenge?.challenge ?? null}
         onCancel={() => setCrChallenge(null)}
