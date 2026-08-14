@@ -3620,12 +3620,30 @@ export function InlineTableField({
             )
           })}
 
-          {/* New row inline */}
+          {/* New row being entered. Distinct from both the saved rows and the
+              staged pending ones: this is the row currently being typed. */}
           {isEditingNew && (
             <tr className='border-b border-slate-100 bg-[#f0fbff] dark:bg-nvr-cyan/5'>
               {(rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
+              {/* This row had no number cell at all, so every column after it
+                  sat one place left of its header. It also shows the number the
+                  row is about to take, continuing past the saved and staged
+                  rows, rather than nothing. */}
+              {showLineNumbers && (
+                <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
+                  {rows.length + pendingRows.length + 1}
+                </td>
+              )}
               {(isNew || isPendingMode) && <td className='px-3 py-1.5' />}
-              {effectiveCols.map((c) => {
+              {rowEditorMode === 'panel'
+                ? renderRowEditorPanel({
+                    identity: `${showLineNumbers ? `Line ${rows.length + pendingRows.length + 1} · ` : ''}New line`,
+                    draft: editState!.draft,
+                    rowId: undefined,
+                    saveLabel: isPendingMode || isNew ? 'Queue' : 'Save',
+                    drawer: renderDrawerRelations(undefined, editState!.draft)
+                  })
+                : effectiveCols.map((c) => {
                 if (isSummaryCol(c)) {
                   return (
                     <td key={c.field} className='px-2 py-1 align-top'>
