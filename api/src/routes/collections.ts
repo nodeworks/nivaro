@@ -138,6 +138,15 @@ export async function collectionsRoutes(app: FastifyInstance) {
       svc.getRelations(collection)
     ])
     const fields = metaFields.length > 0 ? metaFields : await synthesizeFields(collection)
+    const parseJsonList = (v: string | null | undefined): string[] | null => {
+      if (!v) return null
+      try {
+        const parsed = JSON.parse(v)
+        return Array.isArray(parsed) ? parsed.filter((f) => typeof f === 'string') : null
+      } catch {
+        return null
+      }
+    }
     // browser_config is JSON text — parse for consumers (CollectionBrowserView).
     const raw = (col as { browser_config?: string | null }).browser_config
     let browserConfig: unknown = null
@@ -159,7 +168,14 @@ export async function collectionsRoutes(app: FastifyInstance) {
       }
     }
     return reply.send({
-      data: { ...col, fields, relations, browser_config: browserConfig, change_reason_config: changeReasonConfig }
+      data: {
+        ...col,
+        fields,
+        relations,
+        browser_config: browserConfig,
+        change_reason_config: changeReasonConfig,
+        url_alias_fields: parseJsonList((col as { url_alias_fields?: string | null }).url_alias_fields)
+      }
     })
   })
 
@@ -195,11 +211,13 @@ export async function collectionsRoutes(app: FastifyInstance) {
       picker_filter?: unknown
       browser_config?: unknown
       change_reason_config?: unknown
+      url_alias_fields?: unknown
     }
     const {
       picker_filter: rawPickerFilter,
       browser_config: rawBrowserConfig,
       change_reason_config: rawChangeReason,
+      url_alias_fields: rawUrlAlias,
       ...restBody
     } = body
     const patch: Record<string, unknown> = { ...restBody }
@@ -211,6 +229,16 @@ export async function collectionsRoutes(app: FastifyInstance) {
     }
     if ('change_reason_config' in body) {
       patch.change_reason_config = rawChangeReason != null ? JSON.stringify(rawChangeReason) : null
+    }
+    if ('url_alias_fields' in body) {
+      // An empty list means "no alias" — store null so resolution can skip the
+      // collection on a falsy check rather than parsing an empty array.
+      const list = Array.isArray(rawUrlAlias)
+        ? rawUrlAlias.filter((f) => typeof f === 'string' && f.trim() !== '')
+        : []
+      patch.url_alias_fields = list.length > 0 ? JSON.stringify(list) : null
+      // getCollection caches, and resolveAliasId reads from it.
+      svc.clearMetadataCache()
     }
     const data = await svc.updateCollection(collection, patch)
     // Audit level is cached per collection in the activity hook — bust it so an

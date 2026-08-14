@@ -3842,6 +3842,7 @@ function SettingsTab({
       <PickerFilterSection tableName={tableName} />
       <BrowserSettingsSection tableName={tableName} />
       <ChangeReasonSection tableName={tableName} />
+      <UrlAliasSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
     </div>
   )
@@ -4315,6 +4316,69 @@ function AddendumsSection({ tableName }: { tableName: string }) {
 }
 
 // ─── Browser Settings card (Settings tab) ─────────────────────────────────────
+
+// nivaro_collections.url_alias_fields — address records in the URL by
+// something people recognise ("CM26-79826") instead of the primary key.
+function UrlAliasSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const { data: col } = useQuery({
+    queryKey: ['collection-meta-alias', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { url_alias_fields: string[] | null } }>(`/collections/${tableName}`)
+        .then((r) => r.data.data)
+  })
+  const [draft, setDraft] = useState('')
+  const loadedRef = useRef(false)
+  useEffect(() => {
+    if (loadedRef.current || !col) return
+    loadedRef.current = true
+    setDraft((col.url_alias_fields ?? []).join(', '))
+  }, [col])
+
+  async function save() {
+    const fields = draft
+      .split(',')
+      .map((f) => f.trim())
+      .filter(Boolean)
+    await api.patch(`/collections/${tableName}`, { url_alias_fields: fields })
+    qc.invalidateQueries({ queryKey: ['collection-meta-alias', tableName] })
+    toast.success(fields.length > 0 ? 'URL alias saved' : 'URL alias removed')
+  }
+
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='px-4 py-3 space-y-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>URL alias</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Lets a record be opened by a recognisable value instead of its internal id — with{' '}
+            <span className='font-mono'>workflow_id</span> set, /records/{tableName}/CM26-79826
+            resolves the same record as /records/{tableName}/371373. Primary keys keep working. List
+            several fields to combine them; their values are joined by a dash. If a value matches
+            more than one record the lowest id wins, so prefer a field that is genuinely unique.
+          </p>
+        </div>
+        <div>
+          <p className='mb-1 text-[12.5px] font-medium text-slate-700'>Fields (comma-separated)</p>
+          <Input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder='workflow_id'
+            className='h-8 text-[12px] font-mono'
+          />
+        </div>
+        <button
+          type='button'
+          onClick={save}
+          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-medium text-white hover:bg-nvr-cyan/90'
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  )
+}
 
 // nivaro_collections.change_reason_config — require a justification when the
 // listed fields change; the reason lands on the activity row + revision trail.

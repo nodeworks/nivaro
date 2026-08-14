@@ -1413,7 +1413,16 @@ export function ChatPanel({
                 >
                   <span className='relative'>
                     <Avatar id={u.user_id} name={u.display_name} />
-                    <span className='absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-emerald-400 dark:border-card' />
+                    <span
+                      className={cn(
+                        'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white dark:border-card',
+                        // Hollow amber rather than a second solid colour: idle
+                        // is a weaker state than online, and should read that
+                        // way at a glance rather than competing with it.
+                        u.is_idle ? 'border-amber-400 bg-white dark:bg-card' : 'bg-emerald-400'
+                      )}
+                      title={u.is_idle ? 'Idle' : 'Online'}
+                    />
                   </span>
                   <span className='min-w-0 flex-1'>
                     <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>

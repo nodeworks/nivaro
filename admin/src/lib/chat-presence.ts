@@ -24,9 +24,45 @@ export interface OnlineUser {
   current_path: string | null
   last_seen: string
   typing_room?: string | null
+  is_idle?: boolean
+  last_active?: string | null
 }
 
 let presenceRowId: number | null = null
+
+
+/**
+ * When the person last actually did something. The heartbeat keeps beating
+ * while someone is away from the machine, so it cannot answer this on its own —
+ * only real input can. A hidden tab counts as away immediately: switching away
+ * IS the signal, and waiting the full timeout would report someone as present
+ * when they demonstrably are not.
+ */
+const IDLE_AFTER_MS = 5 * 60_000
+let lastActivity = Date.now()
+
+if (typeof window !== 'undefined') {
+  const mark = () => {
+    lastActivity = Date.now()
+  }
+  // passive: these fire constantly and must never delay scrolling.
+  for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'focus']) {
+    window.addEventListener(ev, mark, { passive: true, capture: true })
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') mark()
+    else lastActivity = 0
+  })
+}
+
+function idleState(): { is_idle: boolean; last_active: string } {
+  const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  const stale = Date.now() - lastActivity > IDLE_AFTER_MS
+  return {
+    is_idle: hidden || stale,
+    last_active: new Date(lastActivity || Date.now()).toISOString()
+  }
+}
 
 async function findPresenceRow(userId: string): Promise<number | null> {
   const filter = encodeURIComponent(JSON.stringify({ user_id: { _eq: userId } }))
@@ -48,7 +84,8 @@ async function beat(userId: string, name: string, path: string, roleName: string
     // Written on every heartbeat so a stale value self-heals (legacy rows can
     // hold a role UUID here, which rendered as the user's subtitle).
     role_name: roleName,
-    last_seen: new Date().toISOString()
+    last_seen: new Date().toISOString(),
+    ...idleState()
   }
   try {
     presenceRowId ??= await findPresenceRow(userId)

@@ -1666,6 +1666,62 @@ async function primeRelCacheForFilter(
   }
 }
 
+
+/** Column names are interpolated into a query, so they must be identifiers. */
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * Turn a URL segment into a primary key when a collection is configured to be
+ * addressed by something people recognise ("CM26-79826" instead of 371373).
+ *
+ * Returns the id, or null when the collection has no alias configured / the
+ * segment does not resolve — callers keep their existing not-found behaviour.
+ *
+ * Two things this must not do:
+ *  - Hand a non-numeric segment to an int primary key. MSSQL raises
+ *    "Conversion failed" and the request 500s instead of 404ing, so the id
+ *    lookup is skipped entirely when the segment cannot be one.
+ *  - Silently pick among several matches. Alias columns carry no uniqueness
+ *    guarantee (workflows.workflow_id has real duplicates), so the LOWEST id
+ *    wins deterministically — the same URL always resolves to the same record,
+ *    rather than shifting as rows are added.
+ */
+export async function resolveAliasId(
+  collection: string,
+  segment: string
+): Promise<string | number | null> {
+  const col = await getCollection(collection)
+  const raw = (col as { url_alias_fields?: unknown } | null)?.url_alias_fields
+  const fields = parseJson(typeof raw === 'string' ? raw : null)
+  if (!Array.isArray(fields) || fields.length === 0) return null
+  const names = fields.filter((f): f is string => typeof f === 'string' && IDENT_RE.test(f))
+  if (names.length === 0) return null
+
+  // A multi-field alias joins its parts with '-', so split from the LEFT by
+  // field count and let the final field absorb any remaining separators —
+  // values themselves routinely contain '-' ("CM26-79826").
+  const parts =
+    names.length === 1
+      ? [segment]
+      : (() => {
+          const bits = segment.split('-')
+          if (bits.length < names.length) return null
+          const head = bits.slice(0, names.length - 1)
+          return [...head, bits.slice(names.length - 1).join('-')]
+        })()
+  if (!parts) return null
+
+  try {
+    const q = db(collection).select('id').orderBy('id', 'asc').limit(1)
+    names.forEach((f, i) => void q.where(f, parts[i]))
+    const row = (await q.first()) as { id?: string | number } | undefined
+    return row?.id ?? null
+  } catch {
+    // A stale alias column (renamed/dropped) must not break record loading.
+    return null
+  }
+}
+
 export async function readOne(
   user: User,
   collection: string,
@@ -1701,8 +1757,23 @@ export async function readOne(
         : directFields
       : directFields.filter((f) => f === '*' || allowedFields.includes(f))
 
+  // An alias segment ("CM26-79826") is not a key. Resolve it first, and never
+  // pass it to the id column: an int primary key raises a conversion error
+  // rather than simply not matching.
+  let key: string | number = id
+  const numericLooking = /^\d+$/.test(String(id))
+  const uuidLooking = /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(id))
+  if (!numericLooking && !uuidLooking) {
+    const aliasId = await resolveAliasId(collection, String(id))
+    // Nothing resolved: this is a not-found, not a query. Passing the segment
+    // to an int primary key raises "Conversion failed" and 500s, which is how
+    // a mistyped URL used to look like a broken server.
+    if (aliasId === null) return null
+    key = aliasId
+  }
+
   const q = db(collection)
-    .where({ id })
+    .where({ id: key })
     .select(selectCols as string[])
   await applyWorkspaceScope(q, collection, workspaceId)
 

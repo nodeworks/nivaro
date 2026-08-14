@@ -38,6 +38,9 @@ export interface ChatOnlineUser {
   display_name: string | null
   role_name?: string | null
   current_path?: string | null
+  /** Reported by the client: a tab left open is not the same as being here. */
+  is_idle?: boolean
+  last_active?: string | null
 }
 
 export interface ChatConfig {

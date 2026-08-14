@@ -475,6 +475,12 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           role_name: r.role_name,
           current_path: r.current_path,
           last_seen: r.last_seen,
+          // Reported by the client: the heartbeat alone cannot tell a person
+          // at their desk from a tab left open. Older rows (written before the
+          // column existed, or by a client that does not report it) read as
+          // active rather than guessing at idle.
+          is_idle: r.is_idle === true || r.is_idle === 1,
+          last_active: r.last_active ?? null,
           typing_room: r.typing_room,
           // Flat list for the subtitle line, keyed map for grouping.
           scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),
