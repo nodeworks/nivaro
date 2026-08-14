@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, Copy, Loader2 } from 'lucide-react'
+import { Check, ChevronRight, Copy, Loader2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
-import { parseJson, SENTINEL_FIELDS, SYSTEM_FIELDS } from './helpers'
+import { applyDisplayTemplate, parseJson, SENTINEL_FIELDS, SYSTEM_FIELDS } from './helpers'
 import type { M2MStagingCtx } from './M2MStagingContext'
 import { RelatedItemLabel } from './RelationCombobox'
 import type { CMSField, CMSRelation, FieldGroup, StepDef } from './types'
@@ -105,22 +105,60 @@ function M2MSummaryCount({
   )
 }
 
-// ─── O2MSummaryCount ──────────────────────────────────────────────────────────
+// ─── O2MSummary ───────────────────────────────────────────────────────────────
 
-function O2MSummaryCount({
+const O2M_LABEL_FALLBACKS = ['name', 'title', 'label', 'subject', 'description', 'line_number']
+const O2M_AMOUNT_FIELDS = ['amount', 'total', 'cost', 'price', 'quantity']
+const O2M_PREVIEW = 4
+const O2M_FETCH_LIMIT = 200
+
+/** What a child row is called. Display template first, then the usual names. */
+function o2mRowLabel(row: Record<string, unknown>, template: string | null): string {
+  if (template) {
+    // A display template may reference a related record ("{{workflow.id}} ·
+    // Line {{line_number}}"), and these rows are flat — the unresolved half
+    // renders empty and leaves a dangling separator. Drop orphaned separators
+    // rather than printing "· Line 1".
+    const rendered = applyDisplayTemplate(template, row)
+      .replace(/\s*[·|\-–—/]\s*(?=[·|\-–—/]|$)/g, '')
+      .replace(/^\s*[·|\-–—/]\s*/, '')
+      .trim()
+    if (rendered !== '') return rendered
+  }
+  for (const f of O2M_LABEL_FALLBACKS) {
+    const v = row[f]
+    if (v !== null && v !== undefined && String(v).trim() !== '') return String(v).trim()
+  }
+  return `#${String(row.id ?? '')}`
+}
+
+/**
+ * A child collection in the summary: how many rows, what they are, and what
+ * they add up to.
+ *
+ * A bare count answered "is there anything here?" and nothing else — you had to
+ * open the tab to learn whether the right things were in it. The preview is
+ * capped because this is a summary, not the grid; the remainder is stated
+ * rather than dropped, and a fetch that hits its own ceiling says "200+" rather
+ * than reporting a truncated count as the total.
+ */
+function O2MSummary({
   relatedCollection,
   manyField,
   parentId,
-  rowFilter
+  rowFilter,
+  expanded
 }: {
   relatedCollection: string
   manyField: string
   parentId: string
   rowFilter?: Record<string, unknown>
+  /** Show every fetched row instead of the first few. */
+  expanded?: boolean
 }) {
   const client = useNivaroClient()
   // Same row_filter semantics as InlineTableField: flat values → _eq, object
-  // values pass through — so a filtered grid's summary count matches its rows.
+  // values pass through — so a filtered grid's summary matches its rows.
   const filterClause =
     rowFilter && Object.keys(rowFilter).length > 0
       ? {
@@ -135,23 +173,114 @@ function O2MSummaryCount({
           ]
         }
       : { [manyField]: { _eq: parentId } }
+
   const { data: rows, isLoading } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['o2m-rows', relatedCollection, manyField, parentId, rowFilter ? JSON.stringify(rowFilter) : ''],
+    queryKey: [
+      'o2m-rows',
+      relatedCollection,
+      manyField,
+      parentId,
+      rowFilter ? JSON.stringify(rowFilter) : ''
+    ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
           get(`/items/${relatedCollection}`, {
             filter: JSON.stringify(filterClause),
-            limit: 200
+            limit: O2M_FETCH_LIMIT
           })
         )
         .then((r) => r.data ?? []),
     enabled: !!parentId && parentId !== 'new',
     staleTime: 30_000
   })
-  if (isLoading) return <Loader2 className='h-3 w-3 animate-spin text-slate-400 dark:text-slate-500' />
-  if (!rows || rows.length === 0) return <span className='italic text-[11px] text-slate-400 dark:text-slate-500'>No rows</span>
-  return <span className='text-slate-700 dark:text-slate-200'>{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
+
+  // Display template only. NOT the ['collection-meta', c] key — that one
+  // already resolves to a relations array, and returning a different shape
+  // under it would hand every other consumer the wrong data.
+  const { data: template } = useQuery<string | null>({
+    queryKey: ['summary-o2m-template', relatedCollection],
+    queryFn: () =>
+      client
+        .request<{ data: unknown }>(get(`/collections/${relatedCollection}`))
+        .then((r) => (r.data as { display_template?: string | null })?.display_template ?? null)
+        .catch(() => null),
+    enabled: !!relatedCollection,
+    staleTime: 10 * 60_000
+  })
+
+  if (isLoading)
+    return <Loader2 className='h-3 w-3 animate-spin text-slate-400 dark:text-slate-500' />
+  if (!rows || rows.length === 0)
+    return (
+      <span className='italic text-[11px] text-slate-400 dark:text-slate-500'>No rows</span>
+    )
+
+  const capped = rows.length >= O2M_FETCH_LIMIT
+  const amountField = O2M_AMOUNT_FIELDS.find((f) =>
+    rows.some((r) => typeof r[f] === 'number' || (typeof r[f] === 'string' && r[f] !== '' && !Number.isNaN(Number(r[f]))))
+  )
+  // Only claim a total when nothing was cut off — a sum over the first 200 of
+  // more rows is a wrong number, which is worse than no number.
+  const total =
+    amountField && !capped
+      ? rows.reduce((acc, r) => {
+          const n = Number(r[amountField])
+          return acc + (Number.isFinite(n) ? n : 0)
+        }, 0)
+      : null
+  const isCurrency = amountField ? amountField !== 'quantity' : false
+
+  return (
+    <span className='block'>
+      <span className='flex items-baseline gap-2'>
+        <span className='text-slate-700 dark:text-slate-200'>
+          {capped ? `${O2M_FETCH_LIMIT}+` : rows.length} row{rows.length !== 1 ? 's' : ''}
+        </span>
+        {total !== null && (
+          <span className='tabular-nums text-[11px] text-slate-500 dark:text-slate-400'>
+            {isCurrency
+              ? total.toLocaleString(undefined, {
+                  style: 'currency',
+                  currency: 'USD',
+                  maximumFractionDigits: total % 1 === 0 ? 0 : 2
+                })
+              : total.toLocaleString()}
+          </span>
+        )}
+      </span>
+      <span className='mt-1 block space-y-0.5'>
+        {(expanded ? rows : rows.slice(0, O2M_PREVIEW)).map((row, i) => (
+          <span
+            key={String(row.id ?? i)}
+            className='flex items-baseline justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400'
+          >
+            <span className='truncate'>{o2mRowLabel(row, template ?? null)}</span>
+            {amountField && row[amountField] !== null && row[amountField] !== undefined && (
+              <span className='shrink-0 tabular-nums'>
+                {(() => {
+                  const n = Number(row[amountField])
+                  if (!Number.isFinite(n)) return String(row[amountField])
+                  return isCurrency
+                    ? n.toLocaleString(undefined, {
+                        style: 'currency',
+                        currency: 'USD',
+                        maximumFractionDigits: n % 1 === 0 ? 0 : 2
+                      })
+                    : n.toLocaleString()
+                })()}
+              </span>
+            )}
+          </span>
+        ))}
+        {!expanded && rows.length > O2M_PREVIEW && (
+          <span className='block text-[11px] italic text-slate-400 dark:text-slate-500'>
+            +{capped ? `${rows.length - O2M_PREVIEW}+` : rows.length - O2M_PREVIEW} more
+          </span>
+        )}
+      </span>
+    </span>
+  )
 }
 
 // ─── SummaryFieldValue ─────────────────────────────────────────────────────────
@@ -194,7 +323,7 @@ export function SummaryFieldValue({
         }
       })()
       return (
-        <O2MSummaryCount
+        <O2MSummary
           relatedCollection={o2mRel.many_collection}
           manyField={o2mRel.many_field}
           parentId={itemId}
@@ -327,6 +456,7 @@ export function SummaryPanel({
   onFieldClick: (stepKey: string, fieldKey: string) => void
 }) {
   const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [expandedRelated, setExpandedRelated] = useState<string | null>(null)
   const valueRefs = useRef<Map<string, HTMLSpanElement | null>>(new Map())
 
   const hasGeneralStep = allSteps.some((s) => s.key === '__general__')
@@ -496,7 +626,13 @@ export function SummaryPanel({
           <div className='bg-slate-100 px-4 py-2 border-y border-slate-200 dark:bg-white/[0.06] dark:border-border/80'>
             <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>Related</span>
           </div>
-          {extraO2MRels.map((r, ri) => (
+          {extraO2MRels.map((r, ri) => {
+            // These relations belong to no step, so there is no tab to open —
+            // the empty step key tells the host to skip tab switching and just
+            // go to the grid where it is.
+            const fieldKey = r.one_field ?? r.many_collection ?? ''
+            const isOpen = expandedRelated === fieldKey
+            return (
             <div
               key={r.id ?? `${r.many_collection}.${r.many_field}`}
               className={cn(
@@ -504,20 +640,33 @@ export function SummaryPanel({
                 ri < extraO2MRels.length - 1 && 'border-b border-slate-100 dark:border-border/60'
               )}
             >
-              <div className='flex flex-1 flex-col px-4 py-2 min-w-0'>
-                <span className='text-[10px] font-medium truncate text-slate-400 dark:text-slate-500'>
+              <button
+                type='button'
+                // These collections are not on the layout — that is what put
+                // them in this section — so there is no field to scroll to.
+                // Expanding in place is the one thing the click can honestly
+                // do here.
+                onClick={() => setExpandedRelated((cur) => (cur === fieldKey ? null : fieldKey))}
+                className='flex flex-1 flex-col px-4 py-2 min-w-0 text-left transition-colors hover:bg-nvr-cyan/5'
+              >
+                <span className='flex items-center gap-1 text-[10px] font-medium truncate text-slate-400 dark:text-slate-500'>
+                  <ChevronRight
+                    className={cn('h-3 w-3 shrink-0 transition-transform', isOpen && 'rotate-90')}
+                  />
                   {titleCase(r.one_field ?? r.many_collection ?? '')}
                 </span>
                 <span className='mt-0.5 text-[12px]'>
-                  <O2MSummaryCount
+                  <O2MSummary
                     relatedCollection={r.many_collection ?? ''}
                     manyField={r.many_field!}
                     parentId={itemId}
+                    expanded={isOpen}
                   />
                 </span>
-              </div>
+              </button>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

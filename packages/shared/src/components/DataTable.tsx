@@ -576,7 +576,10 @@ export function DataTable<T = Record<string, unknown>>({
       <TableRow
         key={rowId}
         className={cn(
-          'border-slate-100',
+          // NAMED group: queue cells already use bare `group-hover:` against
+          // their own local group, and claiming the unnamed one here would
+          // make those reveal on row hover instead.
+          'group/row border-slate-100',
           (pinFirstColumn || pinsActive) && 'bg-white dark:bg-card',
           onRowClick &&
             (pinFirstColumn || pinsActive

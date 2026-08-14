@@ -1293,7 +1293,13 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       header: aliasFor('label', 'Item'),
       sortable: true,
       render: (row) => (
-        <span className='block max-w-[160px] truncate font-medium' title={row.label}>
+        // Underlined because clicking opens the item. The row is clickable as
+        // a whole, but nothing on it said so — an underline is the one
+        // convention people already read as "this goes somewhere".
+        <span
+          className='block max-w-[160px] truncate font-medium underline decoration-slate-300 decoration-dotted underline-offset-2 group-hover/row:decoration-nvr-cyan dark:decoration-slate-600'
+          title={row.label}
+        >
           {row.label}
         </span>
       )

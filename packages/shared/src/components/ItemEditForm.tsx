@@ -4929,45 +4929,59 @@ export function ItemEditForm({
                       ])
                     )}
                     onFieldClick={(stepKey, fieldKey) => {
-                      if (hasContainers) {
-                        const ownerContainer = containerGroups.find((c) =>
-                          groups.some((g) => g.type === 'tab' && g.container_id === c.id && g.key === stepKey)
-                        )
-                        if (ownerContainer) {
-                          setContainerTab(ownerContainer, stepKey)
-                          bodyRef.current?.scrollTo({ top: 0 })
+                      // An empty step key means the field belongs to no step
+                      // (the Related child collections) — there is no tab to
+                      // open, so go straight to where it is rendered.
+                      if (stepKey) {
+                        if (hasContainers) {
+                          const ownerContainer = containerGroups.find((c) =>
+                            groups.some(
+                              (g) => g.type === 'tab' && g.container_id === c.id && g.key === stepKey
+                            )
+                          )
+                          if (ownerContainer) {
+                            setContainerTab(ownerContainer, stepKey)
+                            bodyRef.current?.scrollTo({ top: 0 })
+                          } else {
+                            setActiveTab(stepKey)
+                          }
                         } else {
                           setActiveTab(stepKey)
                         }
-                      } else {
-                        setActiveTab(stepKey)
                       }
-                      setTimeout(() => {
-                        // A field pinned to the item header has no row in the
-                        // body to scroll to; flash it where it actually lives
-                        // rather than doing nothing at all.
+                      // Switching a tab mounts that panel, and an inline grid
+                      // does not exist in the DOM until it does — one 80ms
+                      // shot missed it and the click read as doing nothing.
+                      // Poll briefly instead, then give up quietly.
+                      let tries = 0
+                      const find = () => {
                         const el = (document.querySelector(`[data-field="${fieldKey}"]`) ??
                           document.querySelector(
                             `[data-header-field="${fieldKey}"]`
                           )) as HTMLElement | null
-                        if (el) {
-                          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                          el.classList.add('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md')
-                          setTimeout(
-                            () =>
-                              el.classList.remove(
-                                'ring-2',
-                                'ring-nvr-cyan',
-                                'ring-offset-2',
-                                'rounded-md'
-                              ),
-                            1500
-                          )
-                          ;(
-                            el.querySelector('input,textarea,select,button') as HTMLElement | null
-                          )?.focus()
+                        if (!el) {
+                          if (tries++ < 12) setTimeout(find, 60)
+                          return
                         }
-                      }, 80)
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                        el.classList.add('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md')
+                        setTimeout(
+                          () =>
+                            el.classList.remove(
+                              'ring-2',
+                              'ring-nvr-cyan',
+                              'ring-offset-2',
+                              'rounded-md'
+                            ),
+                          1500
+                        )
+                        // Only pull focus for a field you can actually type
+                        // in; focusing a grid's first button scrolls it back
+                        // out from under the highlight.
+                        const input = el.querySelector('input,textarea,select') as HTMLElement | null
+                        input?.focus()
+                      }
+                      setTimeout(find, 60)
                     }}
                   />
                 </div>

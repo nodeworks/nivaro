@@ -766,7 +766,11 @@ function CellValue({
       <span
         className={cn(
           'block max-w-[240px] truncate text-[12px] text-slate-700 dark:text-slate-200',
-          isMachineValue(field) && 'font-mono'
+          isMachineValue(field) && 'font-mono',
+          // An id cell opens the record. Underline it so that is legible
+          // before you click rather than after.
+          isMachineValue(field) &&
+            'underline decoration-slate-300 decoration-dotted underline-offset-2 group-hover:decoration-nvr-cyan dark:decoration-slate-600'
         )}
         data-tip={value.length > 28 ? value : undefined}
       >
