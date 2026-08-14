@@ -317,6 +317,43 @@ export function FieldRenderer({
         )
       }
     }
+    // A derived total that is moving under the reader's edits — an addendum's
+    // proposed lines, say — has to show BOTH figures. The new number alone
+    // silently replaces the one they are amending, and the difference is the
+    // whole point of the amendment.
+    const liveDelta = (field.options as { __live_delta?: { original: unknown; live: number } } | null)
+      ?.__live_delta
+    if (liveDelta && Number.isFinite(Number(liveDelta.live))) {
+      const originalNum = Number(liveDelta.original)
+      const rawDiff = Number(liveDelta.live) - (Number.isFinite(originalNum) ? originalNum : 0)
+      // Round to cents: float sums drift, and a "+$0.00" chip is noise.
+      const diff = Math.round(rawDiff * 100) / 100
+      return (
+        <div className='flex min-h-[36px] flex-wrap items-center gap-x-2 gap-y-0.5'>
+          <span className='text-sm text-slate-400 line-through tabular-nums'>
+            {formatDisplayValue(liveDelta.original, field)}
+          </span>
+          <span className='text-slate-300' aria-hidden>
+            →
+          </span>
+          <span className='text-sm font-medium tabular-nums'>
+            {formatDisplayValue(liveDelta.live, field)}
+          </span>
+          {diff !== 0 && (
+            <span
+              className={`rounded px-1.5 py-px text-[11px] font-medium tabular-nums ${
+                diff > 0
+                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400'
+                  : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400'
+              }`}
+            >
+              {diff > 0 ? '+' : '−'}
+              {formatDisplayValue(Math.abs(diff), field)}
+            </span>
+          )}
+        </div>
+      )
+    }
     const display =
       value === null || value === undefined ? (
         <span className='text-muted-foreground italic text-sm'>—</span>

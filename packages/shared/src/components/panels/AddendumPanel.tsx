@@ -5,6 +5,8 @@ import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { titleCase } from '../../lib/utils'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
+import { useLiveRows } from '../item-edit/O2MStagingContext'
+import { computeLiveRollup, parseRollupSources } from '../item-edit/live-rollups'
 import { O2MStagingContext } from '../item-edit/O2MStagingContext'
 import type { O2MStagingCtx } from '../item-edit/O2MStagingContext'
 import type { CMSField, CMSRelation } from '../item-edit/types'
@@ -109,6 +111,30 @@ const STATUS_STYLES: Record<string, { badge: string; dot: string }> = {
   rejected: { badge: 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400', dot: 'bg-red-500' },
 }
 
+
+/** Money-grade comparison: a live sum of floats never exactly equals a stored
+ *  decimal, so compare at cent precision or every total shows a +$0.00 delta. */
+const sameToCents = (a: unknown, b: unknown): boolean =>
+  Math.round(Number(a) * 100) === Math.round(Number(b) * 100)
+
+/** Decorates a rollup field with its live total so FieldRenderer can show the
+ *  original, the new figure and the difference. Returns the field untouched
+ *  when there is nothing to compare — no live rows, or an unmoved total. */
+function withLiveDelta(
+  meta: CMSField,
+  current: unknown,
+  liveRows: ReturnType<typeof useLiveRows>
+): CMSField {
+  if (!liveRows || meta.computed_type !== 'rollup' || !meta.computed_formula) return meta
+  const live = computeLiveRollup(parseRollupSources(meta.computed_formula), liveRows.rows)
+  if (live === null) return meta
+  if (current !== null && current !== undefined && sameToCents(current, live)) return meta
+  return {
+    ...meta,
+    options: { ...((meta.options as Record<string, unknown> | null) ?? {}), __live_delta: { original: current, live } }
+  }
+}
+
 // ─── ProposedChangesForm ───────────────────────────────────────────────────────
 // Isolated so title/description keystrokes don't re-render FieldRenderers.
 
@@ -129,6 +155,12 @@ const ProposedChangesForm = memo(function ProposedChangesForm({
   collection: string
   prefillParentId: string
 }) {
+  // The addendum's own grid publishes its staged rows into the record form's
+  // LiveRowsContext, so a rollup on the amendment can be totalled from the
+  // lines being proposed — and shown as original → new, since the difference
+  // is the whole point of the amendment.
+  const liveRows = useLiveRows()
+
   if (configuredFields.length === 0) {
     return (
       <div className='rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center dark:border-border dark:bg-muted/30'>
@@ -163,7 +195,7 @@ const ProposedChangesForm = memo(function ProposedChangesForm({
             <div key={a.field}>
               <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>{label}</Label>
               <FieldRenderer
-                field={meta}
+                field={withLiveDelta(meta, formData[a.field], liveRows)}
                 value={formData[a.field]}
                 onChange={(v) => onFieldChange(a.field, v)}
                 relations={relations}

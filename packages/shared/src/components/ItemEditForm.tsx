@@ -3775,7 +3775,27 @@ export function ItemEditForm({
     const normAlts = (swapCfg?.alternate_fields ?? []).map(x => typeof x === 'string' ? { field: x, width: 2 as const } : x)
     const isSwapped = swapCfg?.enabled ? swappedGroups.has(g.id) : false
     const baseFields = groupedMap[g.key] ?? []
-    const groupFields = baseFields
+    // A rollup whose live total has moved away from the stored one shows both
+    // figures and the difference — on an addendum that difference IS the
+    // amendment, and replacing the old number with the new one hides it.
+    const groupFields = baseFields.map((f) => {
+      const live = liveRollupValues.get(f.field)
+      if (live === undefined) return f
+      const original = draft[f.field]
+      // Cent precision: a live sum of floats never exactly equals the stored
+      // decimal, and an unmoved total must not advertise a +$0.00 change.
+      if (
+        original !== null &&
+        original !== undefined &&
+        Math.round(Number(original) * 100) === Math.round(Number(live) * 100)
+      ) {
+        return f
+      }
+      return {
+        ...f,
+        options: { ...((f.options as Record<string, unknown> | null) ?? {}), __live_delta: { original, live } }
+      }
+    })
     const ownersHere = ownersInGroup && ownersGroupKey === g.key && showPipeline
     const pdfHere = pdfInGroup && pdfGroupKey === g.key && !isNew
     const widgetsHere = widgetSlots.filter((ws) => (ws.group_key ?? null) === g.key)
