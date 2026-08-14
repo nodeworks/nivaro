@@ -2920,6 +2920,62 @@ export function InlineTableField({
     return row.id != null ? `#${row.id}` : 'New row'
   }
 
+  /** Derived or non-editable in the panel: shown as a value, ordered last. */
+  /**
+   * The row's nested relation editors (e.g. a line's unit allocations). Same
+   * markup whether it sits in its own table row (inline mode) or inside the
+   * elevated panel — a row's children belong with the row being edited, not
+   * stranded in a strip below it.
+   */
+  const renderDrawerRelations = (rowId: string | undefined, draft: Record<string, unknown>) => {
+    if (!drawerRelations || drawerRelations.length === 0) return null
+    return (
+      <div className='mt-3 space-y-2 border-t border-slate-100 pt-3 dark:border-border'>
+        {drawerRelations.map((dr) => {
+          const relField = typeof dr === 'string' ? dr : dr.field
+          const relHint = typeof dr === 'string' ? undefined : dr.hint
+          const relMatch = typeof dr === 'string' ? undefined : dr.match
+          const matched = relMatch
+            ? buildMatchedDrawer(relMatch, draft, parentId, parentDraftCtx?.draft)
+            : null
+          return (
+            <NestedRelationEditor
+              key={relField}
+              parentCollection={relatedCollection}
+              relationField={relField}
+              parentRowId={rowId ?? null}
+              parentDraft={draft}
+              hint={relHint}
+              outerGridInvalidateKey={['o2m-rows', relatedCollection, manyField, parentId]}
+              {...(relMatch
+                ? {
+                    matchCollection: relMatch.collection,
+                    matchQuery: matched?.query ?? null,
+                    matchSeed: matched?.seed ?? {}
+                  }
+                : isPendingMode || !rowId
+                  ? {
+                      deferred: true,
+                      stagedOps:
+                        (draft[`__nested_ops_${relField}`] as NestedOps | undefined) ?? EMPTY_NESTED_OPS,
+                      onStagedOpsChange: (ops: NestedOps) => setDraftField(`__nested_ops_${relField}`, ops)
+                    }
+                  : {})}
+            />
+          )
+        })}
+      </div>
+    )
+  }
+
+  const isPanelReadOnly = (c: CMSField): boolean =>
+    (c.computed_type === 'write' && !!c.computed_formula) ||
+    c.interface === 'formula-column' ||
+    c.interface === 'match-agg-column' ||
+    c.interface === 'relation-path' ||
+    !!c.readonly ||
+    isSummaryCol(c)
+
   const renderRowEditorPanel = (args: {
     identity: ReactNode
     draft: Record<string, unknown>
@@ -2968,7 +3024,12 @@ export function InlineTableField({
           className='grid items-start gap-x-4 gap-y-3'
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}
         >
-          {effectiveCols.map((c) => {
+          {/* What you can change comes first; derived and read-only values are
+              reference material and collect at the end, in their table order. */}
+          {[...effectiveCols]
+            .map((c, i) => ({ c, i }))
+            .sort((a, b) => Number(isPanelReadOnly(a.c)) - Number(isPanelReadOnly(b.c)) || a.i - b.i)
+            .map(({ c }) => {
             const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
             // A raw column name (LINE_TYPE, SUPPLIER_ITEM) is the table's
             // shorthand; a labelled form should read like prose.
@@ -3542,7 +3603,8 @@ export function InlineTableField({
                       draft: editState?.draft ?? displayRow,
                       rowId: id,
                       saveLabel: isPendingMode ? 'Queue' : 'Save',
-                      onDelete: (e) => deleteRow(row, e)
+                      onDelete: (e) => deleteRow(row, e),
+                      drawer: renderDrawerRelations(id, editState?.draft ?? displayRow)
                     })
                   : effectiveCols.map((c) => {
                   if (isSummaryCol(c)) {
@@ -3639,7 +3701,7 @@ export function InlineTableField({
                   </td>
                 </tr>
               )}
-              {isEditing && !isPendingDelete && drawerRelations && drawerRelations.length > 0 && (
+              {isEditing && !isPendingDelete && rowEditorMode !== 'panel' && drawerRelations && drawerRelations.length > 0 && (
                 <tr className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
                   <td colSpan={nestedColSpan} className='px-3 py-2'>
                     <div className='space-y-2'>
