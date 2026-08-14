@@ -207,9 +207,15 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
   const allFields = new Map<string, Awaited<ReturnType<typeof getFields>>>()
   for (const col of visible) {
     const fields = await getFields(col.collection)
+    // `hidden` is a UI flag — it means "do not put this on the form", not "do
+    // not expose it". The primary key is routinely flagged hidden (the legacy
+    // import did it to every table), which made `{ id }` — the one selection
+    // every GraphQL client makes — unqueryable, and left mutations unable to
+    // return the id of the row they just created. REST never filtered on
+    // hidden, so this also brings the two APIs into agreement.
     allFields.set(
       col.collection,
-      fields.filter((f) => !f.hidden)
+      fields.filter((f) => !f.hidden || f.field === 'id')
     )
   }
 
@@ -536,6 +542,12 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       }
     }
 
+    // Directus named this `create_<collection>_item`; ours is `create_<collection>`.
+    // Both point at the same resolver so an integration written against the old
+    // schema keeps working — it costs one extra field in the schema and saves a
+    // coordinated release with every third party that posts to us.
+    mutationFields[`create_${name}_item`] = mutationFields[`create_${name}`]
+
     mutationFields[`update_${name}_item`] = {
       type: itemType,
       args: {
@@ -651,7 +663,7 @@ export async function buildOpenAPISpec(baseUrl: string): Promise<Record<string, 
   for (const col of collections.filter((c) => !c.hidden)) {
     const name = col.collection
     const fields = await getFields(name)
-    const visibleFields = fields.filter((f) => !f.hidden)
+    const visibleFields = fields.filter((f) => !f.hidden || f.field === 'id')
 
     // ── Schema component ──────────────────────────────────────────────────────
     const schemaName = name.replace(/[^a-zA-Z0-9_]/g, '_')

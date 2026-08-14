@@ -20,6 +20,7 @@ import { resolveWorkspace } from './middleware/workspace.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { cronPlugin } from './plugins/cron.js'
 import { graphqlPlugin } from './plugins/graphql.js'
+import { legacyCompatRoutes } from './plugins/legacy-compat.js'
 import { inngestPlugin } from './plugins/inngest.js'
 import { rateLimitPlugin } from './plugins/rate-limit.js'
 import { redisPlugin } from './plugins/redis.js'
@@ -170,6 +171,7 @@ export async function buildServer() {
   await app.register(presencePublicRoutes, { prefix: '/api/presence' })
   await app.register(registerRoutes, { prefix: '/api' })
   await app.register(graphqlPlugin, { prefix: '/api' })
+  await app.register(legacyCompatRoutes)
   await app.register(formRendererRoutes)
   await app.register(sharePublicRoutes)
 

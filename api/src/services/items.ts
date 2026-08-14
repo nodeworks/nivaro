@@ -1701,6 +1701,42 @@ export async function readOne(
   return item ?? null
 }
 
+/**
+ * Accepts the Directus-era nested shape for a foreign key — `{file: {id, ...}}`
+ * — and reduces it to the id the column actually holds.
+ *
+ * Without this the object falls through to filterToActualColumns, which
+ * JSON-stringifies it into a uuid/int column: a corrupt value or a type error,
+ * for a payload that is perfectly clear about what it means. Scoped strictly to
+ * fields that ARE many-to-one relations, so a genuine JSON column holding an
+ * object with an `id` key is untouched.
+ */
+async function coerceRelationObjects(
+  collection: string,
+  data: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const candidates = Object.entries(data).filter(
+    ([, v]) => v !== null && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date)
+  )
+  if (candidates.length === 0) return data
+  let rels: Awaited<ReturnType<typeof getRelations>>
+  try {
+    rels = await getRelations(collection)
+  } catch {
+    return data
+  }
+  const out = { ...data }
+  for (const [field, value] of candidates) {
+    const isM2O = rels.some(
+      (r) => r.many_collection === collection && r.many_field === field && !!r.one_collection
+    )
+    if (!isM2O) continue
+    const id = (value as Record<string, unknown>).id
+    if (id !== undefined && (typeof id === 'string' || typeof id === 'number')) out[field] = id
+  }
+  return out
+}
+
 export async function createOne(
   user: User,
   collection: string,
@@ -1712,6 +1748,7 @@ export async function createOne(
   assertNotRouteOnly(collection)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
+  data = await coerceRelationObjects(collection, data)
 
   const allowed = await can(user, 'create', collection)
   if (!allowed) throw new ForbiddenError()
@@ -1800,6 +1837,7 @@ export async function updateOne(
   workspaceId?: string
 ) {
   assertNotRouteOnly(collection)
+  data = await coerceRelationObjects(collection, data)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 
