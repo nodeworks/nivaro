@@ -1,7 +1,7 @@
 {
   "name": "@nivaro/sdk",
-  "version": "0.1.3",
-  "description": "TypeScript SDK for Nivaro CMS \u2014 typed REST client, GraphQL, realtime subscriptions, and presence.",
+  "version": "0.1.4",
+  "description": "TypeScript SDK for Nivaro CMS — typed REST client, GraphQL, realtime subscriptions, and presence.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
