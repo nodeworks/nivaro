@@ -9356,13 +9356,17 @@ function FieldSettingsPopover({
               : settings.options) as Record<string, unknown>)
           : {}
         const formatOpts: Record<string, unknown> = {}
+        if (isNumericAbstractType) {
+          // Precision is independent of format now: it drives the input's step
+          // and rounding, so a plain (unformatted) number field still needs it.
+          const p = parseInt(numPrecisionFmt, 10)
+          if (Number.isFinite(p)) formatOpts.precision = p
+        }
         if (isNumericAbstractType && numFormat) {
           formatOpts.format = numFormat
-          if (numFormat === 'decimal') formatOpts.precision = parseInt(numPrecisionFmt, 10) || 2
           if (numFormat === 'currency') formatOpts.currency = numCurrency || 'USD'
         } else if (isNumericAbstractType) {
           delete existing.format
-          delete existing.precision
           delete existing.currency
         }
         if (isNumericAbstractType && numAggregate) {
@@ -9680,9 +9684,12 @@ function FieldSettingsPopover({
                     </button>
                   ))}
                 </div>
-                {numFormat === 'decimal' && (
+                {isNumericAbstractType && (
                   <div className='space-y-1'>
                     <Label className='text-[11px] text-slate-500'>Decimal places</Label>
+                    <p className='text-[10px] text-slate-400'>
+                      Governs entry as well as display — a price set to 4 accepts 0.0625.
+                    </p>
                     <Input
                       type='number'
                       min={0}
@@ -15321,6 +15328,7 @@ function FieldGroupsTab({
     'sort_dir',
     'section_group_by',
     'date_mode',
+    'precision',
     'row_bulk_actions',
     'catalog_mode',
     'picker_facets',

@@ -1,6 +1,7 @@
 import { ExternalLink } from 'lucide-react'
 import { useContext } from 'react'
 import { fieldDrilldownConfig, RelationPathDataContext, useDrilldown , useParentDraft } from '../../context'
+import { precisionOf } from '../../lib/format-value'
 import { Badge } from '../ui/badge'
 import { formatDisplayValue } from './GroupSection'
 import { Input } from '../ui/input'
@@ -416,12 +417,27 @@ export function FieldRenderer({
   const isNumeric = ['integer', 'bigInteger', 'float', 'decimal', 'numeric', 'int', 'bigint', 'smallint', 'tinyint', 'real', 'money', 'smallmoney', 'double', 'number'].includes(field.type)
   if (isNumeric) {
     const isInt = ['integer', 'bigInteger', 'int', 'bigint', 'smallint', 'tinyint'].includes(field.type)
+    // `precision` governs entry, not just display: a price configured for 4
+    // decimal places must accept 0.0625 rather than being stepped to 2. Only
+    // read for non-integers — an integer column with a stray precision must
+    // not start accepting fractions.
+    const digits = isInt ? 0 : precisionOf(field.options, -1)
+    const step = isInt ? '1' : digits >= 0 ? String(10 ** -digits) : 'any'
     return (
       <Input
         type='number'
-        step={isInt ? '1' : 'any'}
+        step={step}
         value={strVal}
         onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+        // Round on blur, not per keystroke — rounding while typing fights the
+        // person entering "0.0625" one character at a time.
+        onBlur={(e) => {
+          if (digits < 0 || e.target.value === '') return
+          const n = Number(e.target.value)
+          if (!Number.isFinite(n)) return
+          const rounded = Number(n.toFixed(digits))
+          if (rounded !== n) onChange(rounded)
+        }}
         placeholder={field.placeholder ?? undefined}
       />
     )

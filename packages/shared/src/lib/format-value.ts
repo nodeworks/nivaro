@@ -88,3 +88,48 @@ export function formatMultiValue(raw: string, cfg: ColumnFormatConfig): string {
     .join(', ')
   return formatted + suffix
 }
+
+/**
+ * How many decimal places a numeric field wants, from its `precision` option.
+ *
+ * One helper because the answer was hardcoded to 2 in five places — the field
+ * input, the inline grid's cells, its formula and aggregate columns, and the
+ * read-only display — so a field configured for 4 showed 4 in one of them and
+ * 2 everywhere else. Out-of-range or missing values fall back rather than
+ * throwing at Intl, which rejects anything outside 0–20.
+ */
+export function precisionOf(
+  options: unknown,
+  fallback = 2
+): number {
+  const opts =
+    typeof options === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(options) as Record<string, unknown>
+          } catch {
+            return {}
+          }
+        })()
+      : ((options ?? {}) as Record<string, unknown>)
+  const p = Number(opts.precision)
+  if (!Number.isFinite(p)) return fallback
+  return Math.min(Math.max(Math.trunc(p), 0), 10)
+}
+
+/** Intl options for a numeric field, honoring its configured precision. */
+export function numericIntlOptions(
+  options: unknown,
+  format?: string
+): Intl.NumberFormatOptions {
+  const digits = precisionOf(options)
+  if (format === 'currency') {
+    return {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits
+    }
+  }
+  return { maximumFractionDigits: digits }
+}

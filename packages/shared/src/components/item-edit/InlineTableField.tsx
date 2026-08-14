@@ -58,6 +58,7 @@ export type AutoAllocateConfig = {
 }
 import { useNivaroClient, useParentDraft, useDrilldown, useReimportHandler, fieldDrilldownConfig } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { numericIntlOptions } from '../../lib/format-value'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import {
   Sheet,
@@ -359,11 +360,11 @@ function walkPath(obj: unknown, path: string): unknown {
   )
 }
 
-function fmtDrawerVal(v: unknown, format?: string): string {
+function fmtDrawerVal(v: unknown, format?: string, colOptions?: unknown): string {
   if (format === 'presence') return v !== null && v !== undefined && String(v).trim() !== '' ? 'Yes' : 'No'
   if (v === null || v === undefined || v === '') return '—'
   if (format === 'currency' && Number.isFinite(Number(v)))
-    return Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+    return Number(v).toLocaleString('en-US', numericIntlOptions(colOptions, 'currency'))
   return String(v)
 }
 
@@ -2706,10 +2707,10 @@ export function InlineTableField({
         if (typeof v === 'number' && Number.isFinite(v)) result = v
       } catch { /* unrenderable */ }
       if (result === null) return <span className='text-slate-300'>—</span>
-      const formatted =
-        colOpts.format === 'currency'
-          ? result.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
-          : result.toLocaleString('en-US', { maximumFractionDigits: 2 })
+      const formatted = result.toLocaleString(
+        'en-US',
+        numericIntlOptions(colOpts, colOpts.format as string | undefined)
+      )
       return <span className='tabular-nums'>{formatted}</span>
     }
 
@@ -2751,9 +2752,7 @@ export function InlineTableField({
         }
       }
       const formatted =
-        entry.cfg.format === 'currency'
-          ? agg.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
-          : agg.toLocaleString('en-US', { maximumFractionDigits: 2 })
+        agg.toLocaleString('en-US', numericIntlOptions(colOpts, entry.cfg.format as string | undefined))
       return <span className='tabular-nums'>{formatted}</span>
     }
 
@@ -2769,7 +2768,7 @@ export function InlineTableField({
       Number.isFinite(Number(val))
     ) {
       val = Number(val).toLocaleString('en-US', {
-        style: 'currency',
+        ...numericIntlOptions(colOpts, 'currency'),
         currency: (colOpts.currency as string) || 'USD'
       })
     }
@@ -2871,7 +2870,14 @@ export function InlineTableField({
           }
           if (fmt === 'currency') {
             const curr = (opts.currency as string) || 'USD'
-            return <span className='block truncate tabular-nums'>{new Intl.NumberFormat(undefined, { style: 'currency', currency: curr }).format(num)}</span>
+            return (
+              <span className='block truncate tabular-nums'>
+                {new Intl.NumberFormat(undefined, {
+                  ...numericIntlOptions(colOpts, 'currency'),
+                  currency: curr
+                }).format(num)}
+              </span>
+            )
           }
         } catch { /* fall through to default */ }
       }
@@ -3959,7 +3965,11 @@ export function InlineTableField({
                   const fmt = opts.format as string | undefined
                   let display = result === null ? '—' : (() => {
                     try {
-                      if (fmt === 'currency') return new Intl.NumberFormat(undefined, { style: 'currency', currency: (opts.currency as string) || 'USD' }).format(result)
+                      if (fmt === 'currency')
+                        return new Intl.NumberFormat(undefined, {
+                          ...numericIntlOptions(opts, 'currency'),
+                          currency: (opts.currency as string) || 'USD'
+                        }).format(result)
                       if (fmt === 'decimal') { const p = typeof opts.precision === 'number' ? opts.precision : 2; return new Intl.NumberFormat(undefined, { minimumFractionDigits: p, maximumFractionDigits: p }).format(result) }
                       if (fmt === 'int' || agg === 'count') return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(result)
                       return agg === 'avg' ? result.toFixed(2) : String(result)
