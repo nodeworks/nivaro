@@ -91,6 +91,63 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // one-time WS token minted by GET /api/auth/ws-token (session-cookie users
     // whose cookie can't ride the cross-origin WS connection). Joins their
     // personal room so real-time notifications can be targeted to them.
+
+  /**
+   * Live connections per user. Presence is derived from these rather than from
+   * a heartbeat timestamp: the socket knows exactly when someone arrives and
+   * leaves, where a timestamp can only be compared against a window — which is
+   * why closing a tab used to leave someone "online" for a minute and a
+   * backgrounded tab (whose timers the browser throttles) dropped off while
+   * still open.
+   *
+   * A SET of socket ids, not a count, because multiple tabs are normal and one
+   * closing must not report the person gone.
+   */
+  const liveSockets = new Map<string, Set<string>>()
+
+  /** Presence writes must never take down a socket. */
+  const writePresence = async (userId: string, patch: Record<string, unknown>) => {
+    try {
+      const updated = await db('user_presence').where({ user_id: userId }).update(patch)
+      if (updated === 0) {
+        await db('user_presence')
+          .insert({ user_id: userId, ...patch })
+          .catch(() => {
+            // UNIQUE(user_id): another tab won the insert, so update instead.
+            return db('user_presence').where({ user_id: userId }).update(patch)
+          })
+      }
+      // Tell every viewer rather than making them poll. This is the whole
+      // reason the list can feel instant instead of up to a minute stale.
+      io.emit('presence:changed', { user_id: userId })
+    } catch (err) {
+      app.log.debug({ err, userId }, 'presence write failed')
+    }
+  }
+
+  const markOnline = async (userId: string, socketId: string) => {
+    const set = liveSockets.get(userId) ?? new Set<string>()
+    set.add(socketId)
+    liveSockets.set(userId, set)
+    const now = new Date()
+    // Connecting IS activity: it takes a real interaction to open the app.
+    await writePresence(userId, {
+      is_online: true,
+      is_idle: false,
+      last_seen: now,
+      last_active: now
+    })
+  }
+
+  const markOffline = async (userId: string, socketId: string) => {
+    const set = liveSockets.get(userId)
+    if (!set) return
+    set.delete(socketId)
+    if (set.size > 0) return // other tabs still open
+    liveSockets.delete(userId)
+    await writePresence(userId, { is_online: false, last_seen: new Date() })
+  }
+
     socket.on('auth', async (payload: { token?: string }) => {
       const token = payload?.token?.trim()
       if (!token) return
@@ -105,6 +162,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             authenticatedUser = user
             socket.join(`user:${user.id}`)
             socket.emit('auth:ok', { userId: user.id })
+            void markOnline(user.id, socket.id)
           }
           return
         }
@@ -122,6 +180,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             authenticatedUser = user
             socket.join(`user:${user.id}`)
             socket.emit('auth:ok', { userId: user.id })
+            void markOnline(user.id, socket.id)
           }
           return
         }
@@ -144,6 +203,25 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         socket.join(`tenant:${tenantId}`)
         socket.emit('tenant:joined', { tenantId })
       }
+    })
+
+    /**
+     * Idle flips arrive as they happen instead of riding the next heartbeat,
+     * so going idle and coming back are both seen within a second rather than
+     * up to half a minute later — the lag is most of what made this feel
+     * inconsistent. Gated on auth: presence is an identity claim.
+     */
+    socket.on('presence:idle', (payload: { idle?: boolean }) => {
+      if (!authenticatedUser) return
+      const idle = payload?.idle === true
+      const now = new Date()
+      void writePresence(authenticatedUser.id, {
+        is_idle: idle,
+        last_seen: now,
+        // Coming back IS the activity; going idle must not stamp it, or the
+        // server's own staleness check would read the person as just-active.
+        ...(idle ? {} : { last_active: now })
+      })
     })
 
     socket.on('presence:join', (roomId: string) => {
@@ -323,6 +401,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
 
     socket.on('disconnect', () => {
+      if (authenticatedUser) void markOffline(authenticatedUser.id, socket.id)
       leaveRecordRoom()
       void closeJourneyRow(socket.id)
       if (pagePresence.delete(socket.id)) {

@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { useLocation } from 'react-router'
-import { idleState, trackActivity } from '@nivaro/shared'
+import { idleState, onIdleChange, trackActivity } from '@nivaro/shared'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { onCollectionUpdate } from '@/lib/socket'
+import { getSocket, onCollectionUpdate } from '@/lib/socket'
 
 /**
  * Chat presence rides the `user_presence` collection (upserted heartbeat every
@@ -36,6 +36,17 @@ let presenceRowId: number | null = null
 // reports it the same way — admin having its own copy is why a row marked idle
 // here never cleared from the other app.
 trackActivity()
+
+// Push the flip down the socket the moment it happens — the HTTP heartbeat
+// below stays as the fallback for when the socket is not connected, but it is
+// no longer what decides how quickly someone reads as back.
+onIdleChange((idle) => {
+  try {
+    getSocket()?.emit('presence:idle', { idle })
+  } catch {
+    // The heartbeat still carries it.
+  }
+})
 
 async function findPresenceRow(userId: string): Promise<number | null> {
   const filter = encodeURIComponent(JSON.stringify({ user_id: { _eq: userId } }))
@@ -94,6 +105,19 @@ export async function setTypingRoom(userId: string, typingRoom: string | null) {
   }
 }
 
+/** Refresh the online list the moment the server says presence moved. */
+export function usePresenceLive() {
+  const qc = useQueryClient()
+  useEffect(() => {
+    const s = getSocket()
+    const onChanged = () => void qc.invalidateQueries({ queryKey: ['admin-online-users'] })
+    s.on('presence:changed', onChanged)
+    return () => {
+      s.off('presence:changed', onChanged)
+    }
+  }, [qc])
+}
+
 export function usePresenceHeartbeat() {
   const { user } = useAuth()
   const { pathname } = useLocation()
@@ -137,8 +161,11 @@ export function useOnlineUsers(): { users: OnlineUser[]; loading: boolean } {
       )
       return res.data.data ?? []
     },
+    // The server broadcasts presence:changed on every connect, disconnect and
+    // idle flip, so this poll is only a backstop for a dropped socket rather
+    // than how the list keeps up.
     refetchInterval: HEARTBEAT_MS,
-    staleTime: 10_000
+    staleTime: 2_000
   })
   useEffect(
     () =>

@@ -15,7 +15,7 @@ import { useNavigate } from 'react-router'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { setTypingRoom, useOnlineUsers, usePresenceHeartbeat } from '@/lib/chat-presence'
+import { usePresenceLive, setTypingRoom, useOnlineUsers, usePresenceHeartbeat } from '@/lib/chat-presence'
 import { onCollectionUpdate, subscribeChatRooms } from '@/lib/socket'
 
 /**
@@ -112,6 +112,7 @@ export function AdminChatProvider({ children }: { children: React.ReactNode }) {
 
 function DockInner() {
   usePresenceHeartbeat()
+  usePresenceLive()
   const [open, setOpen] = useState(false)
   const [requestedDm, setRequestedDm] = useState<{
     userId: string

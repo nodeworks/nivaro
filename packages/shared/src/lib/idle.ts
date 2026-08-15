@@ -32,6 +32,31 @@ const ACTIVITY_EVENTS = [
 
 let lastActivity = Date.now()
 let installed = false
+let lastReported: boolean | null = null
+const listeners = new Set<(idle: boolean) => void>()
+
+/**
+ * Called when idleness CHANGES, not on a timer — a host can push the flip
+ * straight down its socket so coming back is seen in about a second instead of
+ * on the next heartbeat. Returns an unsubscribe.
+ */
+export function onIdleChange(fn: (idle: boolean) => void): () => void {
+  listeners.add(fn)
+  return () => listeners.delete(fn)
+}
+
+function publish(): void {
+  const idle = idleState().is_idle
+  if (idle === lastReported) return
+  lastReported = idle
+  for (const fn of listeners) {
+    try {
+      fn(idle)
+    } catch {
+      // A bad subscriber must not stop presence working.
+    }
+  }
+}
 
 /** Install the listeners. Safe to call more than once. */
 export function trackActivity(): void {
@@ -46,6 +71,7 @@ export function trackActivity(): void {
     if (now - throttle < 1000) return
     throttle = now
     lastActivity = now
+    publish()
   }
 
   for (const ev of ACTIVITY_EVENTS) {
@@ -62,7 +88,12 @@ export function trackActivity(): void {
     } else {
       lastActivity = 0
     }
+    publish()
   })
+
+  // Going idle is the passage of time, not an event, so it needs its own check
+  // — nothing fires when someone simply stops.
+  setInterval(publish, 15_000)
 }
 
 /** The fields a presence heartbeat should carry. */

@@ -116,4 +116,4 @@ export { TipLayer } from './components/TipLayer'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { startApiVersionWatch, useApiUpdate, getApiUpdate, type ApiVersionInfo } from './lib/api-version'
 
-export { IDLE_AFTER_MS, idleState, trackActivity } from './lib/idle'
+export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'

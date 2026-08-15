@@ -163,4 +163,4 @@ export type {
 export { UserChip, UserRosterCluster } from '@nivaro/shared'
 export { ApiUpdateBanner, TipLayer, startApiVersionWatch, useApiUpdate, getApiUpdate } from '@nivaro/shared'
 export type { ApiVersionInfo } from '@nivaro/shared'
-export { IDLE_AFTER_MS, idleState, trackActivity } from '@nivaro/shared'
+export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from '@nivaro/shared'

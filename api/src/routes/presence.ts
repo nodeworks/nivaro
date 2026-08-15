@@ -328,10 +328,14 @@ const IDLE_AFTER_MS = 5 * 60_000
  */
 export async function presenceOnlineRoutes(app: FastifyInstance) {
   app.get('/online', { preHandler: requireAuth }, async (req, reply) => {
+    // A live socket is the authoritative signal: it ends the moment the tab
+    // closes, where the timestamp window can only expire slowly. The window
+    // stays as a fallback for a host with no socket, and covers the seconds
+    // between an HTTP heartbeat and a socket connecting.
     const windowMs = 60_000
     const since = new Date(Date.now() - windowMs)
     const rows = (await db('user_presence')
-      .where('last_seen', '>=', since)
+      .where((qb) => void qb.where('is_online', true).orWhere('last_seen', '>=', since))
       .orderBy('last_seen', 'desc')
       .limit(200)) as Array<Record<string, unknown>>
 
