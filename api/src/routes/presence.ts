@@ -309,6 +309,9 @@ export async function presencePublicRoutes(app: FastifyInstance) {
   })
 }
 
+/** Matches the client's own threshold (packages/shared/src/lib/idle.ts). */
+const IDLE_AFTER_MS = 5 * 60_000
+
 /**
  * GET /online — the enriched online list the chat panels render.
  *
@@ -479,7 +482,17 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           // at their desk from a tab left open. Older rows (written before the
           // column existed, or by a client that does not report it) read as
           // active rather than guessing at idle.
-          is_idle: r.is_idle === true || r.is_idle === 1,
+          // The flag is a client's claim; last_active is when it last saw real
+          // input. Trusting the flag alone left people idle forever whenever a
+          // client wrote presence without reporting it — the row said idle and
+          // nothing ever said otherwise. Recent activity wins.
+          is_idle: (() => {
+            const flag = r.is_idle === true || r.is_idle === 1
+            if (!flag) return false
+            const active = r.last_active ? new Date(r.last_active as string).getTime() : 0
+            if (!active) return true
+            return Date.now() - active > IDLE_AFTER_MS
+          })(),
           last_active: r.last_active ?? null,
           typing_room: r.typing_room,
           // Flat list for the subtitle line, keyed map for grouping.

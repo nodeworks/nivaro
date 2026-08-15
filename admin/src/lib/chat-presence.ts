@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { useLocation } from 'react-router'
+import { idleState, trackActivity } from '@nivaro/shared'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { onCollectionUpdate } from '@/lib/socket'
@@ -31,38 +32,10 @@ export interface OnlineUser {
 let presenceRowId: number | null = null
 
 
-/**
- * When the person last actually did something. The heartbeat keeps beating
- * while someone is away from the machine, so it cannot answer this on its own —
- * only real input can. A hidden tab counts as away immediately: switching away
- * IS the signal, and waiting the full timeout would report someone as present
- * when they demonstrably are not.
- */
-const IDLE_AFTER_MS = 5 * 60_000
-let lastActivity = Date.now()
-
-if (typeof window !== 'undefined') {
-  const mark = () => {
-    lastActivity = Date.now()
-  }
-  // passive: these fire constantly and must never delay scrolling.
-  for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'focus']) {
-    window.addEventListener(ev, mark, { passive: true, capture: true })
-  }
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') mark()
-    else lastActivity = 0
-  })
-}
-
-function idleState(): { is_idle: boolean; last_active: string } {
-  const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
-  const stale = Date.now() - lastActivity > IDLE_AFTER_MS
-  return {
-    is_idle: hidden || stale,
-    last_active: new Date(lastActivity || Date.now()).toISOString()
-  }
-}
+// Idle tracking lives in @nivaro/shared so every host that writes presence
+// reports it the same way — admin having its own copy is why a row marked idle
+// here never cleared from the other app.
+trackActivity()
 
 async function findPresenceRow(userId: string): Promise<number | null> {
   const filter = encodeURIComponent(JSON.stringify({ user_id: { _eq: userId } }))
