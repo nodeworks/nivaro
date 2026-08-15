@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-15T20:05:14.848Z",
+  "generated_at": "2026-08-15T20:12:28.016Z",
   "releases": [
+    {
+      "version": "0.1.48",
+      "tag": "v0.1.48",
+      "date": "2026-08-15T16:12:25-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "pipeline",
+              "text": "a required note does not say (optional)",
+              "hash": "3bdfef4b"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.47",
       "tag": "v0.1.47",
-      "date": "2026-08-15T16:05:13-04:00",
+      "date": "2026-08-15T16:05:14-04:00",
       "sections": [
         {
           "label": "Fixed",
