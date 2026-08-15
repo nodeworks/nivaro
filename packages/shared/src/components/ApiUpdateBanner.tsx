@@ -26,7 +26,10 @@ import { type ApiVersionInfo, startApiVersionWatch, useApiUpdate } from '../lib/
  * API in production and proxied to it in dev, and has no provider at its root.
  */
 export function ApiUpdateBanner({
-  appName = 'Nivaro',
+  // "The API", not "Nivaro": the reader is an operator of whatever app this is
+  // embedded in, and the platform's own name means nothing to them. Hosts that
+  // want to be specific pass appName.
+  appName = 'The API',
   fetchVersion
 }: {
   appName?: string
