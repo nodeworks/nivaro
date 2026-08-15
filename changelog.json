@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-15T19:46:12.165Z",
+  "generated_at": "2026-08-15T19:51:19.870Z",
   "releases": [
+    {
+      "version": "0.1.45",
+      "tag": "v0.1.45",
+      "date": "2026-08-15T15:51:18-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "save the transition's note setting",
+              "hash": "cdfd4a97"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.44",
       "tag": "v0.1.44",
-      "date": "2026-08-15T15:46:10-04:00",
+      "date": "2026-08-15T15:46:12-04:00",
       "sections": [
         {
           "label": "Fixed",
