@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-15T19:57:05.947Z",
+  "generated_at": "2026-08-15T20:05:14.848Z",
   "releases": [
+    {
+      "version": "0.1.47",
+      "tag": "v0.1.47",
+      "date": "2026-08-15T16:05:13-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "the note setting shows what is stored, and the label reads API",
+              "hash": "6e82b8d8"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.46",
       "tag": "v0.1.46",
-      "date": "2026-08-15T15:57:04-04:00",
+      "date": "2026-08-15T15:57:06-04:00",
       "sections": [
         {
           "label": "Fixed",
