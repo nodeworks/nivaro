@@ -522,7 +522,20 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
               description: last?.message
                 ? String(last.message).replace(/<[^>]*>/g, '').slice(0, 90)
                 : undefined,
-              duration: 4000
+              duration: 4000,
+              // Reading the message is the whole reason the toast exists, so
+              // it opens the conversation — only when a host has somewhere to
+              // open it, otherwise the click would do nothing.
+              ...(canOpenChatRoom()
+                ? {
+                    className: 'cursor-pointer',
+                    onDismiss: undefined,
+                    action: {
+                      label: 'Open',
+                      onClick: () => openChatRoom(r.room, r.label)
+                    }
+                  }
+                : {})
             }
           )
         }
@@ -802,4 +815,28 @@ export function canOpenDm(): boolean {
 
 export function openDmWith(userId: string, displayName?: string): void {
   dmOpener?.(userId, displayName)
+}
+
+/**
+ * Same idea for a ROOM rather than a person: a new-message toast has to be able
+ * to open the conversation it is about, and that may be a channel or an entity
+ * room, not only a DM. The host's dock registers this; without one the toast
+ * stays a notification instead of pretending to be clickable.
+ */
+type RoomOpener = (room: string, label?: string) => void
+let roomOpener: RoomOpener | null = null
+
+export function registerRoomOpener(fn: RoomOpener): () => void {
+  roomOpener = fn
+  return () => {
+    if (roomOpener === fn) roomOpener = null
+  }
+}
+
+export function canOpenChatRoom(): boolean {
+  return roomOpener !== null
+}
+
+export function openChatRoom(room: string, label?: string): void {
+  roomOpener?.(room, label)
 }

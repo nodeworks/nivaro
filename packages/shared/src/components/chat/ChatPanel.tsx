@@ -1195,7 +1195,8 @@ export function ChatPanel({
   open,
   onClose,
   renderMessageBody,
-  requestedDm
+  requestedDm,
+  requestedRoom
 }: {
   open: boolean
   onClose: () => void
@@ -1203,6 +1204,9 @@ export function ChatPanel({
   /** External DM request (UserChip "Send message" via registerDmOpener) —
    *  nonce bumps re-trigger even for the same user. */
   requestedDm?: { userId: string; name?: string; nonce: number } | null
+  /** Open this room directly (a toast click). Nonce-keyed like requestedDm so
+   *  the same room can be re-opened after the reader navigates away. */
+  requestedRoom?: { room: string; label?: string; nonce: number } | null
 }) {
   const cfg = useChatConfig()
   const th = useTheme()
@@ -1299,6 +1303,15 @@ export function ChatPanel({
       label: requestedDm.name ?? 'Direct message'
     })
   }, [requestedDm, me])
+
+  const lastRoomNonce = useRef(0)
+  useEffect(() => {
+    if (!requestedRoom || requestedRoom.nonce === lastRoomNonce.current) return
+    lastRoomNonce.current = requestedRoom.nonce
+    setTab('chat')
+    setSettingsOpen(false)
+    setActiveRoom({ room: requestedRoom.room, label: requestedRoom.label ?? requestedRoom.room })
+  }, [requestedRoom])
 
   if (!open) return null
   return (

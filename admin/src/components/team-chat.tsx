@@ -6,7 +6,8 @@ import {
   NivaroProvider,
   useChatRooms,
   useUnreadChirp,
-  registerDmOpener
+  registerDmOpener,
+  registerRoomOpener
 } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { MessagesSquare } from 'lucide-react'
@@ -133,6 +134,22 @@ function DockInner() {
     []
   )
 
+  // A new-message toast opens the conversation it is about: the dock slides
+  // out and lands on that room, whichever kind it is.
+  const [requestedRoom, setRequestedRoom] = useState<{
+    room: string
+    label?: string
+    nonce: number
+  } | null>(null)
+  useEffect(
+    () =>
+      registerRoomOpener((room, label) => {
+        setRequestedRoom((prev) => ({ room, label, nonce: (prev?.nonce ?? 0) + 1 }))
+        setOpen(true)
+      }),
+    []
+  )
+
   return (
     <>
       <Tooltip>
@@ -157,7 +174,12 @@ function DockInner() {
           Team chat
         </TooltipContent>
       </Tooltip>
-      <ChatPanel open={open} onClose={() => setOpen(false)} requestedDm={requestedDm} />
+      <ChatPanel
+        open={open}
+        onClose={() => setOpen(false)}
+        requestedDm={requestedDm}
+        requestedRoom={requestedRoom}
+      />
     </>
   )
 }
