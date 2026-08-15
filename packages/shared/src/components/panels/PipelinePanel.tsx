@@ -1285,7 +1285,12 @@ function PipelinePanelInner({
         type='text'
         value={comment}
         onChange={(e) => setComment(e.target.value)}
-        placeholder='Add a comment (optional)'
+        placeholder={
+          String((pendingTx as { comment_mode?: string } | undefined)?.comment_mode ?? '') ===
+          'required'
+            ? 'Add a note (required)'
+            : 'Add a comment (optional)'
+        }
         className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
       />
       <div className='flex items-center justify-end gap-2'>
@@ -1726,7 +1731,12 @@ function PipelineTransitionButtonsInner({
             type='text'
             value={comment}
             onChange={(e) => setComment(e.target.value)}
-            placeholder='Add a comment (optional)'
+            placeholder={
+              String((pendingTx as { comment_mode?: string } | null)?.comment_mode ?? '') ===
+              'required'
+                ? 'Add a note (required)'
+                : 'Add a comment (optional)'
+            }
             className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
           />
           <div className='flex items-center justify-end gap-2'>
