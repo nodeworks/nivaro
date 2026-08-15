@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import type { User } from '../types.js'
+import { can } from '../services/permissions.js'
 import { resolveDisplayValue } from '../services/display-value.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { config } from '../config.js'
@@ -341,7 +343,8 @@ function titleCase(s: string): string {
  * one query per collection over the whole online list rather than per row.
  */
 async function resolveRecordLabels(
-  paths: Array<string | null | undefined>
+  paths: Array<string | null | undefined>,
+  viewer: User
 ): Promise<Map<string, string>> {
   const wanted = new Map<string, Set<string>>()
   const out = new Map<string, string>()
@@ -351,7 +354,8 @@ async function resolveRecordLabels(
     const m = /^\/(?:records|collections)\/([A-Za-z0-9_]+)\/([^/?#]+)/.exec(raw)
     if (!m) continue
     const [, collection, id] = m
-    if (id === 'new' || collection.startsWith('nivaro_')) continue
+    if (id === 'new') continue
+    if (/^(nivaro_|directus_|staging_)/i.test(collection)) continue
     const set = wanted.get(collection) ?? new Set<string>()
     set.add(id)
     wanted.set(collection, set)
@@ -360,9 +364,16 @@ async function resolveRecordLabels(
 
   for (const [collection, ids] of wanted) {
     try {
+      // current_path is written by the CLIENT, so the collectionname in it is
+      // untrusted input. Two gates before any row is read: it must be a
+      // REGISTERED collection (not an arbitrary table someone names), and this
+      // viewer must be allowed to read it — otherwise a person could park a
+      // path on a table they cannot see and read labels back out of it.
       const meta = (await db('nivaro_collections')
         .where({ collection })
         .first('display_template')) as { display_template?: string | null } | undefined
+      if (!meta) continue
+      if (!(await can(viewer, 'read', collection))) continue
       const rows = (await db(collection)
         .whereIn('id', [...ids])
         .limit(200)) as Array<Record<string, unknown>>
@@ -531,7 +542,8 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
     }
 
     const recordLabels = await resolveRecordLabels(
-      visibleRows.map((r) => (r.current_path as string | null) ?? null)
+      visibleRows.map((r) => (r.current_path as string | null) ?? null),
+      req.user!
     )
     const pageLabel = (path: string | null | undefined): string | null => {
       if (!path) return null
