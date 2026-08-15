@@ -2620,6 +2620,7 @@ export function PipelineEditPage() {
         condition_rules: data.condition_rules,
         requirements: data.requirements,
         auto_trigger: data.auto_trigger,
+        comment_mode: data.comment_mode,
         actions: data.actions
       }
       for (const to_state of data.to_states) {
