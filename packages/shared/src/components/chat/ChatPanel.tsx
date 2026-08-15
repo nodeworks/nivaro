@@ -1131,6 +1131,8 @@ interface PresenceExtra {
   user_id: string
   role_name?: string | null
   current_path?: string | null
+  page?: string | null
+  app?: string | null
   scopes?: string[]
   /** dimension -> labels, e.g. {division: ['Zone 1'], region: ['BLT']} */
   scopes_by_dimension?: Record<string, string[]>
@@ -1451,7 +1453,21 @@ export function ChatPanel({
                           .map((f) => {
                             if (f === 'role') return humanLabel(x?.role_name ?? u.role_name)
                             if (f === 'scopes') return (x?.scopes ?? []).join(', ') || null
-                            if (f === 'page') return prettyPath(x?.current_path ?? u.current_path)
+                            if (f === 'page') {
+                              // The server renders a record's display template
+                              // ("Workflows › CR26-79811"); prettyPath can only
+                              // reach the raw id, so it is the fallback.
+                              const page =
+                                (x as { page?: string | null })?.page ??
+                                (u as { page?: string | null }).page ??
+                                prettyPath(x?.current_path ?? u.current_path)
+                              const app =
+                                (x as { app?: string | null })?.app ??
+                                (u as { app?: string | null }).app
+                              // Only unusual places are worth naming; the
+                              // ordinary frontend sends no app at all.
+                              return app ? `${page ?? ''}${page ? ' · ' : ''}${app}`.trim() : page
+                            }
                             return null
                           })
                           .filter(Boolean)

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { resolveDisplayValue } from '../services/display-value.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { config } from '../config.js'
 import { adminBaseUrl } from '../admin-base.js'
@@ -326,6 +327,62 @@ const IDLE_AFTER_MS = 5 * 60_000
  * `recording_id` is attached for ADMINS only — the live session recording, so
  * an admin can jump from the online list straight into session replay.
  */
+
+/** collection name → a heading a person would recognise. */
+function titleCase(s: string): string {
+  return s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+/**
+ * "Workflows › CR26-79811", not "Workflows › 371367".
+ *
+ * The label has to come from the server: rendering a record's display template
+ * needs the template and the row, and the chat panel has neither. Resolved in
+ * one query per collection over the whole online list rather than per row.
+ */
+async function resolveRecordLabels(
+  paths: Array<string | null | undefined>
+): Promise<Map<string, string>> {
+  const wanted = new Map<string, Set<string>>()
+  const out = new Map<string, string>()
+  for (const raw of paths) {
+    if (!raw) continue
+    // /records/<collection>/<id> and /collections/<collection>/<id>
+    const m = /^\/(?:records|collections)\/([A-Za-z0-9_]+)\/([^/?#]+)/.exec(raw)
+    if (!m) continue
+    const [, collection, id] = m
+    if (id === 'new' || collection.startsWith('nivaro_')) continue
+    const set = wanted.get(collection) ?? new Set<string>()
+    set.add(id)
+    wanted.set(collection, set)
+  }
+  if (wanted.size === 0) return out
+
+  for (const [collection, ids] of wanted) {
+    try {
+      const meta = (await db('nivaro_collections')
+        .where({ collection })
+        .first('display_template')) as { display_template?: string | null } | undefined
+      const rows = (await db(collection)
+        .whereIn('id', [...ids])
+        .limit(200)) as Array<Record<string, unknown>>
+      for (const row of rows) {
+        const label = meta?.display_template
+          ? String(resolveDisplayValue(row, meta.display_template) ?? '').trim()
+          : ''
+        const fallback = ['workflow_id', 'name', 'title', 'label', 'inventory_request_id']
+          .map((f) => row[f])
+          .find((v) => v != null && String(v).trim() !== '')
+        const text = label || (fallback != null ? String(fallback) : '')
+        if (text) out.set(`${collection}:${String(row.id)}`, text)
+      }
+    } catch {
+      // A collection that cannot be read just keeps its raw id.
+    }
+  }
+  return out
+}
+
 export async function presenceOnlineRoutes(app: FastifyInstance) {
   app.get('/online', { preHandler: requireAuth }, async (req, reply) => {
     // A live socket is the authoritative signal: it ends the moment the tab
@@ -473,6 +530,17 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       }
     }
 
+    const recordLabels = await resolveRecordLabels(
+      visibleRows.map((r) => (r.current_path as string | null) ?? null)
+    )
+    const pageLabel = (path: string | null | undefined): string | null => {
+      if (!path) return null
+      const m = /^\/(?:records|collections)\/([A-Za-z0-9_]+)\/([^/?#]+)/.exec(path)
+      if (!m) return null
+      const label = recordLabels.get(`${m[1]}:${m[2]}`)
+      return label ? `${titleCase(m[1])} › ${label}` : null
+    }
+
     return reply.send({
       data: visibleRows.map((r) => {
         const uid = String(r.user_id ?? '').toUpperCase()
@@ -498,6 +566,10 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
             return Date.now() - active > IDLE_AFTER_MS
           })(),
           last_active: r.last_active ?? null,
+          // Rendered here because only the server can: the panel has neither
+          // the display template nor the row.
+          page: pageLabel(r.current_path as string | null),
+          app: (r.app as string | null) ?? null,
           typing_room: r.typing_room,
           // Flat list for the subtitle line, keyed map for grouping.
           scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),

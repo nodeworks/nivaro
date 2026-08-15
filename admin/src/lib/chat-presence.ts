@@ -69,6 +69,9 @@ async function beat(userId: string, name: string, path: string, roleName: string
     // hold a role UUID here, which rendered as the user's subtitle).
     role_name: roleName,
     last_seen: new Date().toISOString(),
+    // Names the admin console specifically. efp-new sends nothing, so the
+    // ordinary case stays unlabelled.
+    app: 'Nivaro',
     ...idleState()
   }
   try {
