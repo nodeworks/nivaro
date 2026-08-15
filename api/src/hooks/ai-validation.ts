@@ -44,6 +44,8 @@ export async function getAnthropicClient(): Promise<Anthropic | null> {
 export interface AiCollectionSettings {
   collection: string
   validation_enabled: boolean
+  /** Offer the manual AI Review button. Independent of the save-time check. */
+  review_enabled: boolean
   validation_mode: 'soft' | 'hard'
   // Mixed array: legacy free-text rule strings evaluated by the AI validator,
   // plus typed rule objects (e.g. sum_cap) evaluated by their own hooks.
@@ -57,6 +59,7 @@ const settingsCache = new Map<string, { value: AiCollectionSettings; expires: nu
 
 export const AI_SETTINGS_DEFAULTS: Omit<AiCollectionSettings, 'collection'> = {
   validation_enabled: false,
+  review_enabled: false,
   validation_mode: 'soft',
   validation_rules: [],
   duplicate_detection_enabled: false,
@@ -92,6 +95,7 @@ export async function getAiCollectionSettings(collection: string): Promise<AiCol
     ? {
         collection,
         validation_enabled: row.validation_enabled === true || row.validation_enabled === 1,
+        review_enabled: row.review_enabled === true || row.review_enabled === 1,
         validation_mode: row.validation_mode === 'hard' ? 'hard' : 'soft',
         validation_rules: parseRules(row.validation_rules),
         duplicate_detection_enabled:

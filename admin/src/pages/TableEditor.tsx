@@ -4728,6 +4728,7 @@ interface AiCollectionSettings {
   validation_enabled: boolean
   validation_mode: 'soft' | 'hard'
   validation_rules: ValidationRuleEntry[]
+  review_enabled?: boolean
   duplicate_detection_enabled: boolean
   duplicate_threshold: number
 }
@@ -4897,6 +4898,7 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
   const [validationEnabled, setValidationEnabled] = useState(false)
   const [validationMode, setValidationMode] = useState<'soft' | 'hard'>('soft')
   const [rules, setRules] = useState<ValidationRuleEntry[]>([])
+  const [reviewEnabled, setReviewEnabled] = useState(false)
   const [dupEnabled, setDupEnabled] = useState(false)
   const [dupThreshold, setDupThreshold] = useState(0.85)
   const [seeded, setSeeded] = useState(false)
@@ -4904,6 +4906,7 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
   useEffect(() => {
     if (settings && !seeded) {
       setValidationEnabled(settings.validation_enabled)
+      setReviewEnabled(!!settings.review_enabled)
       setValidationMode(settings.validation_mode)
       setRules(settings.validation_rules)
       setDupEnabled(settings.duplicate_detection_enabled)
@@ -4920,6 +4923,7 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
         validation_rules: rules
           .map((r) => (typeof r === 'string' ? r.trim() : r))
           .filter((r) => (typeof r === 'string' ? r.length > 0 : true)),
+        review_enabled: reviewEnabled,
         duplicate_detection_enabled: dupEnabled,
         duplicate_threshold: Number(dupThreshold)
       }),
@@ -4945,6 +4949,21 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
       <div className='space-y-6 max-w-xl'>
         {/* Content Validation */}
         <div className='space-y-3'>
+          {/* Separate from the save-time check below: rules can back a review
+              people ASK for without one running on every save. */}
+          <div className='flex items-center gap-3'>
+            <Switch
+              id='ai-review-enabled'
+              checked={reviewEnabled}
+              onCheckedChange={setReviewEnabled}
+            />
+            <Label htmlFor='ai-review-enabled' className='cursor-pointer text-[12px]'>
+              AI Review button
+            </Label>
+            <span className='text-[11px] text-slate-400'>
+              Offers a review on the record, run on demand — never on save
+            </span>
+          </div>
           <div className='flex items-center gap-3'>
             <Switch
               id='ai-validation-enabled'

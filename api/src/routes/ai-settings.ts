@@ -43,6 +43,9 @@ function formatRow(collection: string, row: Record<string, unknown> | undefined 
   return {
     collection,
     validation_enabled: row.validation_enabled === true || row.validation_enabled === 1,
+    // Separate from validation_enabled: the button can be offered without the
+    // save-time check running, and vice versa.
+    review_enabled: row.review_enabled === true || row.review_enabled === 1,
     validation_mode: row.validation_mode === 'hard' ? 'hard' : 'soft',
     validation_rules: parseRules(row.validation_rules),
     duplicate_detection_enabled:
@@ -73,6 +76,7 @@ export async function aiSettingsRoutes(app: FastifyInstance) {
 
       const body = req.body as Partial<{
         validation_enabled: boolean
+        review_enabled: boolean
         validation_mode: string
         validation_rules: unknown
         duplicate_detection_enabled: boolean
@@ -80,6 +84,9 @@ export async function aiSettingsRoutes(app: FastifyInstance) {
       }>
 
       const patch: Record<string, unknown> = { updated_at: new Date() }
+      if (body.review_enabled != null) {
+        patch.review_enabled = body.review_enabled ? 1 : 0
+      }
       if (body.validation_enabled != null) {
         patch.validation_enabled = body.validation_enabled ? 1 : 0
       }
