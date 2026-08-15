@@ -3138,6 +3138,10 @@ export function PipelineEditPage() {
                                           condition_rules: route.condition_rules,
                                           requirements: route.requirements,
                                           auto_trigger: route.auto_trigger,
+                                          // Without this the form always opened
+                                          // on 'No note', whatever was stored —
+                                          // and saving then wrote that back.
+                                          comment_mode: route.comment_mode,
                                           actions: route.actions
                                         }}
                                         fixedLabel={grp.label}
