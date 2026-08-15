@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-08-15T19:51:19.870Z",
+  "generated_at": "2026-08-15T19:57:05.947Z",
   "releases": [
+    {
+      "version": "0.1.46",
+      "tag": "v0.1.46",
+      "date": "2026-08-15T15:57:04-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "the EDIT form sends the note setting too",
+              "hash": "254d9912"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "say \"The API was updated\", not \"Nivaro was updated\"",
+              "hash": "b5784a01"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.45",
       "tag": "v0.1.45",
-      "date": "2026-08-15T15:51:18-04:00",
+      "date": "2026-08-15T15:51:19-04:00",
       "sections": [
         {
           "label": "Fixed",
