@@ -185,7 +185,6 @@ export const navCategories: NavCategory[] = [
       { icon: Database, label: 'Virtual Collections', to: '/virtual-collections' },
       { icon: ArrowRightLeft, label: 'Content Promotion', to: '/content-promotion' },
       { icon: Package, label: 'Blueprints', to: '/blueprints' },
-      { icon: ScrollText, label: 'Changelog', to: '/changelog' },
       { icon: Trash2, label: 'Trash', to: '/trash' },
       { icon: Link2, label: 'External APIs', to: '/external-apis' },
       { icon: Braces, label: 'GraphQL', to: '/graphql' },
@@ -708,6 +707,26 @@ export function AppLayout() {
             <div className='flex shrink-0 flex-col items-center gap-0.5 border-t border-white/[0.07] px-1.5 py-2'>
               <TeamChatDock />
               <NotificationBell collapsed compact />
+              {/* Beside chat and the bell rather than buried in System: "what
+                  changed" is something people reach for from anywhere, not a
+                  configuration screen they navigate to. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link
+                    to='/changelog'
+                    aria-label='Changelog'
+                    className={cn(
+                      'flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-white/[0.05] hover:text-white',
+                      location.pathname === '/changelog'
+                        ? 'bg-white/[0.08] text-white'
+                        : 'text-slate-400'
+                    )}
+                  >
+                    <ScrollText className='h-[15px] w-[15px]' />
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side='right'>Changelog</TooltipContent>
+              </Tooltip>
               <ThemeSwitcher collapsed />
               <Tooltip>
                 <TooltipTrigger asChild>
