@@ -10,6 +10,7 @@
     "dev:inngest": "npx inngest-cli@latest dev -u http://localhost:3055/api/inngest",
     "dev:docker": "docker compose up --build",
     "dev:docker:down": "docker compose down",
+    "kill:api": "node scripts/kill-api.mjs",
     "dev:www": "npx browser-sync start --server www --files 'www/**/*' --port 3057 --open --extensions html",
     "build": "pnpm --filter @nivaro/api build && pnpm --filter @nivaro/admin build",
     "build:shared": "pnpm --filter @nivaro/shared build && pnpm --filter @nivaro/react build",
