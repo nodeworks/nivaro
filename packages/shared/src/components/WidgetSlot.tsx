@@ -171,7 +171,10 @@ function StripCell({
       <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
         {label}
       </span>
-      <span className='mt-1 leading-none truncate max-w-[220px]'>
+      {/* leading-tight, not leading-none: a field chip in the same strip uses
+          it, and the shorter line box sat the value 2px higher — enough for the
+          two kinds of cell to read as different rows. */}
+      <span className='mt-1 leading-tight truncate max-w-[220px]'>
         {loading ? (
           <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
         ) : (
