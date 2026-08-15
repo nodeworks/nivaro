@@ -4978,8 +4978,13 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
             </span>
           </div>
 
-          {validationEnabled && (
+          {/* Rules feed BOTH the save-time check and the on-demand button, so
+              they stay visible whenever either is on — hiding them behind the
+              save-time switch made 'rules but no automatic run' unreachable. */}
+          {(validationEnabled || reviewEnabled) && (
             <div className='space-y-3 pl-1'>
+              {/* Mode describes the save-time check only. */}
+              {validationEnabled && (
               <div>
                 <Label className='mb-1 block text-[12px]'>Mode</Label>
                 <div className='inline-flex rounded-md border border-slate-200 p-0.5'>
@@ -5008,6 +5013,7 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
                     : 'Violations reject the save with a 422 error'}
                 </p>
               </div>
+              )}
 
               <div>
                 <div className='mb-1 flex items-center justify-between'>
