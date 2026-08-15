@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-15T19:38:01.612Z",
+  "generated_at": "2026-08-15T19:46:12.165Z",
   "releases": [
+    {
+      "version": "0.1.44",
+      "tag": "v0.1.44",
+      "date": "2026-08-15T15:46:10-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "nav",
+              "text": "changelog lives in the sidebar rail, not the System list",
+              "hash": "de05db2b"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.43",
       "tag": "v0.1.43",
-      "date": "2026-08-15T15:37:59-04:00",
+      "date": "2026-08-15T15:38:01-04:00",
       "sections": [
         {
           "label": "Added",
