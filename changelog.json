@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-15T21:15:56.977Z",
+  "generated_at": "2026-08-15T21:40:07.982Z",
   "releases": [
+    {
+      "version": "0.1.51",
+      "tag": "v0.1.51",
+      "date": "2026-08-15T17:40:05-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ai",
+              "text": "rules stay visible when only the review button is on",
+              "hash": "02c67de5"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.50",
       "tag": "v0.1.50",
-      "date": "2026-08-15T17:15:55-04:00",
+      "date": "2026-08-15T17:15:57-04:00",
       "sections": [
         {
           "label": "Added",
