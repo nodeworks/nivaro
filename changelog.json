@@ -1,6 +1,25 @@
 {
-  "generated_at": "2026-08-15T19:34:39.415Z",
+  "generated_at": "2026-08-15T19:38:01.612Z",
   "releases": [
+    {
+      "version": "0.1.43",
+      "tag": "v0.1.43",
+      "date": "2026-08-15T15:37:59-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "a changelog page for released versions",
+              "hash": "77a06bfc"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.42",
       "tag": "v0.1.42",
