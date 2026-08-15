@@ -72,6 +72,8 @@ interface WorkflowTransition {
   group_label: string | null
   condition_rules: string | null
   requirements: string | null
+  /** 'none' (act on click) | 'optional' | 'required' — migration 201. */
+  comment_mode?: string | null
 }
 
 interface WorkflowBinding {
@@ -204,6 +206,12 @@ function formatState(s: WorkflowState) {
     skip_criteria: parseJson(s.skip_criteria),
     stage_visibility: s.stage_visibility ?? 'always'
   }
+}
+
+/** Only these three mean anything to the panel; anything else is 'none'. */
+function normalizeCommentMode(v: unknown): 'none' | 'optional' | 'required' {
+  const m = String(v ?? '').toLowerCase()
+  return m === 'optional' || m === 'required' ? m : 'none'
 }
 
 function formatTransition(t: WorkflowTransition) {
@@ -559,6 +567,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'group_label'
       | 'condition_rules'
       | 'requirements'
+      | 'comment_mode'
     >
     if (!body.to_state) return reply.code(400).send({ error: 'to_state is required' })
     if (!body.label?.trim()) return reply.code(400).send({ error: 'label is required' })
@@ -579,7 +588,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       sort: body.sort ?? 0,
       group_label: body.group_label?.trim() || null,
       condition_rules: toJsonStr(body.condition_rules),
-      requirements: toJsonStr(body.requirements)
+      requirements: toJsonStr(body.requirements),
+      comment_mode: normalizeCommentMode(body.comment_mode)
     })
     const tx = await db<WorkflowTransition>('nivaro_workflow_transitions')
       .where({ id: txId })
@@ -625,7 +635,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         condition_rules:
           body.condition_rules !== undefined ? toJsonStr(body.condition_rules) : tx.condition_rules,
         requirements:
-          body.requirements !== undefined ? toJsonStr(body.requirements) : tx.requirements
+          body.requirements !== undefined ? toJsonStr(body.requirements) : tx.requirements,
+        comment_mode:
+          body.comment_mode !== undefined
+            ? normalizeCommentMode(body.comment_mode)
+            : tx.comment_mode
       })
     const updated = await db<WorkflowTransition>('nivaro_workflow_transitions')
       .where({ id: txId })
