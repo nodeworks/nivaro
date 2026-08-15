@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-15T20:59:08.892Z",
+  "generated_at": "2026-08-15T21:15:56.977Z",
   "releases": [
+    {
+      "version": "0.1.50",
+      "tag": "v0.1.50",
+      "date": "2026-08-15T17:15:55-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "ai",
+              "text": "the review button is its own switch, and only shows where enabled",
+              "hash": "86de264f"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.49",
       "tag": "v0.1.49",
-      "date": "2026-08-15T16:59:07-04:00",
+      "date": "2026-08-15T16:59:08-04:00",
       "sections": [
         {
           "label": "Added",
