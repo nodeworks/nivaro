@@ -89,6 +89,10 @@ COPY --from=build /app/admin/dist ./admin/dist
 # Mail templates
 COPY api/templates ./api/templates
 
+# Release notes, generated from git tags at release time. Copied because the
+# container has no git repository to read them from.
+COPY changelog.json ./changelog.json
+
 # Uploads directory — mount as a named volume in production
 RUN mkdir -p /app/uploads
 

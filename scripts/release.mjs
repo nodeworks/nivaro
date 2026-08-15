@@ -32,7 +32,17 @@ const run = (args) => {
 run(['add', 'package.json']);
 run(['commit', '-m', `chore: release nivaro@${newVersion}`]);
 run(['tag', tag]);
-run(['tag', tag2]);
+
+// Rebuild the changelog AFTER tagging, so this release is in it, then amend it
+// onto the release commit and move the tags to match. Generating it before the
+// tag would always leave the newest version missing from its own notes.
+const gen = spawnSync('node', ['scripts/build-changelog.mjs'], { stdio: 'inherit' });
+if (gen.status === 0) {
+  run(['add', 'changelog.json']);
+  run(['commit', '--amend', '--no-edit']);
+  run(['tag', '-f', tag]);
+}
+run(['tag', '-f', tag2]);
 run(['push', 'origin', 'HEAD']);
 run(['push', 'origin', tag]);
 run(['push', 'origin', tag2]);

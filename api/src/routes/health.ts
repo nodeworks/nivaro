@@ -1,8 +1,13 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { NIVARO_VERSION } from '../version.js'
+
+let changelogCache: { generated_at?: string | null; releases: unknown[] } | null = null
 
 export async function healthRoutes(app: FastifyInstance) {
   // GET /version — the cheapest possible "what build is running" probe: no DB,
@@ -14,6 +19,41 @@ export async function healthRoutes(app: FastifyInstance) {
       version: NIVARO_VERSION,
       environment: config.NODE_ENV,
       cloud: !!process.env.CLOUD_META_DB_URL
+    })
+  })
+
+  /**
+   * GET /changelog — what shipped in each release.
+   *
+   * Read from changelog.json, generated from git TAGS at build time and copied
+   * into the image: the running container has no git repository, and asking it
+   * to grow one to answer a page would be absurd. Cached after the first read
+   * since the file cannot change while the process lives.
+   *
+   * Public, like /version: it lists release notes for the software itself, and
+   * gating it would only stop people knowing what they are running.
+   */
+  app.get('/changelog', async (_req, reply) => {
+    if (!changelogCache) {
+      const here = dirname(fileURLToPath(import.meta.url))
+      // dev: api/src/routes → repo root. image: /app/api/dist/routes → /app.
+      const candidates = [
+        resolve(here, '../../../changelog.json'),
+        resolve(here, '../../changelog.json'),
+        resolve(process.cwd(), 'changelog.json')
+      ]
+      changelogCache = { generated_at: null, releases: [] }
+      for (const file of candidates) {
+        try {
+          changelogCache = JSON.parse(readFileSync(file, 'utf8'))
+          break
+        } catch {
+          // try the next location
+        }
+      }
+    }
+    return reply.send({
+      data: { ...changelogCache, running: NIVARO_VERSION }
     })
   })
 

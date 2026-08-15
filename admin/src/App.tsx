@@ -223,6 +223,7 @@ const PageViewPage = lazy(() =>
 const ApiAnalyticsPage = lazy(() =>
   import('@/pages/ApiAnalytics').then((m) => ({ default: m.ApiAnalyticsPage }))
 )
+const ChangelogPage = lazy(() => import('@/pages/Changelog'))
 const HealthDashboardPage = lazy(() =>
   import('@/pages/HealthDashboard').then((m) => ({ default: m.HealthDashboardPage }))
 )
@@ -457,6 +458,7 @@ export default function App() {
                   <Route path='p/:slug' element={<PageViewPage />} />
                   <Route path='api-analytics' element={<ApiAnalyticsPage />} />
                   <Route path='health' element={<HealthDashboardPage />} />
+                  <Route path='changelog' element={<ChangelogPage />} />
                   <Route path='data-quality' element={<DataQualityPage />} />
                   <Route path='privacy-retention' element={<RetentionPoliciesPage />} />
                   <Route path='issues' element={<IssuesPage />} />

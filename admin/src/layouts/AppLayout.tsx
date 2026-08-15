@@ -185,6 +185,7 @@ export const navCategories: NavCategory[] = [
       { icon: Database, label: 'Virtual Collections', to: '/virtual-collections' },
       { icon: ArrowRightLeft, label: 'Content Promotion', to: '/content-promotion' },
       { icon: Package, label: 'Blueprints', to: '/blueprints' },
+      { icon: ScrollText, label: 'Changelog', to: '/changelog' },
       { icon: Trash2, label: 'Trash', to: '/trash' },
       { icon: Link2, label: 'External APIs', to: '/external-apis' },
       { icon: Braces, label: 'GraphQL', to: '/graphql' },
