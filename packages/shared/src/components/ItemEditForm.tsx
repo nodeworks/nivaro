@@ -4833,7 +4833,12 @@ export function ItemEditForm({
                   <div
                     key={f.field}
                     data-header-field={f.field}
-                    className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
+                    // self-stretch so the label sits the same distance from the
+                    // top as a widget cell's. The row is items-center, and a
+                    // widget stat cell already stretches to full height — a
+                    // centred field chip is shorter, so its label landed a few
+                    // pixels lower and the two read as misaligned.
+                    className='group relative flex flex-col justify-start self-stretch border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
                   >
                     <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>{f.label}</span>
                     <span className={['mt-1 leading-tight truncate max-w-[220px] pb-px', isPill ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10` : isTag ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}` : ''].filter(Boolean).join(' ')}>
