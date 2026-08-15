@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-15T20:12:28.016Z",
+  "generated_at": "2026-08-15T20:59:08.892Z",
   "releases": [
+    {
+      "version": "0.1.49",
+      "tag": "v0.1.49",
+      "date": "2026-08-15T16:59:07-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "say who made the change",
+              "hash": "115a75ee"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.48",
       "tag": "v0.1.48",
-      "date": "2026-08-15T16:12:25-04:00",
+      "date": "2026-08-15T16:12:28-04:00",
       "sections": [
         {
           "label": "Fixed",
