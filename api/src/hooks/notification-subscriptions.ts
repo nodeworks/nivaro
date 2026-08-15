@@ -37,6 +37,26 @@ async function fireSubscriptionNotifications(
       )
 
     const now = new Date()
+
+    // Who did it. "A change was made" leaves the reader having to open the
+    // record and dig through history to learn the one thing they usually want
+    // to know first; the actor is already in scope, it just was not said.
+    let actorName: string | null = null
+    if (actorUserId) {
+      try {
+        const a = (await db('nivaro_users')
+          .where({ id: actorUserId })
+          .first('first_name', 'last_name', 'email')) as
+          | { first_name?: string | null; last_name?: string | null; email?: string | null }
+          | undefined
+        actorName =
+          [a?.first_name, a?.last_name].filter(Boolean).join(' ').trim() || a?.email || null
+      } catch {
+        // Never let naming the actor stop the notification.
+      }
+    }
+    const by = actorName ? ` by ${actorName}` : ''
+
     for (const sub of subs) {
       // Skip the actor — don't notify the user who triggered the event
       if (actorUserId && sub.user === actorUserId) continue
@@ -48,8 +68,10 @@ async function fireSubscriptionNotifications(
       }
 
       const label = sub.label || `${collection} ${eventType}`
-      const subject = `${label}: ${eventType} in ${collection}`
-      const message = `A ${eventType} event occurred on item ${item} in ${collection}`
+      const subject = `${label}: ${eventType} in ${collection}${by}`
+      const message = actorName
+        ? `${actorName} performed a ${eventType} on item ${item} in ${collection}`
+        : `A ${eventType} event occurred on item ${item} in ${collection}`
 
       const [notif] = await db('nivaro_notifications')
         .insert({
@@ -199,6 +221,23 @@ export async function fireWorkflowStateSubscriptions(opts: {
       return valueCache.get(path)
     }
 
+    // Same reasoning as the record-change path: a state change is something a
+    // PERSON did, and the reader's first question is who.
+    let actorName: string | null = null
+    if (opts.actorUserId) {
+      try {
+        const a = (await db('nivaro_users')
+          .where({ id: opts.actorUserId })
+          .first('first_name', 'last_name', 'email')) as
+          | { first_name?: string | null; last_name?: string | null; email?: string | null }
+          | undefined
+        actorName =
+          [a?.first_name, a?.last_name].filter(Boolean).join(' ').trim() || a?.email || null
+      } catch {
+        // Naming the actor must never stop the notification.
+      }
+    }
+
     const now = new Date()
     for (const sub of relevant) {
       if (opts.actorUserId && sub.user === opts.actorUserId) continue
@@ -224,8 +263,12 @@ export async function fireWorkflowStateSubscriptions(opts: {
 
       const label = sub.label || `${opts.collection} workflow`
       const friendly = opts.friendlyId ?? opts.item
-      const subject = `${label} ${friendly}: ${opts.transitionLabel} → ${opts.stateLabel}`
-      const message = `${friendly} moved to "${opts.stateLabel}" (${opts.transitionLabel})`
+      const subject = `${label} ${friendly}: ${opts.transitionLabel} → ${opts.stateLabel}${
+        actorName ? ` by ${actorName}` : ''
+      }`
+      const message = actorName
+        ? `${actorName} moved ${friendly} to "${opts.stateLabel}" (${opts.transitionLabel})`
+        : `${friendly} moved to "${opts.stateLabel}" (${opts.transitionLabel})`
 
       const [notif] = await db('nivaro_notifications')
         .insert({
