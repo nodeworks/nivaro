@@ -101,6 +101,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
+import { QuickFiltersEditor, type QuickFilterDef } from '@/components/quick-filters-editor'
 import { api, type CMSField, type CMSRelation } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import {
@@ -4485,13 +4486,13 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
   })
   const cfg = col?.browser_config ?? {}
   const [pageSize, setPageSize] = useState('')
-  const [qfDraft, setQfDraft] = useState('')
-  const [qfError, setQfError] = useState('')
+  const [qfRows, setQfRows] = useState<QuickFilterDef[]>([])
+  const [qfDirty, setQfDirty] = useState(false)
   const [initialised, setInitialised] = useState(false)
   useEffect(() => {
     if (col !== undefined && !initialised) {
       setPageSize(cfg.page_size ? String(cfg.page_size) : '')
-      setQfDraft(cfg.quick_filters?.length ? JSON.stringify(cfg.quick_filters, null, 2) : '')
+      setQfRows((cfg.quick_filters ?? []) as QuickFilterDef[])
       setInitialised(true)
     }
   }, [col, initialised, cfg])
@@ -4556,41 +4557,45 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
         </div>
         <div>
           <p className='text-[12.5px] font-medium text-slate-700'>Quick filters</p>
-          <p className='mb-1 text-[11.5px] text-slate-500'>
-            Facet dropdowns above the table — JSON array of{' '}
-            {'{key, label, path, collection, label_field, value_field?, sort?, or_paths?}'}
+          <p className='mb-1.5 text-[11.5px] text-slate-500'>
+            Facet dropdowns above the table. Drag to reorder — that is the order they appear in.
           </p>
-          <Textarea
-            value={qfDraft}
-            onChange={(e) => setQfDraft(e.target.value)}
-            placeholder='[{"key":"fy","label":"Funding Year","path":["funding_years"],"collection":"funding_years","label_field":"id","sort":"-id"}]'
-            rows={4}
-            className='font-mono text-[12px]'
+          <QuickFiltersEditor
+            collection={tableName}
+            value={qfRows}
+            onChange={(next) => {
+              setQfRows(next)
+              setQfDirty(true)
+            }}
           />
-          {qfError && <p className='text-[11px] text-red-500'>{qfError}</p>}
-          <div className='mt-1.5 flex gap-2'>
-            <Button
-              size='sm'
-              className='h-7 text-[12px]'
-              onClick={() => {
-                if (!qfDraft.trim()) {
-                  setQfError('')
-                  void patch({ quick_filters: undefined })
-                  return
-                }
-                try {
-                  const parsed = JSON.parse(qfDraft)
-                  if (!Array.isArray(parsed)) throw new Error('not array')
-                  setQfError('')
-                  void patch({ quick_filters: parsed })
-                } catch {
-                  setQfError('Invalid JSON — must be an array of quick-filter objects')
-                }
-              }}
-            >
-              Save quick filters
-            </Button>
-          </div>
+          {qfDirty && (
+            <div className='mt-2 flex items-center gap-2'>
+              <Button
+                size='sm'
+                className='h-7 text-[12px]'
+                onClick={async () => {
+                  // Incomplete rows would render a dropdown that filters
+                  // nothing, so they are dropped rather than saved half-built.
+                  const clean = qfRows.filter(
+                    (f) =>
+                      f.key?.trim() &&
+                      f.label?.trim() &&
+                      f.collection?.trim() &&
+                      f.label_field?.trim() &&
+                      (f.path?.length || f.or_paths?.some((p) => p.length))
+                  )
+                  await patch({ quick_filters: clean.length > 0 ? clean : undefined })
+                  setQfRows(clean)
+                  setQfDirty(false)
+                }}
+              >
+                Save quick filters
+              </Button>
+              <span className='text-[11px] text-slate-400'>
+                {qfRows.length} filter{qfRows.length === 1 ? '' : 's'} — unsaved
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </div>
