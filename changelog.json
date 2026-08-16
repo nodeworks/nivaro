@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-15T21:40:07.982Z",
+  "generated_at": "2026-08-16T23:02:16.952Z",
   "releases": [
+    {
+      "version": "0.1.52",
+      "tag": "v0.1.52",
+      "date": "2026-08-16T19:02:15-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "session replay",
+              "text": "retention is configurable, not a constant",
+              "hash": "6cf5e278"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.51",
       "tag": "v0.1.51",
-      "date": "2026-08-15T17:40:05-04:00",
+      "date": "2026-08-15T17:40:08-04:00",
       "sections": [
         {
           "label": "Fixed",
