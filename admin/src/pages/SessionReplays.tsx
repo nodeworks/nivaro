@@ -485,7 +485,11 @@ export function SessionReplaysPage() {
               Session Replays
             </h1>
             <p className='text-[12px] text-muted-foreground'>
-              Watch what people saw — inputs masked, kept 7 days.
+              {/* Reads the setting rather than restating a number that is now
+                  configurable — copy that contradicts the control beside it is
+                  worse than no copy. */}
+              Watch what people saw — inputs masked, kept {retention} day
+              {retention === 1 ? '' : 's'}.
             </p>
           </div>
           {apps.length > 1 && (

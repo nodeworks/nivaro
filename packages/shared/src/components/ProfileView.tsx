@@ -570,6 +570,21 @@ function ScopeDimensionRow({
 // ── Security: two-factor + API token ─────────────────────────────────────────
 
 function SecurityCard() {
+  // Two-factor is only offered where the instance actually enforces it.
+  // Showing the setup flow on a deployment that never asks for a code invites
+  // people to enrol in nothing and leaves them holding a dead authenticator
+  // entry. Undefined while loading counts as ON so an enrolled user's panel
+  // does not flicker away and back.
+  const { data: instanceSettings } = useQuery({
+    queryKey: ['nvr-settings-2fa'],
+    queryFn: () =>
+      client
+        .request({ _method: 'GET', _path: '/settings/' } as never)
+        .then((r) => (r as { data?: { two_factor_enabled?: boolean } })?.data ?? null)
+        .catch(() => null),
+    staleTime: 10 * 60_000
+  })
+  const twoFactorOffered = instanceSettings?.two_factor_enabled !== false
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [qr, setQr] = useState<{ qr: string; secret: string } | null>(null)
@@ -633,9 +648,12 @@ function SecurityCard() {
     <SectionCard
       icon={<ShieldCheck className='h-4 w-4' />}
       title='Security'
-      hint='Two-factor sign-in and API access'
+      hint={twoFactorOffered ? 'Two-factor sign-in and API access' : 'API access'}
     >
       <div className='space-y-4'>
+        {/* Hidden entirely when the instance does not use two-factor —
+            an inert setup flow is worse than no panel. */}
+        {twoFactorOffered && (
         <div>
           <div className='flex items-center gap-2'>
             <p className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
@@ -712,8 +730,15 @@ function SecurityCard() {
             </div>
           )}
         </div>
+        )}
 
-        <div className='border-t border-slate-100 pt-3 dark:border-border/60'>
+        {/* The rule separates this from two-factor above — with that hidden
+            it would be a stray line across the top of the card. */}
+        <div
+          className={
+            twoFactorOffered ? 'border-t border-slate-100 pt-3 dark:border-border/60' : undefined
+          }
+        >
           <p className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>API token</p>
           <p className='mt-0.5 text-[11.5px] text-slate-400'>
             Personal Bearer token for scripts and integrations. Shown once — creating a new one

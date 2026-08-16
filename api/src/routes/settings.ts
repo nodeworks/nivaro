@@ -36,6 +36,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       'presence_session_ttl',
       'session_recording_enabled',
       'session_recording_retention_days',
+      'two_factor_enabled',
       'presence_sweep_interval',
       'presence_ping_interval',
       'ai_model',

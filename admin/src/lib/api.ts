@@ -161,6 +161,8 @@ export type CMSSettings = {
   teams_webhook_url: string | null
   ad_group_role_map: Array<{ ad_group_id: string; role_id: string }> | null
   anthropic_api_key: string | null
+  /** Off hides two-factor setup from every profile. */
+  two_factor_enabled?: boolean | null
   presence_session_ttl: number | null
   presence_sweep_interval: number | null
   presence_ping_interval: number | null

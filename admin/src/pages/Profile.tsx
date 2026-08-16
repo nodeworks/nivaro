@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { UserActivityPanel } from '@/components/user-activity-panel'
 import { api, type Role, type User } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { useSettings } from '@/lib/useSettings'
 import { formatDate, formatRelative, cn } from '@/lib/utils'
 
 function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
@@ -417,6 +418,8 @@ function initials(user: User): string {
 }
 
 export function ProfilePage() {
+  const { data: instanceSettings } = useSettings()
+  const twoFactorOffered = instanceSettings?.two_factor_enabled !== false
   const { user: currentUser, refetch: refetchMe } = useAuth()
   const queryClient = useQueryClient()
   const [showToken, setShowToken] = useState(false)
@@ -674,8 +677,10 @@ export function ProfilePage() {
               </div>
             </form>
 
-            {/* Two-Factor Authentication (own save, outside the profile form) */}
-            <TwoFactorCard />
+            {/* Two-Factor Authentication (own save, outside the profile form).
+                Hidden when the instance does not use two-factor — the same gate
+                the shared ProfileView applies, so both surfaces agree. */}
+            {twoFactorOffered && <TwoFactorCard />}
 
             {/* Browser push (own save, outside the profile form) */}
             <EmailDeliveryCard />

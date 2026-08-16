@@ -324,6 +324,7 @@ export function SettingsPage() {
   const [newLocale, setNewLocale] = useState('')
   const [teamsWebhook, setTeamsWebhook] = useState('')
   const [anthropicKey, setAnthropicKey] = useState('')
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(true)
   const [sessionTtl, setSessionTtl] = useState(20)
   const [sweepInterval, setSweepInterval] = useState(8000)
   const [pingInterval, setPingInterval] = useState(10000)
@@ -373,6 +374,7 @@ export function SettingsPage() {
     setAvailableLocales(toLocaleArray((settings as Record<string, unknown>).available_locales))
     setTeamsWebhook(settings.teams_webhook_url ?? '')
     setAnthropicKey(settings.anthropic_api_key ?? '')
+    setTwoFactorEnabled(settings.two_factor_enabled !== false)
     setSessionTtl(settings.presence_session_ttl ?? 20)
     setSweepInterval(settings.presence_sweep_interval ?? 8000)
     setPingInterval(settings.presence_ping_interval ?? 10000)
@@ -546,6 +548,7 @@ export function SettingsPage() {
 
   function savePresence() {
     mutation.mutate({
+      two_factor_enabled: twoFactorEnabled,
       presence_session_ttl: sessionTtl,
       presence_sweep_interval: sweepInterval,
       presence_ping_interval: pingInterval
@@ -956,10 +959,16 @@ export function SettingsPage() {
 
               {activeSection === 'presence' && (
                 <SectionWrap
-                  title='Presence Tracking'
+                  title='Presence & Security'
                   onSave={savePresence}
                   saving={mutation.isPending}
                 >
+                  <Field
+                    label='Two-factor authentication'
+                    hint='Off hides two-factor setup from every profile. Turn it off when this deployment does not ask for a code — offering a setup flow nothing enforces leaves people holding a dead authenticator entry.'
+                  >
+                    <Switch checked={twoFactorEnabled} onCheckedChange={setTwoFactorEnabled} />
+                  </Field>
                   <Field
                     label='Session TTL (seconds)'
                     hint='How long a session stays active in Redis after the last ping. Must be longer than the ping interval.'
