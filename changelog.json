@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-16T23:02:16.952Z",
+  "generated_at": "2026-08-16T23:21:16.956Z",
   "releases": [
+    {
+      "version": "0.1.53",
+      "tag": "v0.1.53",
+      "date": "2026-08-16T19:21:15-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "make two-factor setup optional per instance",
+              "hash": "59a2789e"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.52",
       "tag": "v0.1.52",
-      "date": "2026-08-16T19:02:15-04:00",
+      "date": "2026-08-16T19:02:17-04:00",
       "sections": [
         {
           "label": "Added",
