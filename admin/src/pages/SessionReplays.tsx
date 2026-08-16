@@ -388,6 +388,24 @@ export function SessionReplaysPage() {
     setPlaying(match)
   }, [deepLinkId, recordings])
 
+  const { data: settings } = useQuery({
+    queryKey: ['session-recording-retention'],
+    queryFn: () =>
+      api
+        .get<{ data: { session_recording_retention_days?: number | null } }>('/settings/')
+        .then((r) => r.data.data)
+  })
+  const retention = settings?.session_recording_retention_days ?? 7
+  const setRetention = useMutation({
+    mutationFn: (days: number) =>
+      api.patch('/settings/', { session_recording_retention_days: days }),
+    onSuccess: (_d, days) => {
+      toast.success(`Recordings kept for ${days} day${days === 1 ? '' : 's'}`)
+      queryClient.invalidateQueries({ queryKey: ['session-recording-retention'] })
+    },
+    onError: () => toast.error('Failed to save retention')
+  })
+
   const toggle = useMutation({
     mutationFn: (value: boolean) => api.patch('/settings/', { session_recording_enabled: value }),
     onSuccess: (_r, value) => {
@@ -501,7 +519,24 @@ export function SessionReplaysPage() {
               ))}
             </div>
           )}
-          <label className='ml-auto flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
+          {/* Beside the on/off switch: how long recordings live is the other
+              half of the same decision, and it was previously a code constant. */}
+          <label className='ml-auto flex items-center gap-1.5 text-[12.5px] text-slate-600 dark:text-slate-300'>
+            Keep for
+            <select
+              value={String(retention)}
+              onChange={(e) => setRetention.mutate(Number(e.target.value))}
+              disabled={setRetention.isPending}
+              className='h-7 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
+            >
+              {[1, 3, 7, 14, 30, 60, 90, 180, 365].map((d) => (
+                <option key={d} value={d}>
+                  {d} day{d === 1 ? '' : 's'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className='flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
             Recording {enabled ? 'on' : 'off'}
             <Switch
               checked={!!enabled}

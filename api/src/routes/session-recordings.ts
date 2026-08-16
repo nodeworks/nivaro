@@ -17,12 +17,34 @@ type RrwebEventLike = { type: number; timestamp: number; data?: Record<string, u
  * after RETENTION_DAYS via the daily retention pass.
  */
 
+/** Fallback when the setting is unset or nonsense — the historic value. */
 export const RECORDING_RETENTION_DAYS = 7
+
+/**
+ * Days to keep recordings, from settings.
+ *
+ * Clamped to 1–365: zero would delete a recording the moment it was made, and
+ * an unbounded value turns a debugging aid into an archive of people working,
+ * which is the thing a retention setting exists to prevent.
+ */
+export async function recordingRetentionDays(): Promise<number> {
+  try {
+    const row = await db('nivaro_settings')
+      .where({ id: 1 })
+      .first('session_recording_retention_days')
+    const n = Number(row?.session_recording_retention_days)
+    if (!Number.isFinite(n) || n <= 0) return RECORDING_RETENTION_DAYS
+    return Math.min(Math.max(Math.trunc(n), 1), 365)
+  } catch {
+    return RECORDING_RETENTION_DAYS
+  }
+}
 const MAX_BYTES = 15_000_000 // 15MB per recording
 const MAX_CHUNK = 1_500_000 // 1.5MB per chunk
 
 export async function purgeExpiredRecordings(): Promise<void> {
-  const cutoff = new Date(Date.now() - RECORDING_RETENTION_DAYS * 86_400_000)
+  const days = await recordingRetentionDays()
+  const cutoff = new Date(Date.now() - days * 86_400_000)
   await db('nivaro_session_recordings').where('started_at', '<', cutoff).del()
 }
 
