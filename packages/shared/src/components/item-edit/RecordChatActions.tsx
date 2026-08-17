@@ -92,6 +92,10 @@ export function RecordChatActions({
   useEffect(() => {
     if (!shareOpen) return
     const onDown = (e: MouseEvent) => {
+      const t = e.target as Element | null
+      // The room dropdown (Radix Select) PORTALS its options to document.body
+      // — clicking an option must not read as "outside the popup".
+      if (t?.closest?.('[data-radix-popper-content-wrapper], [role="listbox"]')) return
       if (!rootRef.current?.contains(e.target as Node)) setShareOpen(false)
     }
     window.addEventListener('mousedown', onDown)
