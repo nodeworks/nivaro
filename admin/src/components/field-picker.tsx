@@ -108,7 +108,7 @@ export function FieldPicker({
             e.stopPropagation()
             onClear()
           }}
-          className='absolute right-2 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+          className='absolute right-2 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'
         >
           <X className='h-3 w-3' />
         </button>
@@ -117,7 +117,7 @@ export function FieldPicker({
         <div
           ref={dropdownRef}
           style={{ position: 'fixed', top: pos.top, left: pos.left }}
-          className='z-50 w-72 rounded-xl border border-slate-200 bg-white shadow-lg'
+          className='z-50 w-72 rounded-xl border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card'
         >
           <div className='p-2'>
             <div className='relative mb-1.5'>

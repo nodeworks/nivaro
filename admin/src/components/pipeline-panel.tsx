@@ -406,7 +406,7 @@ function AsyncUserPicker({
               e.stopPropagation()
               onChange('')
             }}
-            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'
           >
             <X className='h-3 w-3' />
           </button>
@@ -512,7 +512,7 @@ function MiniCombobox({
               e.stopPropagation()
               onChange('')
             }}
-            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'
           >
             <X className='h-3 w-3' />
           </button>
@@ -926,7 +926,7 @@ export function PipelinePanel({ collection, item, defaultExpanded, title, onBefo
           </Button>
         )}
         <button type='button' onClick={() => setExpanded(v => !v)}
-          className='ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600'>
+          className='ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'>
           <ChevronDown className={cn('h-3.5 w-3.5 transition-transform duration-150', expanded && 'rotate-180')} />
         </button>
       </div>

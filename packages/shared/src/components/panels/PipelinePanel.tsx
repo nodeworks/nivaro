@@ -588,7 +588,7 @@ function AsyncUserPicker({ value, onChange }: { value: string; onChange: (v: str
               e.stopPropagation()
               onChange('')
             }}
-            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'
           >
             <X className='h-3 w-3' />
           </button>
@@ -959,7 +959,7 @@ function ApprovalChainView({
         <button
           type='button'
           title='View approval chain'
-          className='flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600'
+          className='flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'
           onClick={(e) => e.stopPropagation()}
         >
           <Users className='h-3.5 w-3.5' />

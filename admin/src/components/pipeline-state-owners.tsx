@@ -169,7 +169,7 @@ function M2OValuePicker({
         className='h-8 text-[12px] w-[160px]'
       />
       {open && (
-        <div className='absolute z-50 top-full mt-0.5 max-h-48 w-full min-w-[200px] overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg'>
+        <div className='absolute z-50 top-full mt-0.5 max-h-48 w-full min-w-[200px] overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card'>
           {isLoading ? (
             <div className='flex items-center justify-center py-3'>
               <Loader2 className='h-3.5 w-3.5 animate-spin text-slate-400' />

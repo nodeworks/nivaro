@@ -307,7 +307,7 @@ export function QueueKanbanBoard({
       )}
       <DragOverlay dropAnimation={{ duration: 150, easing: 'ease' }}>
         {activeItem && (
-          <div className='w-72 rounded-md border border-slate-300 bg-white p-2.5 shadow-lg'>
+          <div className='w-72 rounded-md border border-slate-300 bg-white p-2.5 shadow-lg dark:border-border dark:bg-card'>
             <p className='truncate text-[12px] font-medium text-slate-800'>{activeItem.label}</p>
           </div>
         )}

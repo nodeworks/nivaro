@@ -3304,7 +3304,7 @@ export function InlineTableField({
     {readOnly && presetSwitcher}
     <div className={isPrefilling ? 'hidden' : 'relative rounded-lg border border-slate-200 text-[12px]'}>
       {reordering && (
-        <div className='absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px]'>
+        <div className='absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px] dark:bg-black/40'>
           <div className='flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 shadow-sm text-[12px] text-slate-500'>
             <Loader2 className='h-3.5 w-3.5 animate-spin' />
             Saving order…

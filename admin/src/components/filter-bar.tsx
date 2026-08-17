@@ -201,7 +201,7 @@ function FieldPickerDropdown({
   const [op, setOp] = useState<string>('')
 
   return (
-    <div className='absolute left-0 top-full z-50 mt-1 w-72 rounded-xl border border-slate-200 bg-white shadow-lg'>
+    <div className='absolute left-0 top-full z-50 mt-1 w-72 rounded-xl border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card'>
       {stage === 'picking_field' && (
         <FieldStage
           collection={collection}

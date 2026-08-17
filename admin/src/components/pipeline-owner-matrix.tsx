@@ -712,7 +712,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
         <table className='min-w-full border-collapse text-[12px]'>
           <thead>
             <tr className='bg-slate-50'>
-              <th className='sticky left-0 z-10 bg-slate-50 border-b border-r border-slate-200 px-3 py-2 text-left text-[12px] font-semibold text-slate-700 min-w-[100px]'>
+              <th className='sticky left-0 z-10 bg-slate-50 dark:bg-muted border-b border-r border-slate-200 dark:border-border px-3 py-2 text-left text-[12px] font-semibold text-slate-700 dark:text-slate-200 min-w-[100px]'>
                 {rowDim.label}
               </th>
               {states.map((s) => (
@@ -737,7 +737,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
             {rowValues.map((row) => (
               <Fragment key={row.value}>
                 <tr className='hover:bg-slate-50/50'>
-                  <td className='sticky left-0 z-10 bg-white border-b border-r border-slate-200 px-3 py-2 font-medium text-slate-700 text-[13px]'>
+                  <td className='sticky left-0 z-10 bg-white dark:bg-card border-b border-r border-slate-200 dark:border-border px-3 py-2 font-medium text-slate-700 dark:text-slate-200 text-[13px]'>
                     {row.label}
                   </td>
                   {states.map((s) => {
@@ -807,7 +807,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                 </tr>
                 {expandedCell?.rowValue === row.value && (
                   <tr>
-                    <td className='sticky left-0 z-10 bg-slate-50 border-b border-r border-slate-200' />
+                    <td className='sticky left-0 z-10 bg-slate-50 dark:bg-muted border-b border-r border-slate-200 dark:border-border' />
                     {states.map((s) => {
                       if (expandedCell.stateId !== s.id) {
                         return (
@@ -1132,7 +1132,7 @@ function InlineM2OPicker({
         className='h-8 w-48 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] focus:border-nvr-cyan/50 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
       />
       {open && (
-        <div className='absolute z-50 top-full mt-0.5 w-full min-w-[200px] max-h-48 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg'>
+        <div className='absolute z-50 top-full mt-0.5 w-full min-w-[200px] max-h-48 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card'>
           {isLoading ? (
             <div className='flex justify-center py-3'>
               <Loader2 className='h-3.5 w-3.5 animate-spin text-slate-400' />

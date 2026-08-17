@@ -439,7 +439,7 @@ export function FilePickerField({
 
       {open && (
         <div
-          className='absolute z-50 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg'
+          className='absolute z-50 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card'
           style={{ minWidth: 480 }}
         >
           <FileBrowserPanel
@@ -783,7 +783,7 @@ export function FileM2MField({
               </button>
               {open && (
                 <div
-                  className='absolute z-50 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg'
+                  className='absolute z-50 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card'
                   style={{ minWidth: 480 }}
                 >
                   <FileBrowserPanel

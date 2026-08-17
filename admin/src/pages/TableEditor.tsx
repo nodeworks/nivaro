@@ -11036,7 +11036,7 @@ function FieldChip({
             <ChevronDown className='h-2.5 w-2.5' />
           </button>
           {open && (
-            <div className='absolute right-0 top-full z-20 mt-1 rounded-md border border-slate-200 bg-white py-1 shadow-md'>
+            <div className='absolute right-0 top-full z-20 mt-1 rounded-md border border-slate-200 bg-white py-1 shadow-md dark:border-border dark:bg-card'>
               {WIDTH_OPTIONS.map((w) => (
                 <button
                   key={w.span}
@@ -17805,7 +17805,7 @@ function FieldGroupsTab({
               const key = activeGroupId.replace('slot:', '') as SlotKey
               const label = slots[key].label_override?.trim() || SLOT_META[key].defaultLabel
               return (
-                <div className='flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-md text-[12px] font-medium text-slate-700 w-48'>
+                <div className='flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-md text-[12px] font-medium text-slate-700 w-48 dark:border-border dark:bg-card dark:text-slate-200'>
                   <GripVertical className='h-3.5 w-3.5 text-slate-300 shrink-0' />
                   {label}
                 </div>
@@ -17817,7 +17817,7 @@ function FieldGroupsTab({
                 ? 'Ungrouped'
                 : (groups.find((g) => g.key === key)?.label ?? key)
             return (
-              <div className='flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-md text-[12px] font-medium text-slate-700 w-48'>
+              <div className='flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-md text-[12px] font-medium text-slate-700 w-48 dark:border-border dark:bg-card dark:text-slate-200'>
                 <GripVertical className='h-3.5 w-3.5 text-slate-300 shrink-0' />
                 {label}
               </div>
@@ -19232,7 +19232,7 @@ export function TableEditorPage() {
   return (
     <>
       {/* Sticky header */}
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-6 py-3.5'>
+      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-6 py-3.5 dark:border-border dark:bg-card'>
         <div className='flex items-center justify-between'>
           <div className='flex items-center gap-2 text-[13px]'>
             <Link

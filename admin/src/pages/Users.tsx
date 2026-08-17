@@ -221,7 +221,7 @@ export function UsersPage() {
   return (
     <>
       {/* Page header */}
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5'>
+      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
         <div className='flex items-center justify-between'>
           <div className='flex items-center gap-3'>
             <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900'>Users</h1>

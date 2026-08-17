@@ -132,7 +132,7 @@ function SimpleCombobox({
               e.stopPropagation()
               onChange('')
             }}
-            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'
           >
             <X className='h-3 w-3' />
           </button>
@@ -246,7 +246,7 @@ function MultiStateCombobox({
               e.stopPropagation()
               onChange([])
             }}
-            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+            className='absolute right-6 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'
           >
             <X className='h-3 w-3' />
           </button>
@@ -569,7 +569,7 @@ function GroupLabelCombobox({
                   e.stopPropagation()
                   choose(null)
                 }}
-                className='flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+                className='flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'
               >
                 <X className='h-3 w-3' />
               </button>
@@ -2809,7 +2809,7 @@ export function PipelineEditPage() {
   return (
     <>
       {/* Sticky header */}
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5'>
+      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
         <div className='flex items-center justify-between'>
           <div className='flex items-center gap-2 text-[13px]'>
             <Link

@@ -460,7 +460,7 @@ export function SchemaSnapshotPage() {
 
   return (
     <>
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5'>
+      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
         <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900'>
           Schema Snapshot
         </h1>

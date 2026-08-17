@@ -890,7 +890,7 @@ export function CollectionBrowserPage() {
   return (
     <NivaroProvider client={nivaroClient}>
       {/* Page header */}
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-6 py-2.5'>
+      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-6 py-2.5 dark:border-border dark:bg-card'>
         <div className='flex items-center justify-between gap-3'>
           <div className='flex items-center gap-1.5'>
             <button

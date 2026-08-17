@@ -188,7 +188,7 @@ export function WebhookEditPage() {
 
   return (
     <>
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-4'>
+      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-4 dark:border-border dark:bg-card'>
         <div className='flex items-center justify-between'>
           <div className='flex items-center gap-2'>
             <button
