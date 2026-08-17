@@ -106,6 +106,8 @@ const USER_COLS = [
   'manager_id',
   'delegate_id',
   'delegate_expires_at',
+  'ooo_start',
+  'ooo_end',
   'is_out_of_office',
   'created_at'
 ] as const

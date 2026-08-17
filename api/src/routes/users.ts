@@ -226,6 +226,8 @@ export async function usersRoutes(app: FastifyInstance) {
       delegate_id?: string | null
       delegate_expires_at?: string | null
       is_out_of_office?: boolean
+      ooo_start?: string | null
+      ooo_end?: string | null
     }
     const userId = req.user!.id
 
@@ -237,10 +239,22 @@ export async function usersRoutes(app: FastifyInstance) {
       if (!delegate) return reply.code(400).send({ error: 'Delegate user not found' })
     }
 
+    const oooStart = body.ooo_start ? new Date(body.ooo_start) : null
+    const oooEnd = body.ooo_end ? new Date(body.ooo_end) : null
+    if (oooStart && oooEnd && oooEnd.getTime() <= oooStart.getTime()) {
+      return reply.code(400).send({ error: 'The out-of-office window must end after it starts' })
+    }
+    // A window already in progress flips OOO on immediately; a future window
+    // waits for the ooo-schedule cron.
+    const now = Date.now()
+    const windowActive =
+      !!oooStart && !!oooEnd && oooStart.getTime() <= now && oooEnd.getTime() > now
     const updates = {
       delegate_id: body.delegate_id ?? null,
       delegate_expires_at: body.delegate_expires_at ? new Date(body.delegate_expires_at) : null,
-      is_out_of_office: body.is_out_of_office ?? false
+      is_out_of_office: (body.is_out_of_office ?? false) || windowActive,
+      ooo_start: oooStart,
+      ooo_end: oooEnd
     }
 
     const previousUser = await getUser(userId)

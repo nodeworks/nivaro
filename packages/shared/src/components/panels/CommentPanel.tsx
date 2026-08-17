@@ -1,6 +1,7 @@
 import { UserAvatar } from '../UserAvatar'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, MessageSquare, Pencil, Trash2, X } from 'lucide-react'
+import {
+  ClipboardPlus, Check, ChevronDown, MessageSquare, Pencil, Trash2, X } from 'lucide-react'
 import type React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -361,6 +362,22 @@ export function CommentPanel({
     onError: () => toast.error('Failed to delete comment')
   })
 
+  // "Make this a task" — the comment text becomes a task on this record,
+  // assigned to whoever clicked (they're the one who decided it's actionable).
+  const makeTask = useMutation({
+    mutationFn: (c: Comment) =>
+      client.request(
+        post('/tasks', {
+          collection,
+          item,
+          title: c.text.replace(/<[^>]*>/g, '').replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 200),
+          assignee: userId
+        })
+      ),
+    onSuccess: () => toast.success('Task created from comment — assigned to you'),
+    onError: () => toast.error('Could not create a task')
+  })
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!draft.trim()) return
@@ -512,25 +529,37 @@ export function CommentPanel({
                             {c.updated_at && c.updated_at !== c.created_at && (
                               <span className='text-[10px] text-slate-300'>(edited)</span>
                             )}
-                            {isOwn && !isEditing && (
+                            {!isEditing && (
                               <div className='ml-auto flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100'>
                                 <button
                                   type='button'
-                                  className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700'
-                                  onClick={() => {
-                                    setEditingId(c.id)
-                                    setEditText(c.text)
-                                  }}
+                                  title='Make a task from this comment'
+                                  className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
+                                  onClick={() => makeTask.mutate(c)}
                                 >
-                                  <Pencil className='h-3 w-3' />
+                                  <ClipboardPlus className='h-3 w-3' />
                                 </button>
-                                <button
-                                  type='button'
-                                  className='rounded p-1 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500'
-                                  onClick={() => remove.mutate(c.id)}
-                                >
-                                  <Trash2 className='h-3 w-3' />
-                                </button>
+                                {isOwn && (
+                                  <>
+                                    <button
+                                      type='button'
+                                      className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700'
+                                      onClick={() => {
+                                        setEditingId(c.id)
+                                        setEditText(c.text)
+                                      }}
+                                    >
+                                      <Pencil className='h-3 w-3' />
+                                    </button>
+                                    <button
+                                      type='button'
+                                      className='rounded p-1 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500'
+                                      onClick={() => remove.mutate(c.id)}
+                                    >
+                                      <Trash2 className='h-3 w-3' />
+                                    </button>
+                                  </>
+                                )}
                               </div>
                             )}
                           </div>

@@ -878,10 +878,15 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
   const [expires, setExpires] = useState(
     user.delegate_expires_at ? String(user.delegate_expires_at).slice(0, 10) : ''
   )
+  const u = user as ManagedUser & { ooo_start?: string | null; ooo_end?: string | null }
+  const [oooStart, setOooStart] = useState(u.ooo_start ? String(u.ooo_start).slice(0, 10) : '')
+  const [oooEnd, setOooEnd] = useState(u.ooo_end ? String(u.ooo_end).slice(0, 10) : '')
   const dirty =
     ooo !== !!user.is_out_of_office ||
     (delegate ?? null) !== (user.delegate_id ?? null) ||
-    expires !== (user.delegate_expires_at ? String(user.delegate_expires_at).slice(0, 10) : '')
+    expires !== (user.delegate_expires_at ? String(user.delegate_expires_at).slice(0, 10) : '') ||
+    oooStart !== (u.ooo_start ? String(u.ooo_start).slice(0, 10) : '') ||
+    oooEnd !== (u.ooo_end ? String(u.ooo_end).slice(0, 10) : '')
 
   const save = useMutation({
     mutationFn: () =>
@@ -889,7 +894,11 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
         setMyDelegate({
           is_out_of_office: ooo,
           delegate_id: delegate,
-          delegate_expires_at: expires ? new Date(`${expires}T23:59:59`).toISOString() : null
+          delegate_expires_at: expires ? new Date(`${expires}T23:59:59`).toISOString() : null,
+          // Scheduled window — the ooo-schedule cron flips the toggle on
+          // entry and clears it (and the window) when it passes.
+          ooo_start: oooStart ? new Date(`${oooStart}T00:00:00`).toISOString() : null,
+          ooo_end: oooEnd ? new Date(`${oooEnd}T23:59:59`).toISOString() : null
         })
       ),
     onSuccess: onSaved
@@ -899,6 +908,8 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
     setOoo(!!user.is_out_of_office)
     setDelegate(user.delegate_id ?? null)
     setExpires(user.delegate_expires_at ? String(user.delegate_expires_at).slice(0, 10) : '')
+    setOooStart(u.ooo_start ? String(u.ooo_start).slice(0, 10) : '')
+    setOooEnd(u.ooo_end ? String(u.ooo_end).slice(0, 10) : '')
   }
 
   const untilLabel = expires
@@ -956,6 +967,22 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
             placeholder='Pick a delegate…'
           />
         </div>
+        {/* Plan it ahead: the toggle flips on/off automatically inside this
+            window, so nobody has to remember on the morning they leave. */}
+        <Field
+          label='Out from'
+          hint='schedule ahead'
+          type='date'
+          value={oooStart}
+          onChange={setOooStart}
+        />
+        <Field
+          label='Out until'
+          hint='auto-clears after'
+          type='date'
+          value={oooEnd}
+          onChange={setOooEnd}
+        />
         {/* h-9 matches the RelationCombobox trigger beside it */}
         <Field
           label='Until'

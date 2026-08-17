@@ -10,9 +10,11 @@ import {
   Lock,
   LogOut,
   MessageCircle,
+  ClipboardPlus,
   Paperclip,
   Pencil,
   Pin,
+  Video,
   Plus,
   PlayCircle,
   Search,
@@ -23,10 +25,11 @@ import {
   Users,
   X
 } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
-import { get } from '../../lib/commands'
+import { toast } from 'sonner'
+import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import {
@@ -38,6 +41,7 @@ import {
   type RoomInfo,
   chatAvatarColor,
   chatInitials,
+  dmPeer,
   dmRoom,
   getMentionQuery,
   splitMessageTokens,
@@ -530,6 +534,28 @@ export function ChatRoomView({
   const toggleReaction = useToggleReaction(room)
   const pins = useRoomPins(room)
   const togglePin = useTogglePin(room)
+  // Entity-room record — powers "make task from message". Reads the room
+  // card's cached resolution (same query key), so no extra fetch.
+  const qcRoom = useQueryClient()
+  const roomRecord = qcRoom.getQueryData<{ collection: string; id: string | number } | null>([
+    'nvr-chat-room-card',
+    room
+  ])
+  const makeTask = useMutation({
+    mutationFn: async (m: ChatMessage) => {
+      if (!roomRecord || !me) throw new Error('no record')
+      await client.request(
+        post('/tasks', {
+          collection: roomRecord.collection,
+          item: String(roomRecord.id),
+          title: m.message.replace(/<[^>]*>/g, '').slice(0, 200),
+          assignee: me.id
+        })
+      )
+    },
+    onSuccess: () => toast.success('Task created from message — assigned to you'),
+    onError: () => toast.error('Could not create a task')
+  })
   const [pinsOpen, setPinsOpen] = useState(false)
   const editMessage = useEditMessage(room)
   const deleteMessage = useDeleteMessage(room)
@@ -787,6 +813,51 @@ export function ChatRoomView({
         >
           <Search className='h-3.5 w-3.5' strokeWidth={2} />
         </button>
+        {(room.startsWith('dm:') || roomInfo?.channel?.is_direct) && (
+          <button
+            type='button'
+            title='Start a Teams call with everyone here'
+            onClick={async () => {
+              try {
+                let emails: string[] = []
+                if (room.startsWith('dm:') && me) {
+                  const peer = dmPeer(room, me.id)
+                  if (peer) {
+                    const r = (await client.request(
+                      get<{ data: { email?: string | null } }>(`/users/${peer}`)
+                    )) as { data: { email?: string | null } }
+                    if (r.data?.email) emails = [r.data.email]
+                  }
+                } else if (roomInfo?.channel?.id) {
+                  const r = (await client.request(
+                    get<{ data: Array<{ email: string | null; user: string }> }>(
+                      `/chat/channels/${roomInfo.channel.id}/members`
+                    )
+                  )) as { data: Array<{ email: string | null; user: string }> }
+                  emails = r.data
+                    .filter((u) => u.email && u.user.toUpperCase() !== me?.id.toUpperCase())
+                    .map((u) => u.email as string)
+                }
+                if (emails.length === 0) {
+                  toast.error('No callable participants found')
+                  return
+                }
+                window.open(
+                  `https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(emails.join(','))}`,
+                  '_blank',
+                  'noopener'
+                )
+              } catch {
+                toast.error('Could not resolve participants')
+              }
+            }}
+            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+            aria-label='Start a Teams call'
+            data-chat-teams-call
+          >
+            <Video className='h-3.5 w-3.5' strokeWidth={2} />
+          </button>
+        )}
         {roomInfo && (
           <div className='relative flex items-center'>
             <button
@@ -1011,6 +1082,16 @@ export function ChatRoomView({
                             {e}
                           </button>
                         ))}
+                        {roomRecord && (
+                          <button
+                            type='button'
+                            title='Make a task from this message'
+                            onClick={() => makeTask.mutate(m)}
+                            className='rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                          >
+                            <ClipboardPlus className='h-3 w-3' />
+                          </button>
+                        )}
                         <button
                           type='button'
                           title={pins.some((p) => p.id === m.id) ? 'Unpin' : 'Pin'}

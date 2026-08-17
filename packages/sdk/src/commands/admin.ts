@@ -150,6 +150,10 @@ export function setMyDelegate(data: {
   delegate_id?: UUID | null
   delegate_expires_at?: ISODate | null
   is_out_of_office?: boolean
+  /** Scheduled OOO window — the server's ooo-schedule cron flips the toggle
+   *  on entry and clears it after the window passes. */
+  ooo_start?: ISODate | null
+  ooo_end?: ISODate | null
 }): Command<{ data: ManagedUser }> {
   return cmd('POST', '/users/me/delegate', undefined, data)
 }

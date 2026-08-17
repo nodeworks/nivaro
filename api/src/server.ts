@@ -363,7 +363,27 @@ export async function buildServer() {
     // rows whose FK points at a deleted/never-existed parent (blank labels,
     // drill 404s). See services/fk-integrity.ts.
     // Manual: POST /api/cron/fk-integrity-sweep/run.
-        // Chat-bot reminders — "@efp remind me Friday about X". Due rows deliver
+        // Scheduled out-of-office — flips is_out_of_office ON while inside a
+    // user's ooo_start..ooo_end window and OFF (clearing the window) once it
+    // passes. Manual toggles carry no window and are never auto-cleared.
+    app.cron.schedule('ooo-schedule', '*/15 * * * *', async () => {
+      const { db } = await import('./db/index.js')
+      const now = new Date()
+      await db('nivaro_users')
+        .where('is_out_of_office', false)
+        .whereNotNull('ooo_start')
+        .whereNotNull('ooo_end')
+        .where('ooo_start', '<=', now)
+        .where('ooo_end', '>', now)
+        .update({ is_out_of_office: true })
+      await db('nivaro_users')
+        .where('is_out_of_office', true)
+        .whereNotNull('ooo_end')
+        .where('ooo_end', '<=', now)
+        .update({ is_out_of_office: false, ooo_start: null, ooo_end: null })
+    })
+
+    // Chat-bot reminders — "@efp remind me Friday about X". Due rows deliver
     // via notifyUser (in-app + web push) and mark sent; failures retry next tick.
     app.cron.schedule('chat-reminders', '*/5 * * * *', async () => {
       const { db } = await import('./db/index.js')

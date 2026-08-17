@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Clock, RotateCcw } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -417,6 +417,18 @@ function RevisionsList({
     staleTime: 30_000
   })
   const count = data?.length ?? 0
+  // Time travel: pick a date, see the record as it was then — the latest
+  // snapshot at or before that moment. Every revision already carries the
+  // FULL post-change snapshot, so this is a lookup, not a reconstruction.
+  const [asOf, setAsOf] = useState('')
+  const asOfRevision = useMemo(() => {
+    if (!asOf || !data) return null
+    const cutoff = new Date(`${asOf}T23:59:59`).getTime()
+    // data is newest-first — first row at/before the cutoff wins.
+    return (
+      data.find((r) => r.timestamp && new Date(r.timestamp).getTime() <= cutoff) ?? null
+    )
+  }, [asOf, data])
   if (isLoading)
     return (
       <div className='space-y-2 pt-2'>
@@ -429,6 +441,60 @@ function RevisionsList({
     return <p className='text-[13px] text-slate-400 pt-4'>No revisions recorded yet.</p>
   return (
     <div className='pt-2'>
+      <div className='mb-2 flex items-center gap-2'>
+        <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+          View record as of
+        </span>
+        <input
+          type='date'
+          value={asOf}
+          onChange={(e) => setAsOf(e.target.value)}
+          className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
+          aria-label='View record as of date'
+          data-as-of
+        />
+        {asOf && (
+          <button
+            type='button'
+            onClick={() => setAsOf('')}
+            className='text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {asOf && !asOfRevision && (
+        <p className='mb-2 text-[12px] text-slate-400'>
+          No snapshot exists at or before that date — the record is newer.
+        </p>
+      )}
+      {asOfRevision && (
+        <div className='mb-3 overflow-hidden rounded-lg border border-nvr-cyan/40'>
+          <div className='flex items-center gap-2 border-b border-slate-200 bg-[#f0fbff] px-2.5 py-1.5 dark:border-border dark:bg-nvr-cyan/10'>
+            <span className='text-[11px] font-semibold text-slate-700 dark:text-slate-200'>
+              Record as of{' '}
+              {asOfRevision.timestamp ? new Date(asOfRevision.timestamp).toLocaleString() : asOf}
+            </span>
+          </div>
+          <div className='max-h-80 overflow-y-auto'>
+            {Object.entries(asOfRevision.data ?? {})
+              .filter(([, v]) => v !== null && v !== undefined && v !== '')
+              .map(([k, v]) => (
+                <div
+                  key={k}
+                  className='flex items-start gap-2 border-b border-slate-100 px-2.5 py-1 last:border-0 dark:border-border/60'
+                >
+                  <span className='w-[38%] shrink-0 break-all font-mono text-[10.5px] text-slate-500'>
+                    {k}
+                  </span>
+                  <span className='break-all text-[11px] text-slate-700 dark:text-slate-300'>
+                    {typeof v === 'object' ? JSON.stringify(v).slice(0, 120) : String(v).slice(0, 200)}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
       {(data ?? []).map((rev, i) => (
         <RevisionRow
           key={rev.id}

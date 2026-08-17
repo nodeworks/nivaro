@@ -52,7 +52,7 @@ import type {
   SummaryAggConfig,
   SummaryEntry
 } from './item-edit/types'
-import { AccessDeniedPanel, AddendumPanel, CommentPanel, ExternalRequestsChip, ItemActionButtons, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
+import { AccessDeniedPanel, AddendumPanel, CommentPanel, ExternalRequestsChip, ItemActionButtons, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RelatedRecordsPanel, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
 import { WidgetSlot, type InputBinding } from './WidgetSlot'
 import type { PendingTask } from './panels/TaskPanel'
 import { Button } from './ui/button'
@@ -3952,6 +3952,7 @@ export function ItemEditForm({
           <PipelinePanel collection={pipelineCollection} item={pipelineItem} onBeforeTransition={validateAll} addendumPending={!viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled} addendumView={viewingAddendum} />
         )}
         {!tasksSlot && effectiveShowTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
+        {!isNew && itemId && <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />}
         {!commentsSlot && effectiveShowComments && (
           <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}
@@ -4138,6 +4139,7 @@ export function ItemEditForm({
           <PipelinePanel collection={pipelineCollection} item={pipelineItem} onBeforeTransition={validateAll} addendumPending={!viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled} addendumView={viewingAddendum} />
         )}
         {!tasksSlot && effectiveShowTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
+        {!isNew && itemId && <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />}
         {!commentsSlot && effectiveShowComments && (
           <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
         )}

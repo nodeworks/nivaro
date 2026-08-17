@@ -1,7 +1,8 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChartLine, Info, Lock, Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
+import {
+  History, ChartLine, Info, Lock, Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
@@ -100,6 +101,110 @@ function FieldSparkline({ collection, itemId, field }: { collection: string; ite
       </button>
       {open && <span className='inline-flex items-center'>{chart}</span>}
     </>
+  )
+}
+
+/**
+ * "What was this before?" — the field's value history in a popover: became
+ * <value> at <time> by <who>, newest first, from the revision deltas. Fetches
+ * only when opened. Every field type, not just numerics (the old sparkline
+ * covered numbers only and was never enabled).
+ */
+function FieldHistoryButton({
+  collection,
+  itemId,
+  field,
+  formatValue
+}: {
+  collection: string
+  itemId: string
+  field: string
+  formatValue?: (v: unknown) => string
+}) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const { data, isLoading } = useQuery({
+    queryKey: ['field-value-history', collection, itemId, field],
+    queryFn: () =>
+      client
+        .request<{
+          data: Array<{ value: unknown; display: string | null; timestamp: string | null; user_name: string | null; action: string }>
+        }>(get(`/field-history/${collection}/${encodeURIComponent(itemId)}/${field}`))
+        .then((r) => r.data ?? []),
+    enabled: open,
+    staleTime: 60_000
+  })
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [open])
+  const fmt = (v: unknown, display?: string | null): string => {
+    // Server-resolved display label (relation record, choice text) wins —
+    // never show an internal id when the human name is known.
+    if (display) return display
+    if (v === null || v === undefined || v === '') return '—'
+    if (formatValue) return formatValue(v)
+    if (typeof v === 'boolean' || v === 'true' || v === 'false') {
+      return v === true || v === 'true' ? 'Yes' : 'No'
+    }
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) {
+      return new Date(v).toLocaleString()
+    }
+    if (typeof v === 'object') return JSON.stringify(v).slice(0, 60)
+    return String(v).slice(0, 80)
+  }
+  return (
+    <div ref={rootRef} className='relative inline-flex'>
+      <button
+        type='button'
+        onClick={() => setOpen((o) => !o)}
+        title='Value history'
+        className={cn(
+          'inline-flex items-center rounded p-0.5 transition-opacity',
+          open
+            ? 'text-nvr-cyan opacity-100'
+            : 'text-slate-300 opacity-0 hover:text-slate-500 group-hover/fieldrow:opacity-100 dark:text-slate-400 dark:hover:text-slate-200'
+        )}
+        data-field-history
+      >
+        <History className='h-3 w-3' />
+      </button>
+      {open && (
+        <div className='absolute left-0 top-full z-40 mt-1 max-h-64 w-[300px] overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-border dark:bg-card'>
+          <p className='mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+            Value history
+          </p>
+          {isLoading ? (
+            <p className='px-1 py-2 text-[11.5px] text-slate-400'>Loading…</p>
+          ) : (data ?? []).length === 0 ? (
+            <p className='px-1 py-2 text-[11.5px] text-slate-400'>
+              No recorded changes for this field.
+            </p>
+          ) : (
+            <div className='space-y-1'>
+              {(data ?? []).map((e, i) => (
+                <div
+                  key={i}
+                  className='rounded px-1 py-1 text-[11.5px] leading-snug hover:bg-slate-50 dark:hover:bg-muted'
+                >
+                  <span className='font-medium text-slate-700 dark:text-slate-200'>{fmt(e.value, e.display)}</span>
+                  <span className='block text-[10.5px] text-slate-400'>
+                    {e.action === 'create' ? 'initial value' : 'changed'}
+                    {e.timestamp ? ` · ${new Date(e.timestamp).toLocaleString()}` : ''}
+                    {e.user_name ? ` · ${e.user_name}` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -341,7 +446,7 @@ export function FieldRow({
   }
 
   return (
-    <div data-field={field.field} className='space-y-1.5'>
+    <div data-field={field.field} className='group/fieldrow space-y-1.5'>
       {cascadeRules.length > 0 && (
         <CascadeEffectController
           cascadeRules={cascadeRules}
@@ -368,9 +473,9 @@ export function FieldRow({
             </Tooltip>
           </TooltipProvider>
         )}
-        {/*{NUMERIC_TYPES.has(field.type) && itemId && itemId !== 'new' && (*/}
-        {/*  <FieldSparkline collection={collection} itemId={itemId} field={field.field} />*/}
-        {/*)}*/}
+        {itemId && itemId !== 'new' && (
+          <FieldHistoryButton collection={collection} itemId={itemId} field={field.field} />
+        )}
         {isAiEligible(field) && layoutAiEnabled && (
           <button
             type='button'
