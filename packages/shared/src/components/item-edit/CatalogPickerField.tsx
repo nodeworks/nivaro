@@ -1731,7 +1731,7 @@ function AttrSelect({
                 onChange(null)
                 setOpen(false)
               }}
-              className='flex w-full items-center gap-1.5 border-b border-slate-100 px-2 py-1 text-left text-[12px] text-slate-500 hover:bg-slate-50'
+              className='flex w-full items-center gap-1.5 border-b border-slate-100 px-2 py-1 text-left text-[12px] text-slate-500 hover:bg-muted dark:border-border dark:text-slate-400'
             >
               <X className='h-3 w-3 text-slate-400' /> Clear
             </button>
@@ -1745,7 +1745,7 @@ function AttrSelect({
                 setOpen(false)
               }}
               className={cn(
-                'block w-full truncate px-2 py-1 text-left text-[12px] hover:bg-slate-50',
+                'block w-full truncate px-2 py-1 text-left text-[12px] hover:bg-muted',
                 id === value ? 'font-medium text-nvr-cyan' : 'text-slate-700 dark:text-slate-200'
               )}
             >

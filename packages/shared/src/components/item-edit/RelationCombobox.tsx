@@ -369,7 +369,7 @@ export function RelationCombobox({
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-50',
+          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-50',
           isStale ? 'border-amber-300 dark:border-amber-600' : 'border-input'
         )}
       >
@@ -442,7 +442,7 @@ export function RelationCombobox({
                   onChange(null)
                   setOpen(false)
                 }}
-                className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-slate-50 border-b border-slate-100'
+                className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-muted border-b border-slate-100 dark:text-slate-400 dark:border-border'
               >
                 <X className='h-3.5 w-3.5 text-slate-400' />
                 Clear selection
@@ -473,7 +473,7 @@ export function RelationCombobox({
                       onChange(item.id)
                       setOpen(false)
                     }}
-                    className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-slate-50'
+                    className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-muted'
                   >
                     <div
                       className={cn(

@@ -180,7 +180,7 @@ export function RelationGroupedCombobox({
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-50',
+          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-50',
           isStale ? 'border-amber-300 dark:border-amber-600' : 'border-input'
         )}
       >
@@ -213,7 +213,7 @@ export function RelationGroupedCombobox({
               <button
                 type='button'
                 onClick={() => { onChange(null); setOpen(false) }}
-                className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-slate-50 border-b border-slate-100'
+                className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-muted border-b border-slate-100 dark:text-slate-400 dark:border-border'
               >
                 <X className='h-3.5 w-3.5 text-slate-400' />
                 Clear selection
@@ -233,7 +233,7 @@ export function RelationGroupedCombobox({
                     <button
                       type='button'
                       onClick={() => toggleGroup(group.id)}
-                      className='flex w-full items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 hover:bg-slate-50'
+                      className='flex w-full items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 hover:bg-muted'
                     >
                       {expanded
                         ? <ChevronDown className='h-3 w-3 shrink-0' />
@@ -253,7 +253,7 @@ export function RelationGroupedCombobox({
                           key={String(item.id)}
                           type='button'
                           onClick={() => { onChange(item.id); setOpen(false) }}
-                          className='flex w-full items-center gap-2 pl-8 pr-3 py-1.5 text-[13px] text-left hover:bg-slate-50'
+                          className='flex w-full items-center gap-2 pl-8 pr-3 py-1.5 text-[13px] text-left hover:bg-muted'
                         >
                           <div className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors', sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300')}>
                             {sel && <Check className='h-2.5 w-2.5 text-white' />}

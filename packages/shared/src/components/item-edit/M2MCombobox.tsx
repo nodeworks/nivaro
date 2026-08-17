@@ -248,7 +248,7 @@ export function M2MCombobox({
                 setOpen((v) => !v)
               }
             }}
-            className='flex min-h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-1 text-sm text-left font-normal hover:bg-slate-50'
+            className='flex min-h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-1 text-sm text-left font-normal hover:bg-muted'
           >
             {allSelectedIds.size > 0 ? (
               <span
@@ -271,7 +271,7 @@ export function M2MCombobox({
                         'inline-flex items-center gap-1 rounded-full border pl-2.5 pr-1.5 py-0.5 text-[12px]',
                         isStaleTag
                           ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-600 dark:bg-amber-950/30 dark:text-amber-400'
-                          : 'border-slate-200 bg-slate-50 text-slate-700'
+                          : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'
                       )}
                     >
                       {isStaleTag && <AlertTriangle className='h-3 w-3 shrink-0 text-amber-500' />}
@@ -316,7 +316,7 @@ export function M2MCombobox({
                 {stagedLinks.map((relId) => (
                   <span
                     key={String(relId)}
-                    className='inline-flex items-center gap-1 rounded-full border border-dashed border-nvr-cyan/50 bg-nvr-cyan/5 pl-2.5 pr-1.5 py-0.5 text-[12px] text-slate-600'
+                    className='inline-flex items-center gap-1 rounded-full border border-dashed border-nvr-cyan/50 bg-nvr-cyan/5 pl-2.5 pr-1.5 py-0.5 text-[12px] text-slate-600 dark:text-slate-300'
                   >
                     {relatedCollection ? (
                       <RelatedItemLabel
@@ -383,7 +383,7 @@ export function M2MCombobox({
                         <div
                           className={cn(
                             'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
-                            isSelected ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
+                            isSelected ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300 dark:border-slate-500'
                           )}
                         >
                           {isSelected && <Check className='h-2.5 w-2.5 text-white' />}
@@ -558,7 +558,7 @@ export function M2MSingleSelectCombobox({
 
   if (readOnly) {
     return (
-      <span className='block truncate text-[12px] text-slate-700'>
+      <span className='block truncate text-[12px] text-slate-700 dark:text-slate-200'>
         {isLoadingLabel ? '…' : (currentLabel ?? '—')}
       </span>
     )
@@ -609,12 +609,12 @@ export function M2MSingleSelectCombobox({
           <button
             type='button'
             className={cn(
-              'w-full h-9 px-3 text-[12px] border rounded-md bg-white text-left flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors disabled:pointer-events-none disabled:opacity-50',
+              'w-full h-9 px-3 text-[12px] border rounded-md bg-background text-left flex items-center justify-between hover:bg-muted cursor-pointer transition-colors disabled:pointer-events-none disabled:opacity-50',
               isSingleStale
                 ? 'border-amber-300 dark:border-amber-600'
                 : isPendingChange
                   ? 'border-nvr-cyan/50'
-                  : 'border-slate-200'
+                  : 'border-input'
             )}
           >
             {isLoadingLabel ||
@@ -627,7 +627,7 @@ export function M2MSingleSelectCombobox({
                   currentLabel
                     ? isPendingChange
                       ? 'text-nvr-cyan'
-                      : 'text-slate-800'
+                      : 'text-slate-800 dark:text-slate-100'
                     : 'text-muted-foreground'
                 )}
               >
@@ -653,7 +653,7 @@ export function M2MSingleSelectCombobox({
                   handleClear()
                   setOpen(false)
                 }}
-                className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-slate-50 border-b border-slate-100'
+                className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-muted border-b border-slate-100 dark:text-slate-400 dark:border-border'
               >
                 <X className='h-3.5 w-3.5 text-slate-400' />
                 Clear selection
@@ -692,7 +692,7 @@ export function M2MSingleSelectCombobox({
                           <div
                             className={cn(
                               'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
-                              isSelected ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
+                              isSelected ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300 dark:border-slate-500'
                             )}
                           >
                             {isSelected && <Check className='h-2.5 w-2.5 text-white' />}
