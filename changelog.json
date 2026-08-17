@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-17T23:01:25.025Z",
+  "generated_at": "2026-08-17T23:24:10.569Z",
   "releases": [
+    {
+      "version": "0.1.63",
+      "tag": "v0.1.63",
+      "date": "2026-08-17T19:24:08-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "stale-record banner, table density toggle, browser group-by",
+              "hash": "ac5b5250"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.62",
       "tag": "v0.1.62",
-      "date": "2026-08-17T19:01:23-04:00",
+      "date": "2026-08-17T19:01:25-04:00",
       "sections": [
         {
           "label": "Added",
