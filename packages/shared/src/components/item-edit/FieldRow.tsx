@@ -168,7 +168,7 @@ function FieldHistoryButton({
           'inline-flex items-center rounded p-0.5 transition-opacity',
           open
             ? 'text-nvr-cyan opacity-100'
-            : 'text-slate-300 opacity-0 hover:text-slate-500 group-hover/fieldrow:opacity-100 dark:text-slate-400 dark:hover:text-slate-200'
+            : 'text-slate-400 opacity-0 hover:text-nvr-cyan group-hover/fieldrow:opacity-100 dark:text-slate-300 dark:hover:text-nvr-cyan'
         )}
         data-field-history
       >
