@@ -272,11 +272,17 @@ export interface ItemEditFormProps {
    *  own copy in the page header; headless hosts opt in. */
   showItemActions?: boolean
   /**
-   * When set, a Duplicate button renders on saved records. Receives a prefill
-   * object (plain scalar + M2O values; audit/auto-id/computed/alias fields
-   * excluded) — the host navigates to its new-record route with it.
+   * When set, a Duplicate button renders on saved records. Receives the full
+   * copy payload — scalar/M2O values, M2M link id arrays (keyed by staging
+   * key, ready for initialLinks), and O2M child rows (keyed
+   * `<child>.<fk>`, ready for initialRows). The host stores it (sessionStorage
+   * — too big for a URL) and navigates to its new-record route.
    */
-  onDuplicate?: (prefill: Record<string, unknown>) => void
+  onDuplicate?: (payload: {
+    values: Record<string, unknown>
+    links: Record<string, unknown[]>
+    rows: Record<string, Array<Record<string, unknown>>>
+  }) => void
   showRevisions?: boolean
   showClone?: boolean
   showPipeline?: boolean
@@ -4579,31 +4585,95 @@ export function ItemEditForm({
               {!isNew && itemId && onDuplicate && (
                 <button
                   type='button'
-                  title='Duplicate this record into a new prefilled form (lines and attachments are not copied)'
-                  onClick={() => {
-                    // Copy what a person would re-type: plain scalars + M2O
-                    // FKs. Excluded: id, audit stamps, auto-id fields (they
-                    // regenerate), computed fields (server re-derives), alias
-                    // relation keys and resolved dotted paths.
+                  title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
+                  onClick={async () => {
+                    // Copy what a person would re-create: plain scalars + M2O
+                    // FKs, the M2M link sets (Zone, funding years…), and the
+                    // O2M grids' child rows. Excluded: id, audit stamps,
+                    // auto-id fields (they regenerate), computed fields
+                    // (server re-derives), attachments.
                     const AUDIT = new Set([
                       'id', 'user_created', 'date_created', 'user_updated', 'date_updated',
-                      'created_at', 'updated_at', 'creator', 'last_state_change'
+                      'created_at', 'updated_at', 'created', 'changed', 'creator', 'last_state_change'
                     ])
+                    // Only fields the form actually SHOWS copy — hidden columns
+                    // are integration/system state (external ids, status
+                    // mirrors) that must not follow the record.
+                    const copyable = new Set<string>()
                     const skip = new Set<string>(AUDIT)
                     for (const fc of fieldConfig ?? []) {
                       const opts = fc.options as Record<string, unknown> | null
                       if (opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id) skip.add(fc.field)
                       if ((fc as { computed_type?: string | null }).computed_type) skip.add(fc.field)
+                      const readonlyFc = Boolean((fc as { readonly?: boolean }).readonly)
+                      const noDupe = Boolean(
+                        opts && typeof opts === 'object' && (opts as { no_duplicate?: unknown }).no_duplicate
+                      )
+                      if (
+                        !fc.hidden &&
+                        !readonlyFc &&
+                        !noDupe &&
+                        (fc as { layout_assigned?: boolean }).layout_assigned !== false
+                      ) {
+                        copyable.add(fc.field)
+                      }
                     }
-                    const prefill: Record<string, unknown> = {}
+                    const values: Record<string, unknown> = {}
                     for (const [k, v] of Object.entries(draft)) {
-                      if (skip.has(k) || k.includes('.') || k.startsWith('__')) continue
+                      if (!copyable.has(k) || skip.has(k) || k.includes('.') || k.startsWith('__')) continue
                       if (v === undefined || v === null || v === '') continue
-                      if (typeof v === 'object' && !Array.isArray(v)) continue
-                      if (Array.isArray(v)) continue // alias id arrays — junctions are not copied
-                      prefill[k] = v
+                      if (typeof v === 'object') continue
+                      values[k] = v
                     }
-                    onDuplicate(prefill)
+                    // M2M links — every alias's committed id set, staged on the
+                    // new form exactly like hand-picked selections.
+                    const links: Record<string, unknown[]> = {}
+                    for (const [aliasField, info] of m2mAliasFieldsForRules.entries()) {
+                      // Attachments never copy — file links belong to the original.
+                      if (aliasField === 'files' || /_files$/i.test(info.manyCollection)) continue
+                      const ids = m2mAliasFieldStates[aliasField]?.ids ?? []
+                      if (ids.length) links[info.stagingKey] = ids
+                    }
+                    // O2M child rows for the grids this layout shows (files
+                    // and audit children are not grids, so they never copy).
+                    const rows: Record<string, Array<Record<string, unknown>>> = {}
+                    const CHILD_SKIP = [
+                      'id', 'user_created', 'date_created', 'user_updated', 'date_updated',
+                      'created_at', 'updated_at', 'created', 'changed', 'creator'
+                    ]
+                    for (const fc of fieldConfig ?? []) {
+                      if (fc.hidden) continue
+                      const rel = (relations ?? []).find(
+                        (r) =>
+                          r.one_collection === collection &&
+                          !r.junction_field &&
+                          (r.one_field === fc.field || r.many_collection === fc.field)
+                      )
+                      if (!rel?.many_collection || !rel.many_field) continue
+                      const key = `${rel.many_collection}.${rel.many_field}`
+                      if (rows[key]) continue
+                      try {
+                        const res = (await client.request(
+                          get<{ data: Array<Record<string, unknown>> }>(`/items/${rel.many_collection}`, {
+                            limit: 200,
+                            filter: JSON.stringify({ [rel.many_field]: { _eq: itemId } })
+                          })
+                        )) as { data: Array<Record<string, unknown>> }
+                        const childRows = (res.data ?? []).map((r0) => {
+                          const c = { ...r0 }
+                          for (const k of CHILD_SKIP) delete c[k]
+                          delete c[rel.many_field as string]
+                          for (const k of Object.keys(c)) {
+                            if (c[k] === null || typeof c[k] === 'object') delete c[k]
+                          }
+                          return c
+                        })
+                        if (childRows.length) rows[key] = childRows
+                      } catch {
+                        /* a grid that fails to read just doesn't copy */
+                      }
+                    }
+                    onDuplicate({ values, links, rows })
                   }}
                   className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
                   data-duplicate-record

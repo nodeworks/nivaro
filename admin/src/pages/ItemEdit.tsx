@@ -554,13 +554,29 @@ export function ItemEditPage() {
   // ── Pre-fill parent from URL params (new items via tree "Add child") ──────
   const parentFieldParam = searchParams.get('parentField')
   const parentIdParam = searchParams.get('parentId')
-  // ?prefill=<base64 JSON> — Duplicate button + deep links (efp-new precedent)
+  // ?prefill=<base64 JSON> — deep links (efp-new precedent)
   const prefillValues = useMemo<Record<string, unknown> | null>(() => {
     const raw = searchParams.get('prefill')
     if (!raw) return null
     try {
       const parsed = JSON.parse(atob(raw)) as Record<string, unknown>
       return parsed && typeof parsed === 'object' ? parsed : null
+    } catch {
+      return null
+    }
+  }, [searchParams])
+  // ?dupe=<key> — Duplicate handoff via sessionStorage (the payload carries
+  // M2M links + O2M child rows, far too big for a URL).
+  const dupePayload = useMemo<{
+    values: Record<string, unknown>
+    links: Record<string, unknown[]>
+    rows: Record<string, Array<Record<string, unknown>>>
+  } | null>(() => {
+    const key = searchParams.get('dupe')
+    if (!key) return null
+    try {
+      const raw = sessionStorage.getItem(key)
+      return raw ? JSON.parse(raw) : null
     } catch {
       return null
     }
@@ -970,23 +986,37 @@ export function ItemEditPage() {
                 onDeleted={() => navigate(`/collections/${collection}`)}
                 extraTopContent={extraTopContent}
                 extraBottomContent={extraBottomContent}
-                {...(isNew && (prefillValues || (parentFieldParam && parentIdParam))
+                {...(isNew && (dupePayload || prefillValues || (parentFieldParam && parentIdParam))
                   ? {
                       initialValues: {
+                        ...(dupePayload?.values ?? {}),
                         ...(prefillValues ?? {}),
                         ...(parentFieldParam && parentIdParam
                           ? { [parentFieldParam]: parentIdParam }
                           : {})
-                      }
+                      },
+                      ...(dupePayload?.links && Object.keys(dupePayload.links).length
+                        ? { initialLinks: dupePayload.links }
+                        : {}),
+                      ...(dupePayload?.rows && Object.keys(dupePayload.rows).length
+                        ? { initialRows: dupePayload.rows }
+                        : {})
                     }
                   : {})}
                 onDuplicate={
                   isNew
                     ? undefined
-                    : (prefill) =>
+                    : (payload) => {
+                        const key = `nvr-dupe-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+                        try {
+                          sessionStorage.setItem(key, JSON.stringify(payload))
+                        } catch {
+                          /* storage full — the new page just opens blank */
+                        }
                         navigate(
-                          `/collections/${collection}/new?prefill=${btoa(JSON.stringify(prefill))}${layoutSlug ? `&layout=${layoutSlug}` : ''}`
+                          `/collections/${collection}/new?dupe=${key}${layoutSlug ? `&layout=${layoutSlug}` : ''}`
                         )
+                      }
                 }
                 {...(isNew && importResult ? { initialImportResult: importResult } : {})}
               />
