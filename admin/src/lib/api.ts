@@ -477,6 +477,8 @@ export interface CMSNotification {
   message: string | null
   type: string
   read: boolean
+  collection?: string | null
+  item?: string | null
   data: unknown
   created_at: string
 }
@@ -709,6 +711,10 @@ export async function markRead(id: number): Promise<void> {
 
 export async function markAllRead(): Promise<void> {
   await api.post('/notifications/read-all')
+}
+
+export async function markReadBatch(ids: number[]): Promise<void> {
+  await api.post('/notifications/mark-read', { ids })
 }
 
 // ─── Import/Export helpers ────────────────────────────────────────────────────

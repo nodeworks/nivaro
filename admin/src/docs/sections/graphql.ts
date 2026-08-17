@@ -270,7 +270,7 @@ query {
     },
     {
       type: 'note',
-      text: 'M2M/O2M wrapper types are only generated when the related collection is visible (not hidden). Hidden junction or system collections are skipped — filter those fields by FK value instead.'
+      text: 'Every registered collection is exposed in GraphQL, including hidden ones — `hidden` is a UI flag (keep it out of the nav), not an API exclusion. Junction collections therefore have full query/mutation fields (e.g. delete_workflows_files_items), matching the REST items API.'
     }
   ]
 }
@@ -386,9 +386,16 @@ export const graphqlMutations: DocSection = {
       head: ['Mutation', 'Arguments', 'Auth'],
       rows: [
         ['create_collectionName', 'data: JSON (all fields optional)', 'User with create permission'],
+        ['create_collectionName_item', 'data: JSON — Directus-compatible alias', 'User with create permission'],
+        ['create_collectionName_items', 'data: [JSON] — batch, one row per entry', 'User with create permission'],
         ['update_collectionName_item', 'id: ID!, data: JSON (partial)', 'User with update permission'],
-        ['delete_collectionName_item', 'id: ID!', 'User with delete permission']
+        ['delete_collectionName_item', 'id: ID!', 'User with delete permission'],
+        ['delete_collectionName_items', 'ids: [ID!]! — batch, returns { ids }', 'User with delete permission']
       ]
+    },
+    {
+      type: 'note',
+      text: 'Create/update payloads accept Directus-era relation shapes: an M2O may be `{ id: … }`, and an M2M alias may be a single object, an array of `{ junction_field: { id } }` entries, or `{ create: [...] }` — alias writes are additive (junction rows are created, never detached).'
     },
     {
       type: 'note',

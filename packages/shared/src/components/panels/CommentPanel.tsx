@@ -1,3 +1,4 @@
+import { UserAvatar } from '../UserAvatar'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, MessageSquare, Pencil, Trash2, X } from 'lucide-react'
 import type React from 'react'
@@ -489,11 +490,17 @@ export function CommentPanel({
                     const isEditing = editingId === c.id
                     return (
                       <div key={c.id} className='group flex gap-3'>
-                        <Avatar className='h-8 w-8 shrink-0'>
-                          <AvatarFallback className='bg-nvr-cyan/15 text-[11px] font-bold text-nvr-navy'>
-                            {initials(c.user)}
-                          </AvatarFallback>
-                        </Avatar>
+                        <UserAvatar
+                          userId={c.user.id}
+                          className='h-8 w-8'
+                          fallback={
+                            <Avatar className='h-8 w-8 shrink-0'>
+                              <AvatarFallback className='bg-nvr-cyan/15 text-[11px] font-bold text-nvr-navy'>
+                                {initials(c.user)}
+                              </AvatarFallback>
+                            </Avatar>
+                          }
+                        />
                         <div className='min-w-0 flex-1'>
                           <div className='flex items-center gap-2'>
                             <span className='text-[13px] font-medium text-slate-800'>

@@ -207,6 +207,18 @@ export async function notificationsRoutes(app: FastifyInstance) {
     return reply.send({ data: { updated } })
   })
 
+  // Batch mark-read — the bell's per-record groups mark several rows in one
+  // call. Own rows only; foreign ids are silently ignored by the WHERE.
+  app.post<{ Body: { ids?: Array<string | number> } }>('/mark-read', async (req, reply) => {
+    const ids = (req.body?.ids ?? []).filter((i) => i != null).slice(0, 200)
+    if (ids.length === 0) return reply.send({ data: { updated: 0 } })
+    const updated = await db('nivaro_notifications')
+      .whereIn('id', ids)
+      .where({ recipient: req.user!.id, status: 'inbox' })
+      .update({ status: 'read' })
+    return reply.send({ data: { updated } })
+  })
+
   // Alias for the notifications center UI
   app.post('/mark-all-read', async (req, reply) => {
     const updated = await markAllRead(req.user!.id)

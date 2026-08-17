@@ -1854,6 +1854,113 @@ async function coerceRelationObjects(
   return out
 }
 
+interface AliasM2MWrite {
+  field: string
+  junction: string
+  parentFk: string
+  relatedFk: string
+  ids: Array<string | number>
+}
+
+/**
+ * Directus-era integrations write M2M relations as alias keys on the record
+ * payload — `regions: {id: 9}`, `funding_years: [{funding_years_year: {id: 2026}}]`,
+ * `files: [{directus_files_id: {id: "…"}}]`, or `{create: [...]}`. Nivaro's own
+ * clients write junction rows directly, so these keys used to be silently
+ * stripped and the links were lost.
+ *
+ * This normalizes each M2M alias value in the payload to a plain array of
+ * related ids (so auto-id templates and field rules can read it as a draft
+ * value), and returns the junction writes to apply AFTER the record write.
+ * Semantics are ADDITIVE — links present are kept, new ones created, nothing
+ * is ever detached (legacy callers delete junction rows explicitly). M2A
+ * aliases are skipped: their junction needs a discriminator column this
+ * shape cannot express.
+ */
+async function extractAliasM2MWrites(
+  collection: string,
+  payload: Record<string, unknown>
+): Promise<AliasM2MWrite[]> {
+  let rels: CMSRelation[]
+  try {
+    rels = await getRelsForCollection(collection)
+  } catch {
+    return []
+  }
+  const writes: AliasM2MWrite[] = []
+  for (const r of rels) {
+    if (r.one_collection !== collection || !r.one_field || r.junction_field == null) continue
+    if ((r as { one_allowed_collections?: unknown }).one_allowed_collections) continue // M2A
+    const key = r.one_field
+    if (!(key in payload)) continue
+    const raw = payload[key]
+    if (raw == null) continue
+    const jf = String(r.junction_field)
+
+    let entries: unknown[]
+    if (Array.isArray(raw)) entries = raw
+    else if (typeof raw === 'object' && Array.isArray((raw as { create?: unknown }).create)) {
+      entries = (raw as { create: unknown[] }).create
+    } else entries = [raw]
+
+    const ids = entries
+      .map((e) => {
+        if (e == null) return null
+        if (typeof e !== 'object') return e as string | number
+        const rec = e as Record<string, unknown>
+        const inner = jf in rec ? rec[jf] : rec
+        if (inner == null) return null
+        if (typeof inner !== 'object') return inner as string | number
+        const id = (inner as Record<string, unknown>).id
+        return typeof id === 'string' || typeof id === 'number' ? id : null
+      })
+      .filter((v): v is string | number => v != null && v !== '')
+
+    // Normalized draft value — auto-id `{regions[0].short_code}` tokens and
+    // rule contexts read this; filterToActualColumns strips it before write.
+    payload[key] = ids
+    if (ids.length > 0) {
+      writes.push({
+        field: key,
+        junction: r.many_collection,
+        parentFk: r.many_field,
+        relatedFk: jf,
+        ids
+      })
+    }
+  }
+  return writes
+}
+
+/**
+ * Create the junction rows an alias write asked for, through createOne so
+ * every downstream contract holds — junction auto-id recompute (the record's
+ * rendered name), stored rollups, activity, queue materialization. Additive:
+ * pairs that already exist are skipped. Never throws — a failed link must not
+ * fail the record write that carried it.
+ */
+async function applyAliasM2MWrites(
+  user: User,
+  recordId: string | number,
+  writes: AliasM2MWrite[],
+  req?: FastifyRequest
+): Promise<void> {
+  for (const w of writes) {
+    try {
+      const existing = (await db(w.junction)
+        .where({ [w.parentFk]: recordId })
+        .select(w.relatedFk)) as Array<Record<string, unknown>>
+      const have = new Set(existing.map((row) => String(row[w.relatedFk])))
+      for (const rid of w.ids) {
+        if (have.has(String(rid))) continue
+        await createOne(user, w.junction, { [w.parentFk]: recordId, [w.relatedFk]: rid }, req)
+      }
+    } catch (err) {
+      console.warn(`alias m2m write failed for ${w.junction}.${w.field}:`, err)
+    }
+  }
+}
+
 export async function createOne(
   user: User,
   collection: string,
@@ -1866,6 +1973,7 @@ export async function createOne(
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
   data = await coerceRelationObjects(collection, data)
+  const aliasWrites = await extractAliasM2MWrites(collection, data)
   // The fields the CALLER explicitly sent, captured before any rule, autofill
   // or computed pass mutates the payload — explicit values always win over
   // layout autofill, and validation only ever judges what the caller wrote.
@@ -1933,6 +2041,11 @@ export async function createOne(
   // Count the new item against the workspace quota (non-fatal)
   await incrementUsage(quotaWorkspace, 'items').catch(() => {})
 
+  // Alias M2M links BEFORE the read-back — the junction creates recompute any
+  // auto-id fields drawing on them, so the response already carries the
+  // rendered name/prefix the caller asked for.
+  await applyAliasM2MWrites(user, returnedId as string | number, aliasWrites, req)
+
   const result = await readOne(user, collection, returnedId as string | number)
 
   // Recalc any stored rollups this new row contributes to (never throws). Callers
@@ -1970,6 +2083,7 @@ export async function updateOne(
 ) {
   assertNotRouteOnly(collection)
   data = await coerceRelationObjects(collection, data)
+  const aliasWrites = await extractAliasM2MWrites(collection, data)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 
@@ -2095,6 +2209,9 @@ export async function updateOne(
       await updQ.update(columnPayload)
     })
   }
+  // Alias M2M links (additive) before the read-back — see extractAliasM2MWrites
+  await applyAliasM2MWrites(user, id, aliasWrites, req)
+
   const result = await span('read-back', () => readOne(user, collection, id, workspaceId))
 
   // Recalc any stored rollups this row contributes to — both the previous and

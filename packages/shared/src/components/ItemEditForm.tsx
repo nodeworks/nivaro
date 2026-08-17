@@ -270,6 +270,12 @@ export interface ItemEditFormProps {
    *  header toolbar. Off by default — the admin's ItemEdit page renders its
    *  own copy in the page header; headless hosts opt in. */
   showItemActions?: boolean
+  /**
+   * When set, a Duplicate button renders on saved records. Receives a prefill
+   * object (plain scalar + M2O values; audit/auto-id/computed/alias fields
+   * excluded) — the host navigates to its new-record route with it.
+   */
+  onDuplicate?: (prefill: Record<string, unknown>) => void
   showRevisions?: boolean
   showClone?: boolean
   showPipeline?: boolean
@@ -547,6 +553,7 @@ export function ItemEditForm({
   onDeleted,
   showHeader = true,
   showItemActions = false,
+  onDuplicate,
   showRevisions = true,
   showClone = true,
   showPipeline = true,
@@ -4520,6 +4527,45 @@ export function ItemEditForm({
               )}
               {!isNew && itemId && (
                 <RecordSubscribeButton collection={collection} itemId={String(itemId)} />
+              )}
+              {!isNew && itemId && onDuplicate && (
+                <button
+                  type='button'
+                  title='Duplicate this record into a new prefilled form (lines and attachments are not copied)'
+                  onClick={() => {
+                    // Copy what a person would re-type: plain scalars + M2O
+                    // FKs. Excluded: id, audit stamps, auto-id fields (they
+                    // regenerate), computed fields (server re-derives), alias
+                    // relation keys and resolved dotted paths.
+                    const AUDIT = new Set([
+                      'id', 'user_created', 'date_created', 'user_updated', 'date_updated',
+                      'created_at', 'updated_at', 'creator', 'last_state_change'
+                    ])
+                    const skip = new Set<string>(AUDIT)
+                    for (const fc of fieldConfig ?? []) {
+                      const opts = fc.options as Record<string, unknown> | null
+                      if (opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id) skip.add(fc.field)
+                      if ((fc as { computed_type?: string | null }).computed_type) skip.add(fc.field)
+                    }
+                    const prefill: Record<string, unknown> = {}
+                    for (const [k, v] of Object.entries(draft)) {
+                      if (skip.has(k) || k.includes('.') || k.startsWith('__')) continue
+                      if (v === undefined || v === null || v === '') continue
+                      if (typeof v === 'object' && !Array.isArray(v)) continue
+                      if (Array.isArray(v)) continue // alias id arrays — junctions are not copied
+                      prefill[k] = v
+                    }
+                    onDuplicate(prefill)
+                  }}
+                  className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-600 hover:bg-muted dark:border-border dark:bg-card dark:text-slate-300'
+                  data-duplicate-record
+                >
+                  <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+                    <rect x='9' y='9' width='13' height='13' rx='2'/>
+                    <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1'/>
+                  </svg>
+                  Duplicate
+                </button>
               )}
               {showItemActions && !isNew && (
                 <ItemActionButtons collection={collection} itemId={String(itemId)} />

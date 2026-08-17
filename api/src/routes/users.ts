@@ -43,6 +43,24 @@ export async function usersRoutes(app: FastifyInstance) {
     return reply.send(result)
   })
 
+  // Avatar as a data URI — deliberately its own endpoint so the nvarchar(max)
+  // column never rides the directory listings. Authenticated: any user may
+  // see any colleague's photo (same trust level as the name beside it).
+  app.get<{ Params: { id: string } }>(
+    '/:id/avatar',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const row = (await db('nivaro_users')
+        .where({ id: req.params.id })
+        .first('avatar', 'is_redacted')) as
+        | { avatar: string | null; is_redacted: boolean | number | null }
+        | undefined
+      if (!row || row.is_redacted) return reply.send({ data: { avatar: null } })
+      reply.header('cache-control', 'private, max-age=1800')
+      return reply.send({ data: { avatar: row.avatar ?? null } })
+    }
+  )
+
   app.get('/:id', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
     if (id !== 'me' && !req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })

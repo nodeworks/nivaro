@@ -15,6 +15,7 @@ export async function findOrCreateFromOIDC(profile: {
   company?: string | null
   department?: string | null
   phone?: string | null
+  avatar?: string | null
 }): Promise<User> {
   // Match by the immutable subject first; email only links a pre-provisioned
   // user on their FIRST login (external_id gets stamped immediately below,
@@ -38,6 +39,10 @@ export async function findOrCreateFromOIDC(profile: {
     if (profile.company) updates.company = profile.company
     if (profile.department) updates.department = profile.department
     if (profile.phone) updates.phone = profile.phone
+    if (profile.avatar) {
+      updates.avatar = profile.avatar
+      updates.avatar_updated_at = new Date()
+    }
     if (adRole) updates.role = adRole
     await db('nivaro_users').where({ id: existing.id }).update(updates)
     return {
@@ -68,6 +73,8 @@ export async function findOrCreateFromOIDC(profile: {
       company: profile.company ?? null,
       department: profile.department ?? null,
       phone: profile.phone ?? null,
+      avatar: profile.avatar ?? null,
+      avatar_updated_at: profile.avatar ? new Date() : null,
       external_id: profile.sub,
       role: assignedRole,
       status: 'active',

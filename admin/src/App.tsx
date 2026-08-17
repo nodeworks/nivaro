@@ -138,6 +138,7 @@ const SchemaGraphPage = lazy(() =>
 const ConfigDiffPage = lazy(() =>
   import('@/pages/ConfigDiff').then((m) => ({ default: m.ConfigDiffPage }))
 )
+const MyWorkPage = lazy(() => import('@/pages/MyWork').then((m) => ({ default: m.MyWorkPage })))
 const CoverageGapsPage = lazy(() =>
   import('@/pages/CoverageGaps').then((m) => ({ default: m.CoverageGapsPage }))
 )
@@ -428,6 +429,7 @@ export default function App() {
                   <Route path='content-promotion' element={<ContentPromotionPage />} />
                   <Route path='config-diff' element={<ConfigDiffPage />} />
                   <Route path='coverage-gaps' element={<CoverageGapsPage />} />
+                  <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='integration-health' element={<IntegrationHealthPage />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
                   <Route path='trash' element={<TrashPage />} />

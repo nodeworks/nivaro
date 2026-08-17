@@ -554,6 +554,17 @@ export function ItemEditPage() {
   // ── Pre-fill parent from URL params (new items via tree "Add child") ──────
   const parentFieldParam = searchParams.get('parentField')
   const parentIdParam = searchParams.get('parentId')
+  // ?prefill=<base64 JSON> — Duplicate button + deep links (efp-new precedent)
+  const prefillValues = useMemo<Record<string, unknown> | null>(() => {
+    const raw = searchParams.get('prefill')
+    if (!raw) return null
+    try {
+      const parsed = JSON.parse(atob(raw)) as Record<string, unknown>
+      return parsed && typeof parsed === 'object' ? parsed : null
+    } catch {
+      return null
+    }
+  }, [searchParams])
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleSummarize = async () => {
@@ -959,9 +970,24 @@ export function ItemEditPage() {
                 onDeleted={() => navigate(`/collections/${collection}`)}
                 extraTopContent={extraTopContent}
                 extraBottomContent={extraBottomContent}
-                {...(parentFieldParam && parentIdParam && isNew
-                  ? { initialValues: { [parentFieldParam]: parentIdParam } }
+                {...(isNew && (prefillValues || (parentFieldParam && parentIdParam))
+                  ? {
+                      initialValues: {
+                        ...(prefillValues ?? {}),
+                        ...(parentFieldParam && parentIdParam
+                          ? { [parentFieldParam]: parentIdParam }
+                          : {})
+                      }
+                    }
                   : {})}
+                onDuplicate={
+                  isNew
+                    ? undefined
+                    : (prefill) =>
+                        navigate(
+                          `/collections/${collection}/new?prefill=${btoa(JSON.stringify(prefill))}${layoutSlug ? `&layout=${layoutSlug}` : ''}`
+                        )
+                }
                 {...(isNew && importResult ? { initialImportResult: importResult } : {})}
               />
             </div>

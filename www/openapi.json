@@ -57056,7 +57056,7 @@
           },
           "divisions": {
             "type": "string",
-            "description": "Zones this BOM category is limited to — empty = available in every zone"
+            "description": "Zones this BOM category serves — required; a category with none is hidden"
           },
           "project_types": {
             "type": "string",

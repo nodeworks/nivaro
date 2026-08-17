@@ -70,6 +70,29 @@ export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgPr
   }
 }
 
+/**
+ * Profile photo from Microsoft Graph, as a small data URI. 96x96 keeps it a
+ * few KB — it renders at 20-40px everywhere. Best-effort with the same 5s
+ * budget as the org profile: a missing photo (404 for users without one) or
+ * a slow Graph just means initials keep rendering.
+ */
+export async function fetchGraphPhoto(accessToken: string): Promise<string | null> {
+  if (!isMicrosoftIssuer()) return null
+  try {
+    const res = await fetch('https://graph.microsoft.com/v1.0/me/photos/96x96/$value', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(5000)
+    })
+    if (!res.ok) return null
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (buf.length === 0 || buf.length > 200 * 1024) return null
+    const mime = res.headers.get('content-type')?.split(';')[0] || 'image/jpeg'
+    return `data:${mime};base64,${buf.toString('base64')}`
+  } catch {
+    return null
+  }
+}
+
 export async function handleCallback(requestUrl: URL, state: string, codeVerifier: string) {
   const cfg = await getOIDCConfig()
   const tokens = await oidc.authorizationCodeGrant(cfg, requestUrl, {
@@ -93,7 +116,12 @@ export async function handleCallback(requestUrl: URL, state: string, codeVerifie
     typeof v === 'string' && /.+@.+\..+/.test(v) ? v : null
   const emailClaim = claims?.email_verified === false ? null : emailish(claims?.email)
 
-  const graph = tokens.access_token ? await fetchGraphProfile(tokens.access_token) : null
+  const [graph, avatar] = tokens.access_token
+    ? await Promise.all([
+        fetchGraphProfile(tokens.access_token),
+        fetchGraphPhoto(tokens.access_token)
+      ])
+    : [null, null]
 
   return {
     sub: claims?.sub ?? '',
@@ -106,6 +134,7 @@ export async function handleCallback(requestUrl: URL, state: string, codeVerifie
     company: graph?.company ?? null,
     department: graph?.department ?? null,
     phone: graph?.phone ?? null,
+    avatar,
     tokens
   }
 }

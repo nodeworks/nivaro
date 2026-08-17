@@ -1,3 +1,4 @@
+import { UserAvatar } from '../UserAvatar'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as LucideIcons from 'lucide-react'
 import {
@@ -359,9 +360,15 @@ function SummaryUserName({ userId }: { userId: string }) {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 py-px pl-0.5 pr-2 hover:bg-slate-200 transition-colors'>
-          <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[9px] font-bold text-nvr-navy dark:text-nvr-cyan'>
-            {initials}
-          </span>
+          <UserAvatar
+            userId={userId}
+            className='h-4 w-4'
+            fallback={
+              <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[9px] font-bold text-nvr-navy dark:text-nvr-cyan'>
+                {initials}
+              </span>
+            }
+          />
           <span className='text-[11px] text-slate-600'>{name}</span>
         </span>
       </DropdownMenuTrigger>
@@ -475,9 +482,16 @@ export function UserRosterCluster({
     >
       <span className='flex -space-x-2'>
         {shown.map((o) => (
-          <span key={o.id} data-copy-skip aria-hidden='true' className={avatarCls}>
-            {initials(o.name)}
-          </span>
+          <UserAvatar
+            key={o.id}
+            userId={o.id}
+            className='h-6 w-6 border-2 border-white dark:border-slate-900'
+            fallback={
+              <span data-copy-skip aria-hidden='true' className={avatarCls}>
+                {initials(o.name)}
+              </span>
+            }
+          />
         ))}
       </span>
       {extra > 0 && (
@@ -627,9 +641,15 @@ export function OwnersInline({
               key={o.id}
               className='flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'
             >
-              <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
-                {initials(o)}
-              </span>
+              <UserAvatar
+                userId={o.id}
+                className='h-6 w-6'
+                fallback={
+                  <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+                    {initials(o)}
+                  </span>
+                }
+              />
               <span className='text-[12px] text-slate-700'>{name(o)}</span>
             </div>
           ))}

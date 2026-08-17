@@ -1,3 +1,4 @@
+import { UserAvatar } from '../UserAvatar'
 import { useState } from 'react'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -44,16 +45,23 @@ function initials(name: string): string {
 function Avatar({ owner, className }: { owner: OwnerLike; className?: string }) {
   const c = colorFor(owner.id)
   return (
-    <span
-      title={owner.name}
-      className={cn(
-        'inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-[9px] font-semibold ring-2 ring-white dark:ring-card',
-        className
-      )}
-      style={{ backgroundColor: c.bg, color: c.fg }}
-    >
-      {initials(owner.name)}
-    </span>
+    <UserAvatar
+      userId={owner.id}
+      alt={owner.name}
+      className={cn('h-[22px] w-[22px] ring-2 ring-white dark:ring-card', className)}
+      fallback={
+        <span
+          title={owner.name}
+          className={cn(
+            'inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-[9px] font-semibold ring-2 ring-white dark:ring-card',
+            className
+          )}
+          style={{ backgroundColor: c.bg, color: c.fg }}
+        >
+          {initials(owner.name)}
+        </span>
+      }
+    />
   )
 }
 

@@ -182,6 +182,11 @@ const DeleteResponseType = new GraphQLObjectType({
   fields: { id: { type: GraphQLID } }
 })
 
+const DeleteManyResponseType = new GraphQLObjectType({
+  name: 'DeleteManyResponse',
+  fields: { ids: { type: new GraphQLList(GraphQLID) } }
+})
+
 // ─── Error conversion ─────────────────────────────────────────────────────────
 
 function wrapError(err: unknown): never {
@@ -201,7 +206,12 @@ interface GQLContext {
 
 export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
   const collections = await listCollections()
-  const visible = collections.filter((c) => !c.hidden)
+  // `hidden` on a collection is a UI flag (keep it out of the nav), not an API
+  // exclusion — REST /items serves hidden collections, and Directus exposed
+  // them in GraphQL too. Junction tables are routinely hidden, and legacy
+  // integrations mutate them directly (delete_workflows_files_items), so
+  // filtering them out silently removed mutations third parties depend on.
+  const visible = collections
 
   // Pre-load all fields per collection
   const allFields = new Map<string, Awaited<ReturnType<typeof getFields>>>()
@@ -582,6 +592,49 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         try {
           await deleteOne(ctx.user, name, id)
           return { id }
+        } catch (e) {
+          wrapError(e)
+        }
+      }
+    }
+
+    // Directus batch forms — `create_<name>_items(data: [...])` and
+    // `delete_<name>_items(ids: [...])`. Legacy integrations (LinX/Nuvolo)
+    // send these verbatim; each row still goes through createOne/deleteOne
+    // so hooks, rules, rollups and activity apply per record. Sequential on
+    // purpose: line rows read earlier rows (line numbering, rollups).
+    mutationFields[`create_${name}_items`] = {
+      type: new GraphQLList(itemType),
+      args: { data: { type: new GraphQLNonNull(GraphQLJSON) } },
+      resolve: async (_root, { data }: { data: unknown }, ctx: GQLContext) => {
+        if (!ctx.user)
+          throw Object.assign(new Error('Unauthorized'), {
+            extensions: { code: 'UNAUTHENTICATED' }
+          })
+        const rows = Array.isArray(data) ? data : [data]
+        const results: unknown[] = []
+        try {
+          for (const row of rows) {
+            results.push(await createOne(ctx.user, name, row as Record<string, unknown>))
+          }
+          return results
+        } catch (e) {
+          wrapError(e)
+        }
+      }
+    }
+
+    mutationFields[`delete_${name}_items`] = {
+      type: DeleteManyResponseType,
+      args: { ids: { type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(GraphQLID))) } },
+      resolve: async (_root, { ids }: { ids: string[] }, ctx: GQLContext) => {
+        if (!ctx.user)
+          throw Object.assign(new Error('Unauthorized'), {
+            extensions: { code: 'UNAUTHENTICATED' }
+          })
+        try {
+          for (const id of ids) await deleteOne(ctx.user, name, id)
+          return { ids }
         } catch (e) {
           wrapError(e)
         }

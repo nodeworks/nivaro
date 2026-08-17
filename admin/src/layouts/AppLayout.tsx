@@ -103,6 +103,7 @@ export const navCategories: NavCategory[] = [
     label: 'Home',
     items: [
       { icon: House, label: 'Overview', to: '/' },
+      { icon: Inbox, label: 'My Work', to: '/my-work' },
       { icon: LayoutGrid, label: 'Dashboards', to: '/dashboards' },
       { icon: Sparkles, label: 'Ask AI', to: '/ask' },
       { icon: MessagesSquare, label: 'Chat', to: '/chat' }
