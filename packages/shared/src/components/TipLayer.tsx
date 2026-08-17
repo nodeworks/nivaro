@@ -66,7 +66,7 @@ export function TipLayer() {
       // z-[120] is the documented tooltip layer — above popovers (110) so a
       // tip triggered from inside an open sheet/popover still paints on top.
       style={{ position: 'fixed', left: tip.x, top: tip.y, zIndex: 120 }}
-      className='pointer-events-none max-w-[340px] whitespace-pre-wrap break-words rounded-md bg-slate-900 px-2 py-1 text-[11px] font-medium leading-snug text-white shadow-lg dark:bg-slate-700'
+      className='pointer-events-none max-w-[340px] whitespace-pre-wrap break-words rounded-md bg-[#0f172a] px-2 py-1 text-[11px] font-medium leading-snug text-white shadow-lg dark:bg-[#334155]'
     >
       {tip.text}
     </div>,

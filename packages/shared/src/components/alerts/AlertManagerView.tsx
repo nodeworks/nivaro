@@ -768,7 +768,7 @@ export function AlertManagerView({
   return (
     <div className={cn('flex flex-col gap-3', className)} data-alert-manager=''>
       {flash && (
-        <div className='fixed right-4 top-4 z-[60] rounded-md bg-slate-900 px-3 py-2 text-[12.5px] text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'>
+        <div className='fixed right-4 top-4 z-[60] rounded-md bg-[#0f172a] px-3 py-2 text-[12.5px] text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'>
           {flash}
         </div>
       )}

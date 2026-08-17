@@ -1325,7 +1325,7 @@ export function CatalogPickerField({
                         <span className='group/suberr relative shrink-0'>
                           <AlertCircle className='h-3.5 w-3.5 text-red-500' strokeWidth={2} />
                           {/* CSS hover tooltip — native title has an OS delay */}
-                          <span className='pointer-events-none absolute bottom-full left-1/2 z-30 mb-1.5 hidden w-max max-w-[380px] -translate-x-1/2 whitespace-normal break-words rounded-md bg-slate-900 px-2.5 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover/suberr:block'>
+                          <span className='pointer-events-none absolute bottom-full left-1/2 z-30 mb-1.5 hidden w-max max-w-[380px] -translate-x-1/2 whitespace-normal break-words rounded-md bg-[#0f172a] px-2.5 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover/suberr:block'>
                             <span className='mb-0.5 block font-semibold text-red-300'>
                               This line was in the failed submission
                             </span>
