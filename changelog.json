@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-08-17T00:10:15.503Z",
+  "generated_at": "2026-08-17T16:21:53.504Z",
   "releases": [
+    {
+      "version": "0.1.55",
+      "tag": "v0.1.55",
+      "date": "2026-08-17T12:21:51-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "batch 4 enhancements + auto-name M2M token fix + import/richtext fixes",
+              "hash": "e06baa84"
+            },
+            {
+              "section": "Added",
+              "scope": "efp",
+              "text": "a BOM category must declare its zone and project type",
+              "hash": "0f5bad32"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.54",
       "tag": "v0.1.54",
-      "date": "2026-08-16T20:10:13-04:00",
+      "date": "2026-08-16T20:10:15-04:00",
       "sections": [
         {
           "label": "Added",
