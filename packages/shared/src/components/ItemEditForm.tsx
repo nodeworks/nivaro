@@ -1,6 +1,6 @@
 import type { ImportParseResponse, ImportTemplateSummary } from '@nivaro/sdk'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileDown, Loader2, Save, Trash2, Wrench } from 'lucide-react'
+import { AlertCircle, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileDown, Loader2, Save, Trash2, Wrench } from 'lucide-react'
 import { CloneDialog } from './item-edit/CloneDialog'
 import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './item-edit/ChangeReasonDialog'
 import { RawEditSheet } from './item-edit/RawEditSheet'
@@ -581,7 +581,7 @@ export function ItemEditForm({
 }: ItemEditFormProps) {
   const client = useNivaroClient()
   const fetchCfg = useApiFetchConfig()
-  const { isAdmin } = useContext(ItemEditAuthContext)
+  const { isAdmin, userId: authUserId } = useContext(ItemEditAuthContext)
   const qc = useQueryClient()
   const itemId = itemIdProp ?? 'new'
   const isNew = !itemIdProp || itemIdProp === 'new'
@@ -2811,19 +2811,55 @@ export function ItemEditForm({
   const { data: lastTouch } = useQuery<{
     action: string
     timestamp: string
+    user_id: string | null
     user_name: string | null
   } | null>({
     queryKey: ['last-touch', collection, String(itemId)],
     queryFn: () =>
       client
-        .request<{ data: { action: string; timestamp: string; user_name: string | null } | null }>(
-          get(`/last-touch/${collection}/${encodeURIComponent(String(itemId))}`)
-        )
+        .request<{
+          data: {
+            action: string
+            timestamp: string
+            user_id: string | null
+            user_name: string | null
+          } | null
+        }>(get(`/last-touch/${collection}/${encodeURIComponent(String(itemId))}`))
         .then((r) => r.data ?? null)
         .catch(() => null),
     enabled: !isNew && !!itemId,
-    staleTime: 60_000
+    staleTime: 60_000,
+    // The stale-record banner rides this poll — one indexed row a minute,
+    // paused while the tab is hidden (react-query default).
+    refetchInterval: 60_000
   })
+  // Someone else saved while this record was open. Baseline = the last touch
+  // this viewer has ACKNOWLEDGED (loaded with, saved themselves, or refreshed
+  // past) — comparing touch-to-touch keeps clock skew out of the decision.
+  const staleBaselineRef = useRef<string | null>(null)
+  const [staleBy, setStaleBy] = useState<string | null>(null)
+  useEffect(() => {
+    if (isNew || !lastTouch) return
+    if (staleBaselineRef.current === null) {
+      staleBaselineRef.current = lastTouch.timestamp
+      return
+    }
+    if (lastTouch.timestamp <= staleBaselineRef.current) return
+    if (!lastTouch.user_id || lastTouch.user_id === authUserId) {
+      // Our own save (or an unattributed system write) advances the baseline.
+      staleBaselineRef.current = lastTouch.timestamp
+      setStaleBy(null)
+      return
+    }
+    setStaleBy(lastTouch.user_name ?? 'Someone else')
+  }, [lastTouch, isNew, authUserId])
+  const refreshStaleRecord = useCallback(() => {
+    if (lastTouch) staleBaselineRef.current = lastTouch.timestamp
+    setStaleBy(null)
+    void qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
+    void qc.invalidateQueries({ queryKey: ['o2m-rows'] })
+    void qc.invalidateQueries({ queryKey: ['pipeline', collection, String(itemId)] })
+  }, [lastTouch, qc, collection, itemId])
   const lastTouchText = useMemo(() => {
     if (!lastTouch) return null
     const ms = Date.now() - new Date(lastTouch.timestamp).getTime()
@@ -5094,6 +5130,28 @@ export function ItemEditForm({
                 takingOver={takingOver}
                 isAdmin={isAdmin}
               />
+            )}
+            {staleBy && (
+              <div
+                className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
+                data-stale-record-banner
+              >
+                <AlertTriangle className='h-4 w-4 shrink-0 text-amber-500' />
+                <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
+                  <span className='font-semibold'>{staleBy}</span> changed this record while you had
+                  it open
+                  {userTouchedRef.current.size > 0
+                    ? ' — review their changes before saving, or your edits may overwrite theirs.'
+                    : ' — refresh to see the latest values.'}
+                </p>
+                <button
+                  type='button'
+                  onClick={refreshStaleRecord}
+                  className='shrink-0 rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/15'
+                >
+                  {userTouchedRef.current.size > 0 ? 'Dismiss' : 'Refresh'}
+                </button>
+              </div>
             )}
             {hasTabs ? (isStepsMode ? renderStepsMode() : renderTabMode()) : renderSectionMode()}
             {extraBottomContent}

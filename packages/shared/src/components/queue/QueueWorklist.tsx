@@ -25,7 +25,9 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Rows2,
   Rows3,
+  Rows4,
   Save,
   SlidersHorizontal,
   Star,
@@ -425,6 +427,14 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const { navigate } = useNavigation()
   const [scope, setScope] = useState<Scope>('all')
   const [page, setPage] = useState(1)
+  // Row density — shares the per-browser preference the collection browser uses.
+  const [density, setDensity] = useState<'compact' | 'comfortable'>(() => {
+    try {
+      return localStorage.getItem('nvr_table_density') === 'comfortable' ? 'comfortable' : 'compact'
+    } catch {
+      return 'compact'
+    }
+  })
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
   const [sort, setSort] = useState('')
   const [filterValues, setFilterValues] = useState<Record<string, string | string[]>>({})
@@ -2293,6 +2303,25 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 </PopoverContent>
               </Popover>
             )}
+            {view === 'table' && (
+              <button
+                type='button'
+                onClick={() => {
+                  const next = density === 'compact' ? 'comfortable' : 'compact'
+                  setDensity(next)
+                  try {
+                    localStorage.setItem('nvr_table_density', next)
+                  } catch {
+                    /* private mode */
+                  }
+                }}
+                aria-label='Row density'
+                title={density === 'compact' ? 'Switch to comfortable rows' : 'Switch to compact rows'}
+                className='flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:bg-card dark:text-slate-400 dark:hover:bg-muted'
+              >
+                {density === 'compact' ? <Rows4 className='h-3.5 w-3.5' /> : <Rows2 className='h-3.5 w-3.5' />}
+              </button>
+            )}
             {view === 'table' && workNextEnabled && visibleRows.length > 0 && (
               <button
                 type='button'
@@ -2484,6 +2513,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
               >
                 <DataTable<QueueItemRow>
                   fillHeight
+                  density={density}
                   minBodyHeight={360}
                   columns={columns}
                   rows={items}

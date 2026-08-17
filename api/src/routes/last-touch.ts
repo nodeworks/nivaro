@@ -29,6 +29,7 @@ export async function lastTouchRoutes(app: FastifyInstance) {
         .first(
           'a.action',
           'a.timestamp',
+          'a.user',
           'u.first_name',
           'u.last_name',
           'u.email'
@@ -36,6 +37,7 @@ export async function lastTouchRoutes(app: FastifyInstance) {
         | {
             action: string
             timestamp: Date
+            user: string | null
             first_name: string | null
             last_name: string | null
             email: string | null
@@ -46,6 +48,7 @@ export async function lastTouchRoutes(app: FastifyInstance) {
         data: {
           action: row.action,
           timestamp: new Date(row.timestamp).toISOString(),
+          user_id: row.user ?? null,
           user_name:
             [row.first_name, row.last_name].filter(Boolean).join(' ') || row.email || null
         }

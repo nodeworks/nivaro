@@ -79,6 +79,8 @@ export interface DataTableProps<T = Record<string, unknown>> {
   /** Force single-line cells (whitespace-nowrap on every body cell) — hosts
    *  pair this with per-column truncation for dense, scannable tables. */
   nowrapCells?: boolean
+  /** Row density: 'comfortable' (default, py-2 cells) or 'compact' (py-1). */
+  density?: 'comfortable' | 'compact'
   /** Pin the selection checkbox (when present) and the first data column so
    *  they stay visible while the table scrolls horizontally. */
   pinFirstColumn?: boolean
@@ -471,6 +473,7 @@ export function DataTable<T = Record<string, unknown>>({
   fillHeight = false,
   hideFilterRow = false,
   nowrapCells = false,
+  density = 'comfortable',
   pinFirstColumn = false,
   columnPins,
   onColumnPinChange,
@@ -598,7 +601,8 @@ export function DataTable<T = Record<string, unknown>>({
         {onSelectionChange && (
           <TableCell
             className={cn(
-              'w-9 px-3 py-2',
+              'w-9 px-3',
+              density === 'compact' ? 'py-1' : 'py-2',
               (pinFirstColumn || pinsActive) && 'sticky left-0 z-[1] min-w-[40px] bg-inherit'
             )}
             onClick={(e) => {
@@ -618,7 +622,8 @@ export function DataTable<T = Record<string, unknown>>({
             key={col.key}
             style={pinStyle(col.key)}
             className={cn(
-              'px-3 py-2',
+              'px-3',
+              density === 'compact' ? 'py-1' : 'py-2',
               nowrapCells && 'whitespace-nowrap',
               !pinsActive &&
                 pinFirstColumn &&

@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, RotateCw, Search } from 'lucide-react'
+import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, Rows2, Rows3, RotateCw, Search } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
@@ -2554,6 +2554,48 @@ export function CollectionBrowserView({
   const drillStack = recordDrill.value
   const [auditId, setAuditId] = useState<string | null>(null)
   const [colsOpen, setColsOpen] = useState(false)
+  // Row density — a per-browser preference shared by every table surface.
+  const [density, setDensity] = useState<'compact' | 'comfortable'>(() => {
+    try {
+      return localStorage.getItem('nvr_table_density') === 'comfortable' ? 'comfortable' : 'compact'
+    } catch {
+      return 'compact'
+    }
+  })
+  const toggleDensity = () => {
+    const next = density === 'compact' ? 'comfortable' : 'compact'
+    setDensity(next)
+    try {
+      localStorage.setItem('nvr_table_density', next)
+    } catch {
+      /* private mode */
+    }
+  }
+  // Group rows under collapsible section headers by one column's value.
+  // Per-collection preference; grouping fetches up to 500 rows in one page so
+  // sections cover the (filtered) set rather than one page of it.
+  const [groupBy, setGroupBy] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(`nvr_cbv_group_${collection}`) || null
+    } catch {
+      return null
+    }
+  })
+  const [groupOpen, setGroupOpen] = useState(false)
+  const groupRef = useRef<HTMLDivElement>(null)
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const pickGroupBy = (k: string | null) => {
+    setGroupBy(k)
+    setCollapsedGroups(new Set())
+    setGroupOpen(false)
+    setPage(1)
+    try {
+      if (k) localStorage.setItem(`nvr_cbv_group_${collection}`, k)
+      else localStorage.removeItem(`nvr_cbv_group_${collection}`)
+    } catch {
+      /* private mode */
+    }
+  }
   const [selectedIds, setSelectedIds] = useState<Array<string | number>>([])
   const [activeViewId, setActiveViewId] = useState<number | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
@@ -2601,6 +2643,14 @@ export function CollectionBrowserView({
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
   }, [colsOpen])
+  useEffect(() => {
+    if (!groupOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!groupRef.current?.contains(e.target as Node)) setGroupOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [groupOpen])
 
   // ── Collection metadata (fields + relations + display info) ───────────────
   const { data: meta } = useQuery({
@@ -2874,12 +2924,12 @@ export function CollectionBrowserView({
     refetch,
     error
   } = useQuery({
-    queryKey: ['cbv-items', collection, appliedSearch, sort, page, effPageSize, conditionsParam],
+    queryKey: ['cbv-items', collection, appliedSearch, sort, groupBy ? 'grouped' : page, groupBy ? 500 : effPageSize, conditionsParam],
     queryFn: () =>
       client.request<{ data: Array<Record<string, unknown>>; total: number }>(
         get(`/items/${collection}`, {
-          limit: effPageSize,
-          page,
+          limit: groupBy ? 500 : effPageSize,
+          page: groupBy ? 1 : page,
           ...(appliedSearch ? { search: appliedSearch } : {}),
           ...(sort ? { sort } : {}),
           ...(conditionsParam ? { conditions: conditionsParam } : {})
@@ -3424,6 +3474,55 @@ export function CollectionBrowserView({
     ...baseColDescs.filter((c) => !pinOf(c.key)),
     ...baseColDescs.filter((c) => pinOf(c.key) === 'right')
   ]
+  // Which columns make sense as group headers: the State pill, resolved
+  // relation columns (already display labels), and plain non-FK data columns.
+  // Raw M2O FK columns are excluded — the header would show an internal id;
+  // add the resolved related column and group by that instead.
+  const groupableCols: Array<{ key: string; label: string }> = [
+    ...(hasPipeline ? [{ key: '__state__', label: 'State' }] : []),
+    ...effectiveColumns
+      .filter((k) => isResolvedCol(k) || !isM2OField(relations, collection, k))
+      .map((k) => ({ key: k, label: columnLabel(k) }))
+  ]
+  const groupValueOf = (row: Record<string, unknown>): string => {
+    if (!groupBy) return ''
+    const id = row.id as string | number
+    if (groupBy === '__state__') {
+      const st = pipelineData?.instances?.[String(id)]
+      return st?.state_label ?? st?.state_key ?? '(no state)'
+    }
+    if (isResolvedCol(groupBy)) return resolvedFor(id, groupBy) || '(empty)'
+    const v = row[groupBy]
+    if (v === null || v === undefined || v === '') return '(empty)'
+    if (typeof v === 'boolean') return v ? 'Yes' : 'No'
+    return fmtCell(String(v), groupBy) || String(v)
+  }
+  type CbvEntry =
+    | { kind: 'header'; gkey: string; label: string; count: number }
+    | { kind: 'row'; row: Record<string, unknown> }
+  const renderList: CbvEntry[] = (() => {
+    if (!groupBy) return rows.map((row) => ({ kind: 'row' as const, row }))
+    const buckets = new Map<string, Array<Record<string, unknown>>>()
+    for (const row of rows) {
+      const g = groupValueOf(row)
+      const arr = buckets.get(g) ?? []
+      arr.push(row)
+      buckets.set(g, arr)
+    }
+    const keys = [...buckets.keys()].sort((a, b) => {
+      if (a === '(empty)') return 1
+      if (b === '(empty)') return -1
+      return a.localeCompare(b, undefined, { numeric: true })
+    })
+    const out: CbvEntry[] = []
+    for (const g of keys) {
+      const bucket = buckets.get(g) ?? []
+      out.push({ kind: 'header', gkey: g, label: g, count: bucket.length })
+      if (!collapsedGroups.has(g)) for (const row of bucket) out.push({ kind: 'row', row })
+    }
+    return out
+  })()
+
   const leftPinnedKeys = orderedCols.filter((c) => pinOf(c.key) === 'left').map((c) => c.key)
   const rightPinnedKeys = orderedCols.filter((c) => pinOf(c.key) === 'right').map((c) => c.key)
 
@@ -3617,6 +3716,60 @@ export function CollectionBrowserView({
           className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
         >
           <RotateCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+        </button>
+        <div className='relative' ref={groupRef}>
+          <button
+            type='button'
+            onClick={() => setGroupOpen((o) => !o)}
+            className={`flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium ${
+              groupBy
+                ? 'border-[#00ceff66] bg-[#00ceff14] text-[#007a99] dark:text-nvr-cyan'
+                : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+            }`}
+          >
+            <Rows3 className='h-3.5 w-3.5' />
+            {groupBy
+              ? `Group: ${groupBy === '__state__' ? 'State' : columnLabel(groupBy)}`
+              : 'Group'}
+          </button>
+          {groupOpen && (
+            <div className='absolute right-0 top-full z-50 mt-1 max-h-[360px] w-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg dark:border-slate-700 dark:bg-slate-900'>
+              <button
+                type='button'
+                onClick={() => pickGroupBy(null)}
+                className={`block w-full rounded px-2 py-1.5 text-left text-[12px] ${
+                  groupBy === null
+                    ? 'bg-[#00ceff14] font-semibold text-slate-800 dark:text-slate-100'
+                    : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`}
+              >
+                No grouping
+              </button>
+              {groupableCols.map((c) => (
+                <button
+                  key={c.key}
+                  type='button'
+                  onClick={() => pickGroupBy(c.key)}
+                  className={`block w-full truncate rounded px-2 py-1.5 text-left text-[12px] ${
+                    groupBy === c.key
+                      ? 'bg-[#00ceff14] font-semibold text-slate-800 dark:text-slate-100'
+                      : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          type='button'
+          onClick={toggleDensity}
+          aria-label='Row density'
+          title={density === 'compact' ? 'Switch to comfortable rows' : 'Switch to compact rows'}
+          className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
+        >
+          {density === 'compact' ? <Rows3 className='h-4 w-4' /> : <Rows2 className='h-4 w-4' />}
         </button>
         {/* Column picker */}
         <div className='relative' ref={colsRef}>
@@ -4099,7 +4252,10 @@ export function CollectionBrowserView({
                 ))}
               </div>
             ) : (
-            <table className='w-full' style={{ fontVariantNumeric: 'tabular-nums' }}>
+            <table
+              className={`w-full ${density === 'comfortable' ? '[&_tbody_td]:py-2.5 [&_tbody_tr]:h-11 [&_tbody]:text-[12.5px]' : ''}`}
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+            >
               <thead>
                 <tr className='border-b border-slate-200 dark:border-slate-700'>
                   {enableCheckboxes && (
@@ -4268,7 +4424,38 @@ export function CollectionBrowserView({
                     </td>
                   </tr>
                 ) : (
-                  rows.map((row) => {
+                  renderList.map((entry) => {
+                    if (entry.kind === 'header') {
+                      return (
+                        <tr
+                          key={`__group__${entry.gkey}`}
+                          onClick={() =>
+                            setCollapsedGroups((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(entry.gkey)) next.delete(entry.gkey)
+                              else next.add(entry.gkey)
+                              return next
+                            })
+                          }
+                          className='cursor-pointer border-b border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 dark:border-slate-700 dark:bg-muted/40'
+                        >
+                          <td className='px-3 py-1.5' colSpan={effectiveColumns.length + extraCols}>
+                            <span className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-200'>
+                              {collapsedGroups.has(entry.gkey) ? (
+                                <ChevronDown className='h-3.5 w-3.5 -rotate-90 text-slate-400' />
+                              ) : (
+                                <ChevronDown className='h-3.5 w-3.5 text-slate-400' />
+                              )}
+                              {entry.label}
+                              <span className='rounded-full bg-slate-200/70 px-1.5 text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
+                                {entry.count}
+                              </span>
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    }
+                    const row = entry.row
                     const id = row.id as string | number
                     const isSelected = selectedIds.includes(id)
                     const state = pipelineData?.instances?.[String(id)]
@@ -4473,8 +4660,14 @@ export function CollectionBrowserView({
             collections={collection ? [collection] : []}
             className='shrink-0 border-t border-slate-100 bg-white px-3 py-1.5 dark:border-slate-800 dark:bg-slate-900'
           />
+          {groupBy && total > 500 && (
+            <p className='shrink-0 border-t border-slate-100 bg-white px-3 py-2 text-[12px] text-slate-500 dark:border-slate-800 dark:bg-slate-900'>
+              Grouping the first {fmtNum(500)} of {fmtNum(total)} records — narrow the filters to
+              group everything.
+            </p>
+          )}
           {/* Pagination */}
-          {total > effPageSize && (
+          {!groupBy && total > effPageSize && (
             <div className='flex shrink-0 items-center justify-between border-t border-slate-100 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900'>
               <p className='text-[12px] tabular-nums text-slate-500 dark:text-slate-400'>
                 <span className='font-semibold text-slate-700 dark:text-slate-200'>
