@@ -457,6 +457,10 @@ export function ChatRoomView({
   const [uploadingFiles, setUploadingFiles] = useState(0)
   const [preview, setPreview] = useState<PreviewFile | null>(null)
   const [notifyMenuOpen, setNotifyMenuOpen] = useState(false)
+  /** Set when MY message mentioned the bot — "…is thinking" until its reply
+   *  arrives (or a timeout says it won't). The asker is the one staring at a
+   *  silent room; everyone else just sees the reply land. */
+  const [botAskedAt, setBotAskedAt] = useState<number | null>(null)
   const mentionMapRef = useRef(new Map<string, ChatOnlineUser>())
   const inputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -477,6 +481,23 @@ export function ChatRoomView({
     }
     endRef.current?.scrollIntoView({ block: 'end' })
   }, [messages.length])
+
+  // Bot "thinking" clears when a message FROM the bot lands after the ask,
+  // or after 90s (model down, no key — the failure reply also clears it).
+  useEffect(() => {
+    if (!botAskedAt || !botName) return
+    const replied = messages.some(
+      (m) =>
+        (m.sender_name ?? '').toLowerCase() === botName.toLowerCase() &&
+        new Date(m.date_created).getTime() >= botAskedAt - 5_000
+    )
+    if (replied) {
+      setBotAskedAt(null)
+      return
+    }
+    const t = setTimeout(() => setBotAskedAt(null), 90_000)
+    return () => clearTimeout(t)
+  }, [botAskedAt, botName, messages])
 
   // Metadata for every attachment in the window, one query.
   const attachmentIds = useMemo(() => {
@@ -569,6 +590,10 @@ export function ChatRoomView({
       : []
     send.mutate({ text, mentions: mentioned, attachments })
     mentionMapRef.current.clear()
+    if (botName) {
+      const esc = botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      if (new RegExp(`@\\[?${esc}\\]?\\b`, 'i').test(text)) setBotAskedAt(Date.now())
+    }
   }
 
   const onDraftChange = (value: string, cursor: number) => {
@@ -1033,8 +1058,19 @@ export function ChatRoomView({
         <div ref={endRef} />
       </div>
       <div className='min-h-[18px] shrink-0 px-3.5'>
-        {typing.typingText && (
-          <p className='text-[11px] italic text-slate-400'>{typing.typingText}</p>
+        {botAskedAt && botName ? (
+          <p className='flex items-center gap-1.5 text-[11px] italic text-slate-400' data-chat-bot-thinking>
+            <span className='inline-flex gap-0.5'>
+              <span className='h-1 w-1 animate-bounce rounded-full bg-slate-400 [animation-delay:0ms]' />
+              <span className='h-1 w-1 animate-bounce rounded-full bg-slate-400 [animation-delay:150ms]' />
+              <span className='h-1 w-1 animate-bounce rounded-full bg-slate-400 [animation-delay:300ms]' />
+            </span>
+            {botName} is thinking…
+          </p>
+        ) : (
+          typing.typingText && (
+            <p className='text-[11px] italic text-slate-400'>{typing.typingText}</p>
+          )
         )}
       </div>
       {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
