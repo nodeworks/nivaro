@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Loader2, Upload } from 'lucide-react'
 import { type ChangeEvent, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { Button } from '../ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
@@ -72,7 +73,12 @@ export function ImportFromFileButton({
       const result = await client.importParse(template.id, file)
       onParsed(result, template)
     } catch (err) {
-      setError(err as ParseError)
+      const parseErr = err as ParseError
+      // Toast for the headline; the issues list (when the server returned one)
+      // opens in a dialog. NEVER inline under the button — an error appearing
+      // in the header row displaces the layout around it.
+      if (parseErr.issues?.length) setError(parseErr)
+      else toast.error(parseErr.message || 'Import parse failed', { duration: 8000 })
     } finally {
       setImportingFile(null)
     }
@@ -162,8 +168,29 @@ export function ImportFromFileButton({
           </PopoverContent>
         </Popover>
       )}
-      {error && <div className='text-[12px] text-red-600 dark:text-red-400'>{error.message}</div>}
-      {error?.issues && <ImportIssuesPanel issues={error.issues} />}
+      {error?.issues &&
+        createPortal(
+          <div
+            className='fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4'
+            onClick={() => setError(null)}
+          >
+            <div
+              className='max-h-[70vh] w-full max-w-[520px] overflow-y-auto rounded-lg border border-slate-200 bg-white p-4 shadow-xl dark:border-border dark:bg-card'
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className='mb-2 text-[13px] font-semibold text-red-600 dark:text-red-400'>
+                {error.message || 'Import parse failed'}
+              </p>
+              <ImportIssuesPanel issues={error.issues} />
+              <div className='mt-3 flex justify-end'>
+                <Button type='button' variant='outline' size='sm' onClick={() => setError(null)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
       {importing &&
         createPortal(
           <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40'>

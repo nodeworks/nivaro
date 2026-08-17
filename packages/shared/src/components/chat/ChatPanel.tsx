@@ -1,6 +1,7 @@
 import {
   Bell,
   BellOff,
+  HelpCircle,
   Check,
   CheckCheck,
   ChevronLeft,
@@ -337,6 +338,76 @@ function dateDivider(iso: string): string {
   return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 }
 
+/**
+ * "How do I use this?" — the chat's power features (mentions, the AI bot,
+ * live record chips, attachments, reactions, cross-room search) are invisible
+ * until someone tells you. One popover tells you.
+ */
+function ChatTipsButton({ botName }: { botName: string | null }) {
+  const th = useTheme()
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [open])
+  const tips: Array<[string, string]> = [
+    ['@name', 'Mention someone — they get notified even with the panel closed.'],
+    ...(botName
+      ? ([[`@${botName} …`, 'Ask the AI assistant anything about your data, right in the room.']] as Array<[string, string]>)
+      : []),
+    ['CR26-12345', 'Type a workflow or request ID and it becomes a live card showing its current state — click it to open the record.'],
+    ['📎 / paste', 'Attach files, or paste a screenshot straight into the message box.'],
+    ['Hover a message', 'React with an emoji; edit or delete your own within 15 minutes.'],
+    ['Search box', 'The box above your conversations searches rooms AND every message in them.'],
+    ['Record pages', 'Workflows and requests have a "Chat" button in their header — discuss the record in its own room or send it to any conversation.']
+  ]
+  return (
+    <div ref={rootRef} className='relative flex items-center'>
+      <button
+        type='button'
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          'rounded-md p-1 transition-colors',
+          open ? th.accentSoft : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+        )}
+        aria-label='Chat tips'
+        title='Tips'
+        data-chat-tips
+      >
+        <HelpCircle className='h-3.5 w-3.5' strokeWidth={2} />
+      </button>
+      {open && (
+        <div
+          className={cn(
+            'absolute right-0 top-full z-30 mt-1 w-[290px] rounded-xl border p-3 shadow-lg',
+            th.surface,
+            'border-slate-200 dark:border-border'
+          )}
+        >
+          <p className='mb-2 text-[12px] font-semibold text-slate-800 dark:text-slate-100'>
+            Things this chat can do
+          </p>
+          <div className='space-y-1.5'>
+            {tips.map(([k, v]) => (
+              <div key={k} className='flex gap-2 text-[11.5px] leading-snug'>
+                <code className={cn('shrink-0 self-start rounded px-1 py-px text-[10.5px] font-semibold', th.accentSoft)}>
+                  {k}
+                </code>
+                <span className='text-slate-600 dark:text-slate-300'>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ChatRoomView({
   room,
   label,
@@ -580,6 +651,7 @@ export function ChatRoomView({
             Open record
           </button>
         )}
+        <ChatTipsButton botName={botName} />
         <button
           type='button'
           onClick={() => {
@@ -690,9 +762,19 @@ export function ChatRoomView({
         {loading ? (
           <p className='py-6 text-center text-[12px] text-slate-400'>Loading…</p>
         ) : visibleMessages.length === 0 ? (
-          <p className='py-6 text-center text-[12px] text-slate-400'>
-            {searching ? 'No messages match.' : 'No messages yet — say hello.'}
-          </p>
+          <div className='py-6 text-center text-[12px] text-slate-400'>
+            {searching ? (
+              'No messages match.'
+            ) : (
+              <>
+                <p>No messages yet — say hello.</p>
+                <p className='mt-1 text-[11px]'>
+                  Tip: @ mentions someone{botName ? `, @${botName} asks the AI` : ''}, and a record
+                  ID like CR26-12345 becomes a live link.
+                </p>
+              </>
+            )}
+          </div>
         ) : (
           visibleMessages.map((m, idx) => {
             const mine = m.sender?.toLowerCase() === myId
@@ -1029,7 +1111,7 @@ export function ChatRoomView({
               void uploadFiles(files)
             }
           }}
-          placeholder={`Message ${label}… (@ to mention)`}
+          placeholder={`Message ${label}… (@ to mention${botName ? `, @${botName} for AI` : ''})`}
           className={cn('h-9 min-w-0 flex-1 rounded-lg border px-3 text-[12.5px] outline-none', th.input)}
           aria-label={`Message ${label}`}
         />
