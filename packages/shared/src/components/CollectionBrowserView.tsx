@@ -2637,6 +2637,31 @@ export function CollectionBrowserView({
     setAiResult(null)
     setAiPrompt('')
   }
+  // Right-click a cell → filter to / exclude / group by. Exclusions live in
+  // their own list because MSSQL's _neq/_ncontains drop NULL rows — each one
+  // compiles to an OR with _null so "everything except X" keeps blanks.
+  const [cellMenu, setCellMenu] = useState<{
+    x: number
+    y: number
+    key: string
+    row: Record<string, unknown>
+    cellText: string
+  } | null>(null)
+  const [cellExcludes, setCellExcludes] = useState<
+    Array<{ id: string; path: string[]; op: '_neq' | '_ncontains'; value: unknown; label: string; field: string }>
+  >([])
+  useEffect(() => {
+    if (!cellMenu) return
+    const close = () => setCellMenu(null)
+    window.addEventListener('mousedown', close)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('keydown', close)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('keydown', close)
+    }
+  }, [cellMenu])
   const [selectedIds, setSelectedIds] = useState<Array<string | number>>([])
   const [activeViewId, setActiveViewId] = useState<number | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
@@ -2947,8 +2972,18 @@ export function CollectionBrowserView({
       }
     }
     for (const c of linkConds) conds.push({ path: c.path, op: c.op, value: c.value })
+    for (const ex of cellExcludes) {
+      // OR with _null: MSSQL's != / NOT LIKE silently drop NULL rows, and an
+      // exclusion must keep records that have no value at all.
+      ;(conds as unknown[]).push({
+        or: [
+          { path: ex.path, op: ex.op, value: ex.value },
+          { path: ex.path, op: '_null', value: true }
+        ]
+      })
+    }
     return conds.length > 0 ? JSON.stringify(conds) : undefined
-  }, [filters, effQuickFilters, appliedQuick, debouncedColFilters, linkConds])
+  }, [filters, effQuickFilters, appliedQuick, debouncedColFilters, linkConds, cellExcludes])
   // Any filter change resets to page 1 (the query key already refetches).
   const prevCondRef = useRef(conditionsParam)
   useEffect(() => {
@@ -3156,6 +3191,91 @@ export function CollectionBrowserView({
       else delete next[key]
       return next
     })
+  /** "Filter to this value" from a right-clicked cell — routes through the
+   *  column-filter machinery so each column kind keeps its own semantics. */
+  const filterToCell = (m: NonNullable<typeof cellMenu>) => {
+    const { key, row, cellText } = m
+    const id = row.id as string | number
+    if (key === '__state__') {
+      const st = pipelineData?.instances?.[String(id)]
+      if (!st?.state_key) return
+      const cur = colFilters.__state__
+      const existing = cur?.kind === 'state' ? cur.value : []
+      setColFilter('__state__', { kind: 'state', value: [...new Set([...existing, st.state_key])] })
+      return
+    }
+    const cls = classifyColFilter(key)
+    if (!cls) return
+    if (cls.kind === 'in') {
+      const rel = isM2OField(relations, collection, key)
+      const vals: Array<string | number> = rel
+        ? row[key] != null
+          ? [row[key] as string | number]
+          : []
+        : ((resolvedData?.rows?.[String(id)]?.[aliasPathByField[key]]?.ids ?? []) as Array<
+            string | number
+          >)
+      if (vals.length === 0) return
+      const cur = colFilters[key]
+      const existing = cur?.kind === 'in' ? cur.value : []
+      setColFilter(key, { kind: 'in', value: [...new Set([...existing, ...vals])] })
+      return
+    }
+    if (cls.kind === 'enum') {
+      if (row[key] == null || row[key] === '') return
+      const cur = colFilters[key]
+      const existing = cur?.kind === 'in' ? cur.value : []
+      setColFilter(key, { kind: 'in', value: [...new Set([...existing, row[key] as string])] })
+      return
+    }
+    if (cls.kind === 'text') {
+      const v = key.includes('.') || key in aliasPathByField ? resolvedFor(id, key) : String(row[key] ?? '')
+      if (v && v !== '—') setColFilter(key, { kind: 'text', value: v, path: cls.path })
+      return
+    }
+    if (cls.kind === 'num') {
+      if (row[key] == null || row[key] === '') return
+      setColFilter(key, { kind: 'num', op: '_eq', value: String(row[key]) })
+      return
+    }
+    if (cls.kind === 'bool') {
+      if (row[key] == null) return
+      setColFilter(key, { kind: 'bool', value: row[key] ? 'true' : 'false' })
+      return
+    }
+    if (cls.kind === 'date') {
+      const d = String(row[key] ?? '').slice(0, 10)
+      if (d) setColFilter(key, { kind: 'date', value: `r:${d}..${d}` })
+    }
+    void cellText
+  }
+  /** Which cells can offer "Exclude" — value-equality kinds only. */
+  const canExcludeCell = (key: string, row: Record<string, unknown>): boolean => {
+    if (key === '__state__') return false
+    const cls = classifyColFilter(key)
+    if (!cls) return false
+    if (cls.kind === 'in') return !!isM2OField(relations, collection, key) && row[key] != null
+    if (cls.kind === 'enum' || cls.kind === 'num') return row[key] != null && row[key] !== ''
+    if (cls.kind === 'text') return true
+    return false
+  }
+  const excludeCell = (m: NonNullable<typeof cellMenu>) => {
+    const { key, row, cellText } = m
+    const id = row.id as string | number
+    const cls = classifyColFilter(key)
+    if (!cls) return
+    let entry: (typeof cellExcludes)[number] | null = null
+    const eid = `${key}:${Date.now().toString(36)}`
+    if (cls.kind === 'in' && isM2OField(relations, collection, key) && row[key] != null) {
+      entry = { id: eid, path: [key], op: '_neq', value: row[key], label: cellText, field: key }
+    } else if ((cls.kind === 'enum' || cls.kind === 'num') && row[key] != null && row[key] !== '') {
+      entry = { id: eid, path: [key], op: '_neq', value: row[key], label: cellText, field: key }
+    } else if (cls.kind === 'text') {
+      const v = key.includes('.') || key in aliasPathByField ? resolvedFor(id, key) : String(row[key] ?? '')
+      if (v && v !== '—') entry = { id: eid, path: cls.path, op: '_ncontains', value: v, label: v, field: key }
+    }
+    if (entry) setCellExcludes((prev) => [...prev, entry])
+  }
   const renderColFilter = (key: string) => {
     const cls = classifyColFilter(key)
     if (!cls) return null
@@ -3734,6 +3854,51 @@ export function CollectionBrowserView({
       `}</style>
       <TipLayer />
       <CellCopyLayer />
+      {cellMenu && (
+        <div
+          style={{ position: 'fixed', left: cellMenu.x, top: cellMenu.y, zIndex: 125 }}
+          className='w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900'
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {(cellMenu.key === '__state__' || classifyColFilter(cellMenu.key)) && cellMenu.cellText && cellMenu.cellText !== '—' && (
+            <button
+              type='button'
+              onClick={() => {
+                filterToCell(cellMenu)
+                setCellMenu(null)
+              }}
+              className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+            >
+              Filter: <span className='font-medium'>{cellMenu.cellText.slice(0, 40)}</span>
+            </button>
+          )}
+          {canExcludeCell(cellMenu.key, cellMenu.row) && cellMenu.cellText && cellMenu.cellText !== '—' && (
+            <button
+              type='button'
+              onClick={() => {
+                excludeCell(cellMenu)
+                setCellMenu(null)
+              }}
+              className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+            >
+              Exclude: <span className='font-medium'>{cellMenu.cellText.slice(0, 40)}</span>
+            </button>
+          )}
+          {(cellMenu.key === '__state__' || groupableCols.some((g) => g.key === cellMenu.key)) &&
+            groupBy !== cellMenu.key && (
+              <button
+                type='button'
+                onClick={() => {
+                  pickGroupBy(cellMenu.key)
+                  setCellMenu(null)
+                }}
+                className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+              >
+                Group by {cellMenu.key === '__state__' ? 'State' : columnLabel(cellMenu.key)}
+              </button>
+            )}
+        </div>
+      )}
       {/* Toolbar */}
       <div className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900'>
         <FilterBar
@@ -3798,6 +3963,24 @@ export function CollectionBrowserView({
             </button>
           </div>
         )}
+        {cellExcludes.map((ex) => (
+          <span
+            key={ex.id}
+            className='order-last inline-flex max-w-full items-center gap-1.5 rounded-full border border-red-200 bg-red-50 py-1 pl-2.5 pr-1.5 text-[12px] text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300'
+          >
+            <span className='min-w-0 truncate'>
+              {columnLabel(ex.field)} ≠ {ex.label}
+            </span>
+            <button
+              type='button'
+              onClick={() => setCellExcludes((prev) => prev.filter((e2) => e2.id !== ex.id))}
+              aria-label='Remove exclusion'
+              className='rounded-full p-0.5 hover:bg-red-100 dark:hover:bg-red-500/20'
+            >
+              <X className='h-3 w-3' />
+            </button>
+          </span>
+        ))}
         {aiResult && (
           <span className='order-last inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#00ceff66] bg-[#00ceff14] py-1 pl-2.5 pr-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
             <Sparkles className='h-3 w-3 shrink-0' />
@@ -4598,6 +4781,16 @@ export function CollectionBrowserView({
                               <td
                                 key={key}
                                 style={pinStyle(key)}
+                                onContextMenu={(e) => {
+                                  e.preventDefault()
+                                  setCellMenu({
+                                    x: e.clientX,
+                                    y: e.clientY,
+                                    key,
+                                    row,
+                                    cellText: (e.currentTarget as HTMLElement).innerText.trim()
+                                  })
+                                }}
                                 className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
                               >
                                 {state ? (
@@ -4660,6 +4853,16 @@ export function CollectionBrowserView({
                             <td
                               key={key}
                               style={pinStyle(key)}
+                              onContextMenu={(e) => {
+                                e.preventDefault()
+                                setCellMenu({
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                  key,
+                                  row,
+                                  cellText: (e.currentTarget as HTMLElement).innerText.trim()
+                                })
+                              }}
                               className={`whitespace-nowrap px-3 py-1.5 ${isNumericCol(key) ? 'text-right' : ''} ${pinCls(key, 'z-[1]', stickyBg)}`}
                             >
                               {isResolvedCol(key) ? (
