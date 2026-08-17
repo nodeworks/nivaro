@@ -1,7 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Lock } from 'lucide-react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { ArrowLeft, Check, Lock, Send } from 'lucide-react'
+import { toast } from 'sonner'
+import { useState } from 'react'
 import { useNivaroClient } from '../../context'
-import { get } from '../../lib/commands'
+import { get, post } from '../../lib/commands'
 
 // ─── Access denied explanation ───────────────────────────────────────────────
 // Rendered by ItemEditForm when the record load 403/404s. A scoped user used
@@ -28,6 +30,16 @@ export function AccessDeniedPanel({
   onBack?: () => void
 }) {
   const client = useNivaroClient()
+  const [requested, setRequested] = useState(false)
+  const requestAccess = useMutation({
+    mutationFn: () =>
+      client.request(post('/access-requests', { collection, item: String(itemId) })),
+    onSuccess: () => {
+      setRequested(true)
+      toast.success('Access request sent — an administrator has been notified')
+    },
+    onError: () => toast.error('Could not send the request')
+  })
   const { data, isLoading } = useQuery<{ access: boolean; reasons: AccessReason[] } | null>({
     queryKey: ['access-explain', collection, String(itemId)],
     queryFn: () =>
@@ -85,9 +97,30 @@ export function AccessDeniedPanel({
 
         {!notFound && !isLoading && reasons.length > 0 && (
           <p className='mt-4 text-[12px] text-slate-500 dark:text-slate-400'>
-            If you need access, contact an administrator — they can adjust your role's
-            permissions or your access filters.
+            If you need access, request it below — an administrator gets the record and the
+            reason attached, and can adjust your role's permissions or access filters.
           </p>
+        )}
+
+        {!notFound && !isLoading && (
+          <button
+            type='button'
+            disabled={requested || requestAccess.isPending}
+            onClick={() => requestAccess.mutate()}
+            className='mt-3 inline-flex items-center gap-1.5 rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50'
+            data-request-access
+          >
+            {requested ? (
+              <>
+                <Check className='h-3.5 w-3.5' /> Request sent
+              </>
+            ) : (
+              <>
+                <Send className='h-3.5 w-3.5' />
+                {requestAccess.isPending ? 'Sending…' : 'Request access'}
+              </>
+            )}
+          </button>
         )}
 
         {onBack && (

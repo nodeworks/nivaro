@@ -12,6 +12,7 @@ import {
   MessageCircle,
   Paperclip,
   Pencil,
+  Pin,
   Plus,
   PlayCircle,
   Search,
@@ -46,6 +47,7 @@ import {
   useChannelAdmin,
   useChannelDirectory,
   useChannelMembers,
+  useChatBotInfo,
   useChatBotName,
   useChatConfig,
   useChatRoles,
@@ -59,7 +61,9 @@ import {
   useEntityRoomLink,
   useMarkRoomRead,
   useRoomMembership,
+  useRoomPins,
   useToggleReaction,
+  useTogglePin,
   useUserSearch,
   usePeerReadAt,
   useSendChatMessage,
@@ -408,6 +412,93 @@ function ChatTipsButton({ botName }: { botName: string | null }) {
   )
 }
 
+/** Live subject card at the top of an entity room — the record's label and
+ *  current state stay in view above the conversation about it. */
+function EntityRoomCard({ room }: { room: string }) {
+  const cfg = useChatConfig()
+  const th = useTheme()
+  const client = useNivaroClient()
+  const idx = room.indexOf(':')
+  const prefix = idx > 0 ? room.slice(0, idx) : null
+  const token = idx > 0 ? room.slice(idx + 1) : null
+  const isEntity =
+    !!prefix && !!token && room !== cfg.globalRoom && prefix !== 'dm' && prefix !== 'ch'
+
+  const { data: card } = useQuery({
+    queryKey: ['nvr-chat-room-card', room],
+    queryFn: async () => {
+      const types = (await client.request(
+        get<{ data: Array<{ prefix: string; collection: string; match_field: string; is_active: boolean; label: string | null }> }>(
+          '/chat/room-types'
+        )
+      )) as { data: Array<{ prefix: string; collection: string; match_field: string; is_active: boolean; label: string | null }> }
+      const t = (types.data ?? []).find((x) => x.is_active && x.prefix === prefix)
+      if (!t) return null
+      const rec = (await client.request(
+        get<{ data: Array<{ id: string | number }> }>(`/items/${t.collection}`, {
+          limit: 1,
+          fields: 'id',
+          filter: JSON.stringify({ [t.match_field]: { _eq: token } })
+        })
+      )) as { data: Array<{ id: string | number }> }
+      const id = rec.data?.[0]?.id
+      if (id == null) return null
+      const inst = (await client.request(
+        get<{ data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null }>(
+          `/pipelines/instance/${t.collection}/${id}`
+        )
+      )) as { data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null }
+      const state = inst.data?.instance?.current_state_obj
+      return {
+        collection: t.collection,
+        type_label: t.label ?? t.collection.replace(/_/g, ' '),
+        id,
+        state: state?.label ?? null,
+        color: state?.color ?? null
+      }
+    },
+    enabled: isEntity,
+    staleTime: 60_000
+  })
+
+  if (!isEntity || !card) return null
+  const build = cfg.recordUrl ?? ((c: string, id: string | number) => `/collections/${c}/${id}`)
+  const href = build(card.collection, card.id)
+  return (
+    <div
+      className={cn('flex shrink-0 items-center gap-2 border-b px-3 py-1.5', th.divider)}
+      data-chat-room-card
+    >
+      <span className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+        {card.type_label}
+      </span>
+      <span className='truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+        {token}
+      </span>
+      {card.state && (
+        <span
+          className='rounded-full px-2 py-0.5 text-[10px] font-semibold'
+          style={{
+            backgroundColor: card.color ? `${card.color}26` : 'rgba(100,116,139,.15)',
+            color: card.color ?? undefined
+          }}
+        >
+          {card.state}
+        </span>
+      )}
+      {href && (
+        <button
+          type='button'
+          onClick={() => cfg.navigate?.(href)}
+          className={cn('ml-auto text-[11px] font-medium hover:underline', th.accentText)}
+        >
+          Open
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function ChatRoomView({
   room,
   label,
@@ -437,6 +528,9 @@ export function ChatRoomView({
   // Entity rooms link back to their record, routed by the host (recordUrl).
   const recordLink = useEntityRoomLink(room)
   const toggleReaction = useToggleReaction(room)
+  const pins = useRoomPins(room)
+  const togglePin = useTogglePin(room)
+  const [pinsOpen, setPinsOpen] = useState(false)
   const editMessage = useEditMessage(room)
   const deleteMessage = useDeleteMessage(room)
   const { setMuted, setNotifyMode } = useRoomMembership()
@@ -783,6 +877,44 @@ export function ChatRoomView({
           />
         </div>
       )}
+      <EntityRoomCard room={room} />
+      {pins.length > 0 && (
+        <div className={cn('shrink-0 border-b px-3 py-1', th.divider)} data-chat-pins-strip>
+          <button
+            type='button'
+            onClick={() => setPinsOpen((o) => !o)}
+            className='flex w-full items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400'
+          >
+            <Pin className='h-3 w-3' strokeWidth={2} />
+            {pins.length} pinned
+            {pinsOpen ? (
+              <ChevronLeft className='ml-auto h-3 w-3 rotate-90' />
+            ) : (
+              <ChevronLeft className='ml-auto h-3 w-3 -rotate-90' />
+            )}
+          </button>
+          {pinsOpen && (
+            <div className='max-h-36 space-y-1 overflow-y-auto py-1'>
+              {pins.map((p) => (
+                <div key={p.pin_id} className='flex items-start gap-1.5 text-[11.5px]'>
+                  <span className='min-w-0 flex-1 text-slate-600 dark:text-slate-300'>
+                    <span className='font-medium'>{p.sender_name ?? 'Unknown'}: </span>
+                    {p.message.length > 140 ? `${p.message.slice(0, 140)}…` : p.message}
+                  </span>
+                  <button
+                    type='button'
+                    title='Unpin'
+                    onClick={() => togglePin.mutate(p.id)}
+                    className='shrink-0 text-slate-400 hover:text-red-500'
+                  >
+                    <X className='h-3 w-3' />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div className='min-h-0 flex-1 space-y-2.5 overflow-y-auto px-3 py-3' data-chat-messages>
         {loading ? (
           <p className='py-6 text-center text-[12px] text-slate-400'>Loading…</p>
@@ -879,6 +1011,19 @@ export function ChatRoomView({
                             {e}
                           </button>
                         ))}
+                        <button
+                          type='button'
+                          title={pins.some((p) => p.id === m.id) ? 'Unpin' : 'Pin'}
+                          onClick={() => togglePin.mutate(m.id)}
+                          className={cn(
+                            'rounded-full p-0.5',
+                            pins.some((p) => p.id === m.id)
+                              ? th.accentText
+                              : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                          )}
+                        >
+                          <Pin className='h-3 w-3' />
+                        </button>
                         {editable && (
                           <>
                             <button
@@ -1460,7 +1605,9 @@ export function ChatRoomList({
   onNewGroup?: () => void
 }) {
   const th = useTheme()
+  const cfg = useChatConfig()
   const { setMuted, leave } = useRoomMembership()
+  const bot = useChatBotInfo()
   const [search, setSearch] = useState('')
   const q = useDebouncedValue(search.trim(), 250)
   // Cross-room message search rides the same box: type ≥2 chars and matching
@@ -1532,6 +1679,38 @@ export function ChatRoomList({
             })
           )}
         </div>
+      )}
+      {bot.bot_name && bot.bot_user_id && cfg.me && (
+        <button
+          type='button'
+          onClick={() =>
+            onOpen({
+              room: dmRoom(cfg.me!.id, bot.bot_user_id!),
+              label: `@${bot.bot_name}`,
+              kind: 'dm',
+              lastMessage: null,
+              unread: 0,
+              muted: false,
+              notify_mode: 'all',
+              joined: true,
+              channel: null
+            })
+          }
+          className='mb-1 flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
+          data-chat-bot-dm
+        >
+          <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[13px] font-bold', th.accentSoft)}>
+            @
+          </span>
+          <span className='min-w-0 flex-1'>
+            <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+              Ask @{bot.bot_name}
+            </span>
+            <span className='block truncate text-[11px] text-slate-400'>
+              Your AI assistant — questions, summaries, reminders
+            </span>
+          </span>
+        </button>
       )}
       {(
         [

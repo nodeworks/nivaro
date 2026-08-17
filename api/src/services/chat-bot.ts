@@ -38,7 +38,7 @@ export function clearChatBotCache(): void {
 
 const BOT_EMAIL = 'chat-bot@nivaro.local'
 
-async function botUserId(): Promise<string> {
+export async function botUserId(): Promise<string> {
   const existing = await db('nivaro_users').where({ email: BOT_EMAIL }).first('id')
   if (existing) return String(existing.id)
   const id = randomUUID().toUpperCase()
@@ -77,12 +77,36 @@ export async function handleBotMention(
 ): Promise<void> {
   const botName = await chatBotName()
   if (!botName) return
-  const question = stripBotMention(text, botName)
+  const question = stripBotMention(text, botName) || text.trim()
   if (!question) return
+
+  // The room's recent conversation rides along as context, so "summarize
+  // this room" and "what did Beth decide about the vendor" work naturally.
+  // The asker can already read every one of these messages — no new
+  // disclosure. Deleted messages excluded.
+  let roomContext = ''
+  try {
+    const recent = (await db('chat_messages')
+      .where({ room })
+      .whereNull('deleted_at')
+      .orderBy('id', 'desc')
+      .limit(40)
+      .select('sender_name', 'message')) as Array<{
+      sender_name: string | null
+      message: string
+    }>
+    roomContext = recent
+      .reverse()
+      .map((m) => `${m.sender_name ?? 'Unknown'}: ${String(m.message).slice(0, 400)}`)
+      .join('\n')
+      .slice(-6000)
+  } catch {
+    /* context is optional */
+  }
 
   let reply: string
   try {
-    reply = await answerQuestion(asker, question)
+    reply = await answerQuestion(asker, question, roomContext)
   } catch (err) {
     app.log.warn({ err }, 'chat bot failed')
     reply = "Sorry — I couldn't answer that right now."
@@ -131,7 +155,27 @@ export async function handleBotMention(
   }
 }
 
-async function answerQuestion(asker: User, question: string): Promise<string> {
+/** The bot-only reminder tool — extracts the WHEN so "remind me Friday at 9
+ *  about the CR26-76773 PO" needs no date-picker UI. */
+const SET_REMINDER_TOOL: Anthropic.Tool = {
+  name: 'set_reminder',
+  description:
+    'Schedule a personal reminder for the asking user. Use when they ask to be reminded of something at a time. Resolve relative times ("tomorrow", "Friday 9am") to an ISO datetime using the current time provided in the conversation.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      when_iso: { type: 'string', description: 'ISO 8601 datetime for the reminder' },
+      note: { type: 'string', description: 'What to remind them about, in their words' }
+    },
+    required: ['when_iso', 'note']
+  }
+}
+
+async function answerQuestion(
+  asker: User,
+  question: string,
+  roomContext?: string
+): Promise<string> {
   const client = await getAiClient()
   if (!client) return 'AI is not configured on this instance — an admin can add a key in Settings.'
 
@@ -141,10 +185,13 @@ async function answerQuestion(asker: User, question: string): Promise<string> {
   const modelRow = await db('nivaro_settings').orderBy('id', 'asc').first('ai_model').catch(() => null)
   const model = String(modelRow?.ai_model ?? '') || 'claude-haiku-4-5-20251001'
 
+  const contextBlock = roomContext
+    ? `Recent messages in this chat room (oldest first):\n${roomContext}\n\n`
+    : ''
   const convo: Anthropic.MessageParam[] = [
     {
       role: 'user',
-      content: `${question}\n\n(You are answering inside a chat room — keep it to a few sentences of plain text, no markdown headers or tables.)`
+      content: `${contextBlock}Current time: ${new Date().toISOString()}\n\n${question}\n\n(You are answering inside a chat room — keep it to a few sentences of plain text, no markdown headers or tables. You may use set_reminder when asked to remind the user of something.)`
     }
   ]
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -152,7 +199,7 @@ async function answerQuestion(asker: User, question: string): Promise<string> {
       model,
       max_tokens: 700,
       system: CHAT_SYSTEM_PROMPT,
-      tools: CHAT_TOOLS,
+      tools: [...CHAT_TOOLS, SET_REMINDER_TOOL],
       messages: convo
     })
     if (response.stop_reason !== 'tool_use') {
@@ -169,6 +216,24 @@ async function answerQuestion(asker: User, question: string): Promise<string> {
       if (block.type !== 'tool_use') continue
       const input = (block.input ?? {}) as Record<string, unknown>
       try {
+        if (block.name === 'set_reminder') {
+          const when = new Date(String(input.when_iso ?? ''))
+          const note = String(input.note ?? '').trim().slice(0, 500)
+          if (Number.isNaN(when.getTime()) || !note) throw new Error('Invalid reminder')
+          if (when.getTime() < Date.now()) throw new Error('That time is in the past')
+          await db('nivaro_reminders').insert({
+            user: asker.id,
+            note,
+            remind_at: when,
+            created_at: new Date()
+          })
+          results.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: JSON.stringify({ scheduled_for: when.toISOString(), note })
+          })
+          continue
+        }
         // AS THE ASKER — RBAC/RLS/scopes apply to every tool call.
         const { result } = await executeChatTool(asker, block.name, input)
         results.push({

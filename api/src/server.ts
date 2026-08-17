@@ -363,6 +363,30 @@ export async function buildServer() {
     // rows whose FK points at a deleted/never-existed parent (blank labels,
     // drill 404s). See services/fk-integrity.ts.
     // Manual: POST /api/cron/fk-integrity-sweep/run.
+        // Chat-bot reminders — "@efp remind me Friday about X". Due rows deliver
+    // via notifyUser (in-app + web push) and mark sent; failures retry next tick.
+    app.cron.schedule('chat-reminders', '*/5 * * * *', async () => {
+      const { db } = await import('./db/index.js')
+      const due = (await db('nivaro_reminders')
+        .where('sent', false)
+        .where('remind_at', '<=', new Date())
+        .limit(50)) as Array<{ id: number; user: string; note: string }>
+      if (due.length === 0) return
+      const { notifyUser } = await import('./services/notification-channels.js')
+      for (const r of due) {
+        try {
+          await notifyUser(app, String(r.user), {
+            subject: 'Reminder',
+            message: r.note,
+            sender: null
+          })
+          await db('nivaro_reminders').where('id', r.id).update({ sent: true })
+        } catch (err) {
+          app.log.warn({ err, reminder: r.id }, 'reminder delivery failed')
+        }
+      }
+    })
+
     app.cron.schedule('fk-integrity-sweep', '40 3 * * *', async () => {
       const { detectDanglingFks } = await import('./services/fk-integrity.js')
       const report = await detectDanglingFks()

@@ -11,7 +11,7 @@ import {
   listRooms,
   parseRoom
 } from '../services/chat.js'
-import { chatBotName, clearChatBotCache, handleBotMention, mentionsBot } from '../services/chat-bot.js'
+import { botUserId, chatBotName, clearChatBotCache, handleBotMention, mentionsBot } from '../services/chat-bot.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { sendWebPush } from '../services/web-push.js'
 
@@ -176,10 +176,18 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     // '@<bot>' routes the question to the AI assistant (fire-and-forget —
-    // the human's message must never wait on a model).
+    // the human's message must never wait on a model). A DM with the bot
+    // needs no mention: every message there is addressed to it.
     const botName = await chatBotName()
-    if (botName && mentionsBot(message, botName)) {
-      void handleBotMention(app, req.user!, room, message)
+    if (botName && message) {
+      if (mentionsBot(message, botName)) {
+        void handleBotMention(app, req.user!, room, message)
+      } else if (parsedRoom.kind === 'dm') {
+        const bid = await botUserId().catch(() => null)
+        if (bid && (parsedRoom.participants ?? []).includes(bid.toUpperCase())) {
+          void handleBotMention(app, req.user!, room, message)
+        }
+      }
     }
 
     // Sending is also reading: seeing your own message as unread is noise.
@@ -342,6 +350,41 @@ export async function chatRoutes(app: FastifyInstance) {
     return reply.send({ data: rows })
   })
 
+  // ── Pinned messages ───────────────────────────────────────────────────────
+
+  /** Toggle a pin. Any room member may pin/unpin — a pin is shared context,
+   *  not a moderation act. */
+  app.post<{ Params: { id: string } }>('/messages/:id/pin', async (req, reply) => {
+    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    if (!msg || msg.deleted_at) return reply.code(404).send({ error: 'Not found' })
+    if (!(await canSeeRoom(req.user!, String(msg.room)))) return reply.code(403).send(forbidden)
+    const existing = await db('nivaro_chat_pins')
+      .where({ room: String(msg.room), message_id: msg.id })
+      .first()
+    if (existing) {
+      await db('nivaro_chat_pins').where('id', existing.id).del()
+    } else {
+      await db('nivaro_chat_pins')
+        .insert({ room: String(msg.room), message_id: msg.id, pinned_by: req.user!.id })
+        .catch(() => {})
+    }
+    emitRoomTouch(String(msg.room))
+    return { data: { pinned: !existing } }
+  })
+
+  app.get<{ Params: { room: string } }>('/rooms/:room/pins', async (req, reply) => {
+    const room = decodeURIComponent(req.params.room)
+    if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
+    const rows = await db('nivaro_chat_pins as p')
+      .join('chat_messages as m', 'm.id', 'p.message_id')
+      .where('p.room', room)
+      .whereNull('m.deleted_at')
+      .orderBy('p.id', 'desc')
+      .limit(20)
+      .select('p.id as pin_id', 'm.id', 'm.sender_name', 'm.message', 'm.date_created')
+    return reply.send({ data: rows })
+  })
+
   // ── Group DMs ─────────────────────────────────────────────────────────────
 
   /** Ad-hoc multi-person conversation: a private channel flagged is_direct,
@@ -394,7 +437,13 @@ export async function chatRoutes(app: FastifyInstance) {
 
   /** What the composer needs to know about this instance's chat. */
   app.get('/config', async () => {
-    return { data: { bot_name: await chatBotName() } }
+    const name = await chatBotName()
+    return {
+      data: {
+        bot_name: name,
+        bot_user_id: name ? await botUserId().catch(() => null) : null
+      }
+    }
   })
 
   // ── Channels ──────────────────────────────────────────────────────────────

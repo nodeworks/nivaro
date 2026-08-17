@@ -881,19 +881,64 @@ export function useCreateGroupDm() {
 
 // ── Instance chat config (AI bot name) ───────────────────────────────────────
 
-export function useChatBotName(): string | null {
+export interface ChatBotInfo {
+  bot_name: string | null
+  bot_user_id: string | null
+}
+
+export function useChatBotInfo(): ChatBotInfo {
   const client = useNivaroClient()
   const { data } = useQuery({
     queryKey: ['nvr-chat-config'],
     queryFn: async () => {
-      const res = (await client.request(get<{ data: { bot_name: string | null } }>('/chat/config'))) as {
-        data: { bot_name: string | null }
+      const res = (await client.request(get<{ data: ChatBotInfo }>('/chat/config'))) as {
+        data: ChatBotInfo
       }
-      return res.data?.bot_name ?? null
+      return res.data ?? { bot_name: null, bot_user_id: null }
     },
     staleTime: 5 * 60_000
   })
-  return data ?? null
+  return data ?? { bot_name: null, bot_user_id: null }
+}
+
+export function useChatBotName(): string | null {
+  return useChatBotInfo().bot_name
+}
+
+// ── Pinned messages ──────────────────────────────────────────────────────────
+
+export interface PinnedMessage {
+  pin_id: number
+  id: number
+  sender_name: string | null
+  message: string
+  date_created: string
+}
+
+export function useRoomPins(room: string | null) {
+  const client = useNivaroClient()
+  const { data } = useQuery({
+    queryKey: ['nvr-chat-pins', room],
+    queryFn: async () => {
+      const res = (await client.request(
+        get<{ data: PinnedMessage[] }>(`/chat/rooms/${encodeURIComponent(room as string)}/pins`)
+      )) as { data: PinnedMessage[] }
+      return res.data ?? []
+    },
+    enabled: !!room,
+    staleTime: 15_000
+  })
+  useChatRealtime([['nvr-chat-pins']], room ? [room] : [])
+  return data ?? []
+}
+
+export function useTogglePin(room: string) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (messageId: number) => client.request(post(`/chat/messages/${messageId}/pin`)),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-chat-pins', room] })
+  })
 }
 
 // ── Avatar helpers ───────────────────────────────────────────────────────────

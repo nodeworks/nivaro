@@ -55,6 +55,8 @@ import { configDiffRoutes } from './config-diff.js'
 import { viewSubscriptionsRoutes } from './view-subscriptions.js'
 import { coverageGapsRoutes } from './coverage-gaps.js'
 import { myWorkRoutes } from './my-work.js'
+import { accessRequestRoutes } from './access-requests.js'
+import { lastTouchRoutes } from './last-touch.js'
 import { integrationHealthRoutes } from './integration-health.js'
 import { hierarchyRoutes } from './hierarchy.js'
 import { importTemplatesRoutes } from './import-templates.js'
@@ -147,6 +149,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })
   await app.register(coverageGapsRoutes)
   await app.register(myWorkRoutes)
+  await app.register(accessRequestRoutes)
+  await app.register(lastTouchRoutes)
   await app.register(integrationHealthRoutes)
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(aiRoutes, { prefix: '/ai' })

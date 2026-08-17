@@ -2801,6 +2801,39 @@ export function ItemEditForm({
   // Full subtitle text for the hover tip + the copy button — the rendered row
   // is capped at 350px and ellipsised, so this is the only place the whole
   // value is available.
+  // "Edited 3d ago by Beth" — one activity row for the header chip.
+  const { data: lastTouch } = useQuery<{
+    action: string
+    timestamp: string
+    user_name: string | null
+  } | null>({
+    queryKey: ['last-touch', collection, String(itemId)],
+    queryFn: () =>
+      client
+        .request<{ data: { action: string; timestamp: string; user_name: string | null } | null }>(
+          get(`/last-touch/${collection}/${encodeURIComponent(String(itemId))}`)
+        )
+        .then((r) => r.data ?? null)
+        .catch(() => null),
+    enabled: !isNew && !!itemId,
+    staleTime: 60_000
+  })
+  const lastTouchText = useMemo(() => {
+    if (!lastTouch) return null
+    const ms = Date.now() - new Date(lastTouch.timestamp).getTime()
+    const mins = Math.floor(ms / 60_000)
+    const rel =
+      mins < 1
+        ? 'just now'
+        : mins < 60
+          ? `${mins}m ago`
+          : mins < 48 * 60
+            ? `${Math.floor(mins / 60)}h ago`
+            : `${Math.floor(mins / 1440)}d ago`
+    const verb = lastTouch.action === 'create' ? 'Created' : 'Edited'
+    return `${verb} ${rel}${lastTouch.user_name ? ` by ${lastTouch.user_name}` : ''}`
+  }, [lastTouch])
+
   const subtitleFullText = useMemo(
     () => subtitleParts.map((p) => p.value).join(subtitleConfig?.separator ?? ' | '),
     [subtitleParts, subtitleConfig]
@@ -4464,6 +4497,15 @@ export function ItemEditForm({
                     )
                 )}
               </div>
+              {lastTouchText && (
+                <p
+                  className='mt-0.5 text-[10.5px] text-slate-400 dark:text-slate-500'
+                  data-tip={lastTouch ? new Date(lastTouch.timestamp).toLocaleString() : undefined}
+                  data-last-touch
+                >
+                  {lastTouchText}
+                </p>
+              )}
               {subtitleParts.length > 0 && (
                 <div className='group/subtitle mt-0.5 flex items-center gap-1'>
                   {/* Capped to 350px on one line — a long subtitle used to wrap
