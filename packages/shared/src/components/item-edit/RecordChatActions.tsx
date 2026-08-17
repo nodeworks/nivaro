@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { MessageSquare, Send, X } from 'lucide-react'
+import { ChevronDown, MessageSquare, Send, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -40,7 +40,6 @@ export function RecordChatActions({
   itemDraft: Record<string, unknown>
 }) {
   const client = useNivaroClient()
-  const [menuOpen, setMenuOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [shareRoom, setShareRoom] = useState('')
   const [note, setNote] = useState('')
@@ -85,23 +84,19 @@ export function RecordChatActions({
     onSuccess: () => {
       toast.success('Shared to chat')
       setShareOpen(false)
-      setMenuOpen(false)
       setNote('')
     },
     onError: () => toast.error('Could not share to that room')
   })
 
   useEffect(() => {
-    if (!menuOpen && !shareOpen) return
+    if (!shareOpen) return
     const onDown = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) {
-        setMenuOpen(false)
-        setShareOpen(false)
-      }
+      if (!rootRef.current?.contains(e.target as Node)) setShareOpen(false)
     }
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
-  }, [menuOpen, shareOpen])
+  }, [shareOpen])
 
   // No registration for this collection, or the record has no token value yet
   // (unsaved / blank human id) — nothing sensible to open or share.
@@ -111,45 +106,35 @@ export function RecordChatActions({
 
   return (
     <div ref={rootRef} className='relative'>
-      <button
-        type='button'
-        onClick={() => {
-          if (discussable && !menuOpen) {
-            setMenuOpen(true)
-          } else {
-            setMenuOpen((o) => !o)
-          }
-        }}
-        title='Chat about this record'
-        className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-600 hover:bg-muted dark:border-border dark:bg-card dark:text-slate-300'
-        data-record-chat
-      >
-        <MessageSquare className='h-3.5 w-3.5' strokeWidth={2} />
-        Chat
-      </button>
-      {menuOpen && !shareOpen && (
-        <div className='absolute right-0 top-full z-30 mt-1 w-[190px] overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-border dark:bg-card'>
-          {discussable && (
-            <button
-              type='button'
-              onClick={() => {
-                setMenuOpen(false)
-                openChatRoom(room, token)
-              }}
-              className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-slate-600 hover:bg-muted dark:text-slate-300'
-            >
-              <MessageSquare className='h-3.5 w-3.5' /> Discuss this record
-            </button>
-          )}
+      <div className='inline-flex h-8 items-stretch overflow-hidden rounded-md border border-slate-200 bg-white text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'>
+        {/* Primary click = straight into the record's own room. No menu, no
+            picking — the room IS the point of the button. */}
+        <button
+          type='button'
+          onClick={() => {
+            if (discussable) openChatRoom(room, token)
+            else setShareOpen((o) => !o)
+          }}
+          title="Open this record's chat room"
+          className='inline-flex items-center gap-1.5 px-2.5 text-[12px] hover:bg-muted'
+          data-record-chat
+        >
+          <MessageSquare className='h-3.5 w-3.5' strokeWidth={2} />
+          Chat
+        </button>
+        {discussable && (
           <button
             type='button'
-            onClick={() => setShareOpen(true)}
-            className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-slate-600 hover:bg-muted dark:text-slate-300'
+            onClick={() => setShareOpen((o) => !o)}
+            title='Send this record to a room'
+            aria-label='Send this record to a room'
+            className='inline-flex items-center border-l border-slate-200 px-1 hover:bg-muted dark:border-border'
+            data-record-chat-more
           >
-            <Send className='h-3.5 w-3.5' /> Send to a room…
+            <ChevronDown className='h-3 w-3' strokeWidth={2} />
           </button>
-        </div>
-      )}
+        )}
+      </div>
       {shareOpen && (
         <div className='absolute right-0 top-full z-30 mt-1 w-[260px] rounded-lg border border-slate-200 bg-white p-2.5 shadow-lg dark:border-border dark:bg-card'>
           <div className='mb-1.5 flex items-center justify-between'>
