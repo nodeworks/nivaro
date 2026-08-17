@@ -32,7 +32,8 @@
     "convert:editorjs": "tsx extensions/efp-ops/scripts/convert-editorjs-richtext.ts",
     "seed:sequences": "tsx extensions/efp-ops/scripts/seed-sequences.ts",
     "golive:convert": "tsx extensions/efp-ops/scripts/run-golive-conversions.ts",
-    "convert:addendums": "tsx extensions/efp-ops/scripts/convert-addendums.ts"
+    "convert:addendums": "tsx extensions/efp-ops/scripts/convert-addendums.ts",
+    "scope:bom-categories": "tsx extensions/efp-ops/scripts/scope-bom-categories.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.101.0",
