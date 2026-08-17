@@ -72,6 +72,8 @@ export interface ChatChannel {
   role: string | null
   created_by: string | null
   is_archived: boolean
+  /** Group DM — a private channel rendered like a conversation, not a #channel. */
+  is_direct: boolean
 }
 
 const TTL_MS = 30_000
@@ -97,7 +99,7 @@ export async function channels(): Promise<Map<string, ChatChannel>> {
   const byKey = new Map(
     rows.map((r) => [
       String(r.key),
-      { ...r, is_archived: !!r.is_archived } as unknown as ChatChannel
+      { ...r, is_archived: !!r.is_archived, is_direct: !!r.is_direct } as unknown as ChatChannel
     ])
   )
   channelCache = { at: Date.now(), byKey }
@@ -206,6 +208,7 @@ export interface RoomSummary {
   label: string | null
   unread: number
   muted: boolean
+  notify_mode: 'all' | 'mentions'
   joined: boolean
   /** Channel rooms only — what the settings panel needs without a second fetch. */
   channel: {
@@ -214,6 +217,7 @@ export interface RoomSummary {
     role: string | null
     topic: string | null
     created_by: string | null
+    is_direct: boolean
   } | null
   last_message: {
     id: number
@@ -234,7 +238,7 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
   const uid = String(user.id)
   const [memberships, dmRooms, chans] = await Promise.all([
     db('nivaro_chat_memberships').where('user', uid) as Promise<
-      Array<{ room: string; last_read_at: Date | null; is_muted: boolean }>
+      Array<{ room: string; last_read_at: Date | null; is_muted: boolean; notify_mode: string | null }>
     >,
     // DMs are implicit: a message addressed to you creates the room.
     // NOTE: .distinct().pluck() is BROKEN on knex/mssql — it returns one
@@ -293,11 +297,13 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
             visibility: channel.visibility,
             role: channel.role,
             topic: channel.topic,
-            created_by: channel.created_by
+            created_by: channel.created_by,
+            is_direct: channel.is_direct
           }
         : null,
       unread: unreadRows.get(room) ?? 0,
       muted: !!membership?.is_muted,
+      notify_mode: (membership?.notify_mode === 'mentions' ? 'mentions' : 'all') as 'all' | 'mentions',
       joined: !!membership,
       last_message: lastMessages.get(room) ?? null
     }
@@ -409,7 +415,9 @@ export interface DirectoryChannel extends ChatChannel {
  * directory never advertises a room's existence to someone who cannot enter.
  */
 export async function listDirectory(user: User, search?: string): Promise<DirectoryChannel[]> {
-  const all = [...(await channels()).values()].filter((c) => !c.is_archived)
+  // Group DMs are conversations, not channels — the directory never lists
+  // them (members see them in the sidebar via their membership rows).
+  const all = [...(await channels()).values()].filter((c) => !c.is_archived && !c.is_direct)
   const mine = new Set(
     (await db('nivaro_chat_memberships').where('user', user.id).pluck('room')) as string[]
   )

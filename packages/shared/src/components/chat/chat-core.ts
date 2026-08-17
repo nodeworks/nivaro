@@ -25,6 +25,12 @@ import { del, get, patch as patch2, post } from '../../lib/commands'
  *   users picked from the autocomplete.
  */
 
+export interface ChatReaction {
+  emoji: string
+  user: string
+  user_name: string | null
+}
+
 export interface ChatMessage {
   id: number
   sender: string
@@ -32,7 +38,14 @@ export interface ChatMessage {
   room: string
   message: string
   date_created: string
+  edited_at?: string | null
+  deleted_at?: string | null
+  attachments?: string[]
+  reactions?: ChatReaction[]
 }
+
+/** The reaction palette — mirrored server-side; anything else is rejected. */
+export const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as const
 
 export interface ChatOnlineUser {
   user_id: string
@@ -196,12 +209,17 @@ export function useSendChatMessage(room: string) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (input: string | { text: string; mentions?: string[] }) => {
-      const { text, mentions } = typeof input === 'string' ? { text: input, mentions: [] } : input
+    mutationFn: async (
+      input: string | { text: string; mentions?: string[]; attachments?: string[] }
+    ) => {
+      const { text, mentions, attachments } =
+        typeof input === 'string' ? { text: input, mentions: [], attachments: [] } : input
       // The server stamps sender/sender_name from the session and fans the
       // mention notifications out itself, skipping anyone who cannot see the
       // room — a client-supplied sender was always a fiction anyway.
-      await client.request(post('/chat/messages', { room, message: text, mentions }))
+      await client.request(
+        post('/chat/messages', { room, message: text, mentions, attachments: attachments ?? [] })
+      )
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['nvr-chat', room] })
@@ -219,6 +237,7 @@ export interface RoomInfo {
   lastMessage: ChatMessage | null
   unread: number
   muted: boolean
+  notify_mode: 'all' | 'mentions'
   joined: boolean
   channel: ChannelMeta | null
 }
@@ -229,6 +248,7 @@ export interface ChannelMeta {
   role: string | null
   topic: string | null
   created_by: string | null
+  is_direct?: boolean
 }
 
 interface ServerRoom {
@@ -237,6 +257,7 @@ interface ServerRoom {
   label: string | null
   unread: number
   muted: boolean
+  notify_mode?: 'all' | 'mentions'
   joined: boolean
   channel: ChannelMeta | null
   last_message: ChatMessage | null
@@ -290,6 +311,7 @@ export function useChatRooms() {
         lastMessage: r.last_message,
         unread: r.unread,
         muted: r.muted,
+        notify_mode: r.notify_mode ?? 'all',
         joined: r.joined,
         channel: r.channel ?? null
       }
@@ -302,6 +324,7 @@ export function useChatRooms() {
         lastMessage: null,
         unread: 0,
         muted: false,
+        notify_mode: 'all',
         joined: true,
         channel: null
       })
@@ -370,7 +393,16 @@ export function useRoomMembership() {
       client.request(patch2(`/chat/rooms/${encodeURIComponent(room)}`, { muted })),
     onSuccess: refresh
   })
-  return { join, leave, setMuted }
+  const setNotifyMode = useMutation({
+    mutationFn: ({ room, mode }: { room: string; mode: 'all' | 'mentions' }) =>
+      client.request(
+        patch2(`/chat/rooms/${encodeURIComponent(room)}`, {
+          notify_mode: mode === 'mentions' ? 'mentions' : null
+        })
+      ),
+    onSuccess: refresh
+  })
+  return { join, leave, setMuted, setNotifyMode }
 }
 
 export interface ChannelMember {
@@ -765,6 +797,102 @@ export function usePeerReadAt(room: string | null): string | null {
     staleTime: 5_000
   })
   useChatRealtime([['nvr-chat-peer-read']], room ? [room] : [])
+  return data ?? null
+}
+
+// ── Message actions ──────────────────────────────────────────────────────────
+
+export function useToggleReaction(room: string) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ messageId, emoji }: { messageId: number; emoji: string }) =>
+      client.request(post(`/chat/messages/${messageId}/reactions`, { emoji })),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-chat', room] })
+  })
+}
+
+export function useEditMessage(room: string) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ messageId, text }: { messageId: number; text: string }) =>
+      client.request(patch2(`/chat/messages/${messageId}`, { message: text })),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-chat', room] })
+  })
+}
+
+export function useDeleteMessage(room: string) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (messageId: number) => client.request(del(`/chat/messages/${messageId}`)),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['nvr-chat', room] })
+      void qc.invalidateQueries({ queryKey: ['nvr-chat-rooms'] })
+    }
+  })
+}
+
+// ── Cross-room message search ────────────────────────────────────────────────
+
+export interface ChatSearchHit {
+  id: number
+  room: string
+  sender: string | null
+  sender_name: string | null
+  message: string
+  date_created: string
+}
+
+/** Search every room in MY sidebar (server enforces visibility by
+ *  construction — the room set is the user's own). */
+export function useChatSearch(q: string) {
+  const client = useNivaroClient()
+  const { data, isLoading } = useQuery({
+    queryKey: ['nvr-chat-search', q],
+    queryFn: async () => {
+      const res = (await client.request(
+        get<{ data: ChatSearchHit[] }>('/chat/search', { q })
+      )) as { data: ChatSearchHit[] }
+      return res.data ?? []
+    },
+    enabled: q.trim().length >= 2,
+    staleTime: 15_000
+  })
+  return { hits: data ?? [], loading: isLoading }
+}
+
+// ── Group DMs ────────────────────────────────────────────────────────────────
+
+export function useCreateGroupDm() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: { user_ids: string[]; name?: string }) => {
+      const res = (await client.request(post('/chat/group-dm', input))) as {
+        data: { room: string; name: string }
+      }
+      return res.data
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-chat-rooms'] })
+  })
+}
+
+// ── Instance chat config (AI bot name) ───────────────────────────────────────
+
+export function useChatBotName(): string | null {
+  const client = useNivaroClient()
+  const { data } = useQuery({
+    queryKey: ['nvr-chat-config'],
+    queryFn: async () => {
+      const res = (await client.request(get<{ data: { bot_name: string | null } }>('/chat/config'))) as {
+        data: { bot_name: string | null }
+      }
+      return res.data?.bot_name ?? null
+    },
+    staleTime: 5 * 60_000
+  })
   return data ?? null
 }
 

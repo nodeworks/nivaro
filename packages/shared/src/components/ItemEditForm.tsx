@@ -4,6 +4,7 @@ import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, 
 import { CloneDialog } from './item-edit/CloneDialog'
 import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './item-edit/ChangeReasonDialog'
 import { RawEditSheet } from './item-edit/RawEditSheet'
+import { RecordChatActions } from './item-edit/RecordChatActions'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
@@ -4527,6 +4528,9 @@ export function ItemEditForm({
               )}
               {!isNew && itemId && (
                 <RecordSubscribeButton collection={collection} itemId={String(itemId)} />
+              )}
+              {!isNew && itemId && (
+                <RecordChatActions collection={collection} itemDraft={draft} />
               )}
               {!isNew && itemId && onDuplicate && (
                 <button

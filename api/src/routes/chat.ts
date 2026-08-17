@@ -11,7 +11,9 @@ import {
   listRooms,
   parseRoom
 } from '../services/chat.js'
+import { chatBotName, clearChatBotCache, handleBotMention, mentionsBot } from '../services/chat-bot.js'
 import { notifyUser } from '../services/notification-channels.js'
+import { sendWebPush } from '../services/web-push.js'
 
 /**
  * Chat (`/api/chat`).
@@ -43,24 +45,68 @@ export async function chatRoutes(app: FastifyInstance) {
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
 
     const limit = Math.min(Number(q.limit ?? 200) || 200, 500)
-    const rows = await db('chat_messages')
+    const rows = (await db('chat_messages')
       .where({ room })
       .modify((qb) => {
         if (q.before) qb.where('id', '<', Number(q.before) || 0)
       })
       .orderBy('id', 'desc')
       .limit(limit)
-      .select('id', 'sender', 'sender_name', 'room', 'message', 'date_created')
+      .select(
+        'id', 'sender', 'sender_name', 'room', 'message', 'date_created',
+        'edited_at', 'deleted_at', 'attachments'
+      )) as Array<Record<string, unknown>>
+
+    // Reactions for the returned window, one query.
+    const ids = rows.map((r) => Number(r.id))
+    const reactionRows = ids.length
+      ? ((await db('nivaro_chat_reactions as r')
+          .leftJoin('nivaro_users as u', 'u.id', 'r.user')
+          .whereIn('r.message_id', ids)
+          .select('r.message_id', 'r.emoji', 'r.user', 'u.first_name', 'u.last_name')) as Array<
+          Record<string, unknown>
+        >)
+      : []
+    const reactionsByMsg = new Map<number, Array<Record<string, unknown>>>()
+    for (const r of reactionRows) {
+      const list = reactionsByMsg.get(Number(r.message_id)) ?? []
+      list.push({
+        emoji: String(r.emoji),
+        user: String(r.user),
+        user_name: [r.first_name, r.last_name].filter(Boolean).join(' ') || null
+      })
+      reactionsByMsg.set(Number(r.message_id), list)
+    }
+
+    const data = rows.map((r) => ({
+      ...r,
+      // A deleted message keeps its row (thread continuity) but sheds content.
+      message: r.deleted_at ? '' : r.message,
+      attachments: r.deleted_at ? [] : parseAttachments(r.attachments),
+      reactions: reactionsByMsg.get(Number(r.id)) ?? []
+    }))
     // Ascending for rendering; the query is descending so `limit` takes the
     // NEWEST messages rather than the oldest.
-    return { data: rows.reverse() }
+    return { data: data.reverse() }
   })
 
   app.post('/messages', async (req, reply) => {
-    const b = req.body as { room?: string; message?: string; mentions?: string[] }
+    const b = req.body as {
+      room?: string
+      message?: string
+      mentions?: string[]
+      attachments?: string[]
+    }
     const room = String(b.room ?? '').trim()
     const message = String(b.message ?? '').trim()
-    if (!room || !message) return reply.code(400).send({ error: 'room and message are required' })
+    // Uuid-shaped nivaro_files ids only, capped — the composer uploads first
+    // and sends ids, so anything else here is a malformed client.
+    const attachments = (Array.isArray(b.attachments) ? b.attachments : [])
+      .filter((a) => /^[0-9a-f-]{36}$/i.test(String(a)))
+      .slice(0, 10)
+    if (!room || (!message && attachments.length === 0)) {
+      return reply.code(400).send({ error: 'room and message are required' })
+    }
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
 
     const senderName =
@@ -73,7 +119,8 @@ export async function chatRoutes(app: FastifyInstance) {
         message,
         sender: req.user?.id ?? null,
         sender_name: senderName,
-        date_created: new Date()
+        date_created: new Date(),
+        attachments: attachments.length ? JSON.stringify(attachments) : null
       })
       .returning('id')
     const id =
@@ -87,7 +134,9 @@ export async function chatRoutes(app: FastifyInstance) {
       message,
       sender: req.user?.id ?? null,
       sender_name: senderName,
-      date_created: new Date().toISOString()
+      date_created: new Date().toISOString(),
+      attachments,
+      reactions: [] as unknown[]
     }
     // chat_messages is configured accountability='activity' (2026-08-06 audit
     // decision), but this native send route raw-inserts and bypasses the items
@@ -112,6 +161,25 @@ export async function chatRoutes(app: FastifyInstance) {
       for (const p of parsedRoom.participants ?? []) {
         app.io?.to(`user:${p}`).emit('chat:message', row)
       }
+      // Web push for the DM peer — no in-app notification row (a row per DM
+      // message would bury the inbox), just the browser ping. Mute wins.
+      const peer = (parsedRoom.participants ?? []).find(
+        (p) => p !== String(req.user!.id).toUpperCase()
+      )
+      if (peer && !(await isMuted(peer, room))) {
+        void sendWebPush(peer, {
+          title: senderName ?? 'New message',
+          body: message.slice(0, 200) || 'Sent an attachment',
+          tag: `chat-${room}`
+        })
+      }
+    }
+
+    // '@<bot>' routes the question to the AI assistant (fire-and-forget —
+    // the human's message must never wait on a model).
+    const botName = await chatBotName()
+    if (botName && mentionsBot(message, botName)) {
+      void handleBotMention(app, req.user!, room, message)
     }
 
     // Sending is also reading: seeing your own message as unread is noise.
@@ -161,10 +229,17 @@ export async function chatRoutes(app: FastifyInstance) {
   app.patch<{ Params: { room: string } }>('/rooms/:room', async (req, reply) => {
     const room = decodeURIComponent(req.params.room)
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
-    const b = req.body as { muted?: boolean }
-    if (b.muted === undefined) return reply.code(400).send({ error: 'muted is required' })
-    await upsertMembership(String(req.user!.id), room, { is_muted: !!b.muted })
-    return { data: { room, muted: !!b.muted } }
+    const b = req.body as { muted?: boolean; notify_mode?: string | null }
+    const patch: { is_muted?: boolean; notify_mode?: string | null } = {}
+    if (b.muted !== undefined) patch.is_muted = !!b.muted
+    if (b.notify_mode !== undefined) {
+      patch.notify_mode = b.notify_mode === 'mentions' ? 'mentions' : null
+    }
+    if (Object.keys(patch).length === 0) {
+      return reply.code(400).send({ error: 'muted or notify_mode is required' })
+    }
+    await upsertMembership(String(req.user!.id), room, patch)
+    return { data: { room, ...patch } }
   })
 
   /** DM read receipt: when did the other participant last read this room? */
@@ -179,6 +254,147 @@ export async function chatRoutes(app: FastifyInstance) {
     if (!peer) return { data: { last_read_at: null } }
     const row = await db('nivaro_chat_memberships').where({ user: peer, room }).first()
     return { data: { last_read_at: row?.last_read_at ?? null } }
+  })
+
+  // ── Message actions (reactions / edit / delete) ───────────────────────────
+
+  const REACTION_EMOJI = new Set(['👍', '✅', '👀', '🎉', '❤️', '😂'])
+
+  /** Toggle a reaction. Same fixed palette client and server. */
+  app.post<{ Params: { id: string } }>('/messages/:id/reactions', async (req, reply) => {
+    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    if (!msg) return reply.code(404).send({ error: 'Not found' })
+    if (!(await canSeeRoom(req.user!, String(msg.room)))) return reply.code(403).send(forbidden)
+    const emoji = String((req.body as { emoji?: string })?.emoji ?? '')
+    if (!REACTION_EMOJI.has(emoji)) return reply.code(400).send({ error: 'Unknown reaction' })
+
+    const existing = await db('nivaro_chat_reactions')
+      .where({ message_id: msg.id, user: req.user!.id, emoji })
+      .first()
+    if (existing) {
+      await db('nivaro_chat_reactions').where('id', existing.id).del()
+    } else {
+      await db('nivaro_chat_reactions')
+        .insert({ message_id: msg.id, user: req.user!.id, emoji })
+        .catch(() => {}) // UNIQUE race — the reaction exists, which is the goal
+    }
+    emitRoomTouch(String(msg.room))
+    return { data: { toggled: emoji, on: !existing } }
+  })
+
+  /** Edit own message within the window. Mentions are NOT re-processed — an
+   *  edit fixes words, it doesn't re-page people. */
+  const EDIT_WINDOW_MS = 15 * 60_000
+  app.patch<{ Params: { id: string } }>('/messages/:id', async (req, reply) => {
+    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    if (!msg) return reply.code(404).send({ error: 'Not found' })
+    if (String(msg.sender ?? '').toUpperCase() !== String(req.user!.id).toUpperCase()) {
+      return reply.code(403).send({ error: 'You can only edit your own messages' })
+    }
+    if (msg.deleted_at) return reply.code(400).send({ error: 'Message was deleted' })
+    if (Date.now() - new Date(msg.date_created).getTime() > EDIT_WINDOW_MS) {
+      return reply.code(400).send({ error: 'The edit window has passed' })
+    }
+    const text = String((req.body as { message?: string })?.message ?? '').trim()
+    if (!text) return reply.code(400).send({ error: 'message is required' })
+    await db('chat_messages')
+      .where('id', msg.id)
+      .update({ message: text, edited_at: new Date() })
+    emitRoomTouch(String(msg.room))
+    return { data: { id: msg.id, message: text } }
+  })
+
+  /** Soft delete — own message, or admin. The row survives as a tombstone so
+   *  the conversation's shape (and reply context) stays honest. */
+  app.delete<{ Params: { id: string } }>('/messages/:id', async (req, reply) => {
+    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    if (!msg) return reply.code(404).send({ error: 'Not found' })
+    const own = String(msg.sender ?? '').toUpperCase() === String(req.user!.id).toUpperCase()
+    if (!own && !req.isAdmin) {
+      return reply.code(403).send({ error: 'You can only delete your own messages' })
+    }
+    await db('chat_messages')
+      .where('id', msg.id)
+      .update({ message: '', attachments: null, deleted_at: new Date() })
+    await db('nivaro_chat_reactions').where({ message_id: msg.id }).del()
+    emitRoomTouch(String(msg.room))
+    return { data: { deleted: true } }
+  })
+
+  // ── Search across my rooms ────────────────────────────────────────────────
+
+  /** Message search over every room in MY sidebar (visibility enforced by
+   *  construction — the room set comes from listRooms). Entity rooms outside
+   *  the sidebar are not searchable; they have no enumerable room list. */
+  app.get('/search', async (req, reply) => {
+    const q = String((req.query as { q?: string }).q ?? '').trim()
+    if (q.length < 2) return { data: [] }
+    const rooms = (await listRooms(req.user!)).map((r) => r.room)
+    if (rooms.length === 0) return { data: [] }
+    const like = `%${q.replace(/[\\%_[]/g, (m) => `\\${m}`)}%`
+    const rows = await db('chat_messages')
+      .whereIn('room', rooms.slice(0, 200))
+      .whereNull('deleted_at')
+      .whereRaw("message LIKE ? ESCAPE '\\'", [like])
+      .orderBy('id', 'desc')
+      .limit(50)
+      .select('id', 'room', 'sender', 'sender_name', 'message', 'date_created')
+    return reply.send({ data: rows })
+  })
+
+  // ── Group DMs ─────────────────────────────────────────────────────────────
+
+  /** Ad-hoc multi-person conversation: a private channel flagged is_direct,
+   *  rendered like a DM (member names as the title). */
+  app.post('/group-dm', async (req, reply) => {
+    const b = req.body as { user_ids?: string[]; name?: string }
+    const userIds = [...new Set((b.user_ids ?? []).map(String).filter(Boolean))].filter(
+      (u) => u.toUpperCase() !== String(req.user!.id).toUpperCase()
+    )
+    if (userIds.length < 1) return reply.code(400).send({ error: 'Pick at least one person' })
+    if (userIds.length > 20) return reply.code(400).send({ error: 'Too many people for a group' })
+
+    const users = (await db('nivaro_users')
+      .whereIn('id', userIds)
+      .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>
+    if (users.length !== userIds.length) {
+      return reply.code(400).send({ error: 'One of those users does not exist' })
+    }
+    const firstNames = [
+      String(req.user?.first_name ?? '').trim() || 'Me',
+      ...users.map(
+        (u) => String(u.first_name ?? '').trim() || String(u.email ?? '').split('@')[0]
+      )
+    ]
+    const name = String(b.name ?? '').trim() || firstNames.slice(0, 4).join(', ')
+    const key = `grp-${Math.random().toString(16).slice(2, 10)}`
+
+    await db('nivaro_chat_channels').insert({
+      key,
+      name: name.slice(0, 100),
+      visibility: 'private',
+      is_direct: true,
+      created_by: req.user?.id ?? null
+    })
+    clearChatCaches()
+    const room = `ch:${key}`
+    await upsertMembership(String(req.user!.id), room, {})
+    for (const u of userIds) await upsertMembership(u, room, {})
+    void logActivity({
+      action: 'chat-group-create',
+      user: req.user?.id ?? null,
+      collection: 'nivaro_chat_channels',
+      item: key,
+      comment: `${userIds.length + 1} members`
+    })
+    return reply.code(201).send({ data: { room, name } })
+  })
+
+  // ── Client config ─────────────────────────────────────────────────────────
+
+  /** What the composer needs to know about this instance's chat. */
+  app.get('/config', async () => {
+    return { data: { bot_name: await chatBotName() } }
   })
 
   // ── Channels ──────────────────────────────────────────────────────────────
@@ -385,10 +601,17 @@ export async function chatRoutes(app: FastifyInstance) {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
+  /** Nudge a room's members to refetch after a non-message change (reaction,
+   *  edit, delete). Rides the same chat:message event clients already
+   *  invalidate on; the payload only needs the room. */
+  function emitRoomTouch(room: string): void {
+    app.io?.to(`chat:${room}`).emit('chat:message', { room, touch: true })
+  }
+
   async function upsertMembership(
     user: string,
     room: string,
-    patch: { is_muted?: boolean; last_read_at?: Date }
+    patch: { is_muted?: boolean; last_read_at?: Date; notify_mode?: string | null }
   ): Promise<void> {
     const existing = await db('nivaro_chat_memberships').where({ user, room }).first()
     if (existing) {
@@ -414,6 +637,16 @@ export async function chatRoutes(app: FastifyInstance) {
   async function isMuted(user: string, room: string): Promise<boolean> {
     const row = await db('nivaro_chat_memberships').where({ user, room }).first()
     return !!row?.is_muted
+  }
+}
+
+function parseAttachments(raw: unknown): string[] {
+  if (!raw) return []
+  try {
+    const arr = JSON.parse(String(raw))
+    return Array.isArray(arr) ? arr.map(String) : []
+  } catch {
+    return []
   }
 }
 

@@ -9,11 +9,16 @@ import {
   Lock,
   LogOut,
   MessageCircle,
+  Paperclip,
+  Pencil,
   Plus,
   PlayCircle,
   Search,
   Send,
   Settings,
+  SmilePlus,
+  Trash2,
+  Users,
   X
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
@@ -21,6 +26,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn } from '../../lib/utils'
+import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import {
   CHAT_DEFAULTS,
   type ChatConfig,
@@ -35,17 +41,24 @@ import {
   splitMessageTokens,
   type ChannelMeta,
   type DirectoryChannel,
+  REACTION_EMOJI,
   useChannelAdmin,
   useChannelDirectory,
   useChannelMembers,
+  useChatBotName,
   useChatConfig,
   useChatRoles,
   useChatMessages,
   useChatRooms,
+  useChatSearch,
   useCreateChannel,
+  useCreateGroupDm,
+  useDeleteMessage,
+  useEditMessage,
   useEntityRoomLink,
   useMarkRoomRead,
   useRoomMembership,
+  useToggleReaction,
   useUserSearch,
   usePeerReadAt,
   useSendChatMessage,
@@ -189,6 +202,104 @@ function Avatar({ id, name, size = 32 }: { id: string; name: string | null; size
   )
 }
 
+/**
+ * Live record chip for an entity token inside a message — the token plus the
+ * record's CURRENT pipeline state as a colored pill, resolved lazily and
+ * cached per token. Falls back to the plain link when the token doesn't
+ * resolve (unregistered prefix, no record, no pipeline).
+ */
+function EntityChip({ token, url, mine }: { token: string; url: string | null; mine?: boolean }) {
+  const cfg = useChatConfig()
+  const th = useTheme()
+  const client = useNivaroClient()
+
+  const { data: types } = useQuery({
+    queryKey: ['nvr-chat-room-types'],
+    queryFn: async () => {
+      const res = (await client.request(
+        get<{ data: Array<{ prefix: string; collection: string; match_field: string; is_active: boolean }> }>(
+          '/chat/room-types'
+        )
+      )) as { data: Array<{ prefix: string; collection: string; match_field: string; is_active: boolean }> }
+      return (res.data ?? []).filter((t) => t.is_active)
+    },
+    staleTime: 5 * 60_000
+  })
+
+  const { data: card } = useQuery({
+    queryKey: ['nvr-chat-entity-card', token],
+    queryFn: async () => {
+      for (const t of types ?? []) {
+        try {
+          const res = (await client.request(
+            get<{ data: Array<{ id: string | number }> }>(`/items/${t.collection}`, {
+              limit: 1,
+              fields: 'id',
+              filter: JSON.stringify({ [t.match_field]: { _eq: token } })
+            })
+          )) as { data: Array<{ id: string | number }> }
+          const id = res.data?.[0]?.id
+          if (id == null) continue
+          const inst = (await client.request(
+            get<{ data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null }>(
+              `/pipelines/instance/${t.collection}/${id}`
+            )
+          )) as { data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null }
+          const state = inst.data?.instance?.current_state_obj
+          return {
+            collection: t.collection,
+            id,
+            state: state?.label ?? null,
+            color: state?.color ?? null
+          }
+        } catch {
+          /* try the next registered type */
+        }
+      }
+      return null
+    },
+    enabled: (types?.length ?? 0) > 0,
+    staleTime: 10 * 60_000
+  })
+
+  const open = () => {
+    if (card) {
+      const build = cfg.recordUrl ?? ((c: string, id: string | number) => `/collections/${c}/${id}`)
+      const href = build(card.collection, card.id)
+      if (href) {
+        cfg.navigate?.(href)
+        return
+      }
+    }
+    if (url) cfg.navigate?.(url)
+  }
+
+  return (
+    <button
+      type='button'
+      onClick={open}
+      className={cn(
+        'inline-flex max-w-full items-center gap-1 align-baseline font-medium underline-offset-2 hover:underline',
+        mine ? 'underline' : th.accentText
+      )}
+      data-chat-entity={token}
+    >
+      {token}
+      {card?.state && (
+        <span
+          className='inline-flex items-center rounded-full px-1.5 py-px text-[9px] font-semibold leading-tight'
+          style={{
+            backgroundColor: card.color ? `${card.color}26` : 'rgba(100,116,139,.15)',
+            color: mine ? undefined : (card.color ?? undefined)
+          }}
+        >
+          {card.state}
+        </span>
+      )}
+    </button>
+  )
+}
+
 function MessageBody({ text, mine }: { text: string; mine?: boolean }) {
   const cfg = useChatConfig()
   const th = useTheme()
@@ -198,21 +309,7 @@ function MessageBody({ text, mine }: { text: string; mine?: boolean }) {
       {parts.map((p, i) => {
         if (p.entity) {
           const url = cfg.entityUrl(p.entity)
-          return url ? (
-            <button
-              key={i}
-              type='button'
-              onClick={() => cfg.navigate?.(url)}
-              className={cn(
-                'font-medium underline-offset-2 hover:underline',
-                mine ? 'underline' : th.accentText
-              )}
-            >
-              {p.text}
-            </button>
-          ) : (
-            <span key={i}>{p.text}</span>
-          )
+          return <EntityChip key={i} token={p.text} url={url} mine={mine} />
         }
         if (p.mention) {
           return (
@@ -245,7 +342,8 @@ export function ChatRoomView({
   label,
   onBack,
   onOpenSettings,
-  renderMessageBody
+  renderMessageBody,
+  initialUnread
 }: {
   room: string
   label: string
@@ -253,6 +351,8 @@ export function ChatRoomView({
   /** Channel rooms only — opens members/visibility settings. */
   onOpenSettings?: () => void
   renderMessageBody?: (m: ChatMessage, ctx: { mine: boolean }) => React.ReactNode
+  /** Unread count at open — anchors the "New messages" divider. */
+  initialUnread?: number
 }) {
   const cfg = useChatConfig()
   const th = useTheme()
@@ -265,18 +365,90 @@ export function ChatRoomView({
   const peerReadAt = usePeerReadAt(room.startsWith('dm:') ? room : null)
   // Entity rooms link back to their record, routed by the host (recordUrl).
   const recordLink = useEntityRoomLink(room)
+  const toggleReaction = useToggleReaction(room)
+  const editMessage = useEditMessage(room)
+  const deleteMessage = useDeleteMessage(room)
+  const { setMuted, setNotifyMode } = useRoomMembership()
+  const { rooms: allRooms } = useChatRooms()
+  const roomInfo = allRooms.find((r) => r.room === room) ?? null
+  const botName = useChatBotName()
   const [draft, setDraft] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [msgSearch, setMsgSearch] = useState('')
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [mentionIndex, setMentionIndex] = useState(0)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+  const [pendingFiles, setPendingFiles] = useState<
+    Array<{ id: string; name: string; type: string | null }>
+  >([])
+  const [uploadingFiles, setUploadingFiles] = useState(0)
+  const [preview, setPreview] = useState<PreviewFile | null>(null)
+  const [notifyMenuOpen, setNotifyMenuOpen] = useState(false)
   const mentionMapRef = useRef(new Map<string, ChatOnlineUser>())
   const inputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
+  const dividerRef = useRef<HTMLDivElement>(null)
+  // Frozen at mount — markRead fires immediately, so the live rooms query
+  // can't be the divider's source of truth.
+  const initialUnreadRef = useRef(Math.max(0, initialUnread ?? 0))
+  const firstScrollRef = useRef(false)
 
   useEffect(() => {
+    if (!firstScrollRef.current && messages.length > 0) {
+      firstScrollRef.current = true
+      // Land the reader AT the "New messages" line, not past it.
+      if (dividerRef.current) dividerRef.current.scrollIntoView({ block: 'center' })
+      else endRef.current?.scrollIntoView({ block: 'end' })
+      return
+    }
     endRef.current?.scrollIntoView({ block: 'end' })
   }, [messages.length])
+
+  // Metadata for every attachment in the window, one query.
+  const attachmentIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const m of messages) for (const a of m.attachments ?? []) ids.add(a)
+    return [...ids]
+  }, [messages])
+  const { data: attachmentMeta } = useQuery({
+    queryKey: ['nvr-chat-attachments', attachmentIds.slice().sort().join('|')],
+    queryFn: async () => {
+      const res = (await client.request(
+        get<{ data: Array<{ id: string; filename_download: string | null; title: string | null; type: string | null; filesize: number | null }> }>(
+          '/files',
+          {
+            filter: JSON.stringify({ id: { _in: attachmentIds } }),
+            limit: String(attachmentIds.length),
+            fields: 'id,filename_download,title,type,filesize'
+          }
+        )
+      )) as { data: Array<{ id: string; filename_download: string | null; title: string | null; type: string | null; filesize: number | null }> }
+      return new Map((res.data ?? []).map((f) => [f.id, f]))
+    },
+    enabled: attachmentIds.length > 0,
+    staleTime: 5 * 60_000
+  })
+
+  const uploadFiles = async (files: File[]) => {
+    if (files.length === 0) return
+    setUploadingFiles((n) => n + files.length)
+    for (const f of files) {
+      try {
+        const result = await client.upload(f)
+        setPendingFiles((prev) => [
+          ...prev,
+          { id: result.id, name: f.name, type: f.type || null }
+        ])
+      } catch {
+        /* one failed upload shouldn't kill the rest */
+      } finally {
+        setUploadingFiles((n) => n - 1)
+      }
+    }
+  }
   useEffect(() => {
     markRead.mutate(room)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -285,10 +457,16 @@ export function ChatRoomView({
   const mentionCandidates = useMemo(() => {
     if (mentionQuery === null) return []
     const q = mentionQuery.toLowerCase()
-    return cfg.onlineUsers
+    const people = cfg.onlineUsers
       .filter((u) => (u.display_name ?? '').toLowerCase().startsWith(q))
       .slice(0, 6)
-  }, [mentionQuery, cfg.onlineUsers])
+    // The AI assistant answers in-room — offered alongside people when its
+    // configured name matches what's being typed.
+    if (botName && botName.toLowerCase().startsWith(q)) {
+      return [{ user_id: '__bot__', display_name: botName } as ChatOnlineUser, ...people].slice(0, 6)
+    }
+    return people
+  }, [mentionQuery, cfg.onlineUsers, botName])
 
   const selectMention = (u: ChatOnlineUser) => {
     const name = u.display_name ?? 'Unknown'
@@ -302,19 +480,23 @@ export function ChatRoomView({
 
   const submit = () => {
     const text = draft.trim()
-    if (!text) return
+    if (!text && pendingFiles.length === 0) return
+    const attachments = pendingFiles.map((f) => f.id)
     setDraft('')
+    setPendingFiles([])
     setMentionQuery(null)
     typing.clearTyping()
     // Mentions ride the send call: the server notifies only people who can
     // actually see the room and aren't muted, which the old client-side
-    // /notifications blast could not check.
+    // /notifications blast could not check. The bot pseudo-entry is excluded —
+    // the server detects the bot by name in the text.
     const mentioned = me
       ? [...mentionMapRef.current.entries()]
           .filter(([name]) => text.includes(`@[${name}]`))
           .map(([, u]) => u.user_id)
+          .filter((id) => id !== '__bot__')
       : []
-    send.mutate({ text, mentions: mentioned })
+    send.mutate({ text, mentions: mentioned, attachments })
     mentionMapRef.current.clear()
   }
 
@@ -414,6 +596,73 @@ export function ChatRoomView({
         >
           <Search className='h-3.5 w-3.5' strokeWidth={2} />
         </button>
+        {roomInfo && (
+          <div className='relative'>
+            <button
+              type='button'
+              onClick={() => setNotifyMenuOpen((o) => !o)}
+              className={cn(
+                'rounded-md p-1 transition-colors',
+                roomInfo.muted || roomInfo.notify_mode === 'mentions'
+                  ? th.accentSoft
+                  : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+              )}
+              aria-label='Notification settings for this room'
+              title={
+                roomInfo.muted
+                  ? 'Muted'
+                  : roomInfo.notify_mode === 'mentions'
+                    ? 'Mentions only'
+                    : 'All messages'
+              }
+              data-chat-notify
+            >
+              {roomInfo.muted ? (
+                <BellOff className='h-3.5 w-3.5' strokeWidth={2} />
+              ) : (
+                <Bell className='h-3.5 w-3.5' strokeWidth={2} />
+              )}
+            </button>
+            {notifyMenuOpen && (
+              <div
+                className={cn(
+                  'absolute right-0 top-full z-30 mt-1 w-[160px] overflow-hidden rounded-lg border py-1 shadow-lg',
+                  th.surface,
+                  'border-slate-200 dark:border-border'
+                )}
+              >
+                {(
+                  [
+                    ['all', 'All messages', !roomInfo.muted && roomInfo.notify_mode !== 'mentions'],
+                    ['mentions', 'Mentions only', !roomInfo.muted && roomInfo.notify_mode === 'mentions'],
+                    ['muted', 'Muted', roomInfo.muted]
+                  ] as const
+                ).map(([mode, text, active]) => (
+                  <button
+                    key={mode}
+                    type='button'
+                    onClick={() => {
+                      setNotifyMenuOpen(false)
+                      if (mode === 'muted') {
+                        setMuted.mutate({ room, muted: true })
+                      } else {
+                        if (roomInfo.muted) setMuted.mutate({ room, muted: false })
+                        setNotifyMode.mutate({ room, mode })
+                      }
+                    }}
+                    className={cn(
+                      'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px]',
+                      active ? th.accentSoft : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-muted'
+                    )}
+                  >
+                    {text}
+                    {active && <Check className='ml-auto h-3 w-3' />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {onOpenSettings && (
           <button
             type='button'
@@ -456,6 +705,23 @@ export function ChatRoomView({
             const isLastMine = mine && idx === lastMineIndex
             const wasRead =
               isLastMine && readTime > 0 && new Date(m.date_created).getTime() <= readTime
+            const deleted = !!m.deleted_at
+            const editable =
+              mine && !deleted && Date.now() - new Date(m.date_created).getTime() < 15 * 60_000
+            const isEditing = editingId === m.id
+            // "New messages" — anchored to the unread count frozen at open.
+            const showUnreadDivider =
+              !searching &&
+              initialUnreadRef.current > 0 &&
+              idx === Math.max(0, visibleMessages.length - initialUnreadRef.current)
+            const reactionGroups = new Map<string, { count: number; mine: boolean; names: string[] }>()
+            for (const r of m.reactions ?? []) {
+              const g = reactionGroups.get(r.emoji) ?? { count: 0, mine: false, names: [] }
+              g.count++
+              if (r.user?.toLowerCase() === myId) g.mine = true
+              if (r.user_name) g.names.push(r.user_name)
+              reactionGroups.set(r.emoji, g)
+            }
             return (
               <div key={m.id}>
                 {newDay && (
@@ -467,28 +733,197 @@ export function ChatRoomView({
                     <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
                   </div>
                 )}
-                <div className={cn('flex gap-2', mine && 'flex-row-reverse')}>
+                {showUnreadDivider && (
+                  <div ref={dividerRef} className='my-2 flex items-center gap-2' data-chat-unread-divider>
+                    <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
+                    <span className='text-[10px] font-semibold uppercase tracking-wide text-red-400'>
+                      New messages
+                    </span>
+                    <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
+                  </div>
+                )}
+                <div className={cn('group/msg flex gap-2', mine && 'flex-row-reverse')}>
                   {!mine && <Avatar id={m.sender} name={m.sender_name} size={26} />}
-                  <div className={cn('max-w-[78%]', mine && 'text-right')}>
+                  <div className={cn('relative max-w-[78%]', mine && 'text-right')}>
                     {!mine && (
                       <p className='mb-0.5 text-[10.5px] font-medium text-slate-400'>
                         {m.sender_name ?? 'Unknown'}
                       </p>
                     )}
-                    <div
-                      className={cn(
-                        'inline-block rounded-2xl px-3 py-1.5 text-left text-[12.5px] leading-snug',
-                        mine ? cn('rounded-br-md', th.bubbleMine) : cn('rounded-bl-md', th.bubbleOther)
-                      )}
-                    >
-                      {renderMessageBody ? (
-                        renderMessageBody(m, { mine })
-                      ) : (
-                        <MessageBody text={m.message} mine={mine} />
-                      )}
-                    </div>
+                    {/* Hover toolbar: react, and (own, in-window) edit/delete */}
+                    {!deleted && !isEditing && (
+                      <div
+                        className={cn(
+                          'absolute -top-3 z-10 hidden items-center gap-0.5 rounded-full border px-1 py-0.5 shadow-sm group-hover/msg:flex',
+                          th.surface,
+                          'border-slate-200 dark:border-border',
+                          mine ? 'left-0' : 'right-0'
+                        )}
+                        data-chat-msg-actions
+                      >
+                        {REACTION_EMOJI.map((e) => (
+                          <button
+                            key={e}
+                            type='button'
+                            onClick={() => toggleReaction.mutate({ messageId: m.id, emoji: e })}
+                            className='rounded-full px-0.5 text-[13px] leading-none transition-transform hover:scale-125'
+                            title={`React ${e}`}
+                          >
+                            {e}
+                          </button>
+                        ))}
+                        {editable && (
+                          <>
+                            <button
+                              type='button'
+                              title='Edit'
+                              onClick={() => {
+                                setEditingId(m.id)
+                                setEditDraft(m.message)
+                                setConfirmDeleteId(null)
+                              }}
+                              className='rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                            >
+                              <Pencil className='h-3 w-3' />
+                            </button>
+                            {confirmDeleteId === m.id ? (
+                              <button
+                                type='button'
+                                title='Confirm delete'
+                                onClick={() => {
+                                  deleteMessage.mutate(m.id)
+                                  setConfirmDeleteId(null)
+                                }}
+                                className='rounded-full px-1 text-[10px] font-semibold text-red-500'
+                              >
+                                Sure?
+                              </button>
+                            ) : (
+                              <button
+                                type='button'
+                                title='Delete'
+                                onClick={() => setConfirmDeleteId(m.id)}
+                                className='rounded-full p-0.5 text-slate-400 hover:text-red-500'
+                              >
+                                <Trash2 className='h-3 w-3' />
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {deleted ? (
+                      <div className='inline-block rounded-2xl border border-dashed border-slate-200 px-3 py-1.5 text-left text-[11.5px] italic text-slate-400 dark:border-border'>
+                        Message removed
+                      </div>
+                    ) : isEditing ? (
+                      <form
+                        className='flex items-center gap-1'
+                        onSubmit={(e) => {
+                          e.preventDefault()
+                          const text = editDraft.trim()
+                          if (text && text !== m.message) {
+                            editMessage.mutate({ messageId: m.id, text })
+                          }
+                          setEditingId(null)
+                        }}
+                      >
+                        <input
+                          autoFocus
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') setEditingId(null)
+                          }}
+                          className={cn('h-8 w-[240px] rounded-lg border px-2 text-[12px] outline-none', th.input)}
+                          aria-label='Edit message'
+                        />
+                        <button type='submit' className={cn('rounded-md px-1.5 py-1 text-[11px] font-medium', th.accentText)}>
+                          Save
+                        </button>
+                      </form>
+                    ) : (
+                      <div
+                        className={cn(
+                          'inline-block rounded-2xl px-3 py-1.5 text-left text-[12.5px] leading-snug',
+                          mine ? cn('rounded-br-md', th.bubbleMine) : cn('rounded-bl-md', th.bubbleOther)
+                        )}
+                      >
+                        {m.message &&
+                          (renderMessageBody ? (
+                            renderMessageBody(m, { mine })
+                          ) : (
+                            <MessageBody text={m.message} mine={mine} />
+                          ))}
+                        {(m.attachments ?? []).length > 0 && (
+                          <div className={cn('flex flex-wrap gap-1.5', m.message && 'mt-1.5')}>
+                            {(m.attachments ?? []).map((aid) => {
+                              const meta = attachmentMeta?.get(aid)
+                              const name = meta?.title || meta?.filename_download || 'Attachment'
+                              const url = client.fileUrl(aid)
+                              const isImg = (meta?.type ?? '').startsWith('image/')
+                              const openPreview = () =>
+                                setPreview({
+                                  id: aid,
+                                  url,
+                                  name,
+                                  type: meta?.type ?? null,
+                                  size: meta?.filesize ?? null
+                                })
+                              return isImg ? (
+                                <button key={aid} type='button' onClick={openPreview} className='block cursor-zoom-in'>
+                                  <img
+                                    src={url}
+                                    alt={name}
+                                    className='max-h-40 max-w-[220px] rounded-lg object-cover'
+                                    loading='lazy'
+                                  />
+                                </button>
+                              ) : (
+                                <button
+                                  key={aid}
+                                  type='button'
+                                  onClick={openPreview}
+                                  className={cn(
+                                    'inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border px-2 py-1 text-[11.5px]',
+                                    mine
+                                      ? 'border-white/30 bg-white/10'
+                                      : 'border-slate-200 bg-white dark:border-border dark:bg-card'
+                                  )}
+                                >
+                                  <Paperclip className='h-3 w-3 shrink-0 opacity-60' />
+                                  <span className='truncate'>{name}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {reactionGroups.size > 0 && (
+                      <div className={cn('mt-0.5 flex flex-wrap gap-1', mine && 'justify-end')} data-chat-reactions>
+                        {[...reactionGroups.entries()].map(([emoji, g]) => (
+                          <button
+                            key={emoji}
+                            type='button'
+                            title={g.names.join(', ')}
+                            onClick={() => toggleReaction.mutate({ messageId: m.id, emoji })}
+                            className={cn(
+                              'inline-flex items-center gap-0.5 rounded-full border px-1.5 py-px text-[10.5px] leading-tight transition-colors',
+                              g.mine
+                                ? cn('font-semibold', th.accentSoft, 'border-transparent')
+                                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:bg-muted'
+                            )}
+                          >
+                            <span>{emoji}</span>
+                            <span className='tabular-nums'>{g.count}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <p className='mt-0.5 flex items-center justify-end gap-1 text-[10px] text-slate-400'>
                       {!mine && <span className='mr-auto' />}
+                      {m.edited_at && !deleted && <span className='italic'>(edited)</span>}
                       {new Date(m.date_created).toLocaleTimeString('en-US', {
                         hour: 'numeric',
                         minute: '2-digit'
@@ -520,6 +955,31 @@ export function ChatRoomView({
           <p className='text-[11px] italic text-slate-400'>{typing.typingText}</p>
         )}
       </div>
+      {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
+      {(pendingFiles.length > 0 || uploadingFiles > 0) && (
+        <div className={cn('flex shrink-0 flex-wrap items-center gap-1.5 border-t px-3 py-1.5', th.divider)}>
+          {pendingFiles.map((f) => (
+            <span
+              key={f.id}
+              className='inline-flex max-w-[180px] items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
+            >
+              <Paperclip className='h-3 w-3 shrink-0 opacity-60' />
+              <span className='truncate'>{f.name}</span>
+              <button
+                type='button'
+                onClick={() => setPendingFiles((prev) => prev.filter((p) => p.id !== f.id))}
+                className='text-slate-400 hover:text-red-500'
+                aria-label={`Remove ${f.name}`}
+              >
+                <X className='h-3 w-3' />
+              </button>
+            </span>
+          ))}
+          {uploadingFiles > 0 && (
+            <span className='text-[11px] italic text-slate-400'>Uploading…</span>
+          )}
+        </div>
+      )}
       <form
         className={cn('relative flex shrink-0 items-center gap-2 border-t p-2.5', th.divider)}
         onSubmit={(e) => {
@@ -562,13 +1022,39 @@ export function ChatRoomView({
             onDraftChange(e.target.value, e.target.selectionStart ?? e.target.value.length)
           }
           onKeyDown={onKeyDown}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.files]
+            if (files.length > 0) {
+              e.preventDefault()
+              void uploadFiles(files)
+            }
+          }}
           placeholder={`Message ${label}… (@ to mention)`}
           className={cn('h-9 min-w-0 flex-1 rounded-lg border px-3 text-[12.5px] outline-none', th.input)}
           aria-label={`Message ${label}`}
         />
+        <input
+          ref={fileInputRef}
+          type='file'
+          multiple
+          className='hidden'
+          onChange={(e) => {
+            void uploadFiles([...(e.target.files ?? [])])
+            e.target.value = ''
+          }}
+        />
+        <button
+          type='button'
+          onClick={() => fileInputRef.current?.click()}
+          className='flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+          aria-label='Attach a file'
+          title='Attach a file (or paste an image)'
+        >
+          <Paperclip className='h-4 w-4' strokeWidth={2} />
+        </button>
         <button
           type='submit'
-          disabled={!draft.trim() || send.isPending}
+          disabled={(!draft.trim() && pendingFiles.length === 0) || send.isPending || uploadingFiles > 0}
           className={cn(
             'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-[filter] hover:brightness-110 disabled:opacity-40',
             th.action
@@ -847,20 +1333,93 @@ function useDebouncedValue<T>(value: T, ms: number): T {
 
 export function ChatRoomList({
   rooms,
-  onOpen
+  onOpen,
+  onNewGroup
 }: {
   rooms: RoomInfo[]
   onOpen: (room: RoomInfo) => void
+  /** Opens the group-conversation composer (host renders the dialog). */
+  onNewGroup?: () => void
 }) {
   const th = useTheme()
   const { setMuted, leave } = useRoomMembership()
+  const [search, setSearch] = useState('')
+  const q = useDebouncedValue(search.trim(), 250)
+  // Cross-room message search rides the same box: type ≥2 chars and matching
+  // MESSAGES appear under the filtered room list.
+  const { hits, loading: searching } = useChatSearch(q)
+  const roomByKey = useMemo(() => new Map(rooms.map((r) => [r.room, r])), [rooms])
+  const filteredRooms = q
+    ? rooms.filter((r) => r.label.toLowerCase().includes(q.toLowerCase()))
+    : rooms
+  // Group DMs are private channels flagged is_direct — they belong with
+  // conversations, not #channels.
+  const isGroupDm = (r: RoomInfo) => r.kind === 'channel' && r.channel?.is_direct
   return (
     <div className='min-h-0 flex-1 overflow-y-auto p-2' data-chat-room-list>
+      <div className='mb-1.5 flex items-center gap-1.5 px-1'>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder='Search rooms & messages…'
+          className={cn('h-7 min-w-0 flex-1 rounded-md border px-2 text-[12px] outline-none', th.input)}
+          aria-label='Search rooms and messages'
+          data-chat-global-search
+        />
+        {onNewGroup && (
+          <button
+            type='button'
+            onClick={onNewGroup}
+            title='New group conversation'
+            className='flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-slate-400 dark:hover:bg-muted'
+            data-chat-new-group
+          >
+            <Users className='h-3.5 w-3.5' strokeWidth={2} />
+          </button>
+        )}
+      </div>
+      {q.length >= 2 && (
+        <div className='mb-1.5'>
+          <p className='px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400'>
+            Messages
+          </p>
+          {searching ? (
+            <p className='px-2.5 py-1 text-[11px] text-slate-400'>Searching…</p>
+          ) : hits.length === 0 ? (
+            <p className='px-2.5 py-1 text-[11px] text-slate-400'>No messages match.</p>
+          ) : (
+            hits.slice(0, 15).map((h) => {
+              const r = roomByKey.get(h.room)
+              return (
+                <button
+                  key={h.id}
+                  type='button'
+                  onClick={() => {
+                    if (r) onOpen(r)
+                  }}
+                  className='flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
+                >
+                  <span className='flex items-center gap-1.5 text-[10.5px] text-slate-400'>
+                    <span className='truncate font-medium'>{r?.label ?? h.room}</span>
+                    <span className='ml-auto shrink-0'>
+                      {new Date(h.date_created).toLocaleDateString()}
+                    </span>
+                  </span>
+                  <span className='truncate text-[12px] text-slate-700 dark:text-slate-200'>
+                    {h.sender_name ? `${h.sender_name}: ` : ''}
+                    {h.message}
+                  </span>
+                </button>
+              )
+            })
+          )}
+        </div>
+      )}
       {(
         [
-          ['Channels', rooms.filter((r) => r.kind === 'global' || r.kind === 'channel')],
-          ['Direct messages', rooms.filter((r) => r.kind === 'dm')],
-          ['Records', rooms.filter((r) => r.kind === 'entity')]
+          ['Channels', filteredRooms.filter((r) => (r.kind === 'global' || r.kind === 'channel') && !isGroupDm(r))],
+          ['Direct messages', filteredRooms.filter((r) => r.kind === 'dm' || isGroupDm(r))],
+          ['Records', filteredRooms.filter((r) => r.kind === 'entity')]
         ] as const
       ).map(([groupLabel, groupRooms]) =>
         groupRooms.length === 0 ? null : (
@@ -878,6 +1437,8 @@ export function ChatRoomList({
                   <span className='flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400'>
                     {r.kind === 'dm' ? (
                       <MessageCircle className='h-4 w-4' strokeWidth={1.8} />
+                    ) : r.channel?.is_direct ? (
+                      <Users className='h-4 w-4' strokeWidth={1.8} />
                     ) : (
                       <Hash className='h-4 w-4' strokeWidth={1.8} />
                     )}
@@ -1193,6 +1754,125 @@ function prettyPath(path: string | null | undefined): string | null {
     .join(' › ')
 }
 
+/** Group conversation composer — pick people, optional name, create. */
+function GroupDmDialog({
+  onClose,
+  onCreated
+}: {
+  onClose: () => void
+  onCreated: (room: string, name: string) => void
+}) {
+  const th = useTheme()
+  const [search, setSearch] = useState('')
+  const [name, setName] = useState('')
+  const [selected, setSelected] = useState<Map<string, string>>(new Map())
+  const { users } = useUserSearch(search, true)
+  const createGroup = useCreateGroupDm()
+  const displayName = (u: { first_name: string | null; last_name: string | null; email: string | null }) =>
+    [u.first_name, u.last_name].filter(Boolean).join(' ') || (u.email ?? 'Unknown')
+
+  return (
+    <div className='flex min-h-0 flex-1 flex-col p-3' data-chat-group-dialog>
+      <div className='mb-2 flex items-center gap-2'>
+        <button
+          type='button'
+          onClick={onClose}
+          className='rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+          aria-label='Back'
+        >
+          <ChevronLeft className='h-4 w-4' strokeWidth={2} />
+        </button>
+        <p className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+          New group conversation
+        </p>
+      </div>
+      {selected.size > 0 && (
+        <div className='mb-2 flex flex-wrap gap-1'>
+          {[...selected.entries()].map(([id, n]) => (
+            <span
+              key={id}
+              className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium', th.accentSoft)}
+            >
+              {n}
+              <button
+                type='button'
+                onClick={() =>
+                  setSelected((prev) => {
+                    const next = new Map(prev)
+                    next.delete(id)
+                    return next
+                  })
+                }
+                aria-label={`Remove ${n}`}
+              >
+                <X className='h-3 w-3' />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder='Find people…'
+        className={cn('mb-1.5 h-8 rounded-md border px-2.5 text-[12.5px] outline-none', th.input)}
+        aria-label='Find people'
+        autoFocus
+      />
+      <div className='min-h-0 flex-1 overflow-y-auto'>
+        {users.map((u) => {
+          const on = selected.has(u.id)
+          return (
+            <button
+              key={u.id}
+              type='button'
+              onClick={() =>
+                setSelected((prev) => {
+                  const next = new Map(prev)
+                  if (on) next.delete(u.id)
+                  else next.set(u.id, displayName(u))
+                  return next
+                })
+              }
+              className={cn(
+                'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] transition-colors',
+                on ? th.accentSoft : 'hover:bg-slate-50 dark:hover:bg-muted/50'
+              )}
+            >
+              <Avatar id={u.id} name={displayName(u)} size={22} />
+              <span className='truncate'>{displayName(u)}</span>
+              {on && <Check className='ml-auto h-3.5 w-3.5 shrink-0' />}
+            </button>
+          )
+        })}
+      </div>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder='Group name (optional)'
+        className={cn('mb-2 mt-1.5 h-8 rounded-md border px-2.5 text-[12.5px] outline-none', th.input)}
+        aria-label='Group name'
+      />
+      <button
+        type='button'
+        disabled={selected.size === 0 || createGroup.isPending}
+        onClick={() =>
+          createGroup.mutate(
+            { user_ids: [...selected.keys()], name: name.trim() || undefined },
+            { onSuccess: (data) => onCreated(data.room, data.name) }
+          )
+        }
+        className={cn(
+          'flex h-9 items-center justify-center rounded-lg text-[12.5px] font-semibold transition-[filter] hover:brightness-110 disabled:opacity-40',
+          th.action
+        )}
+      >
+        {createGroup.isPending ? 'Creating…' : `Start conversation${selected.size ? ` (${selected.size + 1})` : ''}`}
+      </button>
+    </div>
+  )
+}
+
 export function ChatPanel({
   open,
   onClose,
@@ -1218,7 +1898,9 @@ export function ChatPanel({
     room: string
     label: string
     channel?: ChannelMeta | null
+    unread?: number
   } | null>(null)
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const { rooms, totalUnread } = useChatRooms()
   /** Online people split into sections by the chosen attribute.
@@ -1538,6 +2220,14 @@ export function ChatPanel({
               setTab('chat')
             }}
           />
+        ) : groupDialogOpen ? (
+          <GroupDmDialog
+            onClose={() => setGroupDialogOpen(false)}
+            onCreated={(room, name) => {
+              setGroupDialogOpen(false)
+              setActiveRoom({ room, label: name })
+            }}
+          />
         ) : activeRoom && settingsOpen && activeRoom.channel ? (
           <ChatChannelSettings
             channel={activeRoom.channel}
@@ -1548,17 +2238,23 @@ export function ChatPanel({
           <ChatRoomView
             room={activeRoom.room}
             label={activeRoom.label}
-            onOpenSettings={activeRoom.channel ? () => setSettingsOpen(true) : undefined}
+            onOpenSettings={
+              activeRoom.channel && !activeRoom.channel.is_direct
+                ? () => setSettingsOpen(true)
+                : undefined
+            }
             onBack={() => setActiveRoom(null)}
             renderMessageBody={renderMessageBody}
+            initialUnread={activeRoom.unread}
           />
         ) : (
           <ChatRoomList
             rooms={rooms}
             onOpen={(r) => {
               setSettingsOpen(false)
-              setActiveRoom({ room: r.room, label: r.label, channel: r.channel })
+              setActiveRoom({ room: r.room, label: r.label, channel: r.channel, unread: r.unread })
             }}
+            onNewGroup={() => setGroupDialogOpen(true)}
           />
         )}
       </aside>

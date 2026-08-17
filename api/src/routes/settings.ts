@@ -70,7 +70,9 @@ export async function settingsRoutes(app: FastifyInstance) {
       'sms_account_sid',
       'sms_auth_token',
       'sms_from',
-      'sms_region'
+      'sms_region',
+      // Chat
+      'chat_bot_name'
     ]
     const body = req.body as Record<string, unknown>
     const patch = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)))
