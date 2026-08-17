@@ -401,22 +401,46 @@ export function CommentPanel({
         type='button'
         data-panel-toggle='notes'
         onClick={() => setExpanded((v) => !v)}
-        className='flex w-full items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
+        className='flex w-full flex-col px-5 py-3.5 text-left transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
       >
-        <MessageSquare className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
-          {title || 'Comments'}
-        </span>
-        {!expanded && (comments.length > 0 || (queuedComments ?? []).length > 0) && (
-          <span className='ml-1 text-[11px] text-slate-400'>
-            {isNew
-              ? `${(queuedComments ?? []).length} pending`
-              : `${comments.length} comment${comments.length !== 1 ? 's' : ''}`}
+        <span className='flex w-full items-center gap-2.5'>
+          <MessageSquare className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+          <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
+            {title || 'Comments'}
           </span>
-        )}
-        <ChevronDown
-          className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
-        />
+          {(threadEntries.length > 0 || (queuedComments ?? []).length > 0) && (
+            <span className='rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
+              {isNew ? (queuedComments ?? []).length : threadEntries.length}
+            </span>
+          )}
+          <ChevronDown
+            className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
+          />
+        </span>
+        {/* Collapsed: the latest note rides the header so the panel answers
+            "anything new?" without a click. */}
+        {!expanded &&
+          !isNew &&
+          threadEntries.length > 0 &&
+          (() => {
+            const last = threadEntries[threadEntries.length - 1]
+            const who =
+              last.kind === 'comment'
+                ? displayName(last.comment.user)
+                : (last.note.user_name ?? 'System')
+            const text = (last.kind === 'comment' ? last.comment.text : last.note.text)
+              .replace(/<[^>]*>/g, ' ')
+              .replace(/@\[([^\]]+)\]/g, '@$1')
+              .replace(/\s+/g, ' ')
+              .trim()
+            if (!text) return null
+            return (
+              <span className='mt-1 w-full truncate pl-6 text-[11.5px] text-slate-400'>
+                <span className='font-medium text-slate-500 dark:text-slate-400'>{who}:</span>{' '}
+                {text}
+              </span>
+            )
+          })()}
       </button>
       {expanded && (
         <div className='border-t border-slate-100 px-5 py-4 dark:border-border/60'>

@@ -5,6 +5,8 @@ import { toast } from 'sonner'
 import { useNivaroClient, useItemNavigation } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 
 /**
@@ -37,7 +39,9 @@ export function RelatedRecordsPanel({
   const { open: openItem } = useItemNavigation()
   const [expanded, setExpanded] = useState(defaultExpanded)
   const [adding, setAdding] = useState(false)
-  const [targetCollection, setTargetCollection] = useState('')
+  // Most links point at a sibling record — default to this collection.
+  const [targetCollection, setTargetCollection] = useState(collection)
+  const [collectionPickerOpen, setCollectionPickerOpen] = useState(false)
   const [targetItem, setTargetItem] = useState<string | number | null>(null)
   const [linkType, setLinkType] = useState('relates to')
 
@@ -159,21 +163,48 @@ export function RelatedRecordsPanel({
                 ariaLabel='Link type'
                 options={LINK_TYPES.map((t) => ({ value: t, label: t }))}
               />
-              <SimpleSelect
-                value={targetCollection}
-                onChange={(v) => {
-                  setTargetCollection(v)
-                  setTargetItem(null)
-                }}
-                ariaLabel='Collection'
-                options={[
-                  { value: '', label: 'Pick a collection…' },
-                  ...collections.map((c) => ({
-                    value: c.collection,
-                    label: c.display_name || c.collection.replace(/_/g, ' ')
-                  }))
-                ]}
-              />
+              <Popover open={collectionPickerOpen} onOpenChange={setCollectionPickerOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type='button'
+                    className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-700 dark:border-border dark:bg-card dark:text-slate-200'
+                    aria-label='Collection'
+                  >
+                    <span className='truncate'>
+                      {(() => {
+                        const c = collections.find((x) => x.collection === targetCollection)
+                        return c?.display_name || targetCollection.replace(/_/g, ' ') || 'Pick a collection…'
+                      })()}
+                    </span>
+                    <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className='w-[240px] p-0' align='start'>
+                  <Command>
+                    <CommandInput placeholder='Search collections…' className='h-8 text-[12px]' />
+                    <CommandList>
+                      <CommandEmpty>No collection found.</CommandEmpty>
+                      {[...collections]
+                        .sort((a, b) =>
+                          (a.display_name || a.collection).localeCompare(b.display_name || b.collection)
+                        )
+                        .map((c) => (
+                          <CommandItem
+                            key={c.collection}
+                            value={c.display_name || c.collection}
+                            onSelect={() => {
+                              setTargetCollection(c.collection)
+                              setTargetItem(null)
+                              setCollectionPickerOpen(false)
+                            }}
+                          >
+                            {c.display_name || c.collection.replace(/_/g, ' ')}
+                          </CommandItem>
+                        ))}
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
               {targetCollection && (
                 <RelationCombobox
                   collection={targetCollection}

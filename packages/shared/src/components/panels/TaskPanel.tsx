@@ -218,16 +218,32 @@ export function TaskPanel({
       <button
         type='button'
         onClick={() => setExpanded((v) => !v)}
-        className='flex w-full items-center gap-2.5 px-5 py-3.5 transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
+        className='flex w-full flex-col px-5 py-3.5 text-left transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
       >
-        <ClipboardList className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>{title || 'Tasks'}</span>
+        <span className='flex w-full items-center gap-2.5'>
+          <ClipboardList className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+          <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>{title || 'Tasks'}</span>
+          {openTasks.length > 0 && (
+            <span className='rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
+              {openTasks.length} open
+            </span>
+          )}
+          <ChevronDown
+            className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
+          />
+        </span>
+        {/* Collapsed: newest open task rides the header. */}
         {!expanded && openTasks.length > 0 && (
-          <span className='ml-1 text-[11px] text-slate-400'>{openTasks.length} open</span>
+          <span className='mt-1 w-full truncate pl-6 text-[11.5px] text-slate-400'>
+            {openTasks[openTasks.length - 1].title}
+            {openTasks[openTasks.length - 1].due_date && (
+              <span className='text-slate-400/80'>
+                {' '}
+                · due {new Date(openTasks[openTasks.length - 1].due_date as string).toLocaleDateString()}
+              </span>
+            )}
+          </span>
         )}
-        <ChevronDown
-          className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
-        />
       </button>
       {expanded && isNew && (
         <div className='border-t border-slate-100 dark:border-border/60'>
