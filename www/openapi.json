@@ -3032,6 +3032,238 @@
         }
       }
     },
+    "/items/bom_categories_project_types": {
+      "get": {
+        "tags": [
+          "BOM Categories / Project Types"
+        ],
+        "operationId": "listBomCategoriesProjectTypes",
+        "summary": "List bom_categories_project_types",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 25
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated fields; prefix - for descending"
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON filter DSL"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated field list"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BomCategoriesProjectTypes"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "BOM Categories / Project Types"
+        ],
+        "operationId": "createBomCategoriesProjectTypes",
+        "summary": "Create bom_categories_project_types",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BomCategoriesProjectTypes"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BomCategoriesProjectTypes"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items/bom_categories_project_types/{id}": {
+      "get": {
+        "tags": [
+          "BOM Categories / Project Types"
+        ],
+        "operationId": "getBomCategoriesProjectTypes",
+        "summary": "Get bom_categories_project_types by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BomCategoriesProjectTypes"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "BOM Categories / Project Types"
+        ],
+        "operationId": "updateBomCategoriesProjectTypes",
+        "summary": "Update bom_categories_project_types",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BomCategoriesProjectTypes"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BomCategoriesProjectTypes"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "BOM Categories / Project Types"
+        ],
+        "operationId": "deleteBomCategoriesProjectTypes",
+        "summary": "Delete bom_categories_project_types",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/items/bom_categories_divisions": {
       "get": {
         "tags": [
@@ -53169,6 +53401,21 @@
         },
         "required": []
       },
+      "BomCategoriesProjectTypes": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "bom_categories_id": {
+            "type": "integer"
+          },
+          "project_types_id": {
+            "type": "integer"
+          }
+        },
+        "required": []
+      },
       "BomCategoriesDivisions": {
         "type": "object",
         "properties": {
@@ -56810,6 +57057,10 @@
           "divisions": {
             "type": "string",
             "description": "Zones this BOM category is limited to — empty = available in every zone"
+          },
+          "project_types": {
+            "type": "string",
+            "description": "Project types this BOM category is limited to — empty = every project type"
           }
         },
         "required": []
