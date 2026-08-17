@@ -3392,9 +3392,13 @@ Authorization: Bearer &lt;admin-token&gt;
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Mutation</th><th>Arguments</th><th>Auth</th></tr></thead>
             <tbody><tr><tr><td>create_collectionName</td><td>data: JSON (all fields optional)</td><td>User with create permission</td></tr>
+              <tr><td>create_collectionName_item</td><td>data: JSON — Directus-compatible alias</td><td>User with create permission</td></tr>
+              <tr><td>create_collectionName_items</td><td>data: [JSON] — batch, one row per entry</td><td>User with create permission</td></tr>
               <tr><td>update_collectionName_item</td><td>id: ID!, data: JSON (partial)</td><td>User with update permission</td></tr>
-              <tr><td>delete_collectionName_item</td><td>id: ID!</td><td>User with delete permission</td></tr></tr></tbody>
+              <tr><td>delete_collectionName_item</td><td>id: ID!</td><td>User with delete permission</td></tr>
+              <tr><td>delete_collectionName_items</td><td>ids: [ID!]! — batch, returns { ids }</td><td>User with delete permission</td></tr></tr></tbody>
           </table></div>
+          <div class="doc-note">Create/update payloads accept Directus-era relation shapes: an M2O may be <code class="doc-code">{ id: … }</code>, and an M2M alias may be a single object, an array of <code class="doc-code">{ junction_field: { id } }</code> entries, or <code class="doc-code">{ create: [...] }</code> — alias writes are additive (junction rows are created, never detached).</div>
           <div class="doc-note">The <code class="doc-code">data</code> argument accepts the <code class="doc-code">JSON</code> scalar — pass a plain object with the fields you want to set. Unknown fields are ignored; field-level permission checks apply.</div>
           <!-- /SYNC:graphql-mutations -->
         </div>
@@ -3584,7 +3588,7 @@ query {
               <tr><td>UUID / id fields</td><td>IDFilter</td><td>_eq _neq _in _nin _null _nnull</td></tr>
               <tr><td>O2M / M2M virtual</td><td>col_field_relation_filter / col_field_m2m_filter</td><td>_some _none wrapping the related collection filter</td></tr></tr></tbody>
           </table></div>
-          <div class="doc-note">M2M/O2M wrapper types are only generated when the related collection is visible (not hidden). Hidden junction or system collections are skipped — filter those fields by FK value instead.</div>
+          <div class="doc-note">Every registered collection is exposed in GraphQL, including hidden ones — <code class="doc-code">hidden</code> is a UI flag (keep it out of the nav), not an API exclusion. Junction collections therefore have full query/mutation fields (e.g. delete_workflows_files_items), matching the REST items API.</div>
           <!-- /SYNC:graphql-filters -->
         </div>
 

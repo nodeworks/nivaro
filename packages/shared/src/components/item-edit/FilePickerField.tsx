@@ -1,3 +1,4 @@
+import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Clock, Download, File, FileAudio, FileCode, FileSpreadsheet, FileText, FileVideo, Loader2, Plus, Upload, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
@@ -222,6 +223,7 @@ export function FilePickerField({
   const flushKey = useId()
   const [open, setOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [preview, setPreview] = useState<PreviewFile | null>(null)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -295,6 +297,7 @@ export function FilePickerField({
 
   return (
     <div className='relative'>
+      {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
       {hasFile ? (
         <div className='flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50'>
           {hasPending ? (
@@ -307,12 +310,27 @@ export function FilePickerField({
           ) : isLoading ? (
             <div className='h-10 w-10 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
           ) : (
-            <FileThumb
-              url={getUrl(fileId!)}
-              type={file?.type ?? null}
-              filename={file?.filename_download ?? ''}
-              size='sm'
-            />
+            <button
+              type='button'
+              title='Preview'
+              onClick={() =>
+                setPreview({
+                  id: fileId!,
+                  url: getUrl(fileId!),
+                  name: file?.title || file?.filename_download || fileId!,
+                  type: file?.type ?? null,
+                  size: file?.filesize ?? null
+                })
+              }
+              className='shrink-0 cursor-zoom-in'
+            >
+              <FileThumb
+                url={getUrl(fileId!)}
+                type={file?.type ?? null}
+                filename={file?.filename_download ?? ''}
+                size='sm'
+              />
+            </button>
           )}
           <div className='flex-1 min-w-0'>
             <div className='flex items-center gap-1'>
@@ -464,6 +482,7 @@ export function FileM2MField({
   const staging = useM2MStaging()
   const [open, setOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [preview, setPreview] = useState<PreviewFile | null>(null)
   const [pendingFiles, setPendingFiles] = useState<{ file: File; url: string }[]>([])
   const uploadRef = useRef<HTMLInputElement>(null)
   // pending-save mode: track local adds/removes without hitting API until parent saves
@@ -647,22 +666,50 @@ export function FileM2MField({
 
   return (
     <div className='space-y-2'>
+      {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
       {(allFileIds.length > 0 || pendingFiles.length > 0) && (
         <div className='flex flex-col gap-1.5'>
           {allFileIds.map(id => {
             const f = filesMap[id]
             return (
               <div key={id} className='flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50'>
-                <FileThumb
-                  url={getUrl(id)}
-                  type={f?.type ?? null}
-                  filename={f?.filename_download ?? id}
-                  size='sm'
-                />
+                <button
+                  type='button'
+                  title='Preview'
+                  onClick={() =>
+                    setPreview({
+                      id,
+                      url: getUrl(id),
+                      name: f?.title || f?.filename_download || id,
+                      type: f?.type ?? null,
+                      size: f?.filesize ?? null
+                    })
+                  }
+                  className='shrink-0 cursor-zoom-in'
+                >
+                  <FileThumb
+                    url={getUrl(id)}
+                    type={f?.type ?? null}
+                    filename={f?.filename_download ?? id}
+                    size='sm'
+                  />
+                </button>
                 <div className='flex-1 min-w-0'>
-                  <p className='text-[12px] font-medium text-slate-700 truncate'>
+                  <button
+                    type='button'
+                    onClick={() =>
+                      setPreview({
+                        id,
+                        url: getUrl(id),
+                        name: f?.title || f?.filename_download || id,
+                        type: f?.type ?? null,
+                        size: f?.filesize ?? null
+                      })
+                    }
+                    className='block w-full truncate text-left text-[12px] font-medium text-slate-700 hover:underline'
+                  >
                     {f?.title || f?.filename_download || id}
-                  </p>
+                  </button>
                   <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
                     {f?.type && <span className='text-[10px] text-slate-400'>{f.type}</span>}
                     {f?.filesize != null && <span className='text-[10px] text-slate-400'>{fmtSize(f.filesize)}</span>}

@@ -1,3 +1,4 @@
+import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, useMemo, useRef, useEffect, useCallback, memo, type ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -675,22 +676,24 @@ function AddendumDetails({ addendum }: { addendum: Addendum }) {
 
 function AddendumAttachments({ ids }: { ids: string[] | null }) {
   const client = useNivaroClient()
+  const [preview, setPreview] = useState<PreviewFile | null>(null)
   const fileIds = Array.isArray(ids) ? ids.filter(Boolean) : []
-  const { data: metas = [] } = useQuery<Array<{ id: string; filename: string | null; size: number | null }>>({
+  const { data: metas = [] } = useQuery<Array<{ id: string; filename: string | null; size: number | null; type: string | null }>>({
     queryKey: ['addendum-files', ...fileIds],
     queryFn: () =>
       Promise.all(
         fileIds.map((id) =>
           client
-            .request<{ data: { id: string; filename_download?: string; filename?: string; title?: string; filesize?: number } }>(
+            .request<{ data: { id: string; filename_download?: string; filename?: string; title?: string; filesize?: number; type?: string } }>(
               get(`/files/${id}/meta`)
             )
             .then((r) => ({
               id,
               filename: r.data?.filename_download ?? r.data?.filename ?? r.data?.title ?? null,
-              size: r.data?.filesize ?? null
+              size: r.data?.filesize ?? null,
+              type: r.data?.type ?? null
             }))
-            .catch(() => ({ id, filename: null, size: null }))
+            .catch(() => ({ id, filename: null, size: null, type: null }))
         )
       ),
     enabled: fileIds.length > 0,
@@ -703,17 +706,25 @@ function AddendumAttachments({ ids }: { ids: string[] | null }) {
         Attachments
       </p>
       <div className='flex flex-wrap gap-1.5'>
+        {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
         {metas.map((m) => (
-          <a
+          <button
             key={m.id}
-            href={`/api/files/${m.id}`}
-            target='_blank'
-            rel='noreferrer'
+            type='button'
+            onClick={() =>
+              setPreview({
+                id: m.id,
+                url: client.fileUrl(m.id),
+                name: m.filename ?? `File ${m.id.slice(0, 8)}…`,
+                type: m.type,
+                size: m.size
+              })
+            }
             className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11.5px] text-slate-700 transition-colors hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:bg-muted/40 dark:text-slate-300 dark:hover:text-nvr-cyan'
           >
             <Paperclip className='h-3 w-3 shrink-0 text-slate-400' />
             <span className='max-w-[220px] truncate'>{m.filename ?? `File ${m.id.slice(0, 8)}…`}</span>
-          </a>
+          </button>
         ))}
       </div>
     </div>

@@ -129,6 +129,94 @@ function StateBadge({
 
 // ─── State track ─────────────────────────────────────────────────────────────
 
+/**
+ * Time-in-step bar — where the record's calendar time actually went. Each
+ * segment is one stay in a state (a send-back produces a second, separate
+ * segment for the same state — deliberately honest), width proportional to
+ * duration, ending at now for the current stay. Built purely from the history
+ * the panel already fetched; no extra requests. Hidden until there are at
+ * least two segments — a single open stay carries no comparison.
+ */
+function fmtDur(ms: number): string {
+  const m = Math.floor(ms / 60000)
+  if (m < 60) return `${Math.max(1, m)}m`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h`
+  const d = Math.floor(h / 24)
+  return `${d}d ${h % 24}h`
+}
+
+function StateDurationTimeline({
+  history,
+  completedAt
+}: {
+  history: PipelineHistoryEntry[]
+  completedAt: string | null
+}) {
+  const ordered = [...history].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  )
+  if (ordered.length === 0) return null
+  const end = completedAt ? new Date(completedAt).getTime() : Date.now()
+  const segments = ordered
+    .map((h, i) => {
+      const start = new Date(h.timestamp).getTime()
+      const stop = i + 1 < ordered.length ? new Date(ordered[i + 1].timestamp).getTime() : end
+      return {
+        key: h.id,
+        label: h.to_state_label,
+        color: h.to_state_color,
+        ms: Math.max(0, stop - start),
+        current: i === ordered.length - 1 && !completedAt
+      }
+    })
+    .filter((seg) => seg.ms > 0 || seg.current)
+  if (segments.length < 2) return null
+  const total = segments.reduce((sum, seg) => sum + seg.ms, 0)
+  if (total <= 0) return null
+
+  return (
+    <div data-state-timeline>
+      <div className='mb-1 flex items-center justify-between'>
+        <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+          Time in step
+        </p>
+        <p className='text-[10px] tabular-nums text-slate-400 dark:text-slate-500'>
+          {fmtDur(total)} total{completedAt ? '' : ' · so far'}
+        </p>
+      </div>
+      <div className='flex h-4 w-full overflow-hidden rounded'>
+        {segments.map((seg) => {
+          const pct = (seg.ms / total) * 100
+          return (
+            <div
+              key={seg.key}
+              data-tip={`${seg.label} — ${fmtDur(seg.ms)}${seg.current ? ' (current)' : ''}`}
+              className='relative flex min-w-[8px] items-center overflow-hidden border-r border-white/60 last:border-r-0 dark:border-black/30'
+              style={{
+                width: `${pct}%`,
+                backgroundColor: seg.color ? `${seg.color}55` : 'rgba(100,116,139,.25)'
+              }}
+            >
+              {pct >= 14 && (
+                <span className='truncate px-1.5 text-[9.5px] font-medium leading-none text-slate-700 dark:text-slate-200'>
+                  {seg.label} · {fmtDur(seg.ms)}
+                </span>
+              )}
+              {seg.current && (
+                <span
+                  className='absolute inset-y-0 right-0 w-[2px]'
+                  style={{ backgroundColor: seg.color ?? '#64748b' }}
+                />
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function StateTrack({
   states,
   allTransitions,
@@ -1537,7 +1625,7 @@ function PipelinePanelInner({
             ) : (
               <div className='divide-y divide-slate-100 dark:divide-border/60'>
                 {(states ?? []).length > 1 && (
-                  <div className='px-5 py-4'>
+                  <div className='space-y-3 px-5 py-4'>
                     <StateTrack
                       states={states}
                       allTransitions={data?.all_transitions ?? []}
@@ -1546,6 +1634,10 @@ function PipelinePanelInner({
                       history={history ?? []}
                       onPathIds={onPathIds}
                       skippedStates={skippedStates}
+                    />
+                    <StateDurationTimeline
+                      history={history ?? []}
+                      completedAt={instance.completed_at}
                     />
                   </div>
                 )}
