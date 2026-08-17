@@ -2701,6 +2701,239 @@ const STEP_STATUS_CLS: Record<FlowTestStep['status'], string> = {
     'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800'
 }
 
+interface ReplayPreview {
+  dry_run: boolean
+  matched: number
+  truncated: boolean
+  skipped_deletes: number
+  sample: Array<{ id: number; collection: string; action: string; item: string; timestamp: string }>
+}
+interface ReplayResult {
+  dry_run: false
+  executed: number
+  failed: number
+  missing: number
+}
+
+/**
+ * Replay — re-run this event flow over a historical window ("the flow was
+ * broken for three days"). Wraps POST /flows/:id/replay: Preview is a dry run
+ * (count + sample, nothing executes); the real run fans out actual side
+ * effects, so it sits behind the preview and an explicit confirm. Runs land
+ * in the Run History panel below.
+ */
+function FlowReplaySection({ flowId }: { flowId: string }) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const toLocal = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+  const [from, setFrom] = useState(() => toLocal(new Date(Date.now() - 3 * 24 * 3600 * 1000)))
+  const [to, setTo] = useState(() => toLocal(new Date()))
+  const [limit, setLimit] = useState('500')
+  const [preview, setPreview] = useState<ReplayPreview | null>(null)
+  const [result, setResult] = useState<ReplayResult | null>(null)
+  const [confirming, setConfirming] = useState(false)
+
+  const body = (dryRun: boolean) => ({
+    from: new Date(from).toISOString(),
+    to: new Date(to).toISOString(),
+    limit: Number(limit) || 500,
+    dry_run: dryRun
+  })
+
+  const runPreview = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: ReplayPreview }>(`/flows/${flowId}/replay`, body(true))
+        .then((r) => r.data.data),
+    onSuccess: (data) => {
+      setPreview(data)
+      setResult(null)
+      setConfirming(false)
+    },
+    onError: (err) =>
+      toast.error(
+        ((err as { response?: { data?: { error?: string } } }).response?.data?.error) ??
+          'Preview failed'
+      )
+  })
+
+  const runReplay = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: ReplayResult }>(`/flows/${flowId}/replay`, body(false))
+        .then((r) => r.data.data),
+    onSuccess: (data) => {
+      setResult(data)
+      setConfirming(false)
+      queryClient.invalidateQueries({ queryKey: ['flow-runs', flowId] })
+      toast.success(`Replayed ${data.executed} write(s)${data.failed ? ` — ${data.failed} failed` : ''}`)
+    },
+    onError: (err) => {
+      setConfirming(false)
+      toast.error(
+        ((err as { response?: { data?: { error?: string } } }).response?.data?.error) ??
+          'Replay failed'
+      )
+    }
+  })
+
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-700'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-5 py-4'
+      >
+        <div className='flex items-center gap-2'>
+          <History className='h-4 w-4 text-slate-400' />
+          <h2 className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>Replay</h2>
+        </div>
+        {open ? (
+          <ChevronDown className='h-4 w-4 text-slate-400' />
+        ) : (
+          <ChevronRight className='h-4 w-4 text-slate-400' />
+        )}
+      </button>
+      {open && (
+        <div className='space-y-3 border-t border-slate-100 dark:border-border p-5'>
+          <p className='text-[11px] leading-relaxed text-slate-500 dark:text-slate-400'>
+            Re-run this flow for every matching write in a time window — catch-up after the flow
+            was broken or inactive. Records are replayed with their CURRENT values; deletes are
+            skipped.
+          </p>
+          <div className='grid grid-cols-2 gap-2'>
+            <label className='space-y-1'>
+              <span className='text-[11px] font-medium text-slate-500'>From</span>
+              <input
+                type='datetime-local'
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                className='w-full rounded-md border border-slate-200 px-2 py-1.5 text-[12px] dark:border-border dark:bg-card'
+              />
+            </label>
+            <label className='space-y-1'>
+              <span className='text-[11px] font-medium text-slate-500'>To</span>
+              <input
+                type='datetime-local'
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                className='w-full rounded-md border border-slate-200 px-2 py-1.5 text-[12px] dark:border-border dark:bg-card'
+              />
+            </label>
+          </div>
+          <label className='flex items-center gap-2'>
+            <span className='text-[11px] font-medium text-slate-500'>Max writes</span>
+            <input
+              type='number'
+              min={1}
+              max={1000}
+              value={limit}
+              onChange={(e) => setLimit(e.target.value)}
+              className='w-24 rounded-md border border-slate-200 px-2 py-1 text-[12px] tabular-nums dark:border-border dark:bg-card'
+            />
+          </label>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            disabled={runPreview.isPending}
+            onClick={() => runPreview.mutate()}
+            className='w-full'
+          >
+            {runPreview.isPending ? 'Scanning…' : 'Preview matching writes'}
+          </Button>
+
+          {preview && (
+            <div className='space-y-2 rounded-lg border border-slate-200 p-3 dark:border-border'>
+              <p className='text-[12px]'>
+                <span className='font-semibold tabular-nums'>{preview.matched}</span> matching
+                write(s)
+                {preview.truncated && (
+                  <span className='ml-1 text-amber-600 dark:text-amber-400'>
+                    (more exist — raise the limit or narrow the window)
+                  </span>
+                )}
+                {preview.skipped_deletes > 0 && (
+                  <span className='ml-1 text-slate-400'>
+                    · {preview.skipped_deletes} delete(s) skipped
+                  </span>
+                )}
+              </p>
+              {preview.sample.length > 0 && (
+                <div className='max-h-40 overflow-y-auto'>
+                  <table className='w-full text-[11px] tabular-nums'>
+                    <tbody>
+                      {preview.sample.map((r) => (
+                        <tr key={r.id} className='border-t border-slate-100 dark:border-border/60'>
+                          <td className='py-1 pr-2 text-slate-500'>{r.action}</td>
+                          <td className='py-1 pr-2'>{r.collection}</td>
+                          <td className='py-1 pr-2 font-mono'>{r.item}</td>
+                          <td className='py-1 text-slate-400'>
+                            {new Date(r.timestamp).toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {preview.matched > 0 &&
+                (confirming ? (
+                  <div className='flex items-center gap-2'>
+                    <Button
+                      type='button'
+                      size='sm'
+                      disabled={runReplay.isPending}
+                      onClick={() => runReplay.mutate()}
+                      className='flex-1 bg-amber-500 text-white hover:brightness-110'
+                    >
+                      {runReplay.isPending
+                        ? 'Replaying…'
+                        : `Yes — run ${preview.matched} flow run(s)`}
+                    </Button>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      onClick={() => setConfirming(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    type='button'
+                    size='sm'
+                    onClick={() => setConfirming(true)}
+                    className='w-full'
+                  >
+                    Replay {preview.matched} write(s)…
+                  </Button>
+                ))}
+            </div>
+          )}
+
+          {result && (
+            <p className='text-[12px]'>
+              Done — <span className='font-semibold tabular-nums'>{result.executed}</span> executed
+              {result.failed > 0 && (
+                <span className='text-red-600 dark:text-red-400'> · {result.failed} failed</span>
+              )}
+              {result.missing > 0 && (
+                <span className='text-slate-400'> · {result.missing} record(s) since deleted</span>
+              )}
+              . See Run History below.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FlowTesterSection({ flowId, trigger }: { flowId: string; trigger: string }) {
   const [open, setOpen] = useState(false)
   const [payload, setPayload] = useState(() =>
@@ -3358,6 +3591,7 @@ export function FlowEditPage() {
             })()}
 
             {id && <FlowTesterSection flowId={id} trigger={trigger} />}
+            {id && trigger === 'event' && <FlowReplaySection flowId={id} />}
             {id && <FlowVersionsSection flowId={id} />}
             {id && <FlowRunsPanel flowId={id} />}
           </aside>
