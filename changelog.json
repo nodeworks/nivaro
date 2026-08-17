@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-17T18:56:38.685Z",
+  "generated_at": "2026-08-17T19:10:26.920Z",
   "releases": [
+    {
+      "version": "0.1.57",
+      "tag": "v0.1.57",
+      "date": "2026-08-17T15:10:25-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "attachment preview lightbox + time-in-step timeline",
+              "hash": "3972d343"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.56",
       "tag": "v0.1.56",
-      "date": "2026-08-17T14:56:36-04:00",
+      "date": "2026-08-17T14:56:38-04:00",
       "sections": [
         {
           "label": "Added",
